@@ -170,4 +170,4 @@ patch that quietly changes a key rule: several of them look redundant and are no
 
 ## Licence
 
-Not yet chosen — until one is added, no permission to use, copy or modify this code is granted.
+[MIT](LICENSE).
