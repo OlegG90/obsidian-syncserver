@@ -6,12 +6,13 @@
  * does — a node without its envelope is a file nobody can decrypt, and a journal that
  * disagrees with the tree is a client that syncs the wrong thing for ever.
  *
- * Revision allocation lives here rather than in a trigger on purpose: `head_rev` is bumped
- * under `SELECT … FOR UPDATE` inside this transaction, so the three-way write stays one
- * explicit unit.
+ * Revision allocation is a call rather than a trigger on purpose — see `revision.ts`, which
+ * is the only place it happens. Keeping it explicit is what makes the three-way write one
+ * visible unit; a trigger would scatter the same fact across rows nobody reads together.
  */
 import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
+import { nextRev } from '../revision.js';
 
 /**
  * Which of these content tags the vault's own key scope already knows, and what address
@@ -64,15 +65,6 @@ export type WriteFailure =
   | { kind: 'over_quota' };
 
 const fail = (kind: WriteFailure['kind']): WriteFailure => ({ kind }) as WriteFailure;
-
-/** One integer per vault, allocated under a row lock so two writers cannot take the same. */
-const nextRev = async (c: PoolClient, vaultId: string): Promise<number> => {
-  const r = await c.query<{ head: string }>(
-    `UPDATE vaults SET head_rev = head_rev + 1 WHERE id = $1 RETURNING head_rev::text AS head`,
-    [vaultId],
-  );
-  return Number(r.rows[0]!.head);
-};
 
 const writeMaterial = async (c: PoolClient, m: Material): Promise<void> => {
   for (const e of m.envelopes) {

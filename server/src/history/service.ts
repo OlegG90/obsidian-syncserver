@@ -8,6 +8,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
+import { nextRev } from '../revision.js';
 
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
 
@@ -53,14 +54,6 @@ export type RestoreFailure =
   | { kind: 'frozen' }
   /** #36: no automatic suffix. A file silently named "Note (1).md" is one the user cannot account for. */
   | { kind: 'name_taken'; blockedBy: string };
-
-const nextRev = async (c: PoolClient, vaultId: string): Promise<number> => {
-  const r = await c.query<{ head: string }>(
-    `UPDATE vaults SET head_rev = head_rev + 1 WHERE id = $1 RETURNING head_rev::text AS head`,
-    [vaultId],
-  );
-  return Number(r.rows[0]!.head);
-};
 
 /** Is a live sibling already using this name under this parent? */
 const blockingSibling = async (
