@@ -44,6 +44,14 @@ export interface SyncReport {
   matched: { path: string }[];
   /** Adoption found the same path holding different content on each side (docs/04's naming). */
   conflicts: { path: string; conflictPath: string }[];
+  /** Recognised as a move rather than a delete and a create: same node, new place. */
+  renamed: { from: string; to: string }[];
+  /**
+   * Paths this device had synced that are no longer on disk, and were not explained by a
+   * rename. **Reported, not acted on**: telling the server to delete them is its own
+   * scenario, and a rescan that guesses wrong about a disappearance deletes somebody's work.
+   */
+  vanished: { path: string }[];
   errors: { path: string; message: string }[];
 }
 
@@ -63,7 +71,31 @@ interface LocalMeta {
   /** `HMAC(vault key, sha256(plaintext))` — what the dedup lookup is keyed by (docs/06). */
   tag: string;
   mtime: number;
+  size: number;
 }
+
+/**
+ * A path this device had synced and can no longer find, kept as a possible rename source.
+ *
+ * Not every disappearance is a rename, and the cost of being wrong is asymmetric: a missed
+ * rename costs an upload the deduplication makes nearly free, while a wrong one moves a node
+ * the user still has somewhere else. So the match is deliberately narrow — see `RENAME_MIN_BYTES`.
+ */
+interface Vanished {
+  path: string;
+  nodeId: string;
+  rev: number;
+  address: string;
+}
+
+/**
+ * Below this, a hash match means nothing (docs/04).
+ *
+ * Empty notes, a repeated icon, a stub from a template — small files collide constantly, and
+ * the heuristic would move whichever one it happened to see first. Falling back to
+ * delete-and-create costs nothing extra, because the blob deduplicates anyway.
+ */
+const RENAME_MIN_BYTES = 512;
 
 export class SyncEngine {
   constructor(
@@ -77,7 +109,9 @@ export class SyncEngine {
   ) {}
 
   async sync(): Promise<SyncReport> {
-    const report: SyncReport = { scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], errors: [] };
+    const report: SyncReport = {
+      scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [], vanished: [], errors: [],
+    };
     const state = await this.store.load();
 
     const opened = await this.client.openVault(this.vaultId);
@@ -102,9 +136,26 @@ export class SyncEngine {
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
       const bytes = await this.vault.read(f.path);
-      meta.set(f.path, { plainHash: toHex(sha256(bytes)), tag: dedupTag(this.vaultKey, bytes), mtime: f.mtime });
+      meta.set(f.path, {
+        plainHash: toHex(sha256(bytes)),
+        tag: dedupTag(this.vaultKey, bytes),
+        mtime: f.mtime,
+        size: bytes.length,
+      });
     }
     const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag))]);
+
+    // Paths this device had synced and can no longer find. A rename shows up as exactly this
+    // plus a new path holding the same bytes, and the pairing has to be decided BEFORE the
+    // walk creates a second node for the new one.
+    const here = new Set(local.map((f) => f.path));
+    const vanished = new Map<string, Vanished[]>();
+    for (const [path, known] of Object.entries(state.nodes)) {
+      if (here.has(path)) continue;
+      const list = vanished.get(known.plainHash) ?? [];
+      list.push({ path, nodeId: known.nodeId, rev: known.rev, address: known.address });
+      vanished.set(known.plainHash, list);
+    }
 
     // Shallowest first, so a folder exists before the file that lives in it. A FIFO queue
     // rather than one static pass: a conflict file created mid-walk is pushed onto the end
@@ -117,9 +168,20 @@ export class SyncEngine {
       const file = queue.shift()!;
       handled.add(file.path);
       try {
-        await this.reconcileLocal(file, meta, dedup, tree, opened.root_node_id, scopeId, state, report, queue);
+        await this.reconcileLocal(file, meta, dedup, vanished, tree, opened.root_node_id, scopeId, state, report, queue);
       } catch (e) {
         report.errors.push({ path: file.path, message: message(e) });
+      }
+    }
+
+    // Whatever the walk did not claim as a rename source really is gone from this device.
+    // Said out loud and left alone: acting on it means deleting on the server, and a rescan
+    // that guesses wrong about a disappearance — a folder not yet mounted, a sync client
+    // mid-write — deletes work nobody asked it to.
+    for (const list of vanished.values()) {
+      for (const v of list) {
+        report.vanished.push({ path: v.path });
+        handled.add(v.path);
       }
     }
 
@@ -176,6 +238,7 @@ export class SyncEngine {
     file: VaultFile,
     meta: Map<string, LocalMeta>,
     dedup: Map<string, string>,
+    vanished: Map<string, Vanished[]>,
     tree: Map<string, ServerNode>,
     rootNodeId: string,
     scopeId: string,
@@ -226,13 +289,106 @@ export class SyncEngine {
       return;
     }
 
+    // Nothing at this path on the server. Before treating it as new, ask whether it is
+    // something this device already had somewhere else.
+    const source = this.renameSourceFor(m, vanished, tree);
+    if (source) {
+      await this.pushMove(file, m, source, tree, rootNodeId, scopeId, state, report);
+      return;
+    }
+
     // Neither: a genuinely new file, nowhere on the server yet.
     await this.pushNew(file, m, tree, rootNodeId, scopeId, dedup, state, report);
   }
 
+  /**
+   * The one vanished path this file plausibly came from, or nothing.
+   *
+   * Deliberately narrow, in the terms docs/04 sets. **Unique**: two candidates with the same
+   * content give no way to tell which moved where, and picking one is a coin toss with
+   * somebody's file. **Large enough**: below a few hundred bytes a hash match carries almost
+   * no information — empty notes and repeated stubs collide constantly. **Still where it
+   * was**: if the server's tree no longer has a node at the old path, there is nothing to
+   * move and this is an ordinary create.
+   *
+   * Failing any of these is not a failure. It falls through to delete-and-create, and the
+   * blob deduplicates, so the cost of being conservative here is metadata.
+   */
+  private renameSourceFor(
+    m: LocalMeta,
+    vanished: Map<string, Vanished[]>,
+    tree: Map<string, ServerNode>,
+  ): Vanished | undefined {
+    if (m.size < RENAME_MIN_BYTES) return undefined;
+
+    const candidates = vanished.get(m.plainHash);
+    if (!candidates || candidates.length !== 1) return undefined;
+
+    const source = candidates[0]!;
+    const node = tree.get(source.path);
+    if (!node || node.nodeId !== source.nodeId) return undefined;
+
+    // Consumed: a second file with these bytes must not claim the same source.
+    vanished.delete(m.plainHash);
+    return source;
+  }
+
   private async hashAndTag(path: string): Promise<LocalMeta> {
     const bytes = await this.vault.read(path);
-    return { plainHash: toHex(sha256(bytes)), tag: dedupTag(this.vaultKey, bytes), mtime: Date.now() };
+    return {
+      plainHash: toHex(sha256(bytes)),
+      tag: dedupTag(this.vaultKey, bytes),
+      mtime: Date.now(),
+      size: bytes.length,
+    };
+  }
+
+  /**
+   * A move, not a delete and a create.
+   *
+   * The node keeps its id, so its **history follows it** — `versions` is keyed by `node_id`
+   * and knows nothing about names (docs/04). Recreating it would strand every earlier
+   * revision under a node the vault no longer shows.
+   *
+   * `If-Match` on the revision, because here placement really is the subject of the write:
+   * unlike content, where `rev` moving on a rename would make an unrelated edit a conflict.
+   */
+  private async pushMove(
+    file: VaultFile,
+    m: LocalMeta,
+    source: Vanished,
+    tree: Map<string, ServerNode>,
+    rootNodeId: string,
+    scopeId: string,
+    state: VaultState,
+    report: SyncReport,
+  ): Promise<void> {
+    const parentId = await this.ensureFolders(file.path, tree, rootNodeId, scopeId);
+    const name = basename(file.path);
+
+    const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
+      parent_id: parentId,
+      name_enc: encryptName(this.vaultKey, name),
+      name_hmac: nameHmac(this.vaultKey, name),
+      name_key_id: scopeId,
+    });
+
+    delete state.nodes[source.path];
+    state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address };
+
+    // The tree follows, so the pull at the end of the pass does not see the old path as a
+    // server-only node and fetch a file that has just moved.
+    tree.delete(source.path);
+    tree.set(file.path, {
+      nodeId: source.nodeId,
+      parentId,
+      path: file.path,
+      rev: out.rev,
+      address: source.address,
+      isFile: true,
+    });
+
+    report.renamed.push({ from: source.path, to: file.path });
   }
 
   /**

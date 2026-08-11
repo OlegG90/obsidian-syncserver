@@ -147,7 +147,7 @@ both at once.
 |---|---|
 | **M0** — schema, blob store, auth, `delta`/`put`/`delete`, deployed and walked end to end | done |
 | **M0.5** — the plugin: one-way sync, an empty vault materialised from the server | done |
-| **M1** — two-way sync on a real vault | in progress: adoption and content conflicts work; rename detection, trash reconciliation and migration pre-flight checks do not yet |
+| **M1** — two-way sync on a real vault | in progress: adoption, content conflicts and file renames work; folder renames, trash reconciliation, resync after the journal TTL and migration pre-flight checks do not yet |
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | not started |
 | **M3** — folder sharing | designed in full, not built |
 | **M4** — management console, version thinning, blob GC | not started |

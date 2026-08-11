@@ -13,6 +13,8 @@ const report = (over: Partial<SyncReport>): SyncReport => ({
   pulled: [],
   matched: [],
   conflicts: [],
+  renamed: [],
+  vanished: [],
   errors: [],
   ...over,
 });

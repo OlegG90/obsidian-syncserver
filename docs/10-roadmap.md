@@ -3,8 +3,8 @@
 | Milestone | Scope | Done |
 |---|---|---|
 | **M0** | database schema (including `versions`), blob store, authentication, `delta`/`put`/`delete`; verified with curl, no plugin. Ships as a **Docker image** deployed to the home server for testing — see [13](13-deployment.md) | ☑ |
-| **M0.5** | plugin, **one-way** sync: local changes reach the server, delta is only ever applied to an empty vault | ☐ |
-| **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☐ |
+| **M0.5** | plugin, **one-way** sync: local changes reach the server, delta is only ever applied to an empty vault | ☑ |
+| **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ◐ |
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☐ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☐ |
 | **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
@@ -42,9 +42,9 @@ missing named in the row.
 | Scenario | What it proves |
 |---|---|
 | **adoption of a non-empty vault** ☑ | matching by path, equal hashes transfer nothing, differing ones produce a conflict file |
-| renaming a file and a folder | `move`, `ancestry`, history survived |
+| renaming a file and a folder ◐ | `move`, `ancestry`, history survived — a file is covered; a renamed FOLDER is still seen as its files moving one by one |
 | deletion and restore from the trash | soft delete, grouping, ancestor chain, `409` on a taken name |
-| a conflict between two clients ◐ | the content precondition, the conflict file, and **no** spurious conflict on rename + edit — the first two are covered; the third needs rename detection, below |
+| a conflict between two clients ◐ | the content precondition, the conflict file, and **no** spurious conflict on rename + edit — the first two are covered; the third needs rename and edit to be recognised TOGETHER, which the hash heuristic cannot do |
 | an interruption between `POST /blobs` and the node write | `refs_pending`, TTL, retry without duplication |
 | a full rescan | changes made outside Obsidian, rename detection by hash |
 | resync after journal TTL | `410`, `snapshot`, the cursor after the walk |

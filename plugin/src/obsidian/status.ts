@@ -36,7 +36,10 @@ export const shortStatus = (phase: SyncPhase): string => {
       // A conflict is the one outcome that needs a person, not just an eye — ahead of the
       // ordinary counts even when they are also nonzero.
       if (r.conflicts.length) return `Sync: ${r.conflicts.length} conflict${r.conflicts.length === 1 ? '' : 's'}`;
-      if (r.pushed.length || r.pulled.length) return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓`;
+      if (r.pushed.length || r.pulled.length || r.renamed.length) {
+        const moves = r.renamed.length ? ` ${r.renamed.length}→` : '';
+        return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}`;
+      }
       // The case that started all this: nothing moved. Say which kind of nothing — matched
       // (adoption recognised everything and sent none of it again) reads very differently
       // from an empty vault, even though both leave pushed/pulled at zero.
@@ -87,6 +90,19 @@ export const statusLines = (phase: SyncPhase, connection?: { serverUrl: string; 
         lines.push('');
         lines.push('No local files were found. If this vault is not empty, the plugin is not');
         lines.push('seeing it — which is a fault worth reporting rather than a quiet success.');
+      }
+      if (r.renamed.length) {
+        lines.push('');
+        lines.push(`Moved (${r.renamed.length}) — the same note, so its history followed it:`);
+        for (const mv of r.renamed) lines.push(`  ${mv.from}  →  ${mv.to}`);
+      }
+      if (r.vanished.length) {
+        lines.push('');
+        lines.push(`Gone from this device (${r.vanished.length}), still on the server:`);
+        for (const v of r.vanished) lines.push(`  ${v.path}`);
+        lines.push('');
+        lines.push('Nothing was deleted. A rescan cannot tell "the user deleted this" from');
+        lines.push('"the folder was not mounted yet", and one of those answers destroys work.');
       }
       if (r.conflicts.length) {
         lines.push('');

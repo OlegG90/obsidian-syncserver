@@ -375,6 +375,64 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(report.pushed.some((p) => p.path === conflict.conflictPath), 'the conflict file itself was uploaded');
   });
 
+  it('renaming a file moves the node rather than replacing it, so its history follows', async () => {
+    // Long enough to clear the heuristic's floor: below a few hundred bytes a hash match
+    // means almost nothing (docs/04), and the engine deliberately declines to guess.
+    const body = `# Renamed\n\n${'A note with enough substance to be identifiable. '.repeat(20)}`;
+    const before = 'Renames/before.md';
+    const after = 'Renames/after.md';
+
+    const v = new FakeVault();
+    v.seed(before, body);
+    const store = new MemoryStateStore();
+    const engine = new SyncEngine(client, ownVaultId, kv2, v, store, 'laptop');
+
+    const first = await engine.sync();
+    assert.equal(first.errors.length, 0, JSON.stringify(first.errors));
+    const created = (await client.delta(ownVaultId)) as { changes: { node_id: string; name_enc: string | null }[] };
+    const originalNode = created.changes.find((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'before.md')!;
+    assert.ok(originalNode, 'the file reached the server under its first name');
+
+    // Renamed the way a file manager does it: gone from one path, present at another.
+    await v.delete(before);
+    v.seed(after, body);
+
+    const report = await engine.sync();
+    assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+    assert.deepEqual(report.renamed, [{ from: before, to: after }]);
+    assert.equal(report.pushed.length, 0, 'a move sends no content');
+    assert.equal(report.vanished.length, 0, 'the disappearance was explained by the rename');
+
+    const now = (await client.delta(ownVaultId)) as { changes: { node_id: string; name_enc: string | null }[] };
+    const movedNode = now.changes.find((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'after.md')!;
+    assert.ok(movedNode, 'the server knows it by its new name');
+
+    // The whole point: same node id. `versions` is keyed by node_id and knows nothing about
+    // names, so a delete-and-create would have stranded every earlier revision.
+    assert.equal(movedNode.node_id, originalNode.node_id, 'the node moved; it was not replaced');
+    assert.ok(!now.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'before.md'));
+  });
+
+  it('declines to guess on a small file, falling back to create — and says what vanished', async () => {
+    // Two empty-ish notes with identical content is the case the floor exists for: nothing
+    // in the bytes says which one moved where.
+    const tiny = 'tiny';
+    const v = new FakeVault();
+    v.seed('Small/one.md', tiny);
+    const store = new MemoryStateStore();
+    const engine = new SyncEngine(client, ownVaultId, kv2, v, store, 'laptop');
+    assert.equal((await engine.sync()).errors.length, 0);
+
+    await v.delete('Small/one.md');
+    v.seed('Small/two.md', tiny);
+
+    const report = await engine.sync();
+    assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+    assert.equal(report.renamed.length, 0, 'too small to be sure, so it did not pretend to be');
+    assert.ok(report.pushed.some((p) => p.path === 'Small/two.md'), 'created instead — the blob deduplicates anyway');
+    assert.deepEqual(report.vanished, [{ path: 'Small/one.md' }], 'and the disappearance is reported, not acted on');
+  });
+
   it('two clients editing the same file: the server refuses the second, and neither version is lost', async () => {
     // The M1 conflict scenario, end to end against a real server. Both devices sync the
     // file first, so each has it as a KNOWN node — this is the ordinary two-client conflict,
