@@ -34,7 +34,9 @@ export type CursorRejection = 'restore' | 'reset' | 'journal_ttl';
 /** Why a 400 was returned for a cursor rather than a 410 — a forged tag is malformed, not stale (#100). */
 export type CursorFault =
   /** Not a token this server can verify: start again from an empty cursor, applying no deletions. */
-  | 'cursor_unverifiable';
+  | 'cursor_unverifiable'
+  /** Verifiable, but issued for another account or vault: the same restart, and never a hint of whose. */
+  | 'cursor_wrong_subject';
 
 /** Why a write was refused with 409. */
 export type WriteConflict =

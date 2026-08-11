@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { SyncClient } from '../src/api/client.js';
+import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
 import { sealBlob } from '../src/crypto/blob.js';
 import { randomBytes, toHex, utf8 } from '../src/crypto/bytes.js';
@@ -29,7 +29,7 @@ class InitialStateStore implements StateStore {
   }
 }
 
-class FakeSyncClient {
+class FakeSyncClient implements VaultWire {
   putContentCalls = 0;
 
   private readonly remoteBytes: Uint8Array;
@@ -150,6 +150,15 @@ class FakeSyncClient {
   async getBlob(address: string): Promise<Uint8Array | undefined> {
     return address === this.remoteAddress ? this.remoteBytes : undefined;
   }
+
+  /** Recorded rather than thrown on: these scenarios do not rename, but a fake that refuses
+   *  an operation the seam declares is how the last one hid a real path from its own tests. */
+  moved: { nodeId: string; ifMatchRev: number }[] = [];
+
+  async moveNode(_vaultId: string, nodeId: string, ifMatchRev: number): Promise<{ rev: number }> {
+    this.moved.push({ nodeId, ifMatchRev });
+    return { rev: ifMatchRev + 1 };
+  }
 }
 
 const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText: string; serverText: string; knownText: string }) => {
@@ -168,7 +177,9 @@ const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText
       },
     },
   });
-  const engine = new SyncEngine(client as unknown as SyncClient, vaultId, kv, vault, store);
+  // No cast: the fake implements the seam the engine declares, so the type checker is
+  // proving the double matches rather than being told to stop looking.
+  const engine = new SyncEngine(client, vaultId, kv, vault, store);
   return { client, engine, path, vault };
 };
 

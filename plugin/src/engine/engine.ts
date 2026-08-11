@@ -22,7 +22,7 @@
  * journal TTL (`410`), and the pre-flight checks a real migration needs (quota, case
  * collisions, placeholder files). Left for the slices after this one.
  */
-import type { SyncClient } from '../api/client.js';
+import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
@@ -99,7 +99,7 @@ const RENAME_MIN_BYTES = 512;
 
 export class SyncEngine {
   constructor(
-    private readonly client: SyncClient,
+    private readonly client: VaultWire,
     private readonly vaultId: string,
     private readonly vaultKey: Uint8Array,
     private readonly vault: VaultAdapter,

@@ -50,12 +50,15 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
           userId: req.caller!.userId,
           vaultId,
         });
-        if (decoded === 'unverifiable') {
-          // Recoverable on purpose: "start again from an empty cursor, applying no
-          // deletions". Without this a device offline across two key rotations is bricked.
-          return reply.code(400).send({ error: 'cursor_unverifiable' });
+        if (typeof decoded === 'string') {
+          // The fault IS the wire value now, so there is nothing to translate and no way for
+          // a new case to be added on one side of a mapping and forgotten on the other.
+          //
+          // Both are recoverable on purpose: "start again from an empty cursor, applying no
+          // deletions". Without that a device offline across two key rotations is bricked —
+          // its token verifies under no surviving key and it cannot ask for a new one.
+          return reply.code(400).send({ error: decoded });
         }
-        if (decoded === 'wrong_subject') return reply.code(400).send({ error: 'cursor_wrong_subject' });
         cursor = decoded;
       } else {
         // No cursor is not a stale cursor: it is a client that has never synced this vault.

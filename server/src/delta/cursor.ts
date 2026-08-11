@@ -12,9 +12,13 @@
  * the whole recovery protocol.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { CursorPayload } from '@syncserver/shared';
+import type { CursorFault, CursorPayload } from '@syncserver/shared';
 
-export type CursorFault = 'unverifiable' | 'wrong_subject';
+// The wire vocabulary, used by its own producer. There was a second one here — the same two
+// cases under shorter names — with the route translating between them. Two names for one
+// concept do not stay in step: the shared type had drifted to a single value while this file
+// and the route had two, so a client written against the contract would not have known that
+// `cursor_wrong_subject` could arrive at all.
 
 const b64u = (b: Buffer): string => b.toString('base64url');
 
@@ -30,7 +34,7 @@ export const encodeCursor = (secret: string, payload: CursorPayload): string => 
  * A bad tag is **400, not 410**: a forged cursor is malformed, not stale, and answering
  * `410` would turn a mangled byte into a free full resync.
  *
- * The caller distinguishes `unverifiable` — "this is not a token I can check, start again
+ * The caller distinguishes `cursor_unverifiable` — "this is not a token I can check, start again
  * from nothing" — because without it a device offline across two key rotations is bricked:
  * its token verifies under no surviving key and it cannot ask for a new one. A tamper check
  * whose only outcome is a dead end fails closed on the wrong person.
@@ -41,7 +45,7 @@ export const decodeCursor = (
   expect: { userId: string; vaultId: string },
 ): CursorPayload | CursorFault => {
   const dot = token.indexOf('.');
-  if (dot < 1) return 'unverifiable';
+  if (dot < 1) return 'cursor_unverifiable';
 
   const body = token.slice(0, dot);
   const tag = token.slice(dot + 1);
@@ -49,19 +53,19 @@ export const decodeCursor = (
 
   const a = Buffer.from(tag);
   const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return 'unverifiable';
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return 'cursor_unverifiable';
 
   let payload: CursorPayload;
   try {
     payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as CursorPayload;
   } catch {
-    return 'unverifiable';
+    return 'cursor_unverifiable';
   }
-  if (payload.v !== 1) return 'unverifiable';
+  if (payload.v !== 1) return 'cursor_unverifiable';
 
   // `uid` and `vid` live inside the payload so a token cannot be replayed against another
   // account, nor against another vault of the same account, even with a valid tag.
-  if (payload.uid !== expect.userId || payload.vid !== expect.vaultId) return 'wrong_subject';
+  if (payload.uid !== expect.userId || payload.vid !== expect.vaultId) return 'cursor_wrong_subject';
 
   return payload;
 };
