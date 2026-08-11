@@ -114,12 +114,30 @@ class FakeSyncClient {
     return { sha256: _sealed.sha256, size: _sealed.bytes.length };
   }
 
-  async createNode(): Promise<{ node_id: string; rev: number }> {
-    throw new Error('createNode should not be called by these scenarios');
+  /** Paths created during a pass — a conflict file is uploaded in the same one that wrote it. */
+  created: string[] = [];
+
+  async createNode(_vaultId: string, body: { name_enc: string }): Promise<{ node_id: string; rev: number }> {
+    this.created.push(body.name_enc);
+    return { node_id: `node-${this.created.length}`, rev: 10 + this.created.length };
   }
 
-  async putContent(): Promise<{ rev: number }> {
+  /**
+   * The content precondition, modelled rather than waved through (#52).
+   *
+   * An earlier version of this fake accepted every PUT. That made it unable to catch the one
+   * failure it most needed to — an engine sending the server its own current address as the
+   * base, which can never mismatch and so silently overwrites whatever arrived in between.
+   */
+  async putContent(
+    _vaultId: string,
+    _nodeId: string,
+    body: { sha256: string; base_sha256: string | null },
+  ): Promise<{ rev: number } | { conflict: 'base_mismatch'; sha256: string; rev: number }> {
     this.putContentCalls++;
+    if (body.base_sha256 !== this.remoteAddress) {
+      return { conflict: 'base_mismatch', sha256: this.remoteAddress, rev: 2 };
+    }
     return { rev: 3 };
   }
 
@@ -168,17 +186,42 @@ describe('SyncEngine known-node reconciliation', () => {
     assert.equal(setup.client.putContentCalls, 0, 'remote-only change must not call PUT');
   });
 
-  it('known node with local and remote changes reports an error instead of overwriting the server', async () => {
+  it('known node changed on both sides becomes a conflict file, with neither version lost', async () => {
     const setup = makeKnownNodeScenario({ localText: 'local edit', serverText: 'remote edit', knownText: 'base' });
 
     const report = await setup.engine.sync();
 
-    assert.equal(setup.vault.contents(setup.path), 'local edit', 'local edit stays in place for the user to resolve');
-    assert.equal(report.pushed.length, 0);
-    assert.equal(report.pulled.length, 0);
-    assert.equal(setup.client.putContentCalls, 0, 'must not blindly PUT over the remote edit');
-    assert.equal(report.errors.length, 1);
-    assert.equal(report.errors[0]!.path, setup.path);
-    assert.match(report.errors[0]!.message, /changed on this device and on the server/);
+    // The PUT is sent, and the SERVER decides. That is the point of the precondition: the
+    // base is the version this device edited from, so a write that raced somebody else's is
+    // refused rather than accepted — which a client comparing two hashes it fetched a moment
+    // ago cannot arrange for itself.
+    assert.equal(setup.client.putContentCalls, 1, 'the precondition is what refuses it, not a local guess');
+    assert.ok(!report.pushed.some((p) => p.path === setup.path), 'the path itself was not written over');
+    assert.equal(report.errors.length, 0, `a conflict is an outcome, not a failure: ${JSON.stringify(report.errors)}`);
+
+    assert.equal(report.conflicts.length, 1, 'docs/04: the server version becomes the file, ours is kept beside it');
+    const conflict = report.conflicts[0]!;
+    assert.equal(conflict.path, setup.path);
+    assert.equal(setup.vault.contents(setup.path), 'remote edit', 'the server version now holds the path');
+    assert.equal(setup.vault.contents(conflict.conflictPath), 'local edit', 'and this device’s work survives');
+
+    // Not left for the next click: the moment it exists it is an ordinary new file, and the
+    // pass that created it uploads it.
+    assert.equal(setup.client.created.length, 1, 'the conflict file was uploaded in this same pass');
+    assert.ok(report.pushed.some((p) => p.path === conflict.conflictPath));
+  });
+
+  it('does not manufacture a conflict when both sides reached the same text', async () => {
+    // Two devices editing frontmatter back and forth land here constantly. The base still
+    // mismatches, so the server still refuses — but what it holds is exactly what was being
+    // sent, and calling that a conflict would bury the user in files for nothing (docs/04).
+    const setup = makeKnownNodeScenario({ localText: 'same', serverText: 'same', knownText: 'base' });
+
+    const report = await setup.engine.sync();
+
+    assert.equal(report.conflicts.length, 0);
+    assert.equal(report.errors.length, 0);
+    assert.equal(setup.vault.contents(setup.path), 'same', 'nothing written, nothing renamed');
+    assert.deepEqual(report.matched.map((m) => m.path), [setup.path], 'recorded as already in step');
   });
 });

@@ -375,6 +375,56 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(report.pushed.some((p) => p.path === conflict.conflictPath), 'the conflict file itself was uploaded');
   });
 
+  it('two clients editing the same file: the server refuses the second, and neither version is lost', async () => {
+    // The M1 conflict scenario, end to end against a real server. Both devices sync the
+    // file first, so each has it as a KNOWN node — this is the ordinary two-client conflict,
+    // not adoption's no-common-ancestor case.
+    const conflictPath = 'Devices/two-clients.md';
+
+    const a = new FakeVault();
+    a.seed(conflictPath, 'the shared starting point');
+    const storeA = new MemoryStateStore();
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    const b = new FakeVault();
+    b.seed(conflictPath, 'the shared starting point');
+    const storeB = new MemoryStateStore();
+    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    const adopted = await engineB.sync();
+    assert.equal(adopted.errors.length, 0, JSON.stringify(adopted.errors));
+    assert.ok(adopted.matched.some((m) => m.path === conflictPath), 'B adopted it without moving bytes');
+
+    // B edits and wins the race, because it syncs first.
+    await b.write(conflictPath, utf8('edited on the phone'));
+    const pushedB = await engineB.sync();
+    assert.equal(pushedB.errors.length, 0, JSON.stringify(pushedB.errors));
+    assert.ok(pushedB.pushed.some((p) => p.path === conflictPath));
+
+    // A edits from the version it last saw. Its base is stale, so the server refuses — and
+    // that refusal is the whole mechanism: A cannot know about B's write until it is told.
+    await a.write(conflictPath, utf8('edited on the laptop'));
+    const report = await engineA.sync();
+
+    assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+    assert.equal(report.conflicts.length, 1, 'a real conflict, decided by the server');
+    const conflict = report.conflicts[0]!;
+    assert.equal(conflict.path, conflictPath);
+    assert.match(conflict.conflictPath, /two-clients \(conflict \d{4}-\d{2}-\d{2} laptop\)\.md$/);
+
+    assert.equal(a.contents(conflictPath), 'edited on the phone', 'the server version holds the path');
+    assert.equal(a.contents(conflict.conflictPath), 'edited on the laptop', 'and the laptop’s work survives');
+
+    // And it is on the server too, not merely on disk: the conflict file uploads in the
+    // same pass, so the other device sees it on its next sync rather than never.
+    const delta = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in delta));
+    assert.ok(
+      delta.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === basenameOf(conflict.conflictPath)),
+      'the conflict file reached the server',
+    );
+  });
+
   it('adoption: identical content under a NEW path binds to the existing address — nothing sealed twice', async () => {
     const copyPath = 'Devices/copy-of-the-document.md';
     const b = new FakeVault();

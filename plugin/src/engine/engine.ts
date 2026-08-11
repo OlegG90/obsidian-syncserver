@@ -87,7 +87,14 @@ export class SyncEngine {
     const { tree, cursor } = await this.readServerTree(opened.root_node_id);
     const local = (await this.vault.list()).filter((f) => isSyncable(f.path));
     report.scanned = local.length;
-    const localPaths = new Set(local.map((f) => f.path));
+
+    // Filled as the walk goes, not snapshotted before it. The queue grows — a conflict
+    // resolution adds a file — and a path that this pass has just created and uploaded is
+    // not a "server only" node to fetch back down at the end. Taken from the list up front,
+    // that is exactly what happened: the conflict file was pushed and then immediately
+    // pulled over itself, which a real server answers silently because the envelope it
+    // needs was uploaded a moment earlier.
+    const handled = new Set<string>();
 
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
@@ -108,6 +115,7 @@ export class SyncEngine {
 
     while (queue.length) {
       const file = queue.shift()!;
+      handled.add(file.path);
       try {
         await this.reconcileLocal(file, meta, dedup, tree, opened.root_node_id, scopeId, state, report, queue);
       } catch (e) {
@@ -116,7 +124,7 @@ export class SyncEngine {
     }
 
     // What is left: server files no local copy ever stood in for. Ordinary pull.
-    const serverOnly = [...tree.values()].filter((n) => n.isFile && n.address && !localPaths.has(n.path));
+    const serverOnly = [...tree.values()].filter((n) => n.isFile && n.address && !handled.has(n.path));
     await this.pull(serverOnly, scopeId, state, report);
 
     state.cursor = cursor;
@@ -190,20 +198,16 @@ export class SyncEngine {
 
       if (!localChanged && !remoteChanged) return;
 
-      if (localChanged && !remoteChanged) {
-        await this.pushEdit(file, m, onServer, scopeId, dedup, state, report);
-        return;
-      }
-
       if (!localChanged && remoteChanged) {
         await this.pull([onServer], scopeId, state, report);
         return;
       }
 
-      report.errors.push({
-        path: file.path,
-        message: 'changed on this device and on the server; resolve manually before syncing again',
-      });
+      // Local moved — alone, or with the server. Both go through the same PUT: the
+      // precondition is what decides which it was, and the server is a better arbiter of
+      // that than a client comparing two hashes it fetched a moment ago. If they diverged,
+      // the 409 comes back and `pushEdit` writes the conflict file (docs/04).
+      await this.pushEdit(file, m, known, onServer, scopeId, dedup, state, report, queue);
       return;
     }
 
@@ -231,15 +235,30 @@ export class SyncEngine {
     return { plainHash: toHex(sha256(bytes)), tag: dedupTag(this.vaultKey, bytes), mtime: Date.now() };
   }
 
-  /** Seal-or-bind, then PUT against the content the server currently holds (#52). */
+  /**
+   * Seal-or-bind, then PUT with the content precondition (#52).
+   *
+   * The base is **the version this device last synchronised** — `known.address` — and not
+   * whatever the server holds at this instant. Sending the server its own current address
+   * would make the precondition a tautology: it could never fail, and #52's entire job is to
+   * fail when somebody else has written in the meantime.
+   *
+   * So a `409 base_mismatch` here is not an error to report; it is the answer arriving.
+   * docs/04 gives the two branches, and the first one matters more than it looks: if the
+   * server's content is what this device was about to write, two devices simply reached the
+   * same text independently — very common, editing frontmatter back and forth — and calling
+   * that a conflict would bury the user in files for nothing.
+   */
   private async pushEdit(
     file: VaultFile,
     m: LocalMeta,
+    known: { address: string } | undefined,
     onServer: ServerNode,
     scopeId: string,
     dedup: Map<string, string>,
     state: VaultState,
     report: SyncReport,
+    queue: VaultFile[],
   ): Promise<void> {
     const plain = await this.vault.read(file.path);
     const { sha256: address, material } = await this.resolveContent(plain, m.tag, dedup.get(m.tag), scopeId);
@@ -248,15 +267,44 @@ export class SyncEngine {
       sha256: address,
       size: plain.length,
       mtime: new Date(file.mtime).toISOString(),
-      base_sha256: onServer.address,
+      base_sha256: known?.address ?? onServer.address,
       ...material,
     });
+
     if ('conflict' in out) {
-      // A genuine race — somebody else wrote this node between the tree read and now.
-      // M1's adoption handles "no common ancestor"; this is the other kind, still open.
-      report.errors.push({ path: file.path, message: `refused: ${out.conflict}` });
+      if (out.conflict !== 'base_mismatch') {
+        // rev_mismatch or share_boundary: not about content, and not something a conflict
+        // file would resolve.
+        report.errors.push({ path: file.path, message: `refused: ${out.conflict}` });
+        return;
+      }
+
+      const current: ServerNode = { ...onServer, address: out.sha256 ?? onServer.address, rev: out.rev ?? onServer.rev };
+      const serverPlain = await this.fetchPlain(current, scopeId);
+
+      // Compared as PLAINTEXT, and it cannot be done any other way. `KC` is random, so the
+      // same text sealed twice lands at two different addresses (docs/06) — comparing the
+      // server's address against the one just uploaded would call every such case a
+      // conflict, which is precisely the case docs/04 says must not become one. Two devices
+      // reach identical content constantly, editing frontmatter back and forth.
+      if (toHex(sha256(serverPlain)) === m.plainHash) {
+        state.nodes[file.path] = {
+          nodeId: onServer.nodeId,
+          rev: current.rev,
+          plainHash: m.plainHash,
+          address: current.address!,
+        };
+        report.matched.push({ path: file.path });
+        return;
+      }
+
+      // A real conflict: both sides moved from a common base. Same resolution as adoption's
+      // no-common-ancestor case, because the outcome the user needs is identical — the
+      // server version takes the path, this device's work survives beside it.
+      await this.resolveConflict(file, current, scopeId, state, report, queue, serverPlain);
       return;
     }
+
     state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address };
     report.pushed.push({ path: file.path });
   }
@@ -330,17 +378,10 @@ export class SyncEngine {
     state: VaultState,
     report: SyncReport,
     queue: VaultFile[],
+    /** Already fetched by the caller that had to read it to decide this was a conflict at all. */
+    fetched?: Uint8Array,
   ): Promise<void> {
-    if (!onServer.address) throw new Error('a folder cannot collide on content — this is a bug if it happens');
-
-    const envelope = (await this.client.blobKeys(this.vaultId, [onServer.address]))
-      .get(onServer.address)
-      ?.find((e) => e.scopeId === scopeId);
-    if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
-    const ciphertext = await this.client.getBlob(onServer.address);
-    if (!ciphertext) throw new Error('the server holds no bytes at that address');
-    const serverPlain = openBlob(unwrapContentKey(this.vaultKey, envelope.wrappedKey), ciphertext);
-
+    const serverPlain = fetched ?? (await this.fetchPlain(onServer, scopeId));
     const localPlain = await this.vault.read(file.path);
     const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
 
@@ -351,10 +392,24 @@ export class SyncEngine {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
-      address: onServer.address,
+      address: onServer.address!,
     };
     report.conflicts.push({ path: file.path, conflictPath });
     queue.push({ path: conflictPath, mtime: Date.now() });
+  }
+
+  /** The server's own bytes for a node, opened with the content key its envelope carries. */
+  private async fetchPlain(node: ServerNode, scopeId: string): Promise<Uint8Array> {
+    if (!node.address) throw new Error('a folder has no content — this is a bug if it happens');
+
+    const envelope = (await this.client.blobKeys(this.vaultId, [node.address]))
+      .get(node.address)
+      ?.find((e) => e.scopeId === scopeId);
+    if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
+
+    const ciphertext = await this.client.getBlob(node.address);
+    if (!ciphertext) throw new Error('the server holds no bytes at that address');
+    return openBlob(unwrapContentKey(this.vaultKey, envelope.wrappedKey), ciphertext);
   }
 
   // ---- pull --------------------------------------------------------------------

@@ -459,7 +459,8 @@ flowchart TD
     P["PUT with base_sha256"] --> Q{"Same sha256<br/>on the server?"}
     Q -->|yes| OK["Write, rev += 1"]
     Q -->|no| C409["409 + current sha256 and rev"]
-    C409 --> H{"Server sha256 equals<br/>my new one?"}
+    C409 --> F["Fetch and open the server's version"]
+    F --> H{"Its PLAINTEXT hash equals<br/>my own?"}
     H -->|yes| SAME["Same text reached independently:<br/>just update local state"]
     H -->|no| CONF["Server version becomes the file;<br/>local one saved as<br/>Note (conflict 2026-08-01 laptop).md"]
 
@@ -474,6 +475,13 @@ flowchart TD
 
 The "hashes match" branch matters: two devices often reach identical content independently — editing
 frontmatter back and forth, for instance. Without it the user collects conflict files for nothing.
+
+> **The comparison is on plaintext, and it cannot be done any other way.** `KC` is random, so the same
+> text sealed twice lands at two different addresses ([06](06-key-model.md)) — the `sha256` the `409`
+> carries and the one just uploaded will differ even when the content is identical. Comparing them would
+> call every independently-reached agreement a conflict, which is the exact case this branch exists to
+> prevent. So the client fetches the server's version and hashes what it decrypts. That costs a round
+> trip, on the rare path where a write was refused, and it is the only honest way to ask the question.
 
 Conflict files are never removed automatically and synchronise as ordinary notes. The conflict panel in
 the plugin is simply a list of them with a diff.

@@ -36,14 +36,15 @@ first write, `user_blobs`, and the `base_sha256` precondition.
 ### Acceptance scenarios
 
 Each is run end to end. A ☑ means the scenario is covered by a test that runs against a **real server**
-(`npm run test:live`), not that the surrounding milestone is finished.
+(`npm run test:live`), not that the surrounding milestone is finished; ◐ means partly, with what is
+missing named in the row.
 
 | Scenario | What it proves |
 |---|---|
 | **adoption of a non-empty vault** ☑ | matching by path, equal hashes transfer nothing, differing ones produce a conflict file |
 | renaming a file and a folder | `move`, `ancestry`, history survived |
 | deletion and restore from the trash | soft delete, grouping, ancestor chain, `409` on a taken name |
-| a conflict between two clients | the content precondition, the conflict file, and **no** spurious conflict on rename + edit |
+| a conflict between two clients ◐ | the content precondition, the conflict file, and **no** spurious conflict on rename + edit — the first two are covered; the third needs rename detection, below |
 | an interruption between `POST /blobs` and the node write | `refs_pending`, TTL, retry without duplication |
 | a full rescan | changes made outside Obsidian, rename detection by hash |
 | resync after journal TTL | `410`, `snapshot`, the cursor after the walk |
