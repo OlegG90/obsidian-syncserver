@@ -75,6 +75,9 @@ export class ApiError extends Error {
   }
 }
 
+/** docs/04: 8 MB per part, and the same number is the threshold for using parts at all. */
+const PART_BYTES = 8 * 1024 * 1024;
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -93,6 +96,15 @@ export class SyncClient {
     private readonly transport: Transport,
     /** Overridable mainly so a test can prove a hung call is bounded without waiting 30 real seconds for it. */
     private readonly defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
+    /**
+     * The part size of a resumable upload, and by that fact the threshold above which one
+     * is used at all — docs/04 makes them one number, because a one-part resumable upload
+     * costs a retry exactly what a retried `POST` costs.
+     *
+     * The server enforces this as a **ceiling**, so a smaller value is always legal; a test
+     * lowers it to exercise several parts without moving megabytes.
+     */
+    private readonly partBytes = PART_BYTES,
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
@@ -384,10 +396,19 @@ export class SyncClient {
    * server never short-circuits, because answering "already have it" would turn the address
    * into an existence oracle. Sending twice is correct and costs the bytes.
    */
+  /**
+   * Upload a sealed blob, by whichever of the two paths its size calls for (docs/04).
+   *
+   * A note is a few kilobytes and an attachment is not. One `POST` is right for the first
+   * and wrong for the second: a connection that dies at 90% of a large file costs the whole
+   * file again, which on a phone is the ordinary case rather than the unlucky one.
+   */
   async putBlob(
     sealed: { sha256: string; bytes: Uint8Array; keyId: string },
     encAlg = 'xchacha20-poly1305',
   ): Promise<{ sha256: string; size: number }> {
+    if (sealed.bytes.length > this.partBytes) return this.putBlobResumable(sealed, encAlg);
+
     const q = new URLSearchParams({
       sha256: sealed.sha256,
       size: String(sealed.bytes.length),
@@ -406,6 +427,55 @@ export class SyncClient {
     });
     if (res.status !== 201) throw new ApiError(res.status, errorCode(res.text()), res.text());
     return JSON.parse(res.text()) as { sha256: string; size: number };
+  }
+
+  /**
+   * The resumable path: ask what is already there, send what is not, then complete.
+   *
+   * The first call is `GET /parts`, not the first part. On a first attempt it costs one
+   * cheap round trip and answers `{parts: []}`; on a retry it is the entire point, because
+   * it turns "upload this 200 MB file again" into "send the four parts that did not land".
+   * Making it unconditional keeps one code path where a flag would give two.
+   */
+  private async putBlobResumable(
+    sealed: { sha256: string; bytes: Uint8Array; keyId: string },
+    encAlg: string,
+  ): Promise<{ sha256: string; size: number }> {
+    const total = sealed.bytes.length;
+    const count = Math.ceil(total / this.partBytes);
+
+    const staged = await this.send({
+      method: 'GET',
+      path: `/blobs/${sealed.sha256}/parts`,
+      headers: {},
+    });
+    if (staged.status !== 200) throw new ApiError(staged.status, errorCode(staged.text()), staged.text());
+    const have = new Set((JSON.parse(staged.text()) as { parts: number[] }).parts);
+
+    for (let n = 1; n <= count; n++) {
+      if (have.has(n)) continue;
+      // Parts are numbered from 1, so part n covers [(n-1)·size, n·size).
+      const slice = sealed.bytes.subarray((n - 1) * this.partBytes, Math.min(n * this.partBytes, total));
+      const q = new URLSearchParams({ total: String(total), size: String(slice.length) });
+      const res = await this.send({
+        method: 'PUT',
+        path: `/blobs/${sealed.sha256}/parts/${n}?${q}`,
+        headers: { 'content-type': 'application/octet-stream' },
+        body: slice,
+        timeoutMs: BLOB_TIMEOUT_MS,
+      });
+      if (res.status !== 204) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    }
+
+    const q = new URLSearchParams({ size: String(total), enc_alg: encAlg, key_id: sealed.keyId });
+    const done = await this.send({
+      method: 'POST',
+      path: `/blobs/${sealed.sha256}/complete?${q}`,
+      headers: {},
+      timeoutMs: BLOB_TIMEOUT_MS,
+    });
+    if (done.status !== 201) throw new ApiError(done.status, errorCode(done.text()), done.text());
+    return JSON.parse(done.text()) as { sha256: string; size: number };
   }
 
   /** `undefined` for 404, which here means "you hold no live reference to it" (#20), not "it is gone". */

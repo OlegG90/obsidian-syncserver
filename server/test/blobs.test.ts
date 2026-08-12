@@ -15,7 +15,12 @@ import { connect, type Db } from '../src/db.js';
 import { storageKeyFor } from '../src/blobs/store.js';
 
 const STORE = `var/test-blobs-${process.pid}`;
-const cfg = { ...loadConfig(), blobStorePath: STORE };
+const base = loadConfig();
+// 1 KB parts, not 8 MB: the account quota here is 1 MiB, so a realistic part size would
+// make a multi-part upload impossible to express. The server enforces the part size as a
+// ceiling, so lowering it exercises the same code with less traffic.
+const PART = 1024;
+const cfg = { ...base, blobStorePath: STORE, limits: { ...base.limits, uploadPartBytes: PART } };
 
 let db: Db;
 let app: FastifyInstance;
@@ -167,5 +172,168 @@ describe('reading is authorised by the caller\'s own reference (#20)', () => {
   it('refuses an unauthenticated read', async () => {
     const r = await app.inject({ method: 'GET', url: `/blobs/${'0'.repeat(64)}` });
     assert.equal(r.statusCode, 401);
+  });
+});
+
+describe('resumable upload (docs/04)', () => {
+  const parts = (body: Buffer): Buffer[] => {
+    const out: Buffer[] = [];
+    for (let at = 0; at < body.length; at += PART) out.push(body.subarray(at, Math.min(at + PART, body.length)));
+    return out;
+  };
+
+  const putPart = (token: string, address: string, n: number, chunk: Buffer, total: number, overrides: Record<string, string> = {}) =>
+    app.inject({
+      method: 'PUT',
+      url: `/blobs/${address}/parts/${n}`,
+      query: { total: String(total), size: String(chunk.length), ...overrides },
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      payload: chunk,
+    });
+
+  const listParts = (token: string, address: string) =>
+    app.inject({ method: 'GET', url: `/blobs/${address}/parts`, headers: { authorization: `Bearer ${token}` } });
+
+  const complete = (token: string, address: string, size: number) =>
+    app.inject({
+      method: 'POST',
+      url: `/blobs/${address}/complete`,
+      query: { size: String(size), key_id: randomUUID() },
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+  it('assembles the parts into exactly the blob a single POST would have stored', async () => {
+    const body = randomBytes(PART * 3 + 17);
+    const address = sha(body);
+    for (const [i, chunk] of parts(body).entries()) {
+      const r = await putPart(access, address, i + 1, chunk, body.length);
+      assert.equal(r.statusCode, 204, r.body);
+    }
+
+    const done = await complete(access, address, body.length);
+    assert.equal(done.statusCode, 201, done.body);
+    assert.equal(done.json().size, body.length);
+
+    // The same row a single-shot upload writes, at the same storage key — one code path.
+    const row = await db.one<{ storageKey: string }>(
+      `SELECT storage_key AS "storageKey" FROM blobs WHERE sha256 = $1`,
+      [Buffer.from(address, 'hex')],
+    );
+    assert.equal(row!.storageKey, storageKeyFor(address));
+
+    // And it reads back byte for byte, once the caller holds a live reference.
+    await db.query(`UPDATE user_blobs SET refs_own = 1, refs_pending = 0, pending_since = NULL, pending_device_id = NULL
+                     WHERE sha256 = $1`, [Buffer.from(address, 'hex')]);
+    const read = await app.inject({ method: 'GET', url: `/blobs/${address}`, headers: { authorization: `Bearer ${access}` } });
+    assert.equal(read.statusCode, 200);
+    assert.deepEqual(read.rawPayload, body);
+  });
+
+  it('answers a resume with what this caller staged, and re-sending a part overwrites it', async () => {
+    const body = randomBytes(PART * 2);
+    const address = sha(body);
+    const [one, two] = parts(body);
+
+    const untouched = await listParts(access, address);
+    assert.equal(untouched.statusCode, 200, 'an address never started answers 200, not 404');
+    assert.deepEqual(untouched.json(), { parts: [], bytes: 0 });
+
+    await putPart(access, address, 1, one!, body.length);
+    assert.deepEqual((await listParts(access, address)).json(), { parts: [1], bytes: PART });
+
+    // A client unsure whether part 1 landed simply sends it again.
+    const again = await putPart(access, address, 1, one!, body.length);
+    assert.equal(again.statusCode, 204);
+    assert.deepEqual((await listParts(access, address)).json(), { parts: [1], bytes: PART }, 'overwritten, not appended');
+
+    await putPart(access, address, 2, two!, body.length);
+    assert.equal((await complete(access, address, body.length)).statusCode, 201);
+  });
+
+  it('tells a stranger nothing about an upload or a finished blob', async () => {
+    const body = randomBytes(PART * 2);
+    const address = sha(body);
+    for (const [i, chunk] of parts(body).entries()) await putPart(access, address, i + 1, chunk, body.length);
+    assert.equal((await complete(access, address, body.length)).statusCode, 201);
+
+    // The blob now exists on the server. The resume call must not be the oracle that the
+    // 404-not-403 rule and the missing short circuit on POST /blobs both exist to close.
+    const stranger = await listParts(otherAccess, address);
+    assert.equal(stranger.statusCode, 200);
+    assert.deepEqual(stranger.json(), { parts: [], bytes: 0 });
+  });
+
+  it('stages no claim on content, so parts alone never acquire somebody else\'s blob', async () => {
+    // The account stages parts for an address and never completes it. Another account then
+    // uploads that very content. Without the "no row before the bytes" rule, the first
+    // account would now hold a claim on a file it never sent.
+    const body = randomBytes(PART * 2);
+    const address = sha(body);
+    await putPart(otherAccess, address, 1, parts(body)[0]!, body.length);
+
+    const sha256 = Buffer.from(address, 'hex');
+    const claim = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM user_blobs WHERE sha256 = $1`,
+      [sha256],
+    );
+    assert.equal(claim!.n, '0', 'staging parts writes no user_blobs row');
+
+    assert.equal((await upload(access, body)).statusCode, 201);
+    await db.query(`UPDATE user_blobs SET refs_own = 1, refs_pending = 0, pending_since = NULL, pending_device_id = NULL
+                     WHERE sha256 = $1`, [sha256]);
+
+    const stranger = await app.inject({
+      method: 'HEAD',
+      url: `/blobs/${address}`,
+      headers: { authorization: `Bearer ${otherAccess}` },
+    });
+    assert.equal(stranger.statusCode, 404, 'a staged part is not a reference to what somebody else uploaded');
+  });
+
+  it('refuses a hole without destroying the upload, because a hole is what a resume is for', async () => {
+    const body = randomBytes(PART * 3);
+    const address = sha(body);
+    const [one, two, three] = parts(body);
+    await putPart(access, address, 1, one!, body.length);
+    await putPart(access, address, 3, three!, body.length);
+
+    const early = await complete(access, address, body.length);
+    assert.equal(early.statusCode, 409);
+    assert.equal(early.json().error, 'parts_missing');
+    assert.deepEqual(early.json().have, [1, 3]);
+
+    assert.deepEqual((await listParts(access, address)).json().parts, [1, 3], 'the staging survived the refusal');
+    await putPart(access, address, 2, two!, body.length);
+    assert.equal((await complete(access, address, body.length)).statusCode, 201);
+  });
+
+  it('refuses parts that do not hash to the address, and discards them', async () => {
+    const body = randomBytes(PART * 2);
+    const address = sha(randomBytes(64)); // an address these bytes do not produce
+    for (const [i, chunk] of parts(body).entries()) await putPart(access, address, i + 1, chunk, body.length);
+
+    const r = await complete(access, address, body.length);
+    assert.equal(r.statusCode, 400);
+    assert.equal(r.json().error, 'address_mismatch');
+
+    // Discarded, because the server cannot say which part was wrong: retrying `complete`
+    // would otherwise fail identically for ever.
+    assert.deepEqual((await listParts(access, address)).json(), { parts: [], bytes: 0 });
+  });
+
+  it('refuses a part above the part size, and an upload above the quota at its first part', async () => {
+    const body = randomBytes(PART * 2);
+    const address = sha(body);
+
+    const tooBig = await putPart(access, address, 1, randomBytes(PART + 1), body.length);
+    assert.equal(tooBig.statusCode, 413);
+    assert.equal(tooBig.json().error, 'part_too_large');
+
+    // Quota is answered from the WHOLE size, so an upload that cannot fit is refused
+    // before its first part rather than after its last.
+    const tooMuch = await putPart(access, address, 1, parts(body)[0]!, body.length, { total: String(64 * 1024 * 1024) });
+    assert.equal(tooMuch.statusCode, 413);
+    assert.equal(tooMuch.json().error, 'over_quota');
+    assert.deepEqual((await listParts(access, address)).json(), { parts: [], bytes: 0 }, 'nothing was written');
   });
 });

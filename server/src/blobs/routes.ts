@@ -4,7 +4,7 @@ import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { callerHoldsBlob, envelopesFor, mayAccept, recordUpload, storageKeyOf } from './service.js';
 import type { RateLimiter } from './rate.js';
-import { HashMismatch, type BlobStore } from './store.js';
+import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -50,6 +50,36 @@ export const registerBlobRoutes = (
       };
     },
   );
+
+  /**
+   * What both upload paths must clear before a byte is written (docs/04).
+   *
+   * "An authenticated session AND a registered device" (#33). The access token names a
+   * device, but a token outlives the row: signing a device out has to mean something before
+   * the token expires, or "sign out this device" is advice rather than an act (#90). Checked
+   * here rather than on every request — this is the path where being wrong costs disk.
+   *
+   * Quota is answered from the blob's WHOLE size, not from what this request carries, so a
+   * resumable upload that cannot fit is refused at its first part rather than at its last.
+   */
+  const admit = async (
+    userId: string,
+    deviceId: string,
+    sha: Buffer,
+    totalBytes: number,
+  ): Promise<{ code: number; body: { error: string } } | undefined> => {
+    const device = await db.one<{ id: string }>(
+      `SELECT id FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [deviceId, userId],
+    );
+    if (!device) return { code: 401, body: { error: 'device_revoked' } };
+
+    if (totalBytes > cfg.limits.unfinishedUploadBytes) return { code: 413, body: { error: 'too_large' } };
+
+    const verdict = await mayAccept(db, userId, sha, totalBytes);
+    if (!verdict.ok) return { code: 413, body: { error: verdict.reason! } };
+    return undefined;
+  };
 
   /**
    * "Do I have this", not "does the server have this" (#26).
@@ -105,8 +135,8 @@ export const registerBlobRoutes = (
    * declares the address up front, so anyone with a copy of a file could test for it. The
    * server accepts the bytes and deduplicates internally (#46).
    *
-   * Resumability is M2. What is here is the mechanism it will build on — a temp name
-   * renamed into place — not a placeholder for it.
+   * This is the whole-blob path, for anything at or below the part size. Above it a client
+   * uses the resumable calls below, which end in the same `recordUpload` (docs/04).
    */
   app.post<{ Querystring: { sha256?: string; size?: string; enc_alg?: string; key_id?: string } }>(
     '/blobs',
@@ -120,24 +150,10 @@ export const registerBlobRoutes = (
       if (!hex || !HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
       if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
       if (!keyId) return reply.code(400).send({ error: 'key_id_required' });
-      if (declaredSize > cfg.limits.unfinishedUploadBytes) {
-        return reply.code(413).send({ error: 'too_large' });
-      }
       const sha = Buffer.from(hex, 'hex');
 
-      // "An authenticated session AND a registered device" (#33). The access token names a
-      // device, but a token outlives the row: signing a device out has to mean something
-      // before the token expires, or "sign out this device" is advice rather than an act
-      // (#90). Checked here rather than on every request — this is the path where being
-      // wrong costs disk.
-      const device = await db.one<{ id: string }>(
-        `SELECT id FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-        [req.caller!.deviceId, req.caller!.userId],
-      );
-      if (!device) return reply.code(401).send({ error: 'device_revoked' });
-
-      const verdict = await mayAccept(db, req.caller!.userId, sha, declaredSize);
-      if (!verdict.ok) return reply.code(413).send({ error: verdict.reason });
+      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, declaredSize);
+      if (refusal) return reply.code(refusal.code).send(refusal.body);
 
       // Charged from the DECLARED size, before a byte arrives. A volume limit applied
       // afterwards is one checked once the disk it protects already holds the data.
@@ -174,6 +190,148 @@ export const registerBlobRoutes = (
         keyId,
       });
 
+      return reply.code(201).send({ sha256: hex, size: stored.size });
+    },
+  );
+
+  /**
+   * One part of a resumable upload (docs/04).
+   *
+   * Idempotent by index: a client that does not know whether a part landed resends it. That
+   * is the whole reason the parts are addressed rather than appended — an append protocol
+   * has to know exactly how much arrived, which is precisely what a dropped connection does
+   * not tell either side.
+   *
+   * **No row is written here.** A `user_blobs` row is a claim on content, and creating one
+   * from a declared hash before any bytes arrive would let anyone who has merely LEARNED an
+   * address claim a blob somebody else then uploads — under deduplication that is somebody
+   * else's file. Quota is still reserved before the upload starts, from `total`; the claim
+   * is written by `complete`, after the assembled bytes hash to the address.
+   */
+  app.put<{ Params: { sha256: string; n: string }; Querystring: { total?: string; size?: string } }>(
+    '/blobs/:sha256/parts/:n',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const hex = req.params.sha256;
+      const index = Number(req.params.n);
+      const total = Number(req.query.total);
+      const declaredSize = Number(req.query.size);
+
+      if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
+      if (!Number.isInteger(index) || index < 1) return reply.code(400).send({ error: 'bad_part' });
+      if (!Number.isInteger(total) || total <= 0) return reply.code(400).send({ error: 'bad_size' });
+      if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
+      if (declaredSize > cfg.limits.uploadPartBytes) return reply.code(413).send({ error: 'part_too_large' });
+
+      const sha = Buffer.from(hex, 'hex');
+      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, total);
+      if (refusal) return reply.code(refusal.code).send(refusal.body);
+
+      // The in-flight ceiling, measured from the staging area rather than from rows —
+      // parts have no rows, so this directory is where "unfinished" is written down.
+      const inFlight = await store.stagedBytes(req.caller!.userId);
+      if (inFlight + declaredSize > cfg.limits.unfinishedUploadBytes) {
+        return reply.code(413).send({ error: 'too_many_unfinished' });
+      }
+
+      const allowance = rate.reserve(req.caller!.userId, declaredSize);
+      if (!allowance.ok) {
+        return reply
+          .code(429)
+          .header('retry-after', String(allowance.retryAfterSeconds))
+          .send({ error: 'rate_limited', retry_after: allowance.retryAfterSeconds });
+      }
+
+      const { size } = await store.stagePart(req.caller!.userId, hex, index, req.raw);
+      if (size !== declaredSize) {
+        // What arrived is not what was charged against the ceiling, so it does not stay —
+        // but only this part goes. Discarding the whole upload over one bad part would
+        // throw away everything already sent, which is the opposite of resumable.
+        await store.discardPart(req.caller!.userId, hex, index);
+        return reply.code(400).send({ error: 'size_mismatch' });
+      }
+
+      return reply.code(204).send();
+    },
+  );
+
+  /**
+   * What this caller has already staged, so a reconnecting client can skip it.
+   *
+   * **Never a 404, and never a word about the finished blob.** An address the caller never
+   * started answers `{parts: []}`, exactly as an address that does not exist would: any
+   * other answer would make this the existence oracle that the `404`-not-`403` rule (#20)
+   * and the missing short circuit on `POST /blobs` both exist to close. It reads the
+   * caller's own staging directory and nothing else, so there is no other answer to give.
+   */
+  app.get<{ Params: { sha256: string } }>(
+    '/blobs/:sha256/parts',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const hex = req.params.sha256;
+      if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
+      return store.stagedParts(req.caller!.userId, hex);
+    },
+  );
+
+  /**
+   * Assemble the parts into the blob, and only then record the claim.
+   *
+   * The verification is the single-shot one, on the same code path: `assemble` concatenates
+   * `1..k` through `store.put`, which hashes and refuses an address the bytes do not
+   * produce. A resumable upload therefore cannot store what a `POST` could not.
+   *
+   * A failure discards the staging. The server cannot tell which part was wrong, so leaving
+   * them would let the client retry into the same wall for ever.
+   */
+  app.post<{ Params: { sha256: string }; Querystring: { size?: string; enc_alg?: string; key_id?: string } }>(
+    '/blobs/:sha256/complete',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const hex = req.params.sha256;
+      const declaredSize = Number(req.query.size);
+      const encAlg = req.query.enc_alg ?? 'xchacha20-poly1305';
+      const keyId = req.query.key_id;
+
+      if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
+      if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
+      if (!keyId) return reply.code(400).send({ error: 'key_id_required' });
+
+      const sha = Buffer.from(hex, 'hex');
+      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, declaredSize);
+      if (refusal) return reply.code(refusal.code).send(refusal.body);
+
+      let stored;
+      try {
+        stored = await store.assemble(req.caller!.userId, hex);
+      } catch (e) {
+        if (e instanceof PartsMissing) {
+          // The only refusal that does NOT discard: a hole is what a resume is for, and
+          // throwing the upload away here would make an early `complete` destructive.
+          return reply.code(409).send({ error: 'parts_missing', have: e.have });
+        }
+        await store.discardStaging(req.caller!.userId, hex);
+        if (e instanceof HashMismatch) return reply.code(400).send({ error: 'address_mismatch' });
+        throw e;
+      }
+
+      if (stored.size !== declaredSize) {
+        await store.remove(stored.storageKey);
+        await store.discardStaging(req.caller!.userId, hex);
+        return reply.code(400).send({ error: 'size_mismatch' });
+      }
+
+      await recordUpload(db, {
+        userId: req.caller!.userId,
+        deviceId: req.caller!.deviceId,
+        sha256: sha,
+        size: stored.size,
+        storageKey: stored.storageKey,
+        encAlg,
+        keyId,
+      });
+
+      await store.discardStaging(req.caller!.userId, hex);
       return reply.code(201).send({ sha256: hex, size: stored.size });
     },
   );

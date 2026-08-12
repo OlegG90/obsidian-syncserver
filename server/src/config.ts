@@ -43,6 +43,14 @@ export interface Config {
     uploadBytesPerMinute: number;
     /** docs/04: 2 GB of unfinished uploads per account. */
     unfinishedUploadBytes: number;
+    /**
+     * docs/04: 8 MB per part of a resumable upload.
+     *
+     * It is also the threshold: a blob at or below it goes in one `POST`, because a
+     * one-part resumable upload costs the same bytes on retry as a retried `POST`. There
+     * is deliberately no second number for the threshold to be set wrong against.
+     */
+    uploadPartBytes: number;
     /** docs/04: 24 h on abandoned parts. Strictly below the next one — see below. */
     abandonedPartTtlSeconds: number;
     /**
@@ -81,6 +89,7 @@ export const loadConfig = (): Config => {
     limits: {
       uploadBytesPerMinute: int('UPLOAD_BYTES_PER_MINUTE', 200 * 1024 * 1024),
       unfinishedUploadBytes: int('UNFINISHED_UPLOAD_BYTES', 2 * 1024 * 1024 * 1024),
+      uploadPartBytes: int('UPLOAD_PART_BYTES', 8 * 1024 * 1024),
       abandonedPartTtlSeconds: int('ABANDONED_PART_TTL_SECONDS', 24 * 60 * 60),
       unboundBlobTtlSeconds: int('UNBOUND_BLOB_TTL_SECONDS', 48 * 60 * 60),
       journalTtlSeconds: int('JOURNAL_TTL_SECONDS', 90 * 24 * 60 * 60),

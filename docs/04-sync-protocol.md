@@ -217,8 +217,13 @@ POST   /shares/{id}/finalize-leave
                                      vault_envelopes, vault_dedup_tags}]} affected member only
 
 HEAD   /blobs/{sha256}                  → 200 = caller has a live reference; 404 otherwise
-POST   /blobs                           → chunked, resumable, 4–8 MB parts (blobs are account-global)
+POST   /blobs?sha256=&size=&enc_alg=&key_id=   → whole blob in one request (blobs are account-global)
 GET    /blobs/{sha256}                  → content, supports Range
+
+PUT    /blobs/{sha256}/parts/{n}?total=&size=  → one part of a resumable upload; 204, idempotent
+GET    /blobs/{sha256}/parts                   → {parts: [n,…], bytes} — what this caller already staged
+POST   /blobs/{sha256}/complete?size=&enc_alg=&key_id=
+                                               → assemble, verify the address, 201 {sha256, size}
 
 GET    /vaults/{vault_id}/blob-keys?sha256=a,b,…
                                                → {keys: [{sha256, scope_id, wrapped_key}]}
@@ -596,13 +601,71 @@ and it does not take an attacker, just a client stuck in a retry loop.
 | TTL on an **unbound** blob | **48 h** | uploaded and never referenced by a node: swept after this, counted against quota while alive |
 | TTL on the delta journal | **90 days** | append-only log, pruned on its TTL so a stale cursor gets `410 journal_ttl` instead of being answered from a gap |
 
-The part size for a *resumable* upload (**8 MB** in the roadmap) belongs to the resumable
-protocol, which is M2 — this M0 server takes whole blobs over one `POST`, so there is
-nothing on this side of the wire for a part limit to govern, and none exists in config
-until it does.
+| part size, resumable upload | **8 MB** | large enough that a vault of attachments is not a thousand round trips, small enough that a dropped connection costs one part |
 
 Every limit above is enforced by the running server or by the collector; the defaults are
 what a family-sized server runs with.
+
+### Resumable upload
+
+A note is a few kilobytes and a scanned PDF is not. One `POST` per blob is right for the
+first and wrong for the second: a connection that dies at 90% of a 200 MB attachment costs
+the whole 200 MB again, and on a phone that is the normal case rather than the unlucky one.
+
+**The threshold is the part size, and is not a separate number.** A blob of 8 MB or less is
+one part, and a one-part resumable upload buys nothing a retried `POST` does not already
+give — the same bytes travel again either way. So a client sends anything at or below the
+part size through `POST /blobs` and anything above it through the three calls below. Making
+the threshold a knob of its own would only create the possibility of setting it wrong.
+
+```
+PUT  /blobs/{sha256}/parts/{n}?total=<bytes>&size=<bytes>   → 204
+GET  /blobs/{sha256}/parts                                   → {parts: [1,2,…], bytes}
+POST /blobs/{sha256}/complete?size=&enc_alg=&key_id=         → 201 {sha256, size}
+```
+
+Parts are numbered from 1 and must arrive as a contiguous run for `complete` to accept
+them; within that, order and repetition do not matter. A `PUT` of an index already staged
+overwrites it, so a client that is unsure whether a part landed may simply send it again.
+
+**Resuming is `GET /parts`, and it answers only about the caller's own staging.** A client
+that reconnects asks what it already sent and skips those indices. For a hash it never
+started, the answer is `{parts: []}` with a `200` — never a `404`, and never a word about
+whether the finished blob exists. Otherwise the resume call would be exactly the existence
+oracle that the `404`-not-`403` rule (#20) and the missing short-circuit on `POST /blobs`
+both exist to close.
+
+**There is deliberately no `init` call, and no row is written before the bytes arrive.**
+The obvious design reserves quota up front by creating the unbound `user_blobs` row at the
+start of the upload. It must not: that row is a *claim on content*, and creating one from a
+declared hash alone would let anyone who learns an address — from a delta they once had, or
+from a share they have since left — claim a blob somebody else then uploads, and read it.
+Under deduplication one address is shared by every account holding that content (#42), so a
+claim that costs no bytes is a way to acquire content one never had. The claim is therefore
+written by `complete`, from the same `recordUpload` the single-shot `POST` uses, and only
+after the assembled bytes have been hashed and found to equal the address they claim.
+
+Nothing is lost by that, because quota is still reserved before the upload starts: every
+`PUT` declares the blob's `total` and is refused on quota, on the account freeze, and on the
+in-flight ceiling before it writes anything. The first part refuses an upload that cannot
+fit, which is the point of checking early — the account is protected by the check, not by
+the row.
+
+**The in-flight ceiling is measured from the staging area, not from rows.** Parts are files
+under `staging/{user_id}/{sha256}/{n}` in the blob store, so "how many unfinished bytes does
+this account have" is a walk of one directory, and the 2 GB ceiling has an owner without a
+table. This is what "only the unbound blob has a database row" means in practice.
+
+**`complete` verifies the whole, not the parts.** It concatenates `1..k` into the same
+temp-name-then-`rename()` write the single-shot path uses, hashes as it goes, and refuses
+with `400 address_mismatch` if the result is not the address in the URL — the same check,
+on the same code path, so a resumable upload cannot poison an address a single-shot upload
+could not. It also refuses `400 size_mismatch` if the assembled length disagrees with the
+declared `size`, and `409 parts_missing` if the run from 1 has a hole.
+
+**A failed `complete` discards the staging.** The server cannot tell which part was wrong,
+so leaving them would let the client retry into the same wall for ever; discarding them
+makes the next attempt a fresh upload, which is the only attempt that can succeed.
 
 **A refused upload says how long to wait.** Over the volume limit the answer is `429` with
 `Retry-After`, computed from when enough of the window rolls off to fit *this* upload — not
@@ -630,8 +693,9 @@ The unbound-blob row closes the quietest hole: without it, content can be parked
 **Only the *unbound blob* has a database row; the *parts* of a resumable upload do not.** The unbound state
 is `user_blobs` with `refs_pending > 0` ([03](03-data-model.md)) — a row the server clears when the blob is
 bound and sweeps on its 48 h TTL. The parts in between are staging files in the blob store: the same
-temp-name-then-`rename()` area, written by the client's chunked `POST`, and counted/measured and swept by
-the application, not by rows. That is why the schema has no `parts` or `uploads` table and none is needed —
+temp-name-then-`rename()` area, written by the client's `PUT /blobs/{sha256}/parts/{n}`, and
+counted/measured and swept by the application, not by rows. That is why the schema has no `parts` or
+`uploads` table and none is needed —
 a part is an incomplete write, and an incomplete write is exactly what the temp-name scheme exists to
 leave behind as sweepable.
 

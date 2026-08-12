@@ -22,10 +22,10 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 
 import { ApiError, SyncClient } from '../src/api/client.js';
-import { fetchTransport } from '../src/api/transport.js';
+import { fetchTransport, type Transport } from '../src/api/transport.js';
 import { authSecret, createAccount, openAccount, vaultKey } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
-import { fromBase64, fromUtf8, randomUuid, toBase64, utf8 } from '../src/crypto/bytes.js';
+import { fromBase64, fromUtf8, randomBytes, randomUuid, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { HEADER_BYTES } from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
@@ -212,6 +212,63 @@ describe('a vault, end to end', () => {
     assert.ok(node.node_id);
 
     assert.equal(await client.hasBlob(address), true, 'and 200 once a node holds it');
+  });
+
+  it('resumes a large upload from where it broke, instead of sending it again', async () => {
+    // 512-byte parts rather than 8 MB, so this proves the protocol without moving
+    // megabytes. The server enforces the part size as a ceiling, so a smaller one needs no
+    // configuration on its side — which is itself worth knowing.
+    const big = randomBytes(5000);
+    const sealed = sealBlob(big);
+
+    let puts = 0;
+    let breakAfter = Infinity;
+    const flaky: Transport = async (req) => {
+      if (req.method === 'PUT' && req.url.includes('/parts/')) {
+        puts++;
+        if (puts > breakAfter) throw new Error('the connection dropped');
+      }
+      return fetchTransport(req);
+    };
+
+    // The tokens come from the authenticated client; `partBytes` is applied AFTER the copy,
+    // because `Object.assign` would otherwise bring the 8 MB default across with them.
+    const small = new SyncClient(base, flaky);
+    Object.assign(small, client, { transport: flaky, partBytes: 512 });
+
+    breakAfter = 3;
+    await assert.rejects(small.putBlob(sealed), 'the upload dies partway through');
+    assert.equal(puts, 4, 'three parts landed, the fourth did not');
+
+    breakAfter = Infinity;
+    puts = 0;
+    const stored = await small.putBlob(sealed);
+    assert.equal(stored.sha256, sealed.sha256);
+    assert.equal(stored.size, sealed.bytes.length);
+
+    // The whole point: the second attempt sent only what was missing. Ten parts in all,
+    // three already staged — a client that re-sent everything would show ten here.
+    assert.equal(puts, Math.ceil(sealed.bytes.length / 512) - 3, 'only the parts that never landed');
+
+    // And what the server assembled is the blob, not merely something of the right length.
+    const node = await client.createNode(vaultId, {
+      parent_id: rootNodeId,
+      type: 'file',
+      sha256: sealed.sha256,
+      size: sealed.bytes.length,
+      mtime: new Date().toISOString(),
+      name_enc: encryptName(kv, 'Великий.bin'),
+      name_hmac: nameHmac(kv, 'Великий.bin'),
+      name_key_id: scopeId,
+      blob_envelopes: [{ sha256: sealed.sha256, scope_id: scopeId, wrapped_key: wrapContentKey(kv, sealed.contentKey) }],
+      dedup_tags: [{ sha256: sealed.sha256, scope_id: scopeId, content_tag: dedupTag(kv, big) }],
+    });
+    assert.ok(node.node_id);
+
+    const back = (await client.getBlob(sealed.sha256))!;
+    assert.equal(back.length, sealed.bytes.length, 'the assembled blob is the length it claims');
+    const envelope = (await client.blobKeys(vaultId, [sealed.sha256])).get(sealed.sha256)![0]!;
+    assert.deepEqual(openBlob(unwrapContentKey(kv, envelope.wrappedKey), back), big);
   });
 
   it('shows the server holding nothing it can read', async () => {

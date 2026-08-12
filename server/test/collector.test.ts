@@ -217,6 +217,35 @@ describe('the collector', () => {
     await access(fresh); // does not throw
   });
 
+  it('sweeps an abandoned resumable upload by its newest part, not by each part', async () => {
+    // An upload is abandoned when nothing has arrived for it in a long time. Judging each
+    // part separately would eat the early parts of a slow but live migration while its
+    // later ones were still coming in — which is how a resumable upload becomes one that
+    // can never finish.
+    const store = openStore(STORE);
+    const old = new Date(Date.now() - 2 * 60_000);
+
+    const abandoned = path.join(STORE, 'staging', 'user-a', 'aa'.repeat(32));
+    await mkdir(abandoned, { recursive: true });
+    for (const n of ['1', '2']) {
+      await writeFile(path.join(abandoned, n), n);
+      await utimes(path.join(abandoned, n), old, old);
+    }
+
+    // Same shape, but one part arrived just now: the upload is alive.
+    const live = path.join(STORE, 'staging', 'user-a', 'bb'.repeat(32));
+    await mkdir(live, { recursive: true });
+    await writeFile(path.join(live, '1'), '1');
+    await utimes(path.join(live, '1'), old, old);
+    await writeFile(path.join(live, '2'), '2'); // mtime = now
+
+    await runCollector(db, store, cfg);
+
+    await assert.rejects(access(path.join(abandoned, '1')));
+    await access(path.join(live, '1')); // the old part of a live upload stays
+    await access(path.join(live, '2'));
+  });
+
   it('prunes the delta journal past its TTL', async () => {
     // Raise the vault head so the revs below are not "beyond the head revision".
     await db.query(`UPDATE vaults SET head_rev = 2000 WHERE id = $1`, [vaultId]);
