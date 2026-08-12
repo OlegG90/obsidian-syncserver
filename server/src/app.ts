@@ -4,6 +4,7 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { registerBlobRoutes } from './blobs/routes.js';
 import { inProcessRateLimiter } from './blobs/rate.js';
 import { openStore } from './blobs/store.js';
+import { BlobService } from './blobs/service.js';
 import { registerDeltaRoutes } from './delta/routes.js';
 import { registerVaultRoutes } from './vaults/routes.js';
 import { registerHistoryRoutes } from './history/routes.js';
@@ -33,7 +34,9 @@ export const buildApp = async (db: Db, cfg: Config): Promise<FastifyInstance> =>
 
   registerBootstrapGuard(app, db);
   registerAuthRoutes(app, db, cfg);
-  registerBlobRoutes(app, db, openStore(cfg.blobStorePath), cfg, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute));
+  const blobStore = openStore(cfg.blobStorePath);
+  const blobService = new BlobService(db, blobStore, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute), cfg.limits);
+  registerBlobRoutes(app, db, blobStore, blobService);
   registerNodeRoutes(app, db);
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);

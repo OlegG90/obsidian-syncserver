@@ -2,9 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
-import { callerHoldsBlob, envelopesFor, mayAccept, recordUpload, storageKeyOf } from './service.js';
-import type { RateLimiter } from './rate.js';
-import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
+import { BlobService, callerHoldsBlob, envelopesFor, parseRange, refuseBlob, storageKeyOf } from './service.js';
+import { type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -12,8 +11,7 @@ export const registerBlobRoutes = (
   app: FastifyInstance,
   db: Db,
   store: BlobStore,
-  cfg: Config,
-  rate: RateLimiter,
+  service: BlobService,
 ): void => {
   // The body is the blob. Fastify would otherwise try to parse it.
   app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
@@ -50,36 +48,6 @@ export const registerBlobRoutes = (
       };
     },
   );
-
-  /**
-   * What both upload paths must clear before a byte is written (docs/04).
-   *
-   * "An authenticated session AND a registered device" (#33). The access token names a
-   * device, but a token outlives the row: signing a device out has to mean something before
-   * the token expires, or "sign out this device" is advice rather than an act (#90). Checked
-   * here rather than on every request — this is the path where being wrong costs disk.
-   *
-   * Quota is answered from the blob's WHOLE size, not from what this request carries, so a
-   * resumable upload that cannot fit is refused at its first part rather than at its last.
-   */
-  const admit = async (
-    userId: string,
-    deviceId: string,
-    sha: Buffer,
-    totalBytes: number,
-  ): Promise<{ code: number; body: { error: string } } | undefined> => {
-    const device = await db.one<{ id: string }>(
-      `SELECT id FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-      [deviceId, userId],
-    );
-    if (!device) return { code: 401, body: { error: 'device_revoked' } };
-
-    if (totalBytes > cfg.limits.unfinishedUploadBytes) return { code: 413, body: { error: 'too_large' } };
-
-    const verdict = await mayAccept(db, userId, sha, totalBytes);
-    if (!verdict.ok) return { code: 413, body: { error: verdict.reason! } };
-    return undefined;
-  };
 
   /**
    * "Do I have this", not "does the server have this" (#26).
@@ -150,47 +118,18 @@ export const registerBlobRoutes = (
       if (!hex || !HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
       if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
       if (!keyId) return reply.code(400).send({ error: 'key_id_required' });
-      const sha = Buffer.from(hex, 'hex');
 
-      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, declaredSize);
-      if (refusal) return reply.code(refusal.code).send(refusal.body);
-
-      // Charged from the DECLARED size, before a byte arrives. A volume limit applied
-      // afterwards is one checked once the disk it protects already holds the data.
-      const allowance = rate.reserve(req.caller!.userId, declaredSize);
-      if (!allowance.ok) {
-        return reply
-          .code(429)
-          .header('retry-after', String(allowance.retryAfterSeconds))
-          .send({ error: 'rate_limited', retry_after: allowance.retryAfterSeconds });
-      }
-
-      let stored;
-      try {
-        stored = await store.put(hex, req.raw);
-      } catch (e) {
-        if (e instanceof HashMismatch) return reply.code(400).send({ error: 'address_mismatch' });
-        throw e;
-      }
-
-      // The declared size is what quota was reserved against; bytes that disagree with it
-      // were never authorised, so the blob does not stay.
-      if (stored.size !== declaredSize) {
-        await store.remove(stored.storageKey);
-        return reply.code(400).send({ error: 'size_mismatch' });
-      }
-
-      await recordUpload(db, {
+      const out = await service.acceptWhole({
         userId: req.caller!.userId,
         deviceId: req.caller!.deviceId,
-        sha256: sha,
-        size: stored.size,
-        storageKey: stored.storageKey,
+        sha256: Buffer.from(hex, 'hex'),
+        size: declaredSize,
         encAlg,
         keyId,
+        body: req.raw,
       });
-
-      return reply.code(201).send({ sha256: hex, size: stored.size });
+      if (!out.ok) return refuseBlob(reply, out.refusal);
+      return reply.code(201).send({ sha256: out.value.sha256, size: out.value.size });
     },
   );
 
@@ -221,36 +160,17 @@ export const registerBlobRoutes = (
       if (!Number.isInteger(index) || index < 1) return reply.code(400).send({ error: 'bad_part' });
       if (!Number.isInteger(total) || total <= 0) return reply.code(400).send({ error: 'bad_size' });
       if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
-      if (declaredSize > cfg.limits.uploadPartBytes) return reply.code(413).send({ error: 'part_too_large' });
 
-      const sha = Buffer.from(hex, 'hex');
-      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, total);
-      if (refusal) return reply.code(refusal.code).send(refusal.body);
-
-      // The in-flight ceiling, measured from the staging area rather than from rows —
-      // parts have no rows, so this directory is where "unfinished" is written down.
-      const inFlight = await store.stagedBytes(req.caller!.userId);
-      if (inFlight + declaredSize > cfg.limits.unfinishedUploadBytes) {
-        return reply.code(413).send({ error: 'too_many_unfinished' });
-      }
-
-      const allowance = rate.reserve(req.caller!.userId, declaredSize);
-      if (!allowance.ok) {
-        return reply
-          .code(429)
-          .header('retry-after', String(allowance.retryAfterSeconds))
-          .send({ error: 'rate_limited', retry_after: allowance.retryAfterSeconds });
-      }
-
-      const { size } = await store.stagePart(req.caller!.userId, hex, index, req.raw);
-      if (size !== declaredSize) {
-        // What arrived is not what was charged against the ceiling, so it does not stay —
-        // but only this part goes. Discarding the whole upload over one bad part would
-        // throw away everything already sent, which is the opposite of resumable.
-        await store.discardPart(req.caller!.userId, hex, index);
-        return reply.code(400).send({ error: 'size_mismatch' });
-      }
-
+      const out = await service.acceptPart({
+        userId: req.caller!.userId,
+        deviceId: req.caller!.deviceId,
+        sha256: Buffer.from(hex, 'hex'),
+        index,
+        total,
+        size: declaredSize,
+        body: req.raw,
+      });
+      if (!out.ok) return refuseBlob(reply, out.refusal);
       return reply.code(204).send();
     },
   );
@@ -297,69 +217,16 @@ export const registerBlobRoutes = (
       if (!Number.isInteger(declaredSize) || declaredSize <= 0) return reply.code(400).send({ error: 'bad_size' });
       if (!keyId) return reply.code(400).send({ error: 'key_id_required' });
 
-      const sha = Buffer.from(hex, 'hex');
-      const refusal = await admit(req.caller!.userId, req.caller!.deviceId, sha, declaredSize);
-      if (refusal) return reply.code(refusal.code).send(refusal.body);
-
-      let stored;
-      try {
-        stored = await store.assemble(req.caller!.userId, hex);
-      } catch (e) {
-        if (e instanceof PartsMissing) {
-          // The only refusal that does NOT discard: a hole is what a resume is for, and
-          // throwing the upload away here would make an early `complete` destructive.
-          return reply.code(409).send({ error: 'parts_missing', have: e.have });
-        }
-        await store.discardStaging(req.caller!.userId, hex);
-        if (e instanceof HashMismatch) return reply.code(400).send({ error: 'address_mismatch' });
-        throw e;
-      }
-
-      if (stored.size !== declaredSize) {
-        await store.remove(stored.storageKey);
-        await store.discardStaging(req.caller!.userId, hex);
-        return reply.code(400).send({ error: 'size_mismatch' });
-      }
-
-      await recordUpload(db, {
+      const out = await service.complete({
         userId: req.caller!.userId,
         deviceId: req.caller!.deviceId,
-        sha256: sha,
-        size: stored.size,
-        storageKey: stored.storageKey,
+        sha256: Buffer.from(hex, 'hex'),
+        size: declaredSize,
         encAlg,
         keyId,
       });
-
-      await store.discardStaging(req.caller!.userId, hex);
-      return reply.code(201).send({ sha256: hex, size: stored.size });
+      if (!out.ok) return refuseBlob(reply, out.refusal);
+      return reply.code(201).send({ sha256: out.value.sha256, size: out.value.size });
     },
   );
-};
-
-const parseRange = (
-  header: string | undefined,
-  total: number,
-): { start: number; end: number } | undefined | 'unsatisfiable' => {
-  if (!header) return undefined;
-  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!m) return 'unsatisfiable';
-
-  const [, rawStart, rawEnd] = m;
-  let start: number;
-  let end: number;
-
-  if (rawStart === '') {
-    // "bytes=-N" — the last N bytes.
-    const n = Number(rawEnd);
-    if (!Number.isInteger(n) || n <= 0) return 'unsatisfiable';
-    start = Math.max(0, total - n);
-    end = total - 1;
-  } else {
-    start = Number(rawStart);
-    end = rawEnd === '' ? total - 1 : Number(rawEnd);
-  }
-
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || start >= total) return 'unsatisfiable';
-  return { start, end: Math.min(end, total - 1) };
 };

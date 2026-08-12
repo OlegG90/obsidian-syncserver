@@ -1,4 +1,9 @@
+import type { FastifyReply } from 'fastify';
+import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
+import type { Config } from '../config.js';
+import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
+import type { RateLimiter } from './rate.js';
 
 /**
  * > A hash is not a capability.
@@ -59,88 +64,316 @@ export const storageKeyOf = async (db: Db, sha256: Buffer): Promise<string | und
   return row?.storageKey;
 };
 
-export interface QuotaVerdict {
-  ok: boolean;
-  reason?: 'frozen' | 'over_quota';
+/**
+ * A Range header, parsed. `undefined` for "no range"; `'unsatisfiable'` when the request
+ * cannot be served (the route answers `416`).
+ *
+ * Exported rather than buried in the route because the edge cases are real: a suffix form
+ * (`bytes=-N`), an open upper bound, `start >= total`, `start > end`. Each deserves a test,
+ * and a pure function is the cheapest way to give it one.
+ */
+export const parseRange = (
+  header: string | undefined,
+  total: number,
+): { start: number; end: number } | undefined | 'unsatisfiable' => {
+  if (!header) return undefined;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return 'unsatisfiable';
+
+  const [, rawStart, rawEnd] = m;
+  let start: number;
+  let end: number;
+
+  if (rawStart === '') {
+    // "bytes=-N" — the last N bytes.
+    const n = Number(rawEnd);
+    if (!Number.isInteger(n) || n <= 0) return 'unsatisfiable';
+    start = Math.max(0, total - n);
+    end = total - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === '' ? total - 1 : Number(rawEnd);
+  }
+
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || start >= total) return 'unsatisfiable';
+  return { start, end: Math.min(end, total - 1) };
+};
+
+/** Every way an upload can be refused, shared across the three intake operations. */
+export type BlobRefusal =
+  | { kind: 'device_revoked' }
+  | { kind: 'frozen' }
+  | { kind: 'over_quota' }
+  | { kind: 'too_large' }
+  | { kind: 'part_too_large' }
+  | { kind: 'too_many_unfinished' }
+  | { kind: 'rate_limited'; retryAfterSeconds: number }
+  | { kind: 'address_mismatch' }
+  | { kind: 'size_mismatch' }
+  /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
+  | { kind: 'parts_missing'; have: number[] };
+
+/** One place decides what a refusal looks like, so the three handlers cannot disagree (#101's intent). */
+export const refuseBlob = (reply: FastifyReply, refusal: BlobRefusal): void => {
+  switch (refusal.kind) {
+    case 'device_revoked':
+      return void reply.code(401).send({ error: 'device_revoked' });
+    case 'frozen':
+      return void reply.code(413).send({ error: 'frozen' });
+    case 'over_quota':
+      return void reply.code(413).send({ error: 'over_quota' });
+    case 'too_large':
+      return void reply.code(413).send({ error: 'too_large' });
+    case 'part_too_large':
+      return void reply.code(413).send({ error: 'part_too_large' });
+    case 'too_many_unfinished':
+      return void reply.code(413).send({ error: 'too_many_unfinished' });
+    case 'rate_limited':
+      return void reply
+        .code(429)
+        .header('retry-after', String(refusal.retryAfterSeconds))
+        .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
+    case 'address_mismatch':
+      return void reply.code(400).send({ error: 'address_mismatch' });
+    case 'size_mismatch':
+      return void reply.code(400).send({ error: 'size_mismatch' });
+    case 'parts_missing':
+      return void reply.code(409).send({ error: 'parts_missing', have: refusal.have });
+  }
+};
+
+export interface AcceptWholeInput {
+  userId: string;
+  deviceId: string;
+  sha256: Buffer;
+  size: number;
+  encAlg: string;
+  keyId: string;
+  body: Readable;
 }
 
-/**
- * Quota is reserved **before** the upload starts, not checked after — otherwise it is
- * checked when the bytes are already on the disk it was meant to protect (#33).
- *
- * Usage is `SUM(size)` over the account's `user_blobs` and nowhere else (AC-Q2), so a
- * blob the account already holds costs nothing to send again (#46): its size is already
- * inside `used`, and the address is the content, so a second copy changes nothing.
- * Charging it again would bill the same bytes twice at the quota boundary.
- */
-export const mayAccept = async (db: Db, userId: string, sha256: Buffer, size: number): Promise<QuotaVerdict> => {
-  const row = await db.one<{ frozen: boolean; quota: string; used: string; alreadyHeld: boolean }>(
-    `SELECT u.frozen_at IS NOT NULL       AS frozen,
-            u.quota_bytes::text           AS quota,
-            COALESCE(SUM(b.size), 0)::text AS used,
-            EXISTS (SELECT 1 FROM user_blobs u2
-                     WHERE u2.user_id = u.id AND u2.sha256 = $2) AS "alreadyHeld"
-       FROM users u
-       LEFT JOIN user_blobs ub ON ub.user_id = u.id
-       LEFT JOIN blobs b       ON b.sha256   = ub.sha256
-      WHERE u.id = $1
-      GROUP BY u.id`,
-    [userId, sha256],
-  );
-  if (!row) return { ok: false, reason: 'over_quota' };
+export interface AcceptPartInput {
+  userId: string;
+  deviceId: string;
+  sha256: Buffer;
+  index: number;
+  total: number;
+  size: number;
+  body: Readable;
+}
 
-  // A frozen account may not send anything that grows usage (SH-20). Reads and deletes
-  // stay available — deleting is the only way out, so a freeze that blocked it would be a
-  // deadlock.
-  if (row.frozen) return { ok: false, reason: 'frozen' };
+export interface CompleteInput {
+  userId: string;
+  deviceId: string;
+  sha256: Buffer;
+  size: number;
+  encAlg: string;
+  keyId: string;
+}
 
-  // The blob already counts against the account, so this upload grows usage by zero.
-  const growth = row.alreadyHeld ? 0n : BigInt(size);
-  if (BigInt(row.used) + growth > BigInt(row.quota)) return { ok: false, reason: 'over_quota' };
-  return { ok: true };
-};
+export type IntakeResult<T> = { ok: true; value: T } | { ok: false; refusal: BlobRefusal };
 
 /**
- * Record an accepted blob and the account's claim on it, in one transaction.
+ * The blob intake: accept a whole blob, one part of a resumable upload, or assemble staged
+ * parts and record the claim. This is the module docs/02 calls `BlobService` — the ordering
+ * is its invariant, not the route's.
  *
- * The claim starts as `refs_pending`: uploaded and not yet referenced by a node. That row
- * is the whole of the unbound state — the parts of a resumable upload are staging files,
- * not rows, which is why the schema has no `uploads` table. It counts against quota while
- * it lives and is swept on its TTL, so content cannot be parked on the server for free.
+ * The single rule the three operations share, in the order they must run: **admit first**
+ * (a registered, un-revoked device; quota from the blob's WHOLE size; the per-upload ceiling),
+ * then reserve rate, then write, then verify size, then discard on disagreement, then — and
+ * only then — record the claim. A `user_blobs` row is a claim on content, and creating one
+ * from a declared hash before the bytes prove it would let anyone who merely learned an
+ * address claim a blob somebody else then uploads (docs/04).
+ *
+ * `parts_missing` is the one refusal that does NOT discard: a hole is what a resume is for.
+ * Every other failure discards — the server cannot attribute a mismatch to a part, so
+ * leaving the staging would let the client retry into the same wall for ever.
  */
-export const recordUpload = async (
-  db: Db,
-  args: { userId: string; deviceId: string; sha256: Buffer; size: number; storageKey: string; encAlg: string; keyId: string },
-): Promise<void> => {
-  await db.tx(async (c) => {
-    // The address IS the content, so a second upload of the same bytes is not a conflict:
-    // the row already there is correct by construction (#19).
-    //
-    // `DO UPDATE`, not `DO NOTHING`, and the update is deliberately a no-op: what is wanted
-    // is the **row lock** the update branch takes. `DO NOTHING` takes none, which leaves a
-    // window where the collector removes this blob as an orphan between this statement and
-    // the next one — and the next one is an FK child of it, so the upload dies on a
-    // constraint violation. Holding the lock makes that DELETE wait for this transaction
-    // and then re-check its references, which is exactly what the collector's re-checking
-    // DELETE is documented to do.
-    //
-    // The assignment is to `gc_marked_at` rather than to any identity column so that
-    // `blobs_identity_immutable` — which fires only on the columns it names — is not
-    // involved at all. A no-op write should not have to be forgiven by a guard.
-    await c.query(
-      `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (sha256) DO UPDATE SET gc_marked_at = blobs.gc_marked_at`,
-      [args.sha256, args.size, args.storageKey, args.encAlg, args.keyId],
+export class BlobService {
+  constructor(
+    private readonly db: Db,
+    private readonly store: BlobStore,
+    private readonly rate: RateLimiter,
+    private readonly limits: Config['limits'],
+  ) {}
+
+  async acceptWhole(input: AcceptWholeInput): Promise<IntakeResult<{ sha256: string; size: number }>> {
+    const refused = await this.admit(input.userId, input.deviceId, input.sha256, input.size);
+    if (refused) return { ok: false, refusal: refused };
+
+    const rate = this.rate.reserve(input.userId, input.size);
+    if (!rate.ok) return { ok: false, refusal: { kind: 'rate_limited', retryAfterSeconds: rate.retryAfterSeconds } };
+
+    let stored;
+    try {
+      stored = await this.store.put(input.sha256.toString('hex'), input.body);
+    } catch (e) {
+      if (e instanceof HashMismatch) return { ok: false, refusal: { kind: 'address_mismatch' } };
+      throw e;
+    }
+
+    if (stored.size !== input.size) {
+      await this.store.remove(stored.storageKey);
+      return { ok: false, refusal: { kind: 'size_mismatch' } };
+    }
+
+    await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    return { ok: true, value: { sha256: input.sha256.toString('hex'), size: stored.size } };
+  }
+
+  async acceptPart(input: AcceptPartInput): Promise<IntakeResult<{ sha256: string }>> {
+    if (input.size > this.limits.uploadPartBytes) return { ok: false, refusal: { kind: 'part_too_large' } };
+
+    const refused = await this.admit(input.userId, input.deviceId, input.sha256, input.total);
+    if (refused) return { ok: false, refusal: refused };
+
+    // The in-flight ceiling, measured from the staging area rather than from rows — parts
+    // have no rows, so this directory is where "unfinished" is written down (docs/04).
+    const inFlight = await this.store.stagedBytes(input.userId);
+    if (inFlight + input.size > this.limits.unfinishedUploadBytes) {
+      return { ok: false, refusal: { kind: 'too_many_unfinished' } };
+    }
+
+    const rate = this.rate.reserve(input.userId, input.size);
+    if (!rate.ok) return { ok: false, refusal: { kind: 'rate_limited', retryAfterSeconds: rate.retryAfterSeconds } };
+
+    const { size } = await this.store.stagePart(input.userId, input.sha256.toString('hex'), input.index, input.body);
+    if (size !== input.size) {
+      await this.store.discardPart(input.userId, input.sha256.toString('hex'), input.index);
+      return { ok: false, refusal: { kind: 'size_mismatch' } };
+    }
+
+    return { ok: true, value: { sha256: input.sha256.toString('hex') } };
+  }
+
+  async complete(input: CompleteInput): Promise<IntakeResult<{ sha256: string; size: number }>> {
+    const refused = await this.admit(input.userId, input.deviceId, input.sha256, input.size);
+    if (refused) return { ok: false, refusal: refused };
+
+    const hex = input.sha256.toString('hex');
+    let stored;
+    try {
+      stored = await this.store.assemble(input.userId, hex);
+    } catch (e) {
+      if (e instanceof PartsMissing) {
+        // The only refusal that does NOT discard: a hole is what a resume is for, and
+        // throwing the upload away here would make an early `complete` destructive.
+        return { ok: false, refusal: { kind: 'parts_missing', have: e.have } };
+      }
+      await this.store.discardStaging(input.userId, hex);
+      if (e instanceof HashMismatch) return { ok: false, refusal: { kind: 'address_mismatch' } };
+      throw e;
+    }
+
+    if (stored.size !== input.size) {
+      await this.store.remove(stored.storageKey);
+      await this.store.discardStaging(input.userId, hex);
+      return { ok: false, refusal: { kind: 'size_mismatch' } };
+    }
+
+    await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    await this.store.discardStaging(input.userId, hex);
+    return { ok: true, value: { sha256: hex, size: stored.size } };
+  }
+
+  /**
+   * What both upload paths must clear before a byte is written (docs/04).
+   *
+   * "An authenticated session AND a registered device" (#33). The access token names a
+   * device, but a token outlives the row: signing a device out has to mean something before
+   * the token expires, or "sign out this device" is advice rather than an act (#90).
+   *
+   * Quota is answered from the blob's WHOLE size, not from what this request carries, so a
+   * resumable upload that cannot fit is refused at its first part rather than at its last.
+   */
+  private async admit(userId: string, deviceId: string, sha256: Buffer, totalBytes: number): Promise<BlobRefusal | undefined> {
+    const device = await this.db.one<{ id: string }>(
+      `SELECT id FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [deviceId, userId],
     );
-    await c.query(
-      `INSERT INTO user_blobs (user_id, sha256, refs_pending, pending_since, pending_device_id)
-       VALUES ($1, $2, 1, now(), $3)
-       ON CONFLICT (user_id, sha256)
-       DO UPDATE SET refs_pending = user_blobs.refs_pending + 1,
-                     pending_since = COALESCE(user_blobs.pending_since, now()),
-                     pending_device_id = EXCLUDED.pending_device_id`,
-      [args.userId, args.sha256, args.deviceId],
+    if (!device) return { kind: 'device_revoked' };
+
+    if (totalBytes > this.limits.unfinishedUploadBytes) return { kind: 'too_large' };
+
+    const verdict = await this.mayAccept(userId, sha256, totalBytes);
+    if (!verdict.ok) return verdict.reason === 'frozen' ? { kind: 'frozen' } : { kind: 'over_quota' };
+    return undefined;
+  }
+
+  private async mayAccept(userId: string, sha256: Buffer, size: number): Promise<{ ok: true } | { ok: false; reason: 'frozen' | 'over_quota' }> {
+    const row = await this.db.one<{ frozen: boolean; quota: string; used: string; alreadyHeld: boolean }>(
+      `SELECT u.frozen_at IS NOT NULL       AS frozen,
+              u.quota_bytes::text           AS quota,
+              COALESCE(SUM(b.size), 0)::text AS used,
+              EXISTS (SELECT 1 FROM user_blobs u2
+                       WHERE u2.user_id = u.id AND u2.sha256 = $2) AS "alreadyHeld"
+         FROM users u
+         LEFT JOIN user_blobs ub ON ub.user_id = u.id
+         LEFT JOIN blobs b       ON b.sha256   = ub.sha256
+        WHERE u.id = $1
+        GROUP BY u.id`,
+      [userId, sha256],
     );
-  });
-};
+    if (!row) return { ok: false, reason: 'over_quota' };
+
+    // A frozen account may not send anything that grows usage (SH-20). Reads and deletes
+    // stay available — deleting is the only way out, so a freeze that blocked it would be a
+    // deadlock.
+    if (row.frozen) return { ok: false, reason: 'frozen' };
+
+    // The blob already counts against the account, so this upload grows usage by zero.
+    const growth = row.alreadyHeld ? 0n : BigInt(size);
+    if (BigInt(row.used) + growth > BigInt(row.quota)) return { ok: false, reason: 'over_quota' };
+    return { ok: true };
+  }
+
+  /**
+   * Record an accepted blob and the account's claim on it, in one transaction.
+   *
+   * The claim starts as `refs_pending`: uploaded and not yet referenced by a node. That row
+   * is the whole of the unbound state — the parts of a resumable upload are staging files,
+   * not rows, which is why the schema has no `uploads` table. It counts against quota while
+   * it lives and is swept on its TTL, so content cannot be parked on the server for free.
+   */
+  private async recordUpload(
+    userId: string,
+    deviceId: string,
+    sha256: Buffer,
+    size: number,
+    storageKey: string,
+    encAlg: string,
+    keyId: string,
+  ): Promise<void> {
+    await this.db.tx(async (c) => {
+      // The address IS the content, so a second upload of the same bytes is not a conflict:
+      // the row already there is correct by construction (#19).
+      //
+      // `DO UPDATE`, not `DO NOTHING`, and the update is deliberately a no-op: what is wanted
+      // is the **row lock** the update branch takes. `DO NOTHING` takes none, which leaves a
+      // window where the collector removes this blob as an orphan between this statement and
+      // the next one — and the next one is an FK child of it, so the upload dies on a
+      // constraint violation. Holding the lock makes that DELETE wait for this transaction
+      // and then re-check its references, which is exactly what the collector's re-checking
+      // DELETE is documented to do.
+      //
+      // The assignment is to `gc_marked_at` rather than to any identity column so that
+      // `blobs_identity_immutable` — which fires only on the columns it names — is not
+      // involved at all. A no-op write should not have to be forgiven by a guard.
+      await c.query(
+        `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (sha256) DO UPDATE SET gc_marked_at = blobs.gc_marked_at`,
+        [sha256, size, storageKey, encAlg, keyId],
+      );
+      await c.query(
+        `INSERT INTO user_blobs (user_id, sha256, refs_pending, pending_since, pending_device_id)
+         VALUES ($1, $2, 1, now(), $3)
+         ON CONFLICT (user_id, sha256)
+         DO UPDATE SET refs_pending = user_blobs.refs_pending + 1,
+                       pending_since = COALESCE(user_blobs.pending_since, now()),
+                       pending_device_id = EXCLUDED.pending_device_id`,
+        [userId, sha256, deviceId],
+      );
+    });
+  }
+}
