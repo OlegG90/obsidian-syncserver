@@ -507,7 +507,9 @@ clients' backoff reconnects them.
 
 **Auth is the first message, not the URL.** A token in the query string settles into access logs; a
 browser `WebSocket` cannot set a header. The client connects and sends the access token as its first
-message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The connection lives
+message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The verification is
+the API's own: a token must name an account **and** a device, or it is refused — a connection that
+cannot be attributed to a device cannot be throttled or signed out (#90). The connection lives
 while the access token does; when it expires the client refreshes and reconnects, which is the ordinary
 token lifecycle ([06](06-key-model.md)).
 

@@ -148,6 +148,20 @@ describe('change notifications', () => {
     ws.close();
   });
 
+  it('refuses a token that names an account but no device', async () => {
+    // The socket is held to the API's own policy: an access token names an account AND a
+    // device (#90). A token the HTTP guard would refuse is refused here too.
+    const ws = new WebSocket(`${base}/events`);
+    const out: string[] = [];
+    ws.on('message', (d) => out.push(d.toString()));
+    const ownerId = (app.jwt.decode(ownerToken) as { sub: string }).sub;
+    ws.on('open', () => ws.send(JSON.stringify({ token: app.jwt.sign({ sub: ownerId }) })));
+
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(out.some((m) => m.includes('refused')), `refused explicitly: ${out.join(', ')}`);
+    ws.close();
+  });
+
   it('reconnects when the notification connection dies, and keeps waking the owner', async () => {
     // The interface promises a dropped connection is re-established with a short backoff.
     // Reaching it against a real PostgreSQL means killing the listener's backend; prove
