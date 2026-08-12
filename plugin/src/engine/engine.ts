@@ -153,7 +153,12 @@ export class SyncEngine {
     private readonly store: StateStore,
     /** Named in a conflict file's filename (docs/04): `Note (conflict 2026-08-01 laptop).md`. */
     private readonly deviceLabel = 'device',
+    /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
+    private readonly syncObsidian = false,
   ) {}
+
+  /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
+  private readonly scope = (path: string): boolean => isSyncable(path, this.syncObsidian);
 
   // ---- per-sync context ---------------------------------------------------------
   // The engine is built per sync, so these are written once in `sync()` and read by the
@@ -195,7 +200,7 @@ export class SyncEngine {
     this.byNodeId = new Map();
     for (const n of tree.values()) this.byNodeId.set(n.nodeId, n);
 
-    const local = (await this.vault.list()).filter((f) => isSyncable(f.path));
+    const local = (await this.vault.list()).filter((f) => this.scope(f.path));
     this.report.scanned = local.length;
 
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
@@ -229,6 +234,10 @@ export class SyncEngine {
     // walk creates a second node for the new one.
     this.vanished = new Map();
     for (const [path, known] of Object.entries(this.state.nodes)) {
+      // Out of scope paths are frozen, not vanished: turning the `.obsidian/` switch off
+      // must not read "still on the server, not on disk" as a deletion to push. They stay
+      // in state so flipping the switch back on resumes them as ordinary files.
+      if (!this.scope(path)) continue;
       if (here.has(path)) continue;
       const list = this.vanished.get(known.plainHash) ?? [];
       list.push({ path, nodeId: known.nodeId, rev: known.rev, address: known.address });
@@ -274,7 +283,7 @@ export class SyncEngine {
     }
 
     // What is left: server files no local copy ever stood in for. Ordinary pull.
-    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && !this.handled.has(n.path));
+    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !this.handled.has(n.path));
     await this.pull(serverOnly);
 
     this.state.cursor = cursor;
@@ -889,7 +898,7 @@ export class SyncEngine {
     }
 
     // What the winning tree holds that we never had.
-    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && !this.handled.has(n.path));
+    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !this.handled.has(n.path));
     await this.pull(serverOnly);
   }
 

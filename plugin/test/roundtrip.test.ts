@@ -550,6 +550,34 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(!('rejected' in trash));
   });
 
+  it('the .obsidian/ switch gates pull, so a device with it off never receives configuration', async () => {
+    // Device A has the switch ON: it uploads a note AND its .obsidian configuration.
+    const note = 'Devices/scope-note.md';
+    const config = '.obsidian/appearance.json';
+    const a = new FakeVault();
+    a.seed(note, 'a note');
+    a.seed(config, '{"theme":"obsidian"}');
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop', true);
+    const reportA = await engineA.sync();
+    assert.equal(reportA.errors.length, 0, JSON.stringify(reportA.errors));
+    assert.ok(reportA.pushed.some((p) => p.path === config), 'A pushed .obsidian with the switch on');
+
+    // Device B has the switch OFF: it gets the note but never the configuration.
+    const b = new FakeVault();
+    const engineB = new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone', false);
+    const reportB = await engineB.sync();
+    assert.equal(reportB.errors.length, 0, JSON.stringify(reportB.errors));
+    assert.equal(b.contents(note), 'a note', 'the note is pulled');
+    assert.equal(b.contents(config), undefined, 'the .obsidian configuration is not pulled');
+    assert.ok(!reportB.pulled.some((p) => p.path.startsWith('.obsidian/')));
+
+    // Flip B's switch ON: the configuration now comes down, as an ordinary pull.
+    const engineB2 = new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone', true);
+    const reportB2 = await engineB2.sync();
+    assert.equal(reportB2.errors.length, 0, JSON.stringify(reportB2.errors));
+    assert.equal(b.contents(config), '{"theme":"obsidian"}', 'the configuration arrives once the switch is on');
+  });
+
   it('a renamed folder moves as one node, and the empty source folder does not linger', async () => {
     const before = 'Folders/old';
     const after = 'Folders/new';

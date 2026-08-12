@@ -43,7 +43,7 @@ The vault is a folder of files, so the boundary has to be stated explicitly rath
 | | Contents |
 |---|---|
 | **Always** | the whole vault tree — `.md`, attachments, canvas, bases, and any other file the user keeps in it |
-| **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json`, `graph.json`, plugin caches |
+| **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json` and its mobile twin `workspace-mobile.json` (window layout), `graph.json` (graph view), and `cache` (the plugin cache) |
 | **Never** | `.trash/`, `.git/`, `node_modules/`, the `_Reset ` quarantine folder a `410 reset` moves the losing device's work into (docs/07), anything in the user's own ignore list, and the artefacts of other synchronisers: `.stfolder`, `.stversions`, `~sync-conflict-*`, `_remotely-save-metadata-on-remote.json`, `conflicted copy` |
 
 Three notes on the middle row, because it is the one that surprises people.
@@ -54,7 +54,13 @@ wonder where their plugins went, so this belongs in the onboarding text and not 
 
 Even when it is on, the per-device exceptions are not optional. `workspace.json` describes which panes are
 open *on this screen*; propagating it between a laptop and a phone is not synchronisation, it is
-interference.
+interference. `workspace-mobile.json` is the same fact for the phone, `graph.json` the same fact for the
+graph view, and `cache` is regenerated, not owned. Everything else under `.obsidian/` — appearance,
+hotkeys, the enabled-plugin list, plugin data — is configuration the user wants on every device.
+
+Turning the switch off does not delete what is already on the server: `.obsidian/` files are frozen in
+place, exactly as the "never" list below treats files an earlier version uploaded. They stop being
+scanned and pulled, and their state rows are kept so the switch can come back on without re-uploading.
 
 The "never" list is enforced in two places: the watcher never queues those paths, and the pre-flight check
 before a migration reports them (see [07](07-onboarding.md)). A file already uploaded by an earlier version

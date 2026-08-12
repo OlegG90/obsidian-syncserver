@@ -26,6 +26,8 @@ import { session, type Connection, type Session } from './session/index.js';
 interface PluginData {
   connection?: Connection;
   state?: VaultState;
+  /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
+  syncObsidian?: boolean;
 }
 
 const DEFAULT_DATA: PluginData = {};
@@ -175,6 +177,7 @@ export default class SyncServerPlugin extends Plugin {
           new ObsidianVaultAdapter(this.app.vault),
           this.stateStore(),
           deviceLabel(),
+          this.data.syncObsidian === true,
         );
         return engine.sync();
       });
@@ -309,6 +312,20 @@ class SyncServerSettings extends PluginSettingTab {
       containerEl.createEl('p', {
         text: 'The passphrase is not stored. It is asked for once per session, the first time a sync runs.',
       });
+
+      new Setting(containerEl)
+        .setName('Synchronise .obsidian/ configuration')
+        .setDesc(
+          'Plugins and appearance, not per-device state: workspace layout, the graph view and plugin caches stay on this device (docs/01). Off by default.',
+        )
+        .addToggle((t) =>
+          t
+            .setValue(this.plugin.data.syncObsidian === true)
+            .onChange(async (v) => {
+              this.plugin.data.syncObsidian = v;
+              await this.plugin.save();
+            }),
+        );
       return;
     }
 

@@ -40,16 +40,28 @@ export interface VaultAdapter {
 }
 
 /**
- * `.obsidian/` is skipped for now, and this is a decision rather than an oversight.
+ * `.obsidian/` is behind a switch, off by default (#7, docs/01). Off, the whole directory
+ * is skipped. On, everything is synced EXCEPT the per-device exceptions — files that
+ * describe *this screen*, not the vault: the workspace layout, its mobile twin, the graph
+ * view, and the plugin cache. Propagating those is not synchronisation, it is interference:
+ * a laptop and a phone must not fight over which panes are open (docs/01).
  *
- * It holds device-local state — window sizes, workspace layout, the plugin's own settings
- * including this vault's credentials — and synchronising it means one device's layout
- * overwriting another's every few seconds. docs/10 puts exclusions in M2; until then the
- * rule is the simplest one that cannot surprise anybody.
+ * The exceptions apply even when the switch is on; they are not optional. Everything else
+ * under `.obsidian/` — appearance, hotkeys, the enabled-plugin list, plugin data — is
+ * configuration the user wants on every device.
  *
  * `_Reset ` is the quarantine folder a `410 reset` moves the losing device's work into
  * (docs/07): it lives inside the vault so nothing is erased, and it must not be synced or
  * the very files the reset displaced come back up on the next pass.
  */
-export const isSyncable = (path: string): boolean =>
-  !path.startsWith('.obsidian/') && !path.startsWith('.trash/') && !path.startsWith('_Reset ');
+const OBSIDIAN_DEVICE_LOCAL = ['workspace.json', 'workspace-mobile.json', 'graph.json', 'cache'];
+
+export const isSyncable = (path: string, syncObsidian: boolean): boolean => {
+  if (path.startsWith('.trash/') || path.startsWith('_Reset ')) return false;
+  if (path.startsWith('.obsidian/')) {
+    if (!syncObsidian) return false;
+    const rel = path.slice('.obsidian/'.length);
+    return !OBSIDIAN_DEVICE_LOCAL.some((name) => rel === name || rel.startsWith(`${name}/`));
+  }
+  return true;
+};
