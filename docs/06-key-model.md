@@ -174,6 +174,13 @@ re-encrypts nothing**, because the vault keys derive from the unchanged seed.
 > The column is named **`auth_secret_hash`**, not `pwd_hash`. Not pedantry: `pwd_hash` suggests to future
 > code that a password arrives, and sooner or later someone writes exactly that.
 
+**The client never persists a refresh token.** What the plugin writes down — server URL, ids, `wrapped_seed`
+— is worthless without the passphrase, and that is the file's whole security property. A saved refresh token
+would void it: it lets the device keep synchronising as itself without the phrase, which is exactly the
+convenience that eats the property. The token lives in memory for the length of an unlock and dies with it;
+`lock()` clears it together with the seed and the access token, and after a restart the passphrase is the
+only way back in.
+
 `account_salt` and `kdf_params` are returned by the pre-auth `/auth/kdf` response and by successful pairing
 or recovery bootstrap. Nothing in them is secret, but they are not sufficient to obtain a seed.
 

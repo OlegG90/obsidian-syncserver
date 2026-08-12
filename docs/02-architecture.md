@@ -16,7 +16,7 @@ C4Context
 
     Rel(owner, obsidian, "Writes notes")
     Rel(member, obsidian, "Reads and writes within their rights")
-    Rel(obsidian, sync, "Synchronises through the plugin", "HTTPS, WebSocket")
+    Rel(obsidian, sync, "Synchronises through the plugin", "HTTPS; WebSocket from M2")
     Rel(sync, net, "Reachable only from inside")
 ```
 
@@ -32,8 +32,8 @@ C4Container
     Person(owner, "Vault owner", "")
 
     Container_Boundary(client, "User device") {
-        Container(plugin, "Sync plugin", "TypeScript, Obsidian API", "Watches the vault, keeps local state and a queue, applies delta")
-        ContainerDb(idb, "Local state", "IndexedDB", "Node tree: path to node_id, rev, hash, dirty flag. Path resolution lives only here")
+        Container(plugin, "Sync plugin", "TypeScript, Obsidian API", "Runs a sync on command, keeps local state, applies the remote tree")
+        ContainerDb(idb, "Local state", "data.json", "Node tree: path to node_id, rev, hash. Path resolution lives only here")
     }
 
     Container_Boundary(server, "SyncServer") {
@@ -48,7 +48,7 @@ C4Container
     Rel(owner, plugin, "Works in the vault")
     Rel(plugin, idb, "Reads and updates state")
     Rel(plugin, api, "Delta, writes, blobs", "HTTPS")
-    Rel(api, plugin, "Change notifications", "WebSocket")
+    Rel(api, plugin, "Change notifications (M2)", "WebSocket")
     Rel(api, pg, "Reads and writes", "SQL")
     Rel(api, blobs, "Uploads and serves content")
     Rel(api, bus, "Publishes new-revision events")
@@ -84,36 +84,37 @@ C4Component
         Component(auth, "AuthService", "JWT, refresh", "Login, tokens, device registration, KDF parameters")
         Component(nodes, "NodeService", "TypeScript", "create, put, delete, move by node_id; one server transaction writes node, journal and version; recomputes ancestry on move")
         Component(delta, "DeltaService", "TypeScript", "Reads one journal — the caller's own; pins a snapshot, collapses changes")
-        Component(blobsvc, "BlobService", "TypeScript", "Chunked resumable upload, authorisation by the caller's own live reference, Range serving")
-        Component(shares, "ShareService", "TypeScript", "Shares, invitations, membership, freezing; fans a write out to live non-frozen participants")
+        Component(blobsvc, "BlobService", "TypeScript", "Upload with quota and rate verdicts, authorisation by the caller's own live reference, Range serving")
         Component(history, "HistoryService", "TypeScript", "Version list, trash, restore as a new write with an old hash; transfers history on join and on thaw")
-        Component(quota, "QuotaService", "TypeScript", "Per-user unique-blob accounting: own nodes and own history")
-        Component(events, "EventPublisher", "TypeScript", "Fans out new-revision notifications")
+        Component(shares, "ShareService — M3", "TypeScript", "Shares, invitations, membership, freezing; fans a write out to live non-frozen participants")
+        Component(events, "EventPublisher — M2", "TypeScript", "Fans out new-revision notifications over WebSocket")
     }
 
     Rel(plugin, auth, "Login and token refresh")
     Rel(plugin, delta, "Pulls changes")
     Rel(plugin, nodes, "Pushes local changes")
     Rel(plugin, blobsvc, "Checks presence, uploads content")
-    Rel(plugin, shares, "Creates, joins, leaves shares")
     Rel(plugin, history, "Versions, trash, restore")
-    Rel(nodes, quota, "Asks whether it fits")
-    Rel(nodes, shares, "A write inside a shared folder fans out to live non-frozen participants")
-    Rel(nodes, events, "Announces a new revision")
+    Rel(plugin, shares, "Creates, joins, leaves shares (M3)")
+    Rel(nodes, shares, "A write inside a shared folder fans out to live non-frozen participants (M3)")
+    Rel(nodes, events, "Announces a new revision (M2)")
     Rel(history, nodes, "Restore is an ordinary write")
-    Rel(shares, history, "Hands over the interval on join and on thaw")
+    Rel(shares, history, "Hands over the interval on join and on thaw (M3)")
     Rel(nodes, pg, "One server transaction: node, journal, version — per eligible participant")
     Rel(blobsvc, blobs, "Reads and writes content")
 ```
 
-`NodeService` is the only place a revision is born, which is why quota, events and the three-way
-transaction all converge on it. A second write path bypassing it would desynchronise history from delta.
-For a shared write, the service command owns the complete cross-vault transaction and its integration test;
-database triggers protect row-local invariants but do not by themselves prove all-or-none fan-out.
+`NodeService` is the only place a revision is born, which is why the three-way transaction converges on it.
+A second write path bypassing it would desynchronise history from delta. For a shared write, the service
+command owns the complete cross-vault transaction and its integration test; database triggers protect
+row-local invariants but do not by themselves prove all-or-none fan-out.
 
 **`ShareService` does not stand between a reader and someone else's data.** A participant reads their own
 nodes, so nothing is evaluated at read time at all: the service's whole job is on the **write** path, where
 one node write becomes up to eight ([05](05-sharing.md)).
+
+Quota is not a component: the verdict an upload needs is computed inside `BlobService` (`mayAccept`), and
+the accounting itself is schema counters — there is no separate service to place on this diagram.
 
 ## Plugin components (C4 level 3)
 
@@ -121,37 +122,41 @@ one node write becomes up to eight ([05](05-sharing.md)).
 C4Component
     title Sync plugin — components
 
-    Container(api, "Sync API", "HTTPS and WebSocket", "")
-    ContainerDb(idb, "Local state", "IndexedDB", "")
-    System_Ext(obsidian, "Obsidian", "Vault API, metadataCache")
+    Container(api, "Sync API", "HTTPS", "")
+    System_Ext(obsidian, "Obsidian", "Vault API")
 
     Container_Boundary(plugin, "Sync plugin") {
-        Component(watcher, "VaultWatcher", "Obsidian API", "create, modify, delete, rename events; periodic full rescan for changes made outside the editor")
-        Component(state, "LocalState", "IndexedDB", "Node tree and what is already on the server; the only place paths are resolved to node ids. Also the author name cache: user_id to login, never evicted, so a departed member's history still shows a name")
-        Component(engine, "SyncEngine", "TypeScript", "push, pull, apply; persistent queue with backoff")
-        Component(adopt, "AdoptionService", "TypeScript", "Matches a non-empty local vault against the server tree on first connection")
-        Component(conflict, "ConflictResolver", "TypeScript", "Handles a failed content precondition; writes conflict files")
-        Component(shareui, "ShareManager", "TypeScript", "Creates and joins shares; runs the additive key pass and the leave-time re-key")
-        Component(attach, "AttachmentRouter", "Obsidian API", "Keeps attachments created inside a shared folder inside it — a convenience, not a rule")
-        Component(ui, "UI", "Obsidian API", "Sync-state view, conflict list, invitations, share panel, history, problems. Status bar is desktop-only, so it is never the only place a state appears")
+        Component(ui, "UI", "Obsidian API", "Commands, settings, status bar and modal. Status bar is desktop-only, so it is never the only place a state appears")
+        Component(sess, "Session", "TypeScript", "connect, open, lock, use. Owns the seed for the length of a session and the client for the length of a run; persists nothing")
+        Component(engine, "SyncEngine", "TypeScript", "One pass reconciles: pushes, pulls, adopts a non-empty local vault on first contact, writes conflict files on a failed content precondition, and pushes and applies deletes — gated by the epoch the cursor probe answers (restore never wipes, reset quarantines)")
+        Component(state, "LocalState", "data.json", "Node tree and what is already on the server; the only place paths are resolved to node ids")
+        Component(vault, "VaultAdapter", "Obsidian API", "list, read, write, delete — the seam between the engine and the Obsidian vault")
+        Component(shareui, "ShareManager — M3", "TypeScript", "Creates and joins shares; runs the additive key pass and the leave-time re-key")
+        Component(attach, "AttachmentRouter — M2", "Obsidian API", "Keeps attachments created inside a shared folder inside it — a convenience, not a rule")
     }
 
-    Rel(obsidian, watcher, "Vault filesystem events")
-    Rel(watcher, engine, "Marks files dirty")
+    Rel(ui, sess, "Connects, unlocks, locks")
+    Rel(ui, engine, "Runs one sync, inside session.use")
+    Rel(sess, api, "Redeem, login, refresh")
+    Rel(engine, api, "Pushes changes, pulls the tree — nine operations the engine declares as VaultWire")
     Rel(engine, state, "Reads and updates")
-    Rel(engine, api, "Pushes changes, pulls delta")
-    Rel(api, engine, "New-revision notification")
-    Rel(engine, adopt, "Runs before the first sync of a non-empty vault")
-    Rel(engine, conflict, "Precondition failures")
-    Rel(engine, shareui, "Share events: joined, ended; and the account-level freeze and thaw")
-    Rel(shareui, api, "Key envelopes and share-key names")
-    Rel(attach, shareui, "Asks whether the note is inside a shared folder")
+    Rel(engine, vault, "Lists, reads, writes")
+    Rel(vault, obsidian, "Vault API")
+    Rel(engine, shareui, "Share events: joined, ended; freeze and thaw (M3)")
+    Rel(shareui, api, "Key envelopes and share-key names (M3)")
+    Rel(attach, shareui, "Asks whether the note is inside a shared folder (M2)")
 ```
 
 **A shared folder is an ordinary folder to every component above `ShareManager`.** That component handles
 joining and leaving plus the two key passes described in [06](06-key-model.md); nothing else on the client
 needs to know that a folder is shared. There is no read-only state to emulate (SH-10), nothing to mount, and
 no detachment protocol for the client to drive — a participant's copy is their own from the start.
+
+There is no watcher: sync is a command the user runs, and the engine's one pass is the whole reconciliation.
+Adoption and conflict resolution are not components of their own — they are branches of that pass, and the
+diagram above names no module the code does not have. `Session` is the one the M0.5 code grew into: it owns
+the lifecycle `main.ts` used to hold in pieces, and it is what makes the passphrase-to-keys wiring testable
+without launching an editor.
 
 ## Deployment
 

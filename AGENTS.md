@@ -76,6 +76,14 @@ the reason rather than assuming, because more than one condition can share a sta
 broken over one that pins the current shape of the code. When a test and the design disagree,
 find out which is wrong before changing either.
 
+**A test that talks to a live server never fakes the key derivation.** The plugin's session
+module takes a derivation seam (`Session.forTests`) so unit tests can run fast and
+deterministically — but `roundtrip.test.ts` is the only place that proves client, keys and
+server agree, and it must run real Argon2id. A faked derivation there would silently void the
+one proof the suite exists for. The separation is structural: the production entry points take
+no derivation parameter, so substituting one on the live path requires calling a different,
+test-only factory — visible in review, impossible to do by accident.
+
 **Commits explain the change in prose.** What was wrong, why this is the fix, and what was
 verified — enough that the reasoning survives without the conversation that produced it.
 

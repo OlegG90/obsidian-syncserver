@@ -1,0 +1,40 @@
+/**
+ * The real session factory, bound to the real derivation.
+ *
+ * This is the only place production code gets a session. The binding lives here — not in a
+ * parameter, not in a default — so the real path has no knob to turn: you call `connect()`
+ * or `create()`, and the derivation is the real one. A test that wants a fake calls
+ * `Session.forTests(deps)` below, which is a *different function*, visible in review, and
+ * impossible to reach by accident.
+ *
+ * Transport is the one thing the real factory cannot supply: it is Obsidian's networking,
+ * and importing it here would make the module untestable outside the app. So `create()` and
+ * `connect()` take the transport from the caller — which is the plugin, the one place that
+ * already knows it.
+ */
+
+import { createAccount, openAccount, type Account, type KdfParams } from '../crypto/account.js';
+import type { Transport } from '../api/transport.js';
+import { Session, type ConnectArgs, type Connection, type Derivation } from './session.js';
+
+export type { Connection, ConnectArgs, Derivation, Handle } from './session.js';
+export { Session };
+
+const realDerivation: Derivation = {
+  create: (passphrase: string, params?: KdfParams): Account => createAccount(passphrase, params),
+  open: (passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): Account =>
+    openAccount(passphrase, accountSalt, kdfParams, wrappedSeed),
+};
+
+/** Production: real derivation, transport from the caller. */
+export const session = {
+  connect: (args: ConnectArgs, transport: Transport) =>
+    Session.connect(args, { derivation: realDerivation, transport }),
+  create: (conn: Connection, transport: Transport) => Session.create(conn, { derivation: realDerivation, transport }),
+};
+
+/** Tests: a factory the caller binds to fakes. The real path above has no such parameter. */
+export const forTests = (deps: { derivation: Derivation; transport: Transport }) => ({
+  connect: (args: ConnectArgs) => Session.connect(args, deps),
+  create: (conn: Connection) => Session.create(conn, deps),
+});

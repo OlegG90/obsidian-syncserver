@@ -1,10 +1,11 @@
 /**
  * The Obsidian plugin (M0.5).
  *
- * It owns three things and delegates everything else: what this vault is connected to, the
- * passphrase for the length of a session, and when a sync runs. The protocol is in `api/`,
- * the keys in `crypto/`, the decisions in `engine/` — none of which imports Obsidian, which
- * is what lets all three be tested against a real server without launching an editor.
+ * It owns the UI and the file (`data.json`), and delegates everything else. The lifecycle —
+ * unlock, lock, redeem, tokens, the seed — is the **session module** (`session/`), which is
+ * where the passphrase turns into keys and where they die. The protocol is in `api/`, the
+ * keys in `crypto/`, the decisions in `engine/` — none of which imports Obsidian, which is
+ * what lets all of them be tested against a real server without launching an editor.
  *
  * **The passphrase is never written down.** Everything else here is: the server URL, the
  * login, the device and vault ids, and `wrapped_seed` — which is the account's seed sealed
@@ -14,28 +15,13 @@
  */
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
-import { SyncClient } from './api/client.js';
-import type { KdfParams } from './api/client.js';
-import { authSecret, createAccount, openAccount, vaultKey } from './crypto/account.js';
-import { fromBase64, randomUuid, toBase64 } from './crypto/bytes.js';
-import { encryptName } from './crypto/scope.js';
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { obsidianTransport } from './obsidian/transport.js';
-
-interface Connection {
-  serverUrl: string;
-  login: string;
-  deviceId: string;
-  vaultId: string;
-  /** The seed, sealed under the passphrase. Useless on its own — see the file comment. */
-  wrappedSeed: string;
-  accountSalt: string;
-  kdfParams: KdfParams;
-}
+import { session, type Connection, type Session } from './session/index.js';
 
 interface PluginData {
   connection?: Connection;
@@ -47,8 +33,8 @@ const DEFAULT_DATA: PluginData = {};
 export default class SyncServerPlugin extends Plugin {
   data: PluginData = DEFAULT_DATA;
 
-  /** Held for the session only, and never persisted anywhere. */
-  private seed: Uint8Array | undefined;
+  /** The session, once a connection exists. Its state drives the phase — the UI never tracks it. */
+  private sess: Session | undefined;
 
   private phase: SyncPhase = { kind: 'disconnected' };
   private statusBar: HTMLElement | undefined;
@@ -61,7 +47,15 @@ export default class SyncServerPlugin extends Plugin {
     // exactly why the same state is a command as well, and not only here.
     this.statusBar = this.addStatusBarItem();
     this.statusBar.addEventListener('click', () => this.showStatus());
-    this.setPhase(this.data.connection ? { kind: 'locked' } : { kind: 'disconnected' });
+
+    // If a connection exists from a previous run, the session is locked — the seed was
+    // never written down, so the passphrase has to come from the person again.
+    if (this.data.connection) {
+      this.sess = session.create(this.data.connection, obsidianTransport);
+      this.setPhase({ kind: 'locked' });
+    } else {
+      this.setPhase({ kind: 'disconnected' });
+    }
 
     this.addCommand({
       id: 'sync-now',
@@ -78,11 +72,7 @@ export default class SyncServerPlugin extends Plugin {
     this.addCommand({
       id: 'lock',
       name: 'Forget the passphrase until next unlock',
-      callback: () => {
-        this.seed = undefined;
-        this.setPhase({ kind: 'locked' });
-        new Notice('SyncServer: locked.');
-      },
+      callback: () => this.lock(),
     });
   }
 
@@ -96,7 +86,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   showStatus(): void {
-    new StatusModal(this.app, statusLines(this.phase, this.data.connection)).open();
+    new StatusModal(this.app, statusLines(this.phase, this.sess?.connection)).open();
   }
 
   /** The state store the engine writes through — `data.json`, beside the connection. */
@@ -112,103 +102,90 @@ export default class SyncServerPlugin extends Plugin {
 
   /**
    * First run: claim an invitation, generate the account's key material here, and keep only
-   * what is useless without the passphrase.
+   * what is useless without the passphrase. The session returns an open session — the caller
+   * has just typed the passphrase; asking for it again would be theatre.
    */
   async connect(serverUrl: string, login: string, invitationToken: string, passphrase: string): Promise<void> {
-    const client = new SyncClient(serverUrl, obsidianTransport);
-    const account = createAccount(passphrase);
-    const vaultId = randomUuid();
-    const kv = vaultKey(account.seed, vaultId);
-
-    const out = await client.redeem({
-      invitation_token: invitationToken,
-      auth_secret: authSecret(account.seed),
-      account_salt: toBase64(account.accountSalt),
-      kdf_params: account.kdfParams,
-      // X25519 for sharing is M3; a placeholder keeps the account shape valid until then.
-      pubkey: 'AQ==',
-      enc_privkey: 'Ag==',
-      wrapped_seed: account.wrappedSeed,
-      recovery_key: 'BA==',
-      recovery_code_hash: 'f'.repeat(64),
-      initial_vault_id: vaultId,
-      initial_vault_name_enc: encryptName(kv, this.app.vault.getName()),
-      device_name: 'obsidian',
-      device_platform: 'desktop',
-    });
-
-    this.data.connection = {
-      serverUrl,
-      login,
-      deviceId: out.device_id,
-      vaultId: out.vault_id,
-      wrappedSeed: account.wrappedSeed,
-      accountSalt: toBase64(account.accountSalt),
-      kdfParams: account.kdfParams,
-    };
+    const s = await session.connect(
+      {
+        serverUrl,
+        login,
+        invitationToken,
+        passphrase,
+        vaultName: this.app.vault.getName(),
+        deviceName: 'obsidian',
+        devicePlatform: 'desktop',
+      },
+      obsidianTransport,
+    );
+    this.sess = s;
+    this.data.connection = s.connection;
     this.data.state = emptyState();
-    this.seed = account.seed;
     await this.save();
     this.setPhase({ kind: 'idle' });
   }
 
   /**
-   * Turn a passphrase into an authenticated client.
+   * Forget the passphrase. The session drops the seed, the client, and both tokens — an
+   * access token is the right to read and write the vault's ciphertext, and leaving one
+   * behind would be theatre.
    *
-   * Argon2id runs here and nowhere else, once per unlock — 64 MiB and a second or two on a
-   * desktop (docs/06). The seed it recovers stays in memory; what goes to the server is
-   * `HKDF(seed, "auth")`, which is the only branch that ever leaves this process.
+   * While a sync is running the session answers 'busy', and the UI says so rather than
+   * clearing the client out from under it.
    */
-  private async open(passphrase?: string): Promise<{ client: SyncClient; kv: Uint8Array; conn: Connection }> {
-    const conn = this.data.connection;
-    if (!conn) throw new Error('this vault is not connected to a server yet — see the plugin settings');
-
-    if (!this.seed) {
-      if (!passphrase) throw new Error('locked');
-      const account = openAccount(passphrase, fromBase64(conn.accountSalt), conn.kdfParams, conn.wrappedSeed);
-      this.seed = account.seed;
+  private lock(): void {
+    if (!this.sess) return;
+    const result = this.sess.lock();
+    if (result === 'busy') {
+      new Notice('SyncServer: a sync is running — lock after it finishes.');
+      return;
     }
-
-    const client = new SyncClient(conn.serverUrl, obsidianTransport);
-    const session = await client.login({
-      login: conn.login,
-      auth_secret: authSecret(this.seed),
-      device_id: conn.deviceId,
-    });
-    client.setAccessToken(session.access);
-    // The access token is good for 15 minutes (docs/04); a vault with enough files takes
-    // longer than that to sync. The refresh token is what lets the client renew it mid-sync
-    // without asking for the passphrase again — see SyncClient.send.
-    client.setRefreshToken(session.refresh);
-
-    return { client, kv: vaultKey(this.seed, conn.vaultId), conn };
+    this.setPhase({ kind: 'locked' });
+    new Notice('SyncServer: locked.');
   }
 
+  /**
+   * Turn the session into an authenticated client and run one pass.
+   *
+   * The session module owns the lifecycle: `open()` unlocks (Argon2id, once), `use()` lends
+   * the client for the length of the sync, and `lock()` can only refuse while one is out.
+   */
   async syncNow(): Promise<void> {
     try {
-      if (!this.data.connection) {
+      if (!this.sess) {
         new Notice('SyncServer: not connected. Open the plugin settings first.');
         return;
       }
-      const passphrase = this.seed ? undefined : await askPassphrase(this.app);
-      if (!this.seed && !passphrase) return; // dismissed
 
-      const { client, kv, conn } = await this.open(passphrase);
-      const engine = new SyncEngine(
-        client,
-        conn.vaultId,
-        kv,
-        new ObsidianVaultAdapter(this.app.vault),
-        this.stateStore(),
-        deviceLabel(),
-      );
+      const state = this.sess.state;
+      if (state === 'locked') {
+        const passphrase = await askPassphrase(this.app);
+        if (!passphrase) return; // dismissed
+        const unlocked = await this.sess.open(passphrase);
+        if (unlocked === 'locked') return; // the modal was dismissed with an empty field
+      }
 
       this.setPhase({ kind: 'syncing' });
-      const report = await engine.sync();
+
+      const report = await this.sess.use(async ({ client, kv }) => {
+        const engine = new SyncEngine(
+          client,
+          this.sess!.connection.vaultId,
+          kv,
+          new ObsidianVaultAdapter(this.app.vault),
+          this.stateStore(),
+          deviceLabel(),
+        );
+        return engine.sync();
+      });
+
       this.setPhase({ kind: 'idle', at: Date.now(), report });
 
       const parts = [`${report.pushed.length} up`, `${report.pulled.length} down`];
       if (report.matched.length) parts.push(`${report.matched.length} already in sync`);
+      if (report.deleted.length) parts.push(`${report.deleted.length} deleted here`);
+      if (report.removed.length) parts.push(`${report.removed.length} removed after the server`);
+      if (report.renamed.length) parts.push(`${report.renamed.length} moved`);
       if (report.conflicts.length) parts.push(`${report.conflicts.length} conflict${report.conflicts.length === 1 ? '' : 's'}`);
       if (report.errors.length) parts.push(`${report.errors.length} failed`);
       // `scanned` belongs in the summary because a pass that moved nothing is the one result
@@ -221,6 +198,11 @@ export default class SyncServerPlugin extends Plugin {
       for (const e of report.errors.slice(0, 5)) new Notice(`SyncServer: ${e.path} — ${e.message}`, 10000);
       for (const c of report.conflicts.slice(0, 5)) {
         new Notice(`SyncServer: conflict — ${c.path}\nyour copy: ${c.conflictPath}`, 15000);
+      }
+      // A reset on another device moves the user's unsynced work aside. That is the one thing
+      // the user must be told about directly, not left in a list — the cost of missing it is data.
+      for (const q of report.quarantined.slice(0, 5)) {
+        new Notice(`SyncServer: vault was reset elsewhere — ${q.from} was kept as ${q.to}`, 15000);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
