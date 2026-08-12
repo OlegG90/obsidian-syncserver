@@ -14,6 +14,9 @@ const report = (over: Partial<SyncReport>): SyncReport => ({
   matched: [],
   conflicts: [],
   renamed: [],
+  deleted: [],
+  removed: [],
+  quarantined: [],
   vanished: [],
   errors: [],
   ...over,
@@ -111,5 +114,25 @@ describe('statusLines', () => {
     const lines = statusLines({ kind: 'disconnected' });
     assert.ok(lines.some((l) => l.startsWith('Server: not connected')));
     assert.ok(!lines.some((l) => l.startsWith('Login:')));
+  });
+
+  it('names what was deleted on the server and removed here, so a disappearance is never silent', () => {
+    const lines = statusLines({
+      kind: 'idle',
+      at: Date.now(),
+      report: report({ removed: [{ path: 'Notes/gone.md' }] }),
+    });
+    assert.ok(lines.some((l) => l.includes('removed here') && l.includes('1')));
+    assert.ok(lines.some((l) => l.includes('Notes/gone.md')));
+  });
+
+  it('tells the user directly when a reset moved their work aside', () => {
+    const lines = statusLines({
+      kind: 'idle',
+      at: Date.now(),
+      report: report({ quarantined: [{ from: 'Notes/mine.md', to: '_Reset 2026-08-12/Notes/mine.md' }] }),
+    });
+    assert.ok(lines.some((l) => l.includes('reset on another device')));
+    assert.ok(lines.some((l) => l.includes('_Reset 2026-08-12/Notes/mine.md')));
   });
 });

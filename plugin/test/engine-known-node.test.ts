@@ -159,6 +159,16 @@ class FakeSyncClient implements VaultWire {
     this.moved.push({ nodeId, ifMatchRev });
     return { rev: ifMatchRev + 1 };
   }
+
+  /** These scenarios never delete: no cursor, so no epoch, so nothing to delete against. */
+  async deleteNode(): Promise<{ rev: number }> {
+    throw new Error('deleteNode should not be called here');
+  }
+
+  /** No cursor in these scenarios means the engine never probes. */
+  async delta(): Promise<never> {
+    throw new Error('delta should not be called here');
+  }
 }
 
 const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText: string; serverText: string; knownText: string }) => {

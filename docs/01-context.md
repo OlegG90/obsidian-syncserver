@@ -44,7 +44,7 @@ The vault is a folder of files, so the boundary has to be stated explicitly rath
 |---|---|
 | **Always** | the whole vault tree — `.md`, attachments, canvas, bases, and any other file the user keeps in it |
 | **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json`, `graph.json`, plugin caches |
-| **Never** | `.trash/`, `.git/`, `node_modules/`, anything in the user's own ignore list, and the artefacts of other synchronisers: `.stfolder`, `.stversions`, `~sync-conflict-*`, `_remotely-save-metadata-on-remote.json`, `conflicted copy` |
+| **Never** | `.trash/`, `.git/`, `node_modules/`, the `_Reset ` quarantine folder a `410 reset` moves the losing device's work into (docs/07), anything in the user's own ignore list, and the artefacts of other synchronisers: `.stfolder`, `.stversions`, `~sync-conflict-*`, `_remotely-save-metadata-on-remote.json`, `conflicted copy` |
 
 Three notes on the middle row, because it is the one that surprises people.
 

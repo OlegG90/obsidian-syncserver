@@ -4,7 +4,7 @@
 |---|---|---|
 | **M0** | database schema (including `versions`), blob store, authentication, `delta`/`put`/`delete`; verified with curl, no plugin. Ships as a **Docker image** deployed to the home server for testing — see [13](13-deployment.md) | ☑ |
 | **M0.5** | plugin, **one-way** sync: local changes reach the server, delta is only ever applied to an empty vault | ☑ |
-| **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ◐ |
+| **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☑ |
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☐ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☐ |
 | **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
@@ -42,12 +42,12 @@ missing named in the row.
 | Scenario | What it proves |
 |---|---|
 | **adoption of a non-empty vault** ☑ | matching by path, equal hashes transfer nothing, differing ones produce a conflict file |
-| renaming a file and a folder ◐ | `move`, `ancestry`, history survived — a file is covered; a renamed FOLDER is still seen as its files moving one by one |
-| deletion and restore from the trash | soft delete, grouping, ancestor chain, `409` on a taken name |
-| a conflict between two clients ◐ | the content precondition, the conflict file, and **no** spurious conflict on rename + edit — the first two are covered; the third needs rename and edit to be recognised TOGETHER, which the hash heuristic cannot do |
-| an interruption between `POST /blobs` and the node write | `refs_pending`, TTL, retry without duplication |
-| a full rescan | changes made outside Obsidian, rename detection by hash |
-| resync after journal TTL | `410`, `snapshot`, the cursor after the walk |
+| renaming a file and a folder ☑ | `move`, `ancestry`, history survived. A file moves as one node; a renamed FOLDER moves as one folder node too — every child reappearing with identical content under one new parent collapses to a single folder `move`, and the empty source folder does not linger. Rename on one device + edit on another lands as a move plus an edit on the same node — no duplicate, no conflict. A child edited during the move still falls back to per-file, as docs/04's conservative heuristic intends |
+| deletion and restore from the trash ☑ | soft delete, grouping, ancestor chain, `409` on a taken name (server-side, `history.test.ts`). Deletion propagates end-to-end: a delete on one device is pushed, another device removes its copy without resurrecting it, and the deleted file can be restored from the trash through the client (`history` protocol surface) — a new write with an old hash (docs/04). The plugin's trash **UI** is M4; the mechanism is proven |
+| a conflict between two clients ☑ | the content precondition, the conflict file, and **no** spurious conflict on rename + edit — rename and edit are now recognised TOGETHER by node id (the third case the hash heuristic could not do alone) |
+| an interruption between `POST /blobs` and the node write ☑ | `refs_pending`, TTL, retry without duplication — the server mechanism is covered (`collector.test.ts`), and the client's retry is proven live: a node write that dies after the blob upload is reported, and the next sync succeeds creating exactly one node, not two |
+| a full rescan ☑ | changes made outside Obsidian, rename detection by hash — every sync is a full scan by construction (there is no watcher), and rename detection is covered live |
+| resync after journal TTL ◐ | the client presents its stored cursor and resyncs on `410`, taking the snapshot as the new cursor — covered for all four reasons (`continuous`, `restore`, `reset`, `journal_ttl`) in `engine-delete.test.ts`, and the **`410 reset` path is proven live end-to-end** (a reset on one device resyncs the other, quarantining its displaced work). A live `journal_ttl` still needs the journal to age 90 days, which the suite cannot wait for |
 
 The last two are the most expensive to implement and the most valuable: they are what catches the bugs
 that never appear on the happy path.

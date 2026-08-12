@@ -33,6 +33,21 @@ Every secret this section sends — `auth_secret`, the invitation token, the rec
 is verified against a **SHA-256 hex** hash compared in constant time, and every one of them must be at least
 128 bits of CSPRNG output for that to be sound (#108, [06](06-key-model.md)).
 
+**The refresh token has no expiry and no rotation — a named limitation, with its consequence.** It lives in
+`devices.refresh_token_hash` and is replaced only by a new login on the same device row or by revocation
+(#90). Between the two secrets a session holds, this is the one an indefinite lifetime is dangerous for: the
+seed never leaves the device, but the refresh token travels the network — in the body of `POST
+/auth/refresh`, to a server that compares it against the hash — so it is the one that can be intercepted or
+settle in somebody else's log. Whoever holds it can synchronise as that device for as long as the device row
+lives. The candidate repairs are an **expiry**, which fires at a moment when asking for the passphrase is
+acceptable, and **rotation on use**, which also detects replay — but rotation reopens the lost-response
+question: a client whose answer with the new token never arrives is left holding a dead one and must
+re-login, which is precisely the client-side hook the session design declines to build. So the repair, when
+it comes, is expiry. The limitation is recorded now rather than later because of an amplification this
+protocol just underwent: a client that logged in on every sync overwrote the hash each time, so a token
+lived one sync; the plugin's session module logs in once per unlock instead, and the token lives as long as
+the session is open. Same limitation, a different order of magnitude for its window.
+
 The passphrase never reaches the server. The client uses it to derive a KEK and unwrap a stable random
 **seed**; the seed yields `auth_secret`, sent here and hashed again on arrival, and per-vault keys
 `KV = HKDF(seed, vault_id)` that stay on the device. If both sides used the same material, the server would
@@ -441,8 +456,20 @@ journal at all ([05](05-sharing.md)).
 
 ## The sync cycle
 
-**push → pull → apply.** Local changes go out first. The reverse order hides conflicts: the client would
+**probe → push → pull → apply.** Before anything moves, the client presents its stored cursor to
+`/delta` with `limit: 1` and reads the verdict. `200` means the server is continuous with what it last
+saw; `410` names the epoch that moved; `400 cursor_unverifiable` means the cursor cannot be checked at all.
+That verdict is what decides how an absence is read: whether a node missing from the listing was deleted
+there, or the server simply no longer holds it (docs/04's epoch table below, #70). The probe is a check,
+not the data — the client re-reads the tree through a full walk (incremental application is M2).
+
+Local changes go out first. The reverse order hides conflicts: the client would
 apply the server's version over its own and only then discover there was a conflict.
+
+A deletion is pushed like any other local change — `DELETE /nodes/{node_id}` with the revision the walk
+saw — and a node missing from the walked tree under a continuous epoch deletes the local copy. Under a
+`restore` epoch the same absence is a rescue, not a wipe: nothing is deleted locally and what the server
+lost is uploaded as new.
 
 ## Conflicts
 

@@ -36,9 +36,10 @@ export const shortStatus = (phase: SyncPhase): string => {
       // A conflict is the one outcome that needs a person, not just an eye — ahead of the
       // ordinary counts even when they are also nonzero.
       if (r.conflicts.length) return `Sync: ${r.conflicts.length} conflict${r.conflicts.length === 1 ? '' : 's'}`;
-      if (r.pushed.length || r.pulled.length || r.renamed.length) {
+      if (r.pushed.length || r.pulled.length || r.renamed.length || r.deleted.length || r.removed.length) {
         const moves = r.renamed.length ? ` ${r.renamed.length}→` : '';
-        return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}`;
+        const dels = r.deleted.length || r.removed.length ? ` ${r.deleted.length + r.removed.length}✕` : '';
+        return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}${dels}`;
       }
       // The case that started all this: nothing moved. Say which kind of nothing — matched
       // (adoption recognised everything and sent none of it again) reads very differently
@@ -83,6 +84,8 @@ export const statusLines = (phase: SyncPhase, connection?: { serverUrl: string; 
       lines.push(`Local files seen: ${r.scanned}`);
       lines.push(`Uploaded: ${r.pushed.length}`);
       lines.push(`Downloaded: ${r.pulled.length}`);
+      if (r.deleted.length) lines.push(`Deleted here, deleted on the server: ${r.deleted.length}`);
+      if (r.removed.length) lines.push(`Deleted on the server, removed here: ${r.removed.length}`);
       // Zero, most of the time — worth a line only when adoption actually recognised
       // something, so an ordinary sync's summary is not padded with a row that reads "0."
       if (r.matched.length) lines.push(`Already on both sides, nothing sent: ${r.matched.length}`);
@@ -95,6 +98,16 @@ export const statusLines = (phase: SyncPhase, connection?: { serverUrl: string; 
         lines.push('');
         lines.push(`Moved (${r.renamed.length}) — the same note, so its history followed it:`);
         for (const mv of r.renamed) lines.push(`  ${mv.from}  →  ${mv.to}`);
+      }
+      if (r.removed.length) {
+        lines.push('');
+        lines.push(`Deleted on the server, removed here (${r.removed.length}):`);
+        for (const d of r.removed) lines.push(`  ${d.path}`);
+      }
+      if (r.quarantined.length) {
+        lines.push('');
+        lines.push(`This vault was reset on another device. Your unsynced work was kept, moved aside:`);
+        for (const q of r.quarantined) lines.push(`  ${q.from}  →  ${q.to}`);
       }
       if (r.vanished.length) {
         lines.push('');

@@ -46,5 +46,10 @@ export interface VaultAdapter {
  * including this vault's credentials — and synchronising it means one device's layout
  * overwriting another's every few seconds. docs/10 puts exclusions in M2; until then the
  * rule is the simplest one that cannot surprise anybody.
+ *
+ * `_Reset ` is the quarantine folder a `410 reset` moves the losing device's work into
+ * (docs/07): it lives inside the vault so nothing is erased, and it must not be synced or
+ * the very files the reset displaced come back up on the next pass.
  */
-export const isSyncable = (path: string): boolean => !path.startsWith('.obsidian/') && !path.startsWith('.trash/');
+export const isSyncable = (path: string): boolean =>
+  !path.startsWith('.obsidian/') && !path.startsWith('.trash/') && !path.startsWith('_Reset ');

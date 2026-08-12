@@ -238,6 +238,41 @@ export class SyncClient {
     return this.json('GET', `/vaults/${vaultId}`);
   }
 
+  /**
+   * "My client is the source of truth" (docs/07): hard-destroys the vault's own nodes and
+   * bumps the reset epoch, so every other device is answered `410 reset` and resyncs.
+   */
+  resetVault(vaultId: string): Promise<{ reset_epoch: number; root_node_id: string; removed: number }> {
+    return this.json('POST', `/vaults/${vaultId}/reset`);
+  }
+
+  /** Deleted nodes that can still be brought back — `deleted_at` with live versions. */
+  trash(vaultId: string, under?: string): Promise<{ node_id: string; parent_id: string | null; name_enc: string | null; type: string; deleted_at: string; versions: number }[]> {
+    const q = under ? `?under=${encodeURIComponent(under)}` : '';
+    return this.json('GET', `/vaults/${vaultId}/trash${q}`);
+  }
+
+  /** One row per revision, newest first. A restore needs one of these `rev`s. */
+  versions(vaultId: string, nodeId: string): Promise<{ rev: number; sha256: string; size: number; at: string; author_id: string }[]> {
+    return this.json('GET', `/vaults/${vaultId}/versions/${nodeId}`);
+  }
+
+  /** Restore = a new write with an old hash (docs/04). `409 name_taken` names the blocker. */
+  async restore(vaultId: string, nodeId: string, rev: number): Promise<{ rev: number; lifted: boolean }> {
+    const res = await this.send({
+      method: 'POST',
+      path: `/vaults/${vaultId}/restore`,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ node_id: nodeId, rev }),
+    });
+    if (res.status === 409) {
+      const body = JSON.parse(res.text()) as { error?: string; blocked_by?: string };
+      if (body.error === 'name_taken') throw new ApiError(409, 'name_taken', `blocked by ${body.blocked_by}`);
+    }
+    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return JSON.parse(res.text()) as { rev: number; lifted: boolean };
+  }
+
   // ---- the tree ----------------------------------------------------------------
 
   createNode(

@@ -14,7 +14,7 @@
  * The types come from the protocol client because they ARE the wire's shapes — a second set
  * of identical interfaces here would be the duplication this file exists to argue against.
  */
-import type { Change, Envelope, Material, PutConflict } from '../api/client.js';
+import type { Change, CursorRejected, Delta, Envelope, Material, PutConflict } from '../api/client.js';
 
 export interface VaultWire {
   /** Where a client starts: the root, the head, and the key scope per scope (docs/06). */
@@ -69,4 +69,20 @@ export interface VaultWire {
     ifMatchRev: number,
     body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
   ): Promise<{ rev: number }>;
+
+  /**
+   * A soft delete: the row becomes the trash entry (docs/03). The revision precondition —
+   * a delete that raced a write must lose, not silently win.
+   */
+  deleteNode(vaultId: string, nodeId: string, ifMatchRev: number): Promise<{ rev: number }>;
+
+  /**
+   * One question, asked before every walk: can this cursor still be answered?
+   *
+   * The engine passes `limit: 1` because it is after provenance, not pages — a 200 proves
+   * the server is continuous with what the client last saw (so an absence in the tree is a
+   * genuine deletion), and a 410 names the epoch that moved (docs/04). The changes
+   * themselves are re-read through the full walk; incremental application is M2.
+   */
+  delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected>;
 }

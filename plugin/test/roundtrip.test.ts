@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 
-import { SyncClient } from '../src/api/client.js';
+import { ApiError, SyncClient } from '../src/api/client.js';
 import { fetchTransport } from '../src/api/transport.js';
 import { authSecret, createAccount, openAccount, vaultKey } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
@@ -30,6 +30,7 @@ import { HEADER_BYTES } from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { MemoryStateStore } from '../src/engine/state.js';
+import { session, type Session } from '../src/session/index.js';
 import { FakeVault } from './fake-vault.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,9 @@ const client = new SyncClient(base, fetchTransport);
 // scenario that follows — one account, two devices (AC-11).
 let account: ReturnType<typeof createAccount>;
 let vaultId: string;
+
+/** The session the first describe block lives on — connect → open → lock → open. */
+let sess: Session;
 
 /** Everything the child said, kept so a failed start can explain itself. */
 let serverOutput = '';
@@ -130,36 +134,45 @@ describe('a vault, end to end', () => {
   let kv: Uint8Array;
   let address: string;
 
-  it('claims the seeded invitation with material derived on the device', async () => {
+  it('claims the seeded invitation through the session', async () => {
     const health = await client.health();
     assert.equal(health.bootstrap_pending, true, 'this test needs a fresh database — see npm run test:live');
 
-    account = createAccount(passphrase);
-    vaultId = randomUuid();
+    sess = await session.connect(
+      {
+        serverUrl: base,
+        login: 'admin',
+        invitationToken: 'admin',
+        passphrase,
+        vaultName: 'testVault',
+        deviceName: 'roundtrip',
+        devicePlatform: 'linux',
+      },
+      fetchTransport,
+    );
 
-    // The vault key exists before the vault does: the client picks the id, so it can derive
-    // KV and encrypt the vault's own label before anything reaches the server (AC-11).
-    kv = vaultKey(account.seed, vaultId);
+    assert.equal(sess.state, 'open', 'connect() returns an open session — the phrase was just typed');
+    vaultId = sess.connection.vaultId;
 
-    const out = await client.redeem({
-      invitation_token: 'admin',
-      auth_secret: authSecret(account.seed),
-      account_salt: toBase64(account.accountSalt),
-      kdf_params: account.kdfParams,
-      pubkey: 'AQ==',
-      enc_privkey: 'Ag==',
-      wrapped_seed: account.wrappedSeed,
-      recovery_key: 'BA==',
-      recovery_code_hash: 'f'.repeat(64),
-      initial_vault_id: vaultId,
-      initial_vault_name_enc: encryptName(kv, 'testVault'),
-      device_name: 'roundtrip',
-      device_platform: 'linux',
+    // The live KDF floor check (#62): the session derived these with real Argon2id, and the
+    // server accepted them — the only place that proof can live.
+    const kdf = sess.connection.kdfParams;
+    assert.equal(kdf.v, 19, 'the live KDF parameters meet the floor');
+    assert.ok(kdf.m >= 65536, 'the memory floor');
+    assert.ok(kdf.t >= 3, 'the time floor');
+    assert.ok(kdf.p >= 1, 'the parallelism floor');
+
+    // The account material the later tests need: the seed lives in the session, so we open
+    // the account from the record the plugin would persist — the same thing a second
+    // device would do with nothing but the passphrase.
+    account = openAccount(passphrase, fromBase64(sess.connection.accountSalt), kdf, sess.connection.wrappedSeed);
+
+    // The session's client is the one the later tests use: it is already authenticated.
+    await sess.use(async (h) => {
+      // The engine will borrow this client; the test borrows it the same way.
+      Object.assign(client, h.client);
+      kv = h.kv;
     });
-
-    client.setAccessToken(out.access);
-    rootNodeId = out.root_node_id;
-    assert.equal(out.vault_id, vaultId, 'the server took the id the client chose');
   });
 
   it('reads its own vault label back, which the server cannot', async () => {
@@ -168,7 +181,7 @@ describe('a vault, end to end', () => {
     assert.equal(decryptName(kv, vaults[0]!.name_enc), 'testVault');
 
     const opened = await client.openVault(vaultId);
-    assert.equal(opened.root_node_id, rootNodeId);
+    rootNodeId = opened.root_node_id;
     scopeId = opened.scopes.find((s) => s.scope === 'vault')!.key_id;
     assert.ok(scopeId, 'the vault reports its own key scope (docs/06)');
   });
@@ -217,30 +230,31 @@ describe('a vault, end to end', () => {
   });
 
   it('opens the vault again from the passphrase alone, as a second device would', async () => {
-    // Everything a fresh device has: the login, the passphrase, and what the server stores
-    // in the clear. No key travels.
-    const { account_salt, kdf_params } = await client.kdf('admin');
-    const reopened = openAccount(passphrase, fromBase64(account_salt), kdf_params, account.wrappedSeed);
-    assert.deepEqual(reopened.seed, account.seed, 'the seed came back out of its envelope');
-
-    const kv2 = vaultKey(reopened.seed, vaultId);
-    const delta = await client.delta(vaultId);
-    assert.ok(!('rejected' in delta));
-    const change = delta.changes[0]!;
-
-    assert.equal(decryptName(kv2, change.name_enc!), filename);
+    // The session locks, and the phrase is all that gets it back.
+    assert.equal(sess.lock(), 'locked');
+    assert.equal(sess.state, 'locked');
+    assert.equal(await sess.open(), 'locked', 'no phrase, no entry');
 
     // The whole point, in one line: the file, recovered from the server by a client that
     // was given a passphrase and nothing else.
-    const ciphertext = (await client.getBlob(change.sha256!))!;
-    const envelopes = (await client.blobKeys(vaultId, [change.sha256!])).get(change.sha256!) ?? [];
-    assert.ok(envelopes.length > 0, 'the envelope comes from the server: a second device has no local copy');
+    assert.equal(await sess.open(passphrase), 'open');
+    await sess.use(async (h) => {
+      const delta = await h.client.delta(vaultId);
+      assert.ok(!('rejected' in delta));
+      const change = delta.changes[0]!;
 
-    // Picked BY SCOPE, not by position. One scope today; a shared folder adds more, and
-    // "the first one" would then be whichever the database happened to return.
-    const mine = envelopes.find((e) => e.scopeId === scopeId);
-    assert.ok(mine, 'an envelope under this vault’s own key');
-    assert.deepEqual(openBlob(unwrapContentKey(kv2, mine.wrappedKey), ciphertext), plaintext);
+      assert.equal(decryptName(h.kv, change.name_enc!), filename);
+
+      const ciphertext = (await h.client.getBlob(change.sha256!))!;
+      const envelopes = (await h.client.blobKeys(vaultId, [change.sha256!])).get(change.sha256!) ?? [];
+      assert.ok(envelopes.length > 0, 'the envelope comes from the server: a second device has no local copy');
+
+      // Picked BY SCOPE, not by position. One scope today; a shared folder adds more, and
+      // "the first one" would then be whichever the database happened to return.
+      const mine = envelopes.find((e) => e.scopeId === scopeId);
+      assert.ok(mine, 'an envelope under this vault’s own key');
+      assert.deepEqual(openBlob(unwrapContentKey(h.kv, mine.wrappedKey), ciphertext), plaintext);
+    });
   });
 
   it('hands out no envelope for an address the caller does not hold', async () => {
@@ -251,8 +265,9 @@ describe('a vault, end to end', () => {
   });
 
   it('refuses the wrong passphrase rather than returning rubbish', async () => {
-    const { account_salt, kdf_params } = await client.kdf('admin');
-    assert.throws(() => openAccount('not the passphrase', fromBase64(account_salt), kdf_params, account.wrappedSeed));
+    const locked = session.create(sess.connection, fetchTransport);
+    await assert.rejects(() => locked.open('not the passphrase'));
+    assert.equal(locked.state, 'locked', 'the session stayed locked — no half-open state');
   });
 
 });
@@ -413,7 +428,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(!now.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'before.md'));
   });
 
-  it('declines to guess on a small file, falling back to create — and says what vanished', async () => {
+  it('declines to guess on a small file, falling back to create — and deletes the vanished one', async () => {
     // Two empty-ish notes with identical content is the case the floor exists for: nothing
     // in the bytes says which one moved where.
     const tiny = 'tiny';
@@ -430,7 +445,8 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.equal(report.renamed.length, 0, 'too small to be sure, so it did not pretend to be');
     assert.ok(report.pushed.some((p) => p.path === 'Small/two.md'), 'created instead — the blob deduplicates anyway');
-    assert.deepEqual(report.vanished, [{ path: 'Small/one.md' }], 'and the disappearance is reported, not acted on');
+    // The disappearance is now a real delete, pushed to the server — not just reported.
+    assert.deepEqual(report.deleted, [{ path: 'Small/one.md' }], 'the vanished file is deleted, not left dangling');
   });
 
   it('two clients editing the same file: the server refuses the second, and neither version is lost', async () => {
@@ -501,6 +517,229 @@ describe('the engine, device A pushes and device B pulls', () => {
     // (docs/06). Equal addresses here are only possible if the engine used the dedup match
     // instead of sealing fresh bytes — the whole claim, made unfalsifiable by construction.
     assert.equal(copy.sha256, original.sha256, 'bound to the address that already held this content');
+  });
+
+  it('a delete on one device removes the file on the other, and nothing resurrects it', async () => {
+    const path = 'Devices/doomed.md';
+    const a = new FakeVault();
+    a.seed(path, 'this file will be deleted');
+    const storeA = new MemoryStateStore();
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    const b = new FakeVault();
+    const storeB = new MemoryStateStore();
+    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    assert.equal((await engineB.sync()).errors.length, 0);
+    assert.equal(b.contents(path), 'this file will be deleted', 'B has the file before the delete');
+
+    // A deletes it and pushes the delete.
+    await a.delete(path);
+    const delReport = await engineA.sync();
+    assert.equal(delReport.errors.length, 0, JSON.stringify(delReport.errors));
+    assert.ok(delReport.deleted.some((d) => d.path === path), 'A pushed the delete');
+
+    // B syncs: the node is gone from the tree, B's epoch is continuous, so the local copy goes.
+    const reportB = await engineB.sync();
+    assert.equal(reportB.errors.length, 0, JSON.stringify(reportB.errors));
+    assert.equal(b.contents(path), undefined, 'B removed the local copy');
+    assert.ok(reportB.removed.some((r) => r.path === path), 'B reports the removal');
+
+    // And the delete is a soft delete: the content is still in the trash on the server.
+    const trash = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in trash));
+  });
+
+  it('a renamed folder moves as one node, and the empty source folder does not linger', async () => {
+    const before = 'Folders/old';
+    const after = 'Folders/new';
+    const body = `# A folder's note\n\n${'Enough to be identified by hash. '.repeat(20)}`;
+
+    const a = new FakeVault();
+    a.seed(`${before}/one.md`, body);
+    a.seed(`${before}/two.md`, body + '\nsecond');
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    const first = await engineA.sync();
+    assert.equal(first.errors.length, 0, JSON.stringify(first.errors));
+
+    // Rename the folder the way a file manager would: every child moves, content unchanged.
+    await a.delete(`${before}/one.md`);
+    await a.delete(`${before}/two.md`);
+    a.seed(`${after}/one.md`, body);
+    a.seed(`${after}/two.md`, body + '\nsecond');
+
+    const report = await engineA.sync();
+    assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+    assert.ok(report.renamed.some((r) => r.from === before && r.to === after), 'the folder moved as one node');
+
+    // The server tree has `new/…` and no live node under `old/` (the empty source folder is gone).
+    const delta = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in delta));
+    const names = delta.changes.map((c) => c.name_enc && decryptName(kv2, c.name_enc)).filter(Boolean);
+    assert.ok(names.includes('one.md') && names.includes('two.md'), 'the children are live under the new folder');
+    assert.ok(!names.includes('old'), 'the empty source folder did not linger');
+
+    // A second device materialises the vault and sees the new folder, not the old one.
+    const b = new FakeVault();
+    await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone').sync();
+    assert.equal(b.contents(`${after}/one.md`), body);
+    assert.equal(b.contents(`${before}/one.md`), undefined, 'no file under the old folder');
+  });
+
+  it('a rename on one device and an edit on the other land as a move plus an edit — no duplicate, no conflict', async () => {
+    const before = 'Devices/move-me.md';
+    const after = 'Devices/moved.md';
+    const body = `# Move me\n\n${'Enough substance to be identified by hash. '.repeat(20)}`;
+
+    const a = new FakeVault();
+    a.seed(before, body);
+    const storeA = new MemoryStateStore();
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    const b = new FakeVault();
+    const storeB = new MemoryStateStore();
+    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    assert.equal((await engineB.sync()).errors.length, 0);
+    assert.equal(b.contents(before), body, 'B has the file at the old path');
+
+    // A renames it (file-manager style: gone from one path, present at another).
+    await a.delete(before);
+    a.seed(after, body);
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    // B has a local EDIT at the old path, then syncs. The edit must follow the move.
+    await b.write(before, utf8(body + '\nedited on B\n'));
+    const reportB = await engineB.sync();
+    assert.equal(reportB.errors.length, 0, JSON.stringify(reportB.errors));
+    assert.equal(reportB.conflicts.length, 0, 'a rename and an edit do not conflict');
+    assert.equal(b.contents(before), undefined, 'the old path is gone');
+    assert.equal(b.contents(after), body + '\nedited on B\n', 'the edit followed the move');
+
+    // A syncs once more and sees exactly one node: the moved, edited file. No duplicate.
+    const reportA2 = await engineA.sync();
+    assert.equal(reportA2.errors.length, 0, JSON.stringify(reportA2.errors));
+    const delta = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in delta));
+    const names = delta.changes
+      .map((c) => c.name_enc && decryptName(kv2, c.name_enc))
+      .filter(Boolean);
+    assert.ok(!names.includes('move-me.md'), 'the old name did not come back');
+  });
+
+  it('an interruption between the blob upload and the node write retries without duplicating', async () => {
+    // The M1 interruption scenario: the blob lands (a pending claim), the node write dies
+    // before the transaction commits. The next sync must succeed and create exactly one node.
+    const path = 'Devices/interrupted.md';
+    const a = new FakeVault();
+    a.seed(path, 'interrupted but retried');
+
+    // Fail the node write ONCE. The blob upload before it is real and leaves `refs_pending`.
+    let failed = false;
+    const flaky = new Proxy(client, {
+      get(target, prop, receiver) {
+        if (prop === 'createNode' && !failed) {
+          failed = true;
+          return async () => {
+            throw new ApiError(500, 'boom_before_commit', '');
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const store = new MemoryStateStore();
+    const engine = new SyncEngine(flaky, ownVaultId, kv2, a, store, 'laptop');
+    const first = await engine.sync();
+    assert.equal(first.errors.length, 1, 'the interrupted write is reported');
+
+    // The retry — a fresh engine over the same vault, the same store — succeeds cleanly.
+    const retry = await new SyncEngine(client, ownVaultId, kv2, a, store, 'laptop').sync();
+    assert.equal(retry.errors.length, 0, JSON.stringify(retry.errors));
+    assert.ok(retry.pushed.some((p) => p.path === path));
+
+    // Exactly one node holds the file. The interrupted upload sits as `refs_pending` until
+    // the collector's unbound TTL sweeps it — nothing was bound to a duplicate node.
+    const delta = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in delta));
+    const matches = delta.changes.filter((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'interrupted.md');
+    assert.equal(matches.length, 1, 'one node, not two');
+  });
+
+  it('a deleted file can be restored from the trash, and a taken name is refused', async () => {
+    // The trash/restore half of "deletion and restore from the trash": the server keeps the
+    // content and offers it back; a restore is a new write with an old hash (docs/04).
+    const path = 'Devices/trashable.md';
+    const a = new FakeVault();
+    a.seed(path, 'to be deleted and returned');
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    // Delete it, and the node is soft-deleted into the trash.
+    await a.delete(path);
+    assert.equal((await engineA.sync()).errors.length, 0);
+    const trash = await client.trash(ownVaultId);
+    const entry = trash.find((t) => t.name_enc && decryptName(kv2, t.name_enc) === 'trashable.md');
+    assert.ok(entry, 'the deleted node is in the trash');
+    assert.ok(entry!.versions >= 1, 'with history still alive');
+
+    // Restore the newest version: a new write with the old hash (docs/04).
+    const versions = await client.versions(ownVaultId, entry!.node_id);
+    const newest = versions[0]!;
+    const restored = await client.restore(ownVaultId, entry!.node_id, newest.rev);
+    assert.ok(restored.rev >= newest.rev, 'the restore wrote a new version');
+
+    const after = await client.delta(ownVaultId);
+    assert.ok(!('rejected' in after));
+    assert.ok(
+      after.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'trashable.md'),
+      'the file is live again',
+    );
+
+    // A second device pulls the restored file.
+    const b = new FakeVault();
+    await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone').sync();
+    assert.equal(b.contents(path), 'to be deleted and returned');
+  });
+
+  it('a reset on one device resyncs the other through 410, quarantining displaced work', async () => {
+    // docs/07: another device running "my client wins" sends the loser `410 reset`. The
+    // loser resyncs against the winner's tree and QUARANTINES its own local-only work rather
+    // than erasing it (#80) — never delete the user's files silently.
+    const path = 'Devices/reset-shared.md';
+    const extraPath = 'Devices/reset-only-on-b.md';
+
+    // A wins: pushes the shared file.
+    const a = new FakeVault();
+    a.seed(path, 'the winning content');
+    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    assert.equal((await engineA.sync()).errors.length, 0);
+
+    // B pulls it and has an extra local-only file.
+    const b = new FakeVault();
+    const storeB = new MemoryStateStore();
+    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    assert.equal((await engineB.sync()).errors.length, 0);
+    assert.equal(b.contents(path), 'the winning content');
+    b.seed(extraPath, 'my unsynced work');
+
+    // A resets the vault, wiping it, then re-uploads its own tree.
+    const reset = await client.resetVault(ownVaultId);
+    assert.ok(reset.reset_epoch >= 1, 'the reset epoch moved');
+    const storeA2 = new MemoryStateStore();
+    const engineA2 = new SyncEngine(client, ownVaultId, kv2, a, storeA2, 'laptop');
+    assert.equal((await engineA2.sync()).errors.length, 0);
+
+    // B syncs: its cursor predates the reset, so the probe answers 410 reset.
+    const reportB = await engineB.sync();
+    assert.equal(reportB.errors.length, 0, JSON.stringify(reportB.errors));
+
+    // The shared file rebinds to the new node; the local-only work is quarantined, not gone.
+    assert.equal(b.contents(path), 'the winning content');
+    assert.equal(b.contents(extraPath), undefined, 'the displaced file leaves its path');
+    const q = reportB.quarantined.find((x) => x.from === extraPath);
+    assert.ok(q, 'the displaced work was quarantined');
+    assert.equal(b.contents(q!.to), 'my unsynced work', 'and survives, in the quarantine folder');
   });
 });
 
