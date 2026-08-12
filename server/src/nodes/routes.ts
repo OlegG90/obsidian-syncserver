@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
+import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
 import { createNode, dedupLookup, deleteNode, moveNode, putContent, type Material, type WriteFailure } from './service.js';
 
@@ -40,15 +41,9 @@ const material = (b: MaterialBody): Material => ({
 /**
  * Ownership is checked here and nowhere else in these handlers: a caller may only address
  * a vault of their own account. Vaults are not bound to devices (AC-13), so which one they
- * reach is their choice — but it is still their account's.
+ * reach is their choice — but it is still their account's. The predicate itself is shared
+ * with every other route family (`account.ts`); this comment is about the call sites.
  */
-const ownsVault = async (db: Db, userId: string, vaultId: string): Promise<boolean> => {
-  const row = await db.one<{ ok: boolean }>(
-    `SELECT EXISTS (SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2) AS ok`,
-    [vaultId, userId],
-  );
-  return row?.ok ?? false;
-};
 
 export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
   /**

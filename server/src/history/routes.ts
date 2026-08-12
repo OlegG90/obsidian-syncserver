@@ -1,15 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
+import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
 import { listTrash, listVersions, restoreNode } from './service.js';
-
-const ownsVault = async (db: Db, userId: string, vaultId: string): Promise<boolean> => {
-  const row = await db.one<{ ok: boolean }>(
-    `SELECT EXISTS (SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2) AS ok`,
-    [vaultId, userId],
-  );
-  return row?.ok ?? false;
-};
 
 export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
   app.get<{ Params: { vaultId: string; nodeId: string } }>(

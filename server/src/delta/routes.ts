@@ -1,6 +1,7 @@
 import type { CursorPayload } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
+import { ownsVault } from '../account.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
@@ -9,17 +10,9 @@ import { listSubtree, readChanges, readPosition, rejectionFor } from './service.
 const MAX_LIMIT = 500;
 
 export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
-  const ownsVault = async (userId: string, vaultId: string): Promise<boolean> => {
-    const row = await db.one<{ ok: boolean }>(
-      `SELECT EXISTS (SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2) AS ok`,
-      [vaultId, userId],
-    );
-    return row?.ok ?? false;
-  };
-
   /** Where a client starts syncing this vault. */
   app.get<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preHandler: requireAuth }, async (req, reply) => {
-    if (!(await ownsVault(req.caller!.userId, req.params.vaultId))) {
+    if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }
     const row = await db.one<{ rootNodeId: string; head: string; keyId: string }>(
@@ -39,7 +32,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     { preHandler: requireAuth },
     async (req, reply) => {
       const { vaultId } = req.params;
-      if (!(await ownsVault(req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
+      if (!(await ownsVault(db, req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
 
       const at = await readPosition(db, vaultId);
       if (!at) return reply.code(404).send({ error: 'not_found' });
@@ -116,7 +109,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     { preHandler: requireAuth },
     async (req, reply) => {
       const { vaultId } = req.params;
-      if (!(await ownsVault(req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
+      if (!(await ownsVault(db, req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
 
       const at = await readPosition(db, vaultId);
       if (!at) return reply.code(404).send({ error: 'not_found' });

@@ -12,6 +12,7 @@
  * for a server with more writers than this one has.
  */
 import type { Db } from './db.js';
+import { ownerOf } from './account.js';
 
 /** What the WS route registers for one open, authenticated connection. */
 export interface RevisionSubscriber {
@@ -41,14 +42,13 @@ export const openEventsHub = (db: Db): EventsHub => {
 
   listener = db.listen(CHANNEL, (payload) => {
     void (async () => {
-      // The vault that changed; route to the accounts that own it.
-      const row = await db.one<{ userId: string; head: string }>(
-        `SELECT user_id AS "userId", head_rev::text AS head FROM vaults WHERE id = $1`,
-        [payload],
-      );
-      if (!row) return; // a vault that no longer exists wakes nobody
+      // The vault that changed; route to the account that owns it, with where its journal
+      // stands. One module answers both (account.ts) — the fan-out does not re-derive
+      // ownership, which is the drift this exists to avoid.
+      const owned = await ownerOf(db, payload);
+      if (!owned) return; // a vault that no longer exists wakes nobody
       for (const sub of connections) {
-        if (sub.accountId === row.userId) sub.send({ vault_id: payload, head_rev: Number(row.head) });
+        if (sub.accountId === owned.userId) sub.send({ vault_id: payload, head_rev: owned.headRev });
       }
     })().catch(() => {
       // A failed fan-out is a missed hint, not data loss: the next sync finds the change
