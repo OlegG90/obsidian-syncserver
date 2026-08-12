@@ -1,4 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
+import { subscribe, type NotificationMsg } from './listen.js';
 
 /**
  * A row is whatever the query asked for. The driver's own row type is deliberately not in
@@ -45,6 +46,10 @@ export interface Db {
    *
    * The payload is the string `pg_notify` delivers; the channel names what kind of event it
    * is, so the handler decides whether it cares.
+   *
+   * The cycle itself lives in `listen.ts`, whose contract `stop()` honours: when it
+   * resolves, nothing is subscribed and nothing is in flight, so `close()` never waits on
+   * a connection this primitive leaked.
    */
   listen(channel: string, handler: (payload: string) => void): { stop: () => Promise<void> };
   close(): Promise<void>;
@@ -95,67 +100,17 @@ export const connect = (databaseUrl?: string): Db => {
       }
     },
     listen(channel, handler) {
-      let stopped = false;
-      let current: PoolClient | undefined;
-      let retry: NodeJS.Timeout | undefined;
-
-      const attach = async (): Promise<void> => {
-        if (stopped) return;
-        let c: PoolClient;
-        try {
-          c = await pool.connect();
-        } catch {
-          retry = setTimeout(() => void attach(), 250);
-          return;
-        }
-        current = c;
-        try {
-          await c.query(`LISTEN ${channel}`);
-        } catch {
-          await c.release();
-          current = undefined;
-          retry = setTimeout(() => void attach(), 250);
-          return;
-        }
-        // The connection itself owns its lifetime: `end` or an error restarts it. An
-        // `error` listener is mandatory here regardless — without one, a PG fault on the
-        // listening socket would crash the process.
-        c.on('error', () => void restart());
-        c.on('end', () => void restart());
-        c.on('notification', (msg) => {
-          // Delivered only while THIS client is still the subscribed one; a notification
-          // queued on an old client after a restart must not double-fire.
-          if (current === c && msg.payload !== undefined) handler(msg.payload);
-        });
-      };
-
-      const restart = async (): Promise<void> => {
-        if (stopped) return;
-        const old = current;
-        current = undefined;
-        try {
-          old?.release();
-        } catch {
-          /* already gone */
-        }
-        retry = setTimeout(() => void attach(), 250);
-      };
-
-      void attach();
-
-      return {
-        async stop(): Promise<void> {
-          stopped = true;
-          if (retry) clearTimeout(retry);
-          const old = current;
-          current = undefined;
-          try {
-            old?.release();
-          } catch {
-            /* already gone */
-          }
-        },
-      };
+      return subscribe(channel, handler, async () => {
+        const c = await pool.connect();
+        return {
+          query: (sql: string): Promise<unknown> => c.query(sql),
+          on: (event, listener) => {
+            // `pg`'s event types are the driver's; the listen module keeps its own.
+            c.on(event as never, listener as never);
+          },
+          release: (): void => c.release(),
+        };
+      });
     },
     close: () => pool.end(),
   };

@@ -147,4 +147,39 @@ describe('change notifications', () => {
     assert.ok(out.some((m) => m.includes('refused')), `refused explicitly: ${out.join(', ')}`);
     ws.close();
   });
+
+  it('reconnects when the notification connection dies, and keeps waking the owner', async () => {
+    // The interface promises a dropped connection is re-established with a short backoff.
+    // Reaching it against a real PostgreSQL means killing the listener's backend; prove
+    // the promised behaviour rather than assuming it. The listener's own state machine is
+    // pinned down deterministically in listen.test.ts; here the wiring survives a drop.
+    const killed = await db.query<{ done: boolean }>(
+      `SELECT pg_terminate_backend(pid) AS done FROM pg_stat_activity
+       WHERE query LIKE 'LISTEN sync_vault'`,
+    );
+    assert.ok(killed[0]?.done, 'the notification backend was dropped');
+
+    let reconnected = false;
+    for (let i = 0; i < 30 && !reconnected; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const row = await db.one<{ n: string }>(
+        `SELECT count(*) AS n FROM pg_stat_activity WHERE query LIKE 'LISTEN sync_vault'`,
+      );
+      reconnected = Number(row?.n) >= 1;
+    }
+    assert.ok(reconnected, 'the listener re-subscribed to the channel');
+
+    const { ws, messages } = await openSocket(ownerToken);
+    await db.query(`UPDATE vaults SET head_rev = head_rev + 1 WHERE id = $1`, [vaultId]);
+    await db.query(
+      `INSERT INTO journal (vault_id, rev, node_id, op, node_rev)
+       SELECT $1, head_rev, gen_random_uuid(), 'put', head_rev FROM vaults WHERE id = $1`,
+      [vaultId],
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+    const hit = messages.find((m) => m.includes(vaultId));
+    assert.ok(hit, `the owner woke after the reconnect: ${messages.join(', ')}`);
+    ws.close();
+  });
 });
