@@ -34,6 +34,19 @@ export interface Db {
    * of 10; keep that in mind if the pool is ever shrunk.
    */
   session<T>(fn: (c: PoolClient) => Promise<T>): Promise<T>;
+  /**
+   * Subscribe to a `LISTEN` channel, handing each notification's payload to `handler`.
+   *
+   * The one thing a persistent connection is for that `query`/`tx`/`session` cannot serve:
+   * waiting on a channel. It opens a dedicated client, runs `LISTEN`, and streams
+   * `notification` events until `stop()` is called. A dropped connection is re-established
+   * with a short backoff, because a notification channel that dies silently is a client that
+   * stops learning about changes.
+   *
+   * The payload is the string `pg_notify` delivers; the channel names what kind of event it
+   * is, so the handler decides whether it cares.
+   */
+  listen(channel: string, handler: (payload: string) => void): { stop: () => Promise<void> };
   close(): Promise<void>;
 }
 
@@ -80,6 +93,69 @@ export const connect = (databaseUrl?: string): Db => {
       } finally {
         c.release();
       }
+    },
+    listen(channel, handler) {
+      let stopped = false;
+      let current: PoolClient | undefined;
+      let retry: NodeJS.Timeout | undefined;
+
+      const attach = async (): Promise<void> => {
+        if (stopped) return;
+        let c: PoolClient;
+        try {
+          c = await pool.connect();
+        } catch {
+          retry = setTimeout(() => void attach(), 250);
+          return;
+        }
+        current = c;
+        try {
+          await c.query(`LISTEN ${channel}`);
+        } catch {
+          await c.release();
+          current = undefined;
+          retry = setTimeout(() => void attach(), 250);
+          return;
+        }
+        // The connection itself owns its lifetime: `end` or an error restarts it. An
+        // `error` listener is mandatory here regardless — without one, a PG fault on the
+        // listening socket would crash the process.
+        c.on('error', () => void restart());
+        c.on('end', () => void restart());
+        c.on('notification', (msg) => {
+          // Delivered only while THIS client is still the subscribed one; a notification
+          // queued on an old client after a restart must not double-fire.
+          if (current === c && msg.payload !== undefined) handler(msg.payload);
+        });
+      };
+
+      const restart = async (): Promise<void> => {
+        if (stopped) return;
+        const old = current;
+        current = undefined;
+        try {
+          old?.release();
+        } catch {
+          /* already gone */
+        }
+        retry = setTimeout(() => void attach(), 250);
+      };
+
+      void attach();
+
+      return {
+        async stop(): Promise<void> {
+          stopped = true;
+          if (retry) clearTimeout(retry);
+          const old = current;
+          current = undefined;
+          try {
+            old?.release();
+          } catch {
+            /* already gone */
+          }
+        },
+      };
     },
     close: () => pool.end(),
   };

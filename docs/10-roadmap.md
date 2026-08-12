@@ -20,10 +20,12 @@ content is `201` rather than a short circuit (#46), and `HEAD` stays `200` after
 the trash still holds the content. The collector and the schema's 117 assertions ride along; the server's
 own integration suite is run from a development machine, not from the NAS.
 
-**Two of M2's four pieces have landed**: the `.obsidian/` switch with its per-device exceptions ([01](01-context.md)),
-and resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with the part size doubling
-as the threshold above which a client uses them at all. WebSocket push and mobile are what remain, and both
-are larger than either of these.
+**Three of M2's four pieces have landed**: the `.obsidian/` switch with its per-device exceptions
+([01](01-context.md)), resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with
+the part size doubling as the threshold above which a client uses them at all — and WebSocket push
+([04](04-sync-protocol.md), Change notifications): a journal-insert notification delivered on commit, fanned
+out over `WS /events` to the account's devices, so a change wakes a connected client instead of waiting for
+the button. Mobile is what remains, and it is a question of defining "done" as much as of code.
 
 Estimate: M1 is two to three weeks of evenings. Re-estimate M2 and beyond only after M1; until then the
 numbers are guesses.

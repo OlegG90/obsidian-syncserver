@@ -19,6 +19,7 @@ import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
+import { PushListener } from './obsidian/push.js';
 import { shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { obsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
@@ -40,6 +41,7 @@ export default class SyncServerPlugin extends Plugin {
 
   private phase: SyncPhase = { kind: 'disconnected' };
   private statusBar: HTMLElement | undefined;
+  private push: PushListener | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
@@ -55,6 +57,7 @@ export default class SyncServerPlugin extends Plugin {
     if (this.data.connection) {
       this.sess = session.create(this.data.connection, obsidianTransport);
       this.setPhase({ kind: 'locked' });
+      this.startPush();
     } else {
       this.setPhase({ kind: 'disconnected' });
     }
@@ -91,6 +94,35 @@ export default class SyncServerPlugin extends Plugin {
     new StatusModal(this.app, statusLines(this.phase, this.sess?.connection)).open();
   }
 
+  /**
+   * Open the change-notification channel (docs/04): the server tells this device when the
+   * vault gained a revision, so the user does not have to press the button. A hint, not an
+   * order — a lost or late notification costs nothing, because the next sync finds the
+   * change anyway. It connects once the session is unlocked; until then it waits.
+   */
+  private startPush(): void {
+    const conn = this.data.connection;
+    if (!conn || this.push) return;
+    const url = conn.serverUrl.replace(/^http/, 'ws') + '/events';
+    this.push = new PushListener({
+      url,
+      vaultId: conn.vaultId,
+      tokenSource: () => this.sess?.accessToken,
+      refresh: () => this.sess?.refreshAccessToken() ?? Promise.resolve(false),
+      onNotify: () => {
+        // Skip when locked (the passphrase would be asked for a background hint) and when a
+        // sync is already running (it will see the change anyway).
+        if (this.sess?.state === 'open' && this.phase.kind !== 'syncing') void this.syncNow();
+      },
+    });
+    this.push.start();
+  }
+
+  private async stopPush(): Promise<void> {
+    await this.push?.stop();
+    this.push = undefined;
+  }
+
   /** The state store the engine writes through — `data.json`, beside the connection. */
   private stateStore(): StateStore {
     return {
@@ -125,6 +157,7 @@ export default class SyncServerPlugin extends Plugin {
     this.data.state = emptyState();
     await this.save();
     this.setPhase({ kind: 'idle' });
+    this.startPush();
   }
 
   /**
@@ -143,6 +176,7 @@ export default class SyncServerPlugin extends Plugin {
       return;
     }
     this.setPhase({ kind: 'locked' });
+    void this.stopPush();
     new Notice('SyncServer: locked.');
   }
 

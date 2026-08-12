@@ -4,10 +4,12 @@ import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
 import { loadConfig } from './config.js';
 import { connect } from './db.js';
+import { openEventsHub } from './events.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
-const app = await buildApp(db, cfg);
+const events = openEventsHub(db);
+const app = await buildApp(db, cfg, events);
 
 // The collector shares the blob store with the routes — same path, same directory.
 const collectorStore = openStore(cfg.blobStorePath);
@@ -40,6 +42,6 @@ console.log(`syncserver listening on ${host}:${port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
-    void app.close().then(() => db.close()).then(() => process.exit(0));
+    void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
 }

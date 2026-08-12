@@ -117,6 +117,16 @@ export class SyncClient {
     this.refresh = token;
   }
 
+  /** The current access token, for the change-notification channel (docs/04). */
+  getAccessToken(): string | undefined {
+    return this.access;
+  }
+
+  /** Refresh the access token now; `false` when the refresh token is spent or revoked. */
+  refreshToken(): Promise<boolean> {
+    return this.tryRefresh();
+  }
+
   private async send(
     req: Omit<HttpRequest, 'url'> & { path: string; auth?: boolean; timeoutMs?: number },
     retried = false,

@@ -31,6 +31,7 @@ import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapCon
 import { SyncEngine } from '../src/engine/engine.js';
 import { MemoryStateStore } from '../src/engine/state.js';
 import { session, type Session } from '../src/session/index.js';
+import { PushListener } from '../src/obsidian/push.js';
 import { FakeVault } from './fake-vault.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -825,6 +826,37 @@ describe('the engine, device A pushes and device B pulls', () => {
     const q = reportB.quarantined.find((x) => x.from === extraPath);
     assert.ok(q, 'the displaced work was quarantined');
     assert.equal(b.contents(q!.to), 'my unsynced work', 'and survives, in the quarantine folder');
+  });
+
+  it('a change notification wakes a listening device through the live WebSocket', async () => {
+    // The real channel, end to end: the server's journal trigger notifies the hub, the hub
+    // fans out to this device's WebSocket, and the listener wakes. Uses Node's global
+    // WebSocket (present in the test runner, exactly as it is in Electron and the WebView).
+    const notified: string[] = [];
+    const listener = new PushListener({
+      url: base.replace(/^http/, 'ws') + '/events',
+      vaultId: ownVaultId,
+      tokenSource: () => client.getAccessToken(),
+      refresh: () => client.refreshToken(),
+      onNotify: (vaultId) => notified.push(vaultId),
+    });
+    listener.start();
+
+    // A write that bumps the vault's head: push a new file through the engine.
+    const path = 'Devices/pushed-notify.md';
+    const a = new FakeVault();
+    a.seed(path, 'wake up');
+    const report = await new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop').sync();
+    assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+    assert.ok(report.pushed.some((p) => p.path === path));
+
+    // Give the LISTEN → fan-out → socket a moment to land.
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !notified.includes(ownVaultId)) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(notified.includes(ownVaultId), `the listener was woken: ${notified.join(', ')}`);
+    await listener.stop();
   });
 });
 

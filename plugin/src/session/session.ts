@@ -111,6 +111,17 @@ export class Session {
     return this.conn;
   }
 
+  /** The current access token, or `undefined` when locked — the change-notification channel. */
+  get accessToken(): string | undefined {
+    return this.handle?.client.getAccessToken();
+  }
+
+  /** Refresh the access token now, so a stale notification channel can reconnect. */
+  refreshAccessToken(): Promise<boolean> {
+    if (!this.handle) return Promise.resolve(false);
+    return this.handle.client.refreshToken();
+  }
+
   /**
    * Unlock the session. Argon2id runs here and nowhere else (docs/06), once per `open()`.
    *

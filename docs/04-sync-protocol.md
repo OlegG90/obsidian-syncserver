@@ -476,6 +476,47 @@ saw — and a node missing from the walked tree under a continuous epoch deletes
 `restore` epoch the same absence is a rescue, not a wipe: nothing is deleted locally and what the server
 lost is uploaded as new.
 
+## Change notifications
+
+A device learns that another device wrote, so that it can stop waiting for the user to press the sync
+button. What is pushed is the **fact that something changed**, nothing about what changed: no content, no
+name, no delta — just `{vault_id, head_rev}`. Everything else happens through the ordinary sync cycle
+above, which is why a lost or late notification costs nothing. This is not the "push" the design rejects
+for user-facing facts ([02](02-architecture.md)): an invitation or a membership change must live in a list
+the user consults, because a message that never arrives is a fact that is lost. A change notification has
+no such burden — the fact lives in the delta, and the client's next sync finds it whether the
+notification arrived or not.
+
+```
+WS     /events                        → {vault_id, head_rev}   across the account's synced vaults
+```
+
+**The notification is born with the journal row, and only on commit.** A revision is the append-only
+`journal` row (docs/03): each insert is one revision, and `journal_append_only` guarantees the row either
+commits whole or is never seen. The server fires `pg_notify` on that insert, inside the same transaction.
+PostgreSQL delivers a `NOTIFY` only when the transaction that issued it commits — so a write that rolls
+back emits nothing, and the delivery rule is structural, not a convention about where a service calls
+`emit`. There is one channel for all vaults; the payload carries the `vault_id`.
+
+**One process owns the listener.** The deployment runs the API and the collector in one process
+([13](13-deployment.md)), so there is exactly one connection `LISTEN`ing on the channel. The `Db` seam
+gains a `listen` primitive that opens a dedicated connection, subscribes, and hands each notification to a
+callback — the same shape as `session` (a connection held for a purpose), but persistent rather than for
+one callback. Reconnect is the listener's own business; a server restart simply drops the socket and the
+clients' backoff reconnects them.
+
+**Auth is the first message, not the URL.** A token in the query string settles into access logs; a
+browser `WebSocket` cannot set a header. The client connects and sends the access token as its first
+message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The connection lives
+while the access token does; when it expires the client refreshes and reconnects, which is the ordinary
+token lifecycle ([06](06-key-model.md)).
+
+**The client treats a notification as a hint, not an order.** It wakes and runs `syncNow` — and skips if a
+sync is already running, because that sync will see the change anyway. Reconnect uses backoff. iOS has no
+background execution ([02](02-architecture.md)), so on a phone the notification only shortens the wait
+while the app is open. If the server has no WebSocket support or the proxy does not upgrade, the button
+still works; the notification channel is an optimisation, not a requirement of the protocol.
+
 ## Conflicts
 
 The precondition for a write is **content**, not a revision number.

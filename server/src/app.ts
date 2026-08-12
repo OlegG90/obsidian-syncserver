@@ -9,14 +9,17 @@ import { registerDeltaRoutes } from './delta/routes.js';
 import { registerVaultRoutes } from './vaults/routes.js';
 import { registerHistoryRoutes } from './history/routes.js';
 import { registerNodeRoutes } from './nodes/routes.js';
+import { registerEventsRoutes } from './events-route.js';
+import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, rearmBootstrapInvitation, registerBootstrapGuard } from './bootstrap.js';
 import type { Config } from './config.js';
 import type { Db } from './db.js';
 
-export const buildApp = async (db: Db, cfg: Config): Promise<FastifyInstance> => {
+export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise<FastifyInstance> => {
   const app = Fastify({ logger: false });
 
   await app.register(fastifyJwt, { secret: cfg.serverSecret });
+  await app.register(import('@fastify/websocket'));
 
   // Registered before the routes so it runs before any of them: while there is no
   // administrator, the only thing this server does is let one be made (#107).
@@ -41,6 +44,8 @@ export const buildApp = async (db: Db, cfg: Config): Promise<FastifyInstance> =>
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
   registerDeltaRoutes(app, db, cfg);
+
+  if (events) registerEventsRoutes(app, events);
 
   // A seeded invitation that expired unredeemed would otherwise leave the installation
   // with no way in at all.

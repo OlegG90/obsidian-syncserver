@@ -1727,6 +1727,20 @@ $$;
 CREATE TRIGGER journal_append_only
     BEFORE UPDATE ON journal FOR EACH ROW EXECUTE FUNCTION reject_update();
 
+-- A new-revision notification (docs/04). Fired on every journal row, which is one revision;
+-- `pg_notify` delivers it only when the transaction commits, so a write that rolls back
+-- emits nothing. One channel for all vaults; the payload is the vault that changed.
+CREATE FUNCTION journal_notify() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('sync_vault', NEW.vault_id::text);
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER journal_notify
+    AFTER INSERT ON journal FOR EACH ROW EXECUTE FUNCTION journal_notify();
+
 CREATE TRIGGER audit_log_append_only
     BEFORE UPDATE ON audit_log FOR EACH ROW EXECUTE FUNCTION reject_update();
 
