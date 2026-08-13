@@ -18,7 +18,7 @@
  */
 import { sha256 } from '@noble/hashes/sha2.js';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { concat, randomBytes, randomUuid, toHex } from './bytes.js';
+import { randomBytes, randomUuid, toHex } from './bytes.js';
 import { KEY_BYTES, NONCE_BYTES, HEADER_BYTES, packHeader, parseHeader } from './format.js';
 
 export interface SealedBlob {
@@ -40,8 +40,21 @@ export const sealBlob = (plaintext: Uint8Array): SealedBlob => {
   // The header is the aad, so it is authenticated without being secret: an attacker cannot
   // re-label a blob with a different key id or format version without breaking the tag.
   const header = packHeader({ keyId, nonce });
-  const ciphertext = xchacha20poly1305(contentKey, nonce, header).encrypt(plaintext);
-  const bytes = concat(header, ciphertext);
+
+  // **One allocation for the whole blob**, with the ciphertext written straight in after the
+  // header. The obvious form — encrypt, then join — holds THREE copies of the file at once:
+  // the plaintext, the ciphertext it returns, and the joined result. docs/02 says mobile
+  // memory limits are real, and for an attachment that is the difference between two copies
+  // and three of something that can be hundreds of megabytes.
+  //
+  // Two is the floor for this format, not a stopping point chosen for comfort: one nonce and
+  // one tag cover the ENTIRE ciphertext, and the address is `sha256` of all of it, so there
+  // is no chunk that can be sealed and released before the next is read. Sealing a file in
+  // pieces needs a framed format — a nonce and a tag per frame — which is what
+  // `format_version` exists to allow.
+  const bytes = new Uint8Array(HEADER_BYTES + plaintext.length + xchacha20poly1305.tagLength);
+  bytes.set(header);
+  xchacha20poly1305(contentKey, nonce, header).encrypt(plaintext, bytes.subarray(HEADER_BYTES));
 
   return { bytes, sha256: toHex(sha256(bytes)), contentKey, keyId };
 };

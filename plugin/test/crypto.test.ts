@@ -144,6 +144,19 @@ describe('the blob format', () => {
     assert.equal(sealed.bytes.length, HEADER_BYTES + 'hello'.length + 16, 'header + ciphertext + Poly1305 tag');
   });
 
+  it('seals a payload of real size into one exact allocation, and opens it again', () => {
+    // Every other case here is a handful of bytes, and the seal writes its ciphertext into
+    // a buffer it sized itself: an off-by-something in that arithmetic is invisible at five
+    // bytes and corrupts an attachment. A few kilobytes of incompressible, non-repeating
+    // content is enough to catch a wrong length or a wrong offset.
+    const plaintext = randomBytes(9000);
+    const sealed = sealBlob(plaintext);
+
+    assert.equal(sealed.bytes.length, HEADER_BYTES + plaintext.length + 16);
+    assert.equal(sealed.bytes.byteOffset, 0, 'the blob is its own buffer, not a window onto a larger one');
+    assert.deepEqual(openBlob(sealed.contentKey, sealed.bytes), plaintext);
+  });
+
   it('carries the key id in the header, and it survives the round trip', () => {
     const sealed = sealBlob(utf8('x'));
     assert.equal(parseHeader(sealed.bytes).keyId, sealed.keyId);
