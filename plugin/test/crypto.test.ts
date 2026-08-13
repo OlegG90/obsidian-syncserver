@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import {
   DEFAULT_KDF_PARAMS,
   assertKdfFloor,
@@ -17,9 +18,18 @@ import {
   vaultKey,
 } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
-import { open, seal } from '../src/crypto/sealed.js';
+import { MARKER_BYTES, WRAP_VERSION, open, seal } from '../src/crypto/sealed.js';
 import { fromBase64, randomBytes, toBase64, toHex, utf8 } from '../src/crypto/bytes.js';
-import { HEADER_BYTES, MAGIC, NONCE_BYTES, bytesToUuid, packHeader, parseHeader, uuidToBytes } from '../src/crypto/format.js';
+import {
+  ALG_XCHACHA20_POLY1305,
+  HEADER_BYTES,
+  MAGIC,
+  NONCE_BYTES,
+  bytesToUuid,
+  packHeader,
+  parseHeader,
+  uuidToBytes,
+} from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 
 // Argon2id at 64 MiB is deliberately slow; these params keep the suite usable while
@@ -112,22 +122,59 @@ describe('the account hierarchy', () => {
     assert.doesNotThrow(() => assertKdfFloor(DEFAULT_KDF_PARAMS));
     assert.equal(DEFAULT_KDF_PARAMS.m, 65536, 'the default IS the floor: 64 MiB');
   });
+});
+
+describe('the wrapping format', () => {
+  const key = randomBytes(32);
+  const plaintext = utf8('the seed');
+
+  it('carries its version and algorithm at fixed offsets (#109)', () => {
+    const raw = fromBase64(seal(key, plaintext));
+    assert.equal(raw[0], WRAP_VERSION, 'the version is byte 0, where a later version must also put it');
+    assert.equal(raw[1], ALG_XCHACHA20_POLY1305);
+    assert.equal(raw.length, MARKER_BYTES + NONCE_BYTES + plaintext.length + 16, 'marker + nonce + ciphertext + tag');
+    assert.deepEqual(open(key, toBase64(raw)), plaintext);
+  });
+
+  it('authenticates the marker: the tag covers it, so a future field added there is bound', () => {
+    // The property docs/06 claims, asserted where it can be seen: the same key, the same
+    // nonce and the same ciphertext open only when the marker is supplied as the aad.
+    const raw = fromBase64(seal(key, plaintext));
+    const marker = raw.subarray(0, MARKER_BYTES);
+    const nonce = raw.subarray(MARKER_BYTES, MARKER_BYTES + NONCE_BYTES);
+    const ciphertext = raw.subarray(MARKER_BYTES + NONCE_BYTES);
+
+    assert.deepEqual(xchacha20poly1305(key, nonce, marker).decrypt(ciphertext), plaintext);
+    assert.throws(() => xchacha20poly1305(key, nonce).decrypt(ciphertext), 'the tag does not cover the marker');
+  });
+
+  it('names an unreadable version instead of blaming the passphrase', () => {
+    // The reason the marker exists at all. Without it this case arrives as a tag failure —
+    // the same thing a wrong passphrase produces, and unrecoverable advice for the person
+    // holding the right one.
+    const raw = fromBase64(seal(key, plaintext));
+    raw[0] = 2;
+    assert.throws(() => open(key, toBase64(raw)), /unknown wrapping version 2/);
+
+    const other = fromBase64(seal(key, plaintext));
+    other[1] = 2;
+    assert.throws(() => open(key, toBase64(other)), /unknown algorithm 2/);
+  });
 
   it('detects a tampered wrapped value rather than decrypting it', () => {
-    const kek = deriveKek('p', randomBytes(16), FAST);
     // The wrapping format is base64, so the corruption goes through the bytes it stands
     // for: flipping a character would as likely produce something that is not base64 at
     // all, and the AEAD would never be asked the question this test is asking.
-    const raw = fromBase64(seal(kek, utf8('the seed')));
+    const raw = fromBase64(seal(key, plaintext));
     flipBit(raw, raw.length - 1);
-    assert.throws(() => open(kek, toBase64(raw)));
+    assert.throws(() => open(key, toBase64(raw)));
   });
 
-  it('refuses a wrapped value too short to hold a nonce', () => {
-    // The one branch that is not the AEAD's own refusal: below a nonce there is nothing to
-    // slice, and a wrong answer here would be an out-of-range read rather than a rejection.
-    const kek = deriveKek('p', randomBytes(16), FAST);
-    assert.throws(() => open(kek, toBase64(randomBytes(NONCE_BYTES))), /too short/);
+  it('refuses a value too short to hold a marker and a nonce', () => {
+    // The one branch that is not the AEAD's own refusal: below a marker and a nonce there is
+    // nothing to slice, and a wrong answer here would be an out-of-range read rather than a
+    // rejection. Exactly at the boundary there is still no ciphertext, so it is too short too.
+    assert.throws(() => open(key, toBase64(randomBytes(MARKER_BYTES + NONCE_BYTES))), /too short/);
   });
 });
 

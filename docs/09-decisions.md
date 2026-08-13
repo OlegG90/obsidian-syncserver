@@ -97,6 +97,7 @@ Three prefixes appear across the corpus:
 | 65 | A `dedup_index` lookup is authorised like a blob read |
 | 66 | The race between two random content keys is resolved by the index primary key: the loser takes the winner's address |
 | 67 | The column is named `auth_secret_hash`, not `pwd_hash` |
+| 109 | A wrapped value carries `wrap_version ‖ alg_id` and authenticates it as the `aad`. The version is this format's own, separate from the blob's; the algorithm id is the shared registry. Without it a change of AEAD is indistinguishable from a wrong passphrase, since both arrive as a tag failure |
 
 ## Operations
 

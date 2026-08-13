@@ -15,9 +15,17 @@ import { toHex } from './bytes.js';
 /** `SYNC` in ASCII. Present so a blob found in a backup identifies itself. */
 export const MAGIC = Uint8Array.from([0x53, 0x59, 0x4e, 0x43]);
 
+/**
+ * The BLOB layout's version, and only that. The wrapping format versions itself in `sealed.ts`
+ * and the two numbers are unrelated: framing a large blob into per-chunk nonces moves this one
+ * and leaves that one alone.
+ */
 export const FORMAT_VERSION = 1;
 
-/** The only AEAD in the design (docs/06). An id rather than a name so the header stays fixed-width. */
+/**
+ * The only AEAD in the design (docs/06), named by both formats — this is the registry, not a
+ * field of the blob header. An id rather than a name so the header stays fixed-width.
+ */
 export const ALG_XCHACHA20_POLY1305 = 1;
 
 export const NONCE_BYTES = 24; // XChaCha20's extended nonce: random per blob, never a counter

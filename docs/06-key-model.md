@@ -80,9 +80,45 @@ The address is `sha256(header ‖ ciphertext)` and the header is the AEAD's `aad
 46 bytes, fixed. `format_version` sits at a fixed offset that **no future version may move**, which is what
 makes an old blob readable after the layout changes.
 
-Wrapping — the seed under the KEK, a content key under a scope key, a name under a scope key — uses the
-same AEAD with the nonce simply prefixed to the ciphertext and **no `aad`**: there is no header to bind, and
-nothing in scope to substitute the value with.
+### The wrapping format, byte for byte
+
+Everything encrypted that is **not file content** — the seed under the KEK, a content key under a scope key,
+a name under a scope key — uses the same AEAD in a second, smaller format (#109):
+
+```
+marker      = wrap_version ‖ alg_id
+wrapped     = marker ‖ nonce ‖ XChaCha20-Poly1305(K, nonce, plaintext, aad = marker)
+```
+
+| Offset | Bytes | Field | Value |
+|---|---|---|---|
+| 0 | 1 | `wrap_version` | `1` — **this format's** version, not the blob's |
+| 1 | 1 | `alg_id` | `1` = XChaCha20-Poly1305, the same registry the blob header cites |
+| 2 | 24 | nonce | random per value |
+
+Base64 on the wire; `bytea` in `users.wrapped_seed`, `blob_keys.wrapped_key` and `nodes.name_enc`, which the
+server stores and never parses. **The server does not check the marker** — it holds no key, so it cannot
+verify the tag that makes the marker honest, and a second reader of this rule would need bumping in lockstep
+for no gain.
+
+**No magic and no key id**, unlike a blob. Magic exists so bytes found in a backup identify themselves, and a
+wrapped value is never loose — it is always the named column that quotes it. A key id exists because a blob
+has one `KC` and many envelopes; here the key is the one the caller already holds.
+
+**A version, though, for the same reason the blob has one.** Without it a stored `wrapped_seed` cannot say
+which AEAD produced it, so changing the algorithm leaves "try the old one, then the new one" — and in this
+layer that is indistinguishable from a wrong passphrase, because both arrive as a tag failure. The same
+applies to the nonce: a reader that slices a fixed 24 bytes misparses any value whose layout moved, and
+blames the key for it. The two version numbers are **separate on purpose**: framing a large blob into
+per-chunk nonces moves the blob's and leaves this one alone. The algorithm id is shared, because it names an
+AEAD in the design rather than a field of either format.
+
+**The marker is the `aad`**, and the reason is the next field rather than these two. Flipping a version byte
+today only selects a version that does not exist, which the client refuses before it uses a key at all. But a
+marker is where a future field lands — a scope binding, a "this is a name, not a key" flag — and such a field
+is exactly the kind an attacker may swap while the tag still verifies. Binding it from the first version
+means every field that joins it is bound by construction, rather than resting on whoever adds it noticing
+that it must be.
 
 > **`KC` is random, and never derived from the content.**
 >
