@@ -10,6 +10,7 @@
  * Which is why `FORMAT_VERSION` is in it. A future layout gets a new number and old blobs
  * stay readable, because the version is at a fixed offset that no version may move.
  */
+import { toHex } from './bytes.js';
 
 /** `SYNC` in ASCII. Present so a blob found in a backup identifies itself. */
 export const MAGIC = Uint8Array.from([0x53, 0x59, 0x4e, 0x43]);
@@ -31,8 +32,6 @@ export interface Header {
   nonce: Uint8Array;
 }
 
-const HEX: string[] = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
-
 export const uuidToBytes = (uuid: string): Uint8Array => {
   const hex = uuid.replace(/-/g, '');
   if (hex.length !== UUID_BYTES * 2 || !/^[0-9a-f]+$/i.test(hex)) throw new Error(`not a uuid: ${uuid}`);
@@ -43,7 +42,7 @@ export const uuidToBytes = (uuid: string): Uint8Array => {
 
 export const bytesToUuid = (b: Uint8Array): string => {
   if (b.length !== UUID_BYTES) throw new Error(`a uuid is ${UUID_BYTES} bytes, got ${b.length}`);
-  const h = Array.from(b, (x) => HEX[x]!).join('');
+  const h = toHex(b);
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 };
 

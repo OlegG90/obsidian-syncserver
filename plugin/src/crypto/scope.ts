@@ -9,20 +9,8 @@
  */
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { concat, fromBase64, fromUtf8, randomBytes, toBase64, toHex, utf8 } from './bytes.js';
-import { NONCE_BYTES } from './format.js';
-
-const seal = (key: Uint8Array, plaintext: Uint8Array): string => {
-  const nonce = randomBytes(NONCE_BYTES);
-  return toBase64(concat(nonce, xchacha20poly1305(key, nonce).encrypt(plaintext)));
-};
-
-const open = (key: Uint8Array, sealed: string): Uint8Array => {
-  const raw = fromBase64(sealed);
-  if (raw.length <= NONCE_BYTES) throw new Error('sealed value is too short to hold a nonce');
-  return xchacha20poly1305(key, raw.subarray(0, NONCE_BYTES)).decrypt(raw.subarray(NONCE_BYTES));
-};
+import { fromUtf8, toHex, utf8 } from './bytes.js';
+import { open, seal } from './sealed.js';
 
 /** `nodes.name_enc`. One path segment, never a path: the server has no paths (docs/03). */
 export const encryptName = (scopeKey: Uint8Array, name: string): string => seal(scopeKey, utf8(name));

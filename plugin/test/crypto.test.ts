@@ -14,13 +14,12 @@ import {
   deriveKek,
   newSeed,
   openAccount,
-  unwrap,
   vaultKey,
-  wrap,
 } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
+import { open, seal } from '../src/crypto/sealed.js';
 import { fromBase64, randomBytes, toBase64, toHex, utf8 } from '../src/crypto/bytes.js';
-import { HEADER_BYTES, MAGIC, bytesToUuid, packHeader, parseHeader, uuidToBytes } from '../src/crypto/format.js';
+import { HEADER_BYTES, MAGIC, NONCE_BYTES, bytesToUuid, packHeader, parseHeader, uuidToBytes } from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 
 // Argon2id at 64 MiB is deliberately slow; these params keep the suite usable while
@@ -37,7 +36,7 @@ const fastAccount = (passphrase: string) => {
     seed,
     accountSalt,
     kdfParams: FAST,
-    wrappedSeed: toBase64(wrap(deriveKek(passphrase, accountSalt, FAST), seed)),
+    wrappedSeed: seal(deriveKek(passphrase, accountSalt, FAST), seed),
   };
 };
 
@@ -52,7 +51,7 @@ describe('the account hierarchy', () => {
 
     // The whole claim in one assertion: re-wrap under a new passphrase, and every key the
     // vault content depends on is unchanged.
-    const rewrapped = toBase64(wrap(deriveKek('a different passphrase', account.accountSalt, FAST), account.seed));
+    const rewrapped = seal(deriveKek('a different passphrase', account.accountSalt, FAST), account.seed);
     const reopened = openAccount('a different passphrase', account.accountSalt, FAST, rewrapped);
 
     assert.deepEqual(reopened.seed, account.seed, 'the seed survives a passphrase change');
@@ -116,9 +115,19 @@ describe('the account hierarchy', () => {
 
   it('detects a tampered wrapped value rather than decrypting it', () => {
     const kek = deriveKek('p', randomBytes(16), FAST);
-    const wrapped = wrap(kek, utf8('the seed'));
-    flipBit(wrapped, wrapped.length - 1);
-    assert.throws(() => unwrap(kek, wrapped));
+    // The wrapping format is base64, so the corruption goes through the bytes it stands
+    // for: flipping a character would as likely produce something that is not base64 at
+    // all, and the AEAD would never be asked the question this test is asking.
+    const raw = fromBase64(seal(kek, utf8('the seed')));
+    flipBit(raw, raw.length - 1);
+    assert.throws(() => open(kek, toBase64(raw)));
+  });
+
+  it('refuses a wrapped value too short to hold a nonce', () => {
+    // The one branch that is not the AEAD's own refusal: below a nonce there is nothing to
+    // slice, and a wrong answer here would be an out-of-range read rather than a rejection.
+    const kek = deriveKek('p', randomBytes(16), FAST);
+    assert.throws(() => open(kek, toBase64(randomBytes(NONCE_BYTES))), /too short/);
   });
 });
 

@@ -14,10 +14,10 @@
 import { argon2id } from '@noble/hashes/argon2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import type { KdfParams } from '@syncserver/shared';
-import { concat, fromBase64, randomBytes, toBase64, utf8 } from './bytes.js';
-import { KEY_BYTES, NONCE_BYTES } from './format.js';
+import { randomBytes, toBase64, utf8 } from './bytes.js';
+import { KEY_BYTES } from './format.js';
+import { open, seal } from './sealed.js';
 
 /** docs/06: the ceiling of a mobile WebView, and the reason it is not higher. */
 export const DEFAULT_KDF_PARAMS = { v: 19, m: 65536, t: 3, p: 1 } as const;
@@ -34,24 +34,6 @@ export const deriveKek = (passphrase: string, accountSalt: Uint8Array, params: K
     p: params.p,
     dkLen: KEY_BYTES,
   });
-};
-
-/**
- * Wrapping is the same AEAD as content, with the nonce carried in front of the ciphertext.
- *
- * No header and no `aad` here, unlike a blob: this is 32 bytes under a key derived from a
- * passphrase, with nothing else in scope for an attacker to swap it with. A blob's header
- * is authenticated because a blob has one — an address, a key id, a format version that a
- * later version must not be able to reinterpret.
- */
-export const wrap = (kek: Uint8Array, plaintext: Uint8Array): Uint8Array => {
-  const nonce = randomBytes(NONCE_BYTES);
-  return concat(nonce, xchacha20poly1305(kek, nonce).encrypt(plaintext));
-};
-
-export const unwrap = (kek: Uint8Array, wrapped: Uint8Array): Uint8Array => {
-  if (wrapped.length <= NONCE_BYTES) throw new Error('wrapped value is too short to hold a nonce');
-  return xchacha20poly1305(kek, wrapped.subarray(0, NONCE_BYTES)).decrypt(wrapped.subarray(NONCE_BYTES));
 };
 
 export const newSeed = (): Uint8Array => randomBytes(KEY_BYTES);
@@ -116,7 +98,7 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
     seed,
     accountSalt,
     kdfParams: params,
-    wrappedSeed: toBase64(wrap(deriveKek(passphrase, accountSalt, params), seed)),
+    wrappedSeed: seal(deriveKek(passphrase, accountSalt, params), seed),
   };
 };
 
@@ -127,6 +109,6 @@ export const openAccount = (
   kdfParams: KdfParams,
   wrappedSeed: string,
 ): Account => {
-  const seed = unwrap(deriveKek(passphrase, accountSalt, kdfParams), fromBase64(wrappedSeed));
+  const seed = open(deriveKek(passphrase, accountSalt, kdfParams), wrappedSeed);
   return { seed, accountSalt, kdfParams, wrappedSeed };
 };

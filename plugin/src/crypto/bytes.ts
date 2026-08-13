@@ -48,16 +48,6 @@ export const fromBase64 = (s: string): Uint8Array => {
 export const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 export const fromUtf8 = (b: Uint8Array): string => new TextDecoder().decode(b);
 
-export const concat = (...parts: Uint8Array[]): Uint8Array => {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
-};
-
 /**
  * The one source of randomness. Present in Electron, the WebView and Node 22.
  *
