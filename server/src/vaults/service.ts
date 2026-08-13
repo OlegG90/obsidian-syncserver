@@ -6,7 +6,9 @@
  * a client choice; vaults are not bound to devices (AC-13).
  */
 import { randomUUID } from 'node:crypto';
+import { isFrozen } from '../account.js';
 import type { Db } from '../db.js';
+import { usageOf } from '../quota.js';
 
 export type VaultRow = { id: string; nameEnc: string };
 
@@ -99,22 +101,19 @@ export const deleteVault = async (db: Db, userId: string, vaultId: string): Prom
   });
 
 /**
- * Quota is `SUM(size)` over the account's `user_blobs` rows and nowhere else (AC-Q2).
+ * The account surface's three numbers, each from the module that owns it: the quota rule
+ * from `quota.ts` (AC-Q2), the freeze from `account.ts` (SH-20).
  *
- * Because keys are per vault, the same file in two vaults is two blobs and is counted
- * twice — that is the price of vaults not deduplicating against each other (AC-09), and it
- * is a number the user should be able to see rather than deduce.
+ * Two queries where there was one, and deliberately. Rolling the freeze back into the
+ * usage query would give `frozen_at` a second reading alongside `isFrozen`, which is the
+ * duplication the account-scope module exists to prevent — and `GET /usage` is answered
+ * once a sync, so the round trip buys the separation at no price worth naming.
+ *
+ * `used` and `quota` narrow to `number` here because that is what the wire carries; the
+ * comparison that decides whether a write fits stays in `bigint`, inside `quota.ts`.
  */
 export const readUsage = async (db: Db, userId: string) => {
-  const row = await db.one<{ used: string; quota: string; frozen: boolean }>(
-    `SELECT COALESCE(SUM(b.size), 0)::text AS used,
-            max(u.quota_bytes)::text       AS quota,
-            bool_or(u.frozen_at IS NOT NULL) AS frozen
-       FROM users u
-       LEFT JOIN user_blobs ub ON ub.user_id = u.id
-       LEFT JOIN blobs b       ON b.sha256   = ub.sha256
-      WHERE u.id = $1`,
-    [userId],
-  );
-  return row ? { used: Number(row.used), quota: Number(row.quota), frozen: row.frozen } : undefined;
+  const usage = await usageOf(db, userId);
+  if (!usage) return undefined;
+  return { used: Number(usage.used), quota: Number(usage.quota), frozen: await isFrozen(db, userId) };
 };

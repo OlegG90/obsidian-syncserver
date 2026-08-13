@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
 import { isFrozen } from '../account.js';
+import { fits } from '../quota.js';
 import type { Refusal } from '../refuse.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
@@ -265,23 +266,10 @@ export class BlobService {
     // deadlock. The frozen rule lives in account.ts, the same place every write checks it.
     if (await isFrozen(this.db, userId)) return { ok: false, reason: 'frozen' };
 
-    const row = await this.db.one<{ quota: string; used: string; alreadyHeld: boolean }>(
-      `SELECT u.quota_bytes::text           AS quota,
-              COALESCE(SUM(b.size), 0)::text AS used,
-              EXISTS (SELECT 1 FROM user_blobs u2
-                       WHERE u2.user_id = u.id AND u2.sha256 = $2) AS "alreadyHeld"
-         FROM users u
-         LEFT JOIN user_blobs ub ON ub.user_id = u.id
-         LEFT JOIN blobs b       ON b.sha256   = ub.sha256
-        WHERE u.id = $1
-        GROUP BY u.id`,
-      [userId, sha256],
-    );
-    if (!row) return { ok: false, reason: 'over_quota' };
-
-    // The blob already counts against the account, so this upload grows usage by zero.
-    const growth = row.alreadyHeld ? 0n : BigInt(size);
-    if (BigInt(row.used) + growth > BigInt(row.quota)) return { ok: false, reason: 'over_quota' };
+    // And the quota rule lives in quota.ts, which is also what `GET /usage` reports — so
+    // the number the user is shown and the number that refuses their upload cannot drift
+    // apart. The zero-growth case for content already held (#46) is inside it.
+    if (!(await fits(this.db, userId, sha256, size))) return { ok: false, reason: 'over_quota' };
     return { ok: true };
   }
 
