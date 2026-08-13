@@ -1,11 +1,40 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
-import { BlobService, callerHoldsBlob, envelopesFor, parseRange, refuseBlob, storageKeyOf } from './service.js';
+import { BlobService, callerHoldsBlob, envelopesFor, parseRange, storageKeyOf, type BlobRefusal } from './service.js';
 import { type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
+
+/** One place decides what a refusal looks like, so the three handlers cannot disagree. */
+const refuse = (reply: FastifyReply, refusal: BlobRefusal): FastifyReply => {
+  switch (refusal.kind) {
+    case 'device_revoked':
+      return reply.code(401).send({ error: 'device_revoked' });
+    case 'frozen':
+      return reply.code(413).send({ error: 'frozen' });
+    case 'over_quota':
+      return reply.code(413).send({ error: 'over_quota' });
+    case 'too_large':
+      return reply.code(413).send({ error: 'too_large' });
+    case 'part_too_large':
+      return reply.code(413).send({ error: 'part_too_large' });
+    case 'too_many_unfinished':
+      return reply.code(413).send({ error: 'too_many_unfinished' });
+    case 'rate_limited':
+      return reply
+        .code(429)
+        .header('retry-after', String(refusal.retryAfterSeconds))
+        .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
+    case 'address_mismatch':
+      return reply.code(400).send({ error: 'address_mismatch' });
+    case 'size_mismatch':
+      return reply.code(400).send({ error: 'size_mismatch' });
+    case 'parts_missing':
+      return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
+  }
+};
 
 export const registerBlobRoutes = (
   app: FastifyInstance,
@@ -128,7 +157,7 @@ export const registerBlobRoutes = (
         keyId,
         body: req.raw,
       });
-      if (!out.ok) return refuseBlob(reply, out.refusal);
+      if (!out.ok) return refuse(reply, out.refusal);
       return reply.code(201).send({ sha256: out.value.sha256, size: out.value.size });
     },
   );
@@ -170,7 +199,7 @@ export const registerBlobRoutes = (
         size: declaredSize,
         body: req.raw,
       });
-      if (!out.ok) return refuseBlob(reply, out.refusal);
+      if (!out.ok) return refuse(reply, out.refusal);
       return reply.code(204).send();
     },
   );
@@ -225,7 +254,7 @@ export const registerBlobRoutes = (
         encAlg,
         keyId,
       });
-      if (!out.ok) return refuseBlob(reply, out.refusal);
+      if (!out.ok) return refuse(reply, out.refusal);
       return reply.code(201).send({ sha256: out.value.sha256, size: out.value.size });
     },
   );

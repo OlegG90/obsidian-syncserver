@@ -1,4 +1,3 @@
-import type { FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
 import { isFrozen } from '../account.js';
@@ -113,35 +112,6 @@ export type BlobRefusal =
   | { kind: 'size_mismatch' }
   /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
   | { kind: 'parts_missing'; have: number[] };
-
-/** One place decides what a refusal looks like, so the three handlers cannot disagree (#101's intent). */
-export const refuseBlob = (reply: FastifyReply, refusal: BlobRefusal): void => {
-  switch (refusal.kind) {
-    case 'device_revoked':
-      return void reply.code(401).send({ error: 'device_revoked' });
-    case 'frozen':
-      return void reply.code(413).send({ error: 'frozen' });
-    case 'over_quota':
-      return void reply.code(413).send({ error: 'over_quota' });
-    case 'too_large':
-      return void reply.code(413).send({ error: 'too_large' });
-    case 'part_too_large':
-      return void reply.code(413).send({ error: 'part_too_large' });
-    case 'too_many_unfinished':
-      return void reply.code(413).send({ error: 'too_many_unfinished' });
-    case 'rate_limited':
-      return void reply
-        .code(429)
-        .header('retry-after', String(refusal.retryAfterSeconds))
-        .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
-    case 'address_mismatch':
-      return void reply.code(400).send({ error: 'address_mismatch' });
-    case 'size_mismatch':
-      return void reply.code(400).send({ error: 'size_mismatch' });
-    case 'parts_missing':
-      return void reply.code(409).send({ error: 'parts_missing', have: refusal.have });
-  }
-};
 
 export interface AcceptWholeInput {
   userId: string;
