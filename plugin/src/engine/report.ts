@@ -1,15 +1,17 @@
 /**
  * What a `SyncReport` means to a person — one module, instead of one per surface.
  *
- * Two consumers used to compute this twice with different precedence. The status bar
- * (status.ts) let errors and conflicts dominate the ordinary counts, while the post-sync
- * Notice (main.ts) listed everything flat and never mentioned quarantine at all — a reset
- * that moved work aside could read "0 up, 0 down" and then "up to date" on the status bar.
- * Meaning lives here now: `priority` is the one precedence rule, `summary` is the ordered
- * parts, and every surface reads from the same two answers.
+ * Consumers used to compute this with different precedence. The status bar (status.ts) let
+ * errors and conflicts dominate the ordinary counts, the post-sync Notice (main.ts) listed
+ * everything flat and never mentioned quarantine at all, and the long form (statusLines)
+ * re-derived the same counts with its own labels — a reset that moved work aside could read
+ * "0 up, 0 down" and then "up to date" on the status bar. Meaning lives here now:
+ * `priority` is the one precedence rule, `categories` is the one structured answer (the
+ * nonzero outcomes in precedence order, with the items that back them), `summary` is the
+ * short projection of it, and every surface reads from the same answers.
  *
- * Neither function depends on Obsidian, so the precedence is testable where the UI classes
- * are not (report.test.ts).
+ * Nothing here depends on Obsidian, so the precedence is testable where the UI classes are
+ * not (report.test.ts).
  */
 import type { SyncReport } from './engine.js';
 
@@ -49,25 +51,56 @@ export const priority = (report: SyncReport): ReportMood => {
   return report.scanned === 0 ? 'empty' : 'up_to_date';
 };
 
+/** One nonzero outcome, in precedence order, with the report's items that back it. */
+export type ReportCategory =
+  | { kind: 'failed'; items: SyncReport['errors'] }
+  | { kind: 'conflicts'; items: SyncReport['conflicts'] }
+  | { kind: 'quarantined'; items: SyncReport['quarantined'] }
+  | { kind: 'pushed'; items: SyncReport['pushed'] }
+  | { kind: 'pulled'; items: SyncReport['pulled'] }
+  | { kind: 'renamed'; items: SyncReport['renamed'] }
+  | { kind: 'deleted'; items: SyncReport['deleted'] }
+  | { kind: 'removed'; items: SyncReport['removed'] }
+  | { kind: 'matched'; items: SyncReport['matched'] };
+
 /**
- * The "what happened" parts, most important first, zeros skipped.
+ * The report's outcomes, most important first, zeros skipped.
+ *
+ * The one place the counts and their order are decided. `vanished` is deliberately absent:
+ * it is reported, never acted on, and neither `priority` nor `summary` reads it — a surface
+ * that wants it reads the report directly.
+ */
+export const categories = (report: SyncReport): ReportCategory[] => {
+  const out: ReportCategory[] = [];
+  if (report.errors.length) out.push({ kind: 'failed', items: report.errors });
+  if (report.conflicts.length) out.push({ kind: 'conflicts', items: report.conflicts });
+  if (report.quarantined.length) out.push({ kind: 'quarantined', items: report.quarantined });
+  if (report.pushed.length) out.push({ kind: 'pushed', items: report.pushed });
+  if (report.pulled.length) out.push({ kind: 'pulled', items: report.pulled });
+  if (report.renamed.length) out.push({ kind: 'renamed', items: report.renamed });
+  if (report.deleted.length) out.push({ kind: 'deleted', items: report.deleted });
+  if (report.removed.length) out.push({ kind: 'removed', items: report.removed });
+  if (report.matched.length) out.push({ kind: 'matched', items: report.matched });
+  return out;
+};
+
+const PHRASE: Record<ReportCategory['kind'], (count: number) => string> = {
+  failed: (n) => `${n} failed`,
+  conflicts: (n) => `${n} conflict${n === 1 ? '' : 's'}`,
+  quarantined: (n) => `${n} kept aside`,
+  pushed: (n) => `${n} up`,
+  pulled: (n) => `${n} down`,
+  renamed: (n) => `${n} moved`,
+  deleted: (n) => `${n} deleted`,
+  removed: (n) => `${n} removed`,
+  matched: (n) => `${n} already in sync`,
+};
+
+/**
+ * The "what happened" short parts, in `categories`' order — most important first.
  *
  * A surface joins them (main.ts's Notice) or ignores them in favour of `priority` (the
- * status bar). The order is `priority`'s order, so the same report reads the same way on
- * both surfaces.
+ * status bar). A projection of `categories`, so the counts and their order are decided once.
  */
-export const summary = (report: SyncReport): string[] => {
-  const parts: string[] = [];
-  if (report.errors.length) parts.push(`${report.errors.length} failed`);
-  if (report.conflicts.length) {
-    parts.push(`${report.conflicts.length} conflict${report.conflicts.length === 1 ? '' : 's'}`);
-  }
-  if (report.quarantined.length) parts.push(`${report.quarantined.length} kept aside`);
-  if (report.pushed.length) parts.push(`${report.pushed.length} up`);
-  if (report.pulled.length) parts.push(`${report.pulled.length} down`);
-  if (report.renamed.length) parts.push(`${report.renamed.length} moved`);
-  if (report.deleted.length) parts.push(`${report.deleted.length} deleted`);
-  if (report.removed.length) parts.push(`${report.removed.length} removed`);
-  if (report.matched.length) parts.push(`${report.matched.length} already in sync`);
-  return parts;
-};
+export const summary = (report: SyncReport): string[] =>
+  categories(report).map((c) => PHRASE[c.kind](c.items.length));

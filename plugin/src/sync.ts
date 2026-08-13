@@ -17,7 +17,7 @@
  * not (sync.test.ts).
  */
 import type { SyncReport } from './engine/engine.js';
-import { summary } from './engine/report.js';
+import { priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
 
 export interface SyncCoordinatorDeps {
@@ -82,7 +82,8 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
   // person named individually — "3 failed" (or "3 conflicts") is not actionable by count.
   const render = (report: SyncReport): void => {
     const parts = summary(report);
-    const head = parts.length ? parts.join(', ') : report.scanned === 0 ? 'vault looks empty' : 'nothing changed';
+    // The "saw nothing" reading is the report module's `empty` mood, not a re-derived check.
+    const head = parts.length ? parts.join(', ') : priority(report) === 'empty' ? 'vault looks empty' : 'nothing changed';
     deps.notify(`SyncServer: ${head} — ${report.scanned} local files seen.`);
     for (const e of report.errors.slice(0, 5)) deps.notify(`SyncServer: ${e.path} — ${e.message}`, 10000);
     for (const c of report.conflicts.slice(0, 5)) {

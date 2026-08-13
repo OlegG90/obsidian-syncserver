@@ -110,6 +110,23 @@ describe('statusLines', () => {
     assert.ok(!lines.some((l) => l.includes('worth reporting')));
   });
 
+  it('never prints "saw nothing" beside a conflict list it contradicts', () => {
+    // A vault with conflicts and zero scanned files is not empty — it has work to resolve.
+    // The old long-form conjunction (scanned===0 and pushed/pulled/matched zero) fired anyway
+    // and printed "No local files were found" next to the conflicts. The warning belongs to
+    // the report module's `empty` mood, and only to that.
+    const lines = statusLines({
+      kind: 'idle',
+      at: Date.now(),
+      report: report({
+        scanned: 0,
+        conflicts: [{ path: 'Notes/today.md', conflictPath: 'Notes/today (conflict 2026-08-13 device).md' }],
+      }),
+    });
+    assert.ok(lines.some((l) => l.includes('Conflicts (1)')), lines.join('\n'));
+    assert.ok(!lines.some((l) => l.includes('worth reporting')), 'the empty warning is not printed');
+  });
+
   it('shows no connection details before one exists', () => {
     const lines = statusLines({ kind: 'disconnected' });
     assert.ok(lines.some((l) => l.startsWith('Server: not connected')));
