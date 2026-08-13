@@ -1,33 +1,14 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type { Material as WireMaterial } from '@syncserver/shared';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
-import { createNode, dedupLookup, deleteNode, moveNode, putContent, type Material, type WriteFailure } from './service.js';
+import { refuse, type Refusal } from '../refuse.js';
+import { createNode, dedupLookup, deleteNode, moveNode, putContent, type Material } from './service.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-const isFailure = (v: object): v is WriteFailure => 'kind' in v;
-
-/** One place decides what a refusal looks like, so two endpoints cannot disagree about it. */
-const refuse = (reply: FastifyReply, f: WriteFailure) => {
-  switch (f.kind) {
-    case 'not_found':
-      return reply.code(404).send({ error: 'not_found' });
-    case 'base_mismatch':
-      // The caller is told what the content actually is, because that is what lets the
-      // client decide between "same text reached independently" and a real conflict.
-      return reply.code(409).send({ error: 'base_mismatch', sha256: f.currentSha256, rev: f.rev });
-    case 'rev_mismatch':
-      return reply.code(409).send({ error: 'rev_mismatch', rev: f.rev });
-    case 'share_boundary':
-      return reply.code(409).send({ error: 'share_boundary' });
-    case 'frozen':
-      return reply.code(413).send({ error: 'frozen' });
-    case 'over_quota':
-      return reply.code(413).send({ error: 'over_quota' });
-  }
-};
+const isFailure = (v: object): v is Refusal => 'kind' in v;
 
 /** The wire fragment (snake_case) normalised to the service's internal shape. */
 const material = (b: WireMaterial): Material => ({

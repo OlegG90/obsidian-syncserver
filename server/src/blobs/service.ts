@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
 import { isFrozen } from '../account.js';
+import type { Refusal } from '../refuse.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 import type { RateLimiter } from './rate.js';
@@ -99,19 +100,8 @@ export const parseRange = (
   return { start, end: Math.min(end, total - 1) };
 };
 
-/** Every way an upload can be refused, shared across the three intake operations. */
-export type BlobRefusal =
-  | { kind: 'device_revoked' }
-  | { kind: 'frozen' }
-  | { kind: 'over_quota' }
-  | { kind: 'too_large' }
-  | { kind: 'part_too_large' }
-  | { kind: 'too_many_unfinished' }
-  | { kind: 'rate_limited'; retryAfterSeconds: number }
-  | { kind: 'address_mismatch' }
-  | { kind: 'size_mismatch' }
-  /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
-  | { kind: 'parts_missing'; have: number[] };
+/** Every way an upload can be refused — the shared refusal vocabulary, see refuse.ts. */
+export type IntakeResult<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
 
 export interface AcceptWholeInput {
   userId: string;
@@ -141,8 +131,6 @@ export interface CompleteInput {
   encAlg: string;
   keyId: string;
 }
-
-export type IntakeResult<T> = { ok: true; value: T } | { ok: false; refusal: BlobRefusal };
 
 /**
  * The blob intake: accept a whole blob, one part of a resumable upload, or assemble staged
@@ -257,7 +245,7 @@ export class BlobService {
    * Quota is answered from the blob's WHOLE size, not from what this request carries, so a
    * resumable upload that cannot fit is refused at its first part rather than at its last.
    */
-  private async admit(userId: string, deviceId: string, sha256: Buffer, totalBytes: number): Promise<BlobRefusal | undefined> {
+  private async admit(userId: string, deviceId: string, sha256: Buffer, totalBytes: number): Promise<Refusal | undefined> {
     const device = await this.db.one<{ id: string }>(
       `SELECT id FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
       [deviceId, userId],

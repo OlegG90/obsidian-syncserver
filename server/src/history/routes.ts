@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
+import { refuse } from '../refuse.js';
 import { listTrash, listVersions, restoreNode } from './service.js';
 
 export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
@@ -44,20 +45,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
         rev: req.body.rev,
       });
 
-      if ('kind' in out) {
-        switch (out.kind) {
-          case 'not_found':
-            return reply.code(404).send({ error: 'not_found' });
-          case 'no_such_version':
-            return reply.code(404).send({ error: 'no_such_version' });
-          case 'frozen':
-            return reply.code(413).send({ error: 'frozen' });
-          case 'name_taken':
-            // The blocking node is named because the client has to offer the user a
-            // choice, and "something is in the way" is not a choice.
-            return reply.code(409).send({ error: 'name_taken', blocked_by: out.blockedBy });
-        }
-      }
+      if ('kind' in out) return refuse(reply, out);
 
       return { rev: out.rev, lifted: out.lifted };
     },

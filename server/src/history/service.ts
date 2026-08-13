@@ -10,6 +10,7 @@ import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
+import type { Refusal } from '../refuse.js';
 import { nextRev } from '../revision.js';
 
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
@@ -50,13 +51,6 @@ export const listTrash = (db: Db, vaultId: string, under: string | undefined): P
     [vaultId, under ?? null],
   ).then((rows) => rows.map((r) => ({ ...r, versions: Number(r.versions) })) as unknown as TrashEntry[]);
 
-export type RestoreFailure =
-  | { kind: 'not_found' }
-  | { kind: 'no_such_version' }
-  | { kind: 'frozen' }
-  /** #36: no automatic suffix. A file silently named "Note (1).md" is one the user cannot account for. */
-  | { kind: 'name_taken'; blockedBy: string };
-
 /** Is a live sibling already using this name under this parent? */
 const blockingSibling = async (
   c: PoolClient,
@@ -88,13 +82,13 @@ const blockingSibling = async (
 export const restoreNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; rev: number },
-): Promise<{ rev: number; lifted: string[] } | RestoreFailure> =>
+): Promise<{ rev: number; lifted: string[] } | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
-    if (access.kind === 'not_found') return { kind: 'not_found' } as RestoreFailure;
+    if (access.kind === 'not_found') return { kind: 'not_found' } as Refusal;
     // Restoring brings content back into the live tree, so it grows usage — a frozen
     // account may not (SH-20). Deleting stays available; that is the way out.
-    if (access.kind === 'frozen') return { kind: 'frozen' } as RestoreFailure;
+    if (access.kind === 'frozen') return { kind: 'frozen' } as Refusal;
     const userId = access.userId;
 
     const node = await c.query<{ parentId: string | null; nameHmac: Buffer | null; ancestry: string[]; type: string }>(
@@ -102,14 +96,14 @@ export const restoreNode = async (
          FROM nodes WHERE vault_id = $1 AND id = $2 FOR UPDATE`,
       [input.vaultId, input.nodeId],
     );
-    if (node.rowCount === 0) return { kind: 'not_found' } as RestoreFailure;
+    if (node.rowCount === 0) return { kind: 'not_found' } as Refusal;
     const n = node.rows[0]!;
 
     const version = await c.query<{ sha256: Buffer; size: string }>(
       `SELECT sha256, size::text AS size FROM versions WHERE vault_id = $1 AND node_id = $2 AND rev = $3`,
       [input.vaultId, input.nodeId, input.rev],
     );
-    if (version.rowCount === 0) return { kind: 'no_such_version' } as RestoreFailure;
+    if (version.rowCount === 0) return { kind: 'no_such_version' } as Refusal;
 
     // The ancestors first, outermost in: a name collision anywhere in the chain stops the
     // whole restore, and finding out after half of it had been lifted would leave the tree
@@ -124,10 +118,10 @@ export const restoreNode = async (
 
     for (const a of deletedAncestors.rows) {
       const blocked = await blockingSibling(c, input.vaultId, a.parentId, a.nameHmac, a.id);
-      if (blocked) return { kind: 'name_taken', blockedBy: blocked } as RestoreFailure;
+      if (blocked) return { kind: 'name_taken', blockedBy: blocked } as Refusal;
     }
     const blocked = await blockingSibling(c, input.vaultId, n.parentId, n.nameHmac, input.nodeId);
-    if (blocked) return { kind: 'name_taken', blockedBy: blocked } as RestoreFailure;
+    if (blocked) return { kind: 'name_taken', blockedBy: blocked } as Refusal;
 
     const lifted: string[] = [];
     for (const a of deletedAncestors.rows) {

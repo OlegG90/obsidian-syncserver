@@ -14,6 +14,7 @@ import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
+import type { Refusal } from '../refuse.js';
 import { nextRev } from '../revision.js';
 
 /**
@@ -58,15 +59,7 @@ export interface Material {
   dedupTags: { sha256: string; scopeId: string; contentTag: string }[];
 }
 
-export type WriteFailure =
-  | { kind: 'not_found' }
-  | { kind: 'base_mismatch'; currentSha256: string | null; rev: number }
-  | { kind: 'rev_mismatch'; rev: number }
-  | { kind: 'share_boundary' }
-  | { kind: 'frozen' }
-  | { kind: 'over_quota' };
-
-const fail = (kind: WriteFailure['kind']): WriteFailure => ({ kind }) as WriteFailure;
+const fail = (kind: Refusal['kind']): Refusal => ({ kind }) as Refusal;
 
 const writeMaterial = async (c: PoolClient, m: Material): Promise<void> => {
   for (const e of m.envelopes) {
@@ -142,7 +135,7 @@ export interface CreateInput {
   material: Material;
 }
 
-export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: string; rev: number } | WriteFailure> =>
+export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: string; rev: number } | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
@@ -202,7 +195,7 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
 export const putContent = async (
   db: Db,
   input: { vaultId: string; nodeId: string; sha256: string; size: number; mtime: string; baseSha256: string | null; material: Material },
-): Promise<{ rev: number } | WriteFailure> =>
+): Promise<{ rev: number } | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
@@ -257,7 +250,7 @@ export const putContent = async (
 export const deleteNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; ifMatchRev: number },
-): Promise<{ rev: number } | WriteFailure> =>
+): Promise<{ rev: number } | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
@@ -298,7 +291,7 @@ export const deleteNode = async (
 export const moveNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; parentId: string; nameEnc: string; nameHmac: string; nameKeyId: string; ifMatchRev: number },
-): Promise<{ rev: number } | WriteFailure> =>
+): Promise<{ rev: number } | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
