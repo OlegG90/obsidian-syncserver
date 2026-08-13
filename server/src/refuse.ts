@@ -35,7 +35,11 @@ export type Refusal =
   | { kind: 'name_taken'; blockedBy: string }
   | { kind: 'rate_limited'; retryAfterSeconds: number }
   /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
-  | { kind: 'parts_missing'; have: number[] };
+  | { kind: 'parts_missing'; have: number[] }
+  /**
+   * The schema refused the write, and `detail` is what it said (see `refusalFromDatabase`).
+   */
+  | { kind: 'invalid_write'; detail: string };
 
 /** One place decides what a refusal looks like, so every route family answers the same way. */
 export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
@@ -75,5 +79,35 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
         .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
     case 'parts_missing':
       return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
+    case 'invalid_write':
+      return reply.code(400).send({ error: 'invalid_write', detail: refusal.detail });
   }
+};
+
+/** PostgreSQL's `check_violation` — a CHECK constraint or a trigger's `RAISE`. */
+const CHECK_VIOLATION = '23514';
+
+/**
+ * A schema refusal, turned into one the caller can act on.
+ *
+ * The schema is the enforcer of most write rules here, and every trigger in it raises
+ * `check_violation` (see AGENTS.md). Unhandled, that arrives as a `500` — which is wrong by
+ * this codebase's own rule that a `500` for something the caller could fix is a defect, and
+ * wrong in a way that misdirects: the message is usually excellent ("private node … name
+ * must use its vault key") and the status says the server broke.
+ *
+ * The message is passed through rather than replaced. It is the most specific statement
+ * available of what was wrong, it was written to be read, and the caller has already been
+ * authorised for the vault it names — a second, vaguer sentence composed here would only
+ * make the reader guess which of several conditions failed.
+ *
+ * **Only `check_violation` is translated.** A unique violation, a foreign key or a
+ * serialization failure mean something else and often mean a defect on this side; mapping
+ * them all to `400` would file the server's own bugs under the caller's name.
+ */
+export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (code !== CHECK_VIOLATION) return undefined;
+  const detail = (e as { message?: unknown }).message;
+  return { kind: 'invalid_write', detail: typeof detail === 'string' ? detail : 'the write violates a schema rule' };
 };

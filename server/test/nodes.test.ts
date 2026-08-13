@@ -255,6 +255,46 @@ describe('move', () => {
   });
 });
 
+describe('a rule the schema enforces is still the caller\'s to fix', () => {
+  it('answers 400 and says what was wrong, not 500', async () => {
+    // Found on the live server: a node created under somebody else's key scope was refused
+    // by a trigger, and the refusal left as an Internal Server Error. The message was
+    // exact and the status said the server had broken — so a client reading the status,
+    // which is what this protocol asks clients to do, learns the opposite of the truth.
+    const r = await app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes`,
+      headers: auth(),
+      payload: {
+        parent_id: rootId, type: 'folder', mtime: new Date().toISOString(),
+        name_enc: Buffer.from('wrong-scope').toString('base64'),
+        name_hmac: sha(Buffer.from('wrong-scope')),
+        name_key_id: randomUUID(), // not this vault's scope
+      },
+    });
+
+    assert.equal(r.statusCode, 400, r.body);
+    assert.equal(r.json().error, 'invalid_write');
+    assert.match(r.json().detail, /vault key/, 'the schema said what was wrong, and it is passed through');
+  });
+
+  it('leaves a fault a fault: only check_violation is translated', async () => {
+    // A parent that does not exist is not a constraint violation — it is looked up and
+    // answered as `not_found`. The point is that the guard did not swallow the difference.
+    const r = await app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes`,
+      headers: auth(),
+      payload: {
+        parent_id: randomUUID(), type: 'folder', mtime: new Date().toISOString(),
+        name_enc: 'eA==', name_hmac: sha(Buffer.from('x')), name_key_id: vaultKeyId,
+      },
+    });
+    assert.equal(r.statusCode, 404);
+    assert.equal(r.json().error, 'not_found');
+  });
+});
+
 describe('delete', () => {
   it('soft-deletes: the row is the trash entry, and its history survives', async () => {
     const file = await createFile(rootId, 'to-delete.md');

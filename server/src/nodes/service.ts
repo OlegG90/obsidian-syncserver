@@ -14,7 +14,7 @@ import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
-import type { Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refuse.js';
 import { nextRev } from '../revision.js';
 
 /**
@@ -60,6 +60,27 @@ export interface Material {
 }
 
 const fail = (kind: Refusal['kind']): Refusal => ({ kind }) as Refusal;
+
+/**
+ * The schema's own refusals, returned rather than thrown.
+ *
+ * Most write rules here are enforced by a CHECK or a trigger, not by code — deliberately,
+ * so they are stated once. But an unhandled `check_violation` leaves as a `500`, and a `500`
+ * for something the caller could fix is a defect by this codebase's own rule. It cost a
+ * confusing answer on the live server: a node created with somebody else's key scope was
+ * refused with an exact message under a status that said the server had broken.
+ *
+ * Anything that is not a `check_violation` still throws, so a real fault stays a fault.
+ */
+const txGuarded = async <T>(db: Db, fn: (c: PoolClient) => Promise<T>): Promise<T | Refusal> => {
+  try {
+    return await db.tx(fn);
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
 
 const writeMaterial = async (c: PoolClient, m: Material): Promise<void> => {
   for (const e of m.envelopes) {
@@ -136,7 +157,7 @@ export interface CreateInput {
 }
 
 export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: string; rev: number } | Refusal> =>
-  db.tx(async (c) => {
+  txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
     if (access.kind === 'frozen') return fail('frozen');
@@ -196,7 +217,7 @@ export const putContent = async (
   db: Db,
   input: { vaultId: string; nodeId: string; sha256: string; size: number; mtime: string; baseSha256: string | null; material: Material },
 ): Promise<{ rev: number } | Refusal> =>
-  db.tx(async (c) => {
+  txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
     if (access.kind === 'frozen') return fail('frozen');
@@ -251,7 +272,7 @@ export const deleteNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; ifMatchRev: number },
 ): Promise<{ rev: number } | Refusal> =>
-  db.tx(async (c) => {
+  txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
 
@@ -292,7 +313,7 @@ export const moveNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; parentId: string; nameEnc: string; nameHmac: string; nameKeyId: string; ifMatchRev: number },
 ): Promise<{ rev: number } | Refusal> =>
-  db.tx(async (c) => {
+  txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
     if (access.kind === 'frozen') return fail('frozen');
