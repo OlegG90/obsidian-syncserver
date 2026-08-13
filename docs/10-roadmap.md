@@ -25,7 +25,8 @@ own integration suite is run from a development machine, not from the NAS.
 the part size doubling as the threshold above which a client uses them at all — and WebSocket push
 ([04](04-sync-protocol.md), Change notifications): a journal-insert notification delivered on commit, fanned
 out over `WS /events` to the account's devices, so a change wakes a connected client instead of waiting for
-the button. Mobile is what remains, and it is a question of defining "done" as much as of code.
+the button. **Mobile is what remains**, and it was a word rather than a criterion until the section below
+gave it three — two about memory, one that no suite can run.
 
 Estimate: M1 is two to three weeks of evenings. Re-estimate M2 and beyond only after M1; until then the
 numbers are guesses.
@@ -58,6 +59,32 @@ missing named in the row.
 
 The last two are the most expensive to implement and the most valuable: they are what catches the bugs
 that never appear on the happy path.
+
+## M2 — what "mobile" means
+
+The other three pieces of M2 are things that either work or do not. "Mobile" is a word, and a word cannot
+be ticked, so this is what it stands for.
+
+Most of what [02](02-architecture.md) demands of a phone is already structural rather than pending: the
+bundle carries no Node API and no native dependency (the crypto is pure TypeScript for exactly this
+reason), `manifest.json` sets `isDesktopOnly: false`, the device registers under its own platform, and iOS
+having no background execution is already written into the protocol — a change notification only shortens
+the wait while the app is open ([04](04-sync-protocol.md)). The status-bar rule is met the way it had to be:
+**sync, status and lock are commands**, and the status bar carries the same state without being the only
+place it lives.
+
+What is left is memory, and one thing that cannot be automated.
+
+| Scenario | What it proves |
+|---|---|
+| **a large attachment is pulled without three copies of it in memory** ☐ | Sealing costs two copies of a file since the blob became one allocation, but a pull still costs three: the ciphertext, the plaintext `openBlob` returns, and a third the vault adapter makes because `writeBinary` takes an `ArrayBuffer` and a `Uint8Array` is not one. The copy is avoidable — a decrypted blob is a fresh exact allocation, so its buffer can be handed over directly when it covers exactly its view, and copied only when it does not |
+| **the size ceiling is a written number** ☐ | `requestUrl` buffers a whole request and a whole response, so there is an attachment size a phone will not survive. Two copies of a file is the floor for this format — one nonce and one tag cover the whole ciphertext ([06](06-key-model.md)) — so the ceiling is a consequence of the format, not a bug to fix. It belongs in [01](01-context.md) as a limit the user is told, rather than discovered |
+| **one real pass on a phone** ☐ | Install the bundle, adopt a vault, sync both ways, watch a conflict resolve. No suite will ever run this: the tests exercise a Node transport against a real server, which proves the protocol and says nothing about a Capacitor WebView. This is the scenario that decides whether M2 is done |
+
+Going below two copies means a **framed** blob format — a nonce and a tag per frame — which is the same
+decision as giving a wrapped value a version byte ([06](06-key-model.md)): both ask whether the AEAD stays
+one pass over a whole value. Neither is M2's to make. M2's job is to stop paying a third copy and to say
+out loud what the second one costs.
 
 ## State of the specification
 
