@@ -1,10 +1,15 @@
 /**
  * What state the sync is in, and where the user is allowed to read it.
  *
- * Two surfaces on purpose. The **status bar** is glanceable and is where anyone used to
+ * Three surfaces on purpose. The **status bar** is glanceable and is where anyone used to
  * Obsidian's own sync will look first — but it *does not render on mobile* (docs/02), so it
- * may carry a state and must never be the only place one appears. The **status panel** is
- * therefore the complete one, reachable by command on every platform.
+ * may carry a state and must never be the only place one appears. The **ribbon icon** is the
+ * glanceable one that does render on a phone. The **status panel** is the complete one,
+ * reachable by command on every platform.
+ *
+ * The ribbon exists because "not the only place" was satisfied on paper and not in practice:
+ * the commands were there, so the rule was met, and a phone still showed *nothing at all*
+ * until the user went looking for a command. A state you have to ask for is not a status.
  *
  * The panel exists for a reason this project met immediately: the first real sync reported
  * "0 up, 0 down" and there was no way to tell whether nothing had changed or the vault had
@@ -53,6 +58,45 @@ export const shortStatus = (phase: SyncPhase): string => {
           return 'Sync: vault looks empty';
         case 'up_to_date':
           return 'Sync: up to date';
+      }
+    }
+  }
+};
+
+/**
+ * The mood of a phase, as a Lucide icon name — what the ribbon shows.
+ *
+ * Deliberately few, and every one of them a name Obsidian has shipped for years. An icon
+ * that does not resolve renders as nothing, which on the ribbon is indistinguishable from
+ * the bug this surface was added to fix; a precise name that might not exist is a worse
+ * trade than a general one that does.
+ *
+ * The icon carries the mood and the tooltip carries `shortStatus`, so nothing depends on
+ * reading a glyph correctly — the same division the status bar and the panel already have.
+ * `conflicts` and `quarantined` share the warning icon because to a person glancing at a
+ * ribbon they are one thing: something needs you.
+ */
+export const phaseIcon = (phase: SyncPhase): string => {
+  switch (phase.kind) {
+    case 'disconnected':
+      return 'cloud-off';
+    case 'locked':
+      return 'lock';
+    case 'syncing':
+      return 'refresh-cw';
+    case 'failed':
+      return 'alert-triangle';
+    case 'idle': {
+      if (!phase.report) return 'check-circle';
+      switch (priority(phase.report)) {
+        case 'failed':
+        case 'conflicts':
+        case 'quarantined':
+          return 'alert-triangle';
+        case 'empty':
+          return 'help-circle';
+        default:
+          return 'check-circle';
       }
     }
   }

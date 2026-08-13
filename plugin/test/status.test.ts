@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { shortStatus, statusLines } from '../src/obsidian/status.js';
+import { phaseIcon, shortStatus, statusLines, type SyncPhase } from '../src/obsidian/status.js';
 import type { SyncReport } from '../src/engine/engine.js';
 
 const report = (over: Partial<SyncReport>): SyncReport => ({
@@ -151,5 +151,54 @@ describe('statusLines', () => {
     });
     assert.ok(lines.some((l) => l.includes('reset on another device')));
     assert.ok(lines.some((l) => l.includes('_Reset 2026-08-12/Notes/mine.md')));
+  });
+});
+
+describe('phaseIcon — the surface that renders on a phone', () => {
+  // Obsidian's own sync shows its state as a ribbon icon on mobile, which is where someone
+  // will look. The status bar does not render there at all (docs/02), so before this the
+  // phone showed nothing until the user went hunting for a command.
+
+  it('gives every phase an icon, because a missing one renders as nothing at all', () => {
+    // The failure mode this guards is silent: `setIcon` with a name it does not know draws
+    // an empty ribbon, which looks exactly like the bug the ribbon was added to fix.
+    const phases: SyncPhase[] = [
+      { kind: 'disconnected' },
+      { kind: 'locked' },
+      { kind: 'syncing' },
+      { kind: 'failed', message: 'x', at: 0 },
+      { kind: 'idle' },
+      { kind: 'idle', report: report({ scanned: 3 }) },
+      { kind: 'idle', report: report({ scanned: 0 }) },
+      { kind: 'idle', report: report({ conflicts: [{ path: 'a', conflictPath: 'b' }] }) },
+      { kind: 'idle', report: report({ errors: [{ path: 'a', message: 'x' }] }) },
+      { kind: 'idle', report: report({ quarantined: [{ from: 'a', to: 'b' }] }) },
+    ];
+    for (const p of phases) {
+      const icon = phaseIcon(p);
+      assert.ok(icon.length > 0, `${p.kind} has no icon`);
+      assert.match(icon, /^[a-z][a-z0-9-]*$/, `${icon} is not a lucide id`);
+    }
+  });
+
+  it('separates the states a glance has to tell apart', () => {
+    const working = phaseIcon({ kind: 'syncing' });
+    const locked = phaseIcon({ kind: 'locked' });
+    const broken = phaseIcon({ kind: 'failed', message: 'x', at: 0 });
+    const fine = phaseIcon({ kind: 'idle', report: report({ scanned: 3 }) });
+
+    assert.equal(new Set([working, locked, broken, fine]).size, 4, 'four states, four icons');
+  });
+
+  it('shows anything that needs the user as one thing', () => {
+    // A conflict, a failure and work put aside by a reset are different in the panel and
+    // the same on a ribbon: something needs you.
+    const conflict = phaseIcon({ kind: 'idle', report: report({ conflicts: [{ path: 'a', conflictPath: 'b' }] }) });
+    const failed = phaseIcon({ kind: 'idle', report: report({ errors: [{ path: 'a', message: 'x' }] }) });
+    const aside = phaseIcon({ kind: 'idle', report: report({ quarantined: [{ from: 'a', to: 'b' }] }) });
+
+    assert.equal(conflict, failed);
+    assert.equal(failed, aside);
+    assert.notEqual(conflict, phaseIcon({ kind: 'idle', report: report({ scanned: 3 }) }), 'and not as "fine"');
   });
 });

@@ -216,7 +216,11 @@ rules out Node APIs and native dependencies. Practical consequences:
 - `manifest.json` must set `isDesktopOnly: false`;
 - files are processed sequentially — mobile memory limits are real;
 - iOS has no background synchronisation: sync happens when the app is open;
-- **the status bar does not render on mobile.** It may carry a state, never alone.
+- **the status bar does not render on mobile.** It may carry a state, never alone. The
+  glanceable surface that does render there is the **ribbon icon**, which is also where
+  Obsidian's own sync puts its state, so it is where a user looks first. Commands satisfy
+  "never alone" but do not satisfy *glanceable*: a state you have to go and ask for is not a
+  status, and a phone showed nothing at all until the ribbon existed.
 
 Two further constraints shape the protocol rather than the code, and they are the reason for the section
 below:

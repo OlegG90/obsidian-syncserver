@@ -13,14 +13,14 @@
  * the person. That asymmetry is the entire point of the key model (docs/06), and it is the
  * reason the plugin asks again after every restart instead of remembering.
  */
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
 
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
-import { shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
+import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { obsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
@@ -42,6 +42,8 @@ export default class SyncServerPlugin extends Plugin {
 
   private phase: SyncPhase = { kind: 'disconnected' };
   private statusBar: HTMLElement | undefined;
+  /** The glanceable surface that renders on a phone, which the status bar does not. */
+  private ribbon: HTMLElement | undefined;
   private push: PushListener | undefined;
   /** The sync coordinator (sync.ts) — owns unlock → one pass → render, and the re-entry guard. */
   private sync: SyncCoordinator | undefined;
@@ -76,6 +78,11 @@ export default class SyncServerPlugin extends Plugin {
     // exactly why the same state is a command as well, and not only here.
     this.statusBar = this.addStatusBarItem();
     this.statusBar.addEventListener('click', () => this.showStatus());
+
+    // The ribbon is the glanceable surface that DOES render on a phone, and it is where
+    // Obsidian's own sync puts its state — so it is where someone will look. Both this and
+    // the status bar are fed by `setPhase` and by nothing else: two surfaces, one source.
+    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), shortStatus(this.phase), () => this.showStatus());
 
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
@@ -112,7 +119,14 @@ export default class SyncServerPlugin extends Plugin {
 
   private setPhase(phase: SyncPhase): void {
     this.phase = phase;
-    this.statusBar?.setText(shortStatus(phase));
+    const text = shortStatus(phase);
+    this.statusBar?.setText(text);
+    if (this.ribbon) {
+      setIcon(this.ribbon, phaseIcon(phase));
+      // The sentence, not just the glyph: on a phone this is what a long press shows, and
+      // it is the same line the status bar carries on a desktop.
+      this.ribbon.setAttribute('aria-label', text);
+    }
   }
 
   showStatus(): void {
