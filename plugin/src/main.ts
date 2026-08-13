@@ -16,6 +16,7 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
 import { SyncEngine } from './engine/engine.js';
+import { summary } from './engine/report.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
@@ -218,17 +219,13 @@ export default class SyncServerPlugin extends Plugin {
 
       this.setPhase({ kind: 'idle', at: Date.now(), report });
 
-      const parts = [`${report.pushed.length} up`, `${report.pulled.length} down`];
-      if (report.matched.length) parts.push(`${report.matched.length} already in sync`);
-      if (report.deleted.length) parts.push(`${report.deleted.length} deleted here`);
-      if (report.removed.length) parts.push(`${report.removed.length} removed after the server`);
-      if (report.renamed.length) parts.push(`${report.renamed.length} moved`);
-      if (report.conflicts.length) parts.push(`${report.conflicts.length} conflict${report.conflicts.length === 1 ? '' : 's'}`);
-      if (report.errors.length) parts.push(`${report.errors.length} failed`);
-      // `scanned` belongs in the summary because a pass that moved nothing is the one result
-      // that says nothing about itself: "0 up, 0 down" reads as success whether the vault
-      // was already in step or the plugin never saw it.
-      new Notice(`SyncServer: ${parts.join(', ')} — ${report.scanned} local files seen.`);
+      // One precedence rule for the report's meaning (report.ts); this surface only joins
+      // the parts. `scanned` belongs in the summary because a pass that moved nothing is
+      // the one result that says nothing about itself: "0 up, 0 down" reads as success
+      // whether the vault was already in step or the plugin never saw it.
+      const parts = summary(report);
+      const head = parts.length ? parts.join(', ') : report.scanned === 0 ? 'vault looks empty' : 'nothing changed';
+      new Notice(`SyncServer: ${head} — ${report.scanned} local files seen.`);
 
       // Named individually, because "3 failed" — or "3 conflicts" — is not something
       // anybody can act on without knowing which files.

@@ -11,6 +11,7 @@
  * looked empty. A summary that cannot distinguish success from doing nothing is not a status.
  */
 import type { SyncReport } from '../engine/engine.js';
+import { priority } from '../engine/report.js';
 
 export type SyncPhase =
   | { kind: 'disconnected' }
@@ -31,21 +32,28 @@ export const shortStatus = (phase: SyncPhase): string => {
       return 'Sync: failed';
     case 'idle': {
       if (!phase.report) return 'Sync: ready';
-      const r = phase.report;
-      if (r.errors.length) return `Sync: ${r.errors.length} failed`;
-      // A conflict is the one outcome that needs a person, not just an eye — ahead of the
-      // ordinary counts even when they are also nonzero.
-      if (r.conflicts.length) return `Sync: ${r.conflicts.length} conflict${r.conflicts.length === 1 ? '' : 's'}`;
-      if (r.pushed.length || r.pulled.length || r.renamed.length || r.deleted.length || r.removed.length) {
-        const moves = r.renamed.length ? ` ${r.renamed.length}→` : '';
-        const dels = r.deleted.length || r.removed.length ? ` ${r.deleted.length + r.removed.length}✕` : '';
-        return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}${dels}`;
+      // Which of the outcomes dominates is the report module's one precedence rule; this
+      // surface only gives each mood a line.
+      switch (priority(phase.report)) {
+        case 'failed':
+          return `Sync: ${phase.report.errors.length} failed`;
+        case 'conflicts':
+          return `Sync: ${phase.report.conflicts.length} conflict${phase.report.conflicts.length === 1 ? '' : 's'}`;
+        case 'quarantined':
+          return `Sync: ${phase.report.quarantined.length} kept aside after a reset`;
+        case 'moved': {
+          const r = phase.report;
+          const moves = r.renamed.length ? ` ${r.renamed.length}→` : '';
+          const dels = r.deleted.length || r.removed.length ? ` ${r.deleted.length + r.removed.length}✕` : '';
+          return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}${dels}`;
+        }
+        case 'matched':
+          return `Sync: up to date (${phase.report.matched.length} matched)`;
+        case 'empty':
+          return 'Sync: vault looks empty';
+        case 'up_to_date':
+          return 'Sync: up to date';
       }
-      // The case that started all this: nothing moved. Say which kind of nothing — matched
-      // (adoption recognised everything and sent none of it again) reads very differently
-      // from an empty vault, even though both leave pushed/pulled at zero.
-      if (r.matched.length) return `Sync: up to date (${r.matched.length} matched)`;
-      return r.scanned === 0 ? 'Sync: vault looks empty' : 'Sync: up to date';
     }
   }
 };
