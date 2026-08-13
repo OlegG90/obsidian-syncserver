@@ -26,10 +26,11 @@
  * Local deletes (a synced file gone from disk) push `deleteNode` — safe under every epoch,
  * because the row soft-deletes into the trash and the content survives (docs/03).
  *
- * The engine instance is one sync, so the per-pass context lives on the instance rather than
- * being threaded through a dozen parameters. Out of scope, deliberately: folder moves are
- * still per-file, and the delta's *pages* are not applied incrementally — the full walk is
- * the data source, the probe is only the provenance check (incremental application is M2).
+ * One pass's mutable state is a single `PassContext` built in `sync()` and handed to every
+ * helper, so a reused instance starts a fresh pass instead of carrying the last one's
+ * fields. Out of scope, deliberately: folder moves are still per-file, and the delta's
+ * *pages* are not applied incrementally — the full walk is the data source, the probe is
+ * only the provenance check (incremental application is M2).
  */
 import { ApiError } from '../api/client.js';
 import type { VaultWire } from './wire.js';
@@ -133,7 +134,7 @@ interface SyncPolicy {
   preferLocal: boolean;
 }
 
-const POLICY: Record<Exclude<RemoteEpoch, 'reset'>, SyncPolicy> = {
+const POLICY: Record<RemoteEpoch, SyncPolicy> = {
   // The walk is current, so a known node missing from it was genuinely deleted.
   continuous: { pushDeletes: true, applyRemoteDeletes: true, preferLocal: false },
   // The journal pruned past our cursor, but the server moved forwards — same reading.
@@ -142,7 +143,36 @@ const POLICY: Record<Exclude<RemoteEpoch, 'reset'>, SyncPolicy> = {
   restore: { pushDeletes: false, applyRemoteDeletes: false, preferLocal: true },
   // The cursor cannot be checked at all: resync from empty, deleting nothing (#100).
   unverifiable: { pushDeletes: false, applyRemoteDeletes: false, preferLocal: true },
+  // Not a flag change but a different algorithm (`resyncAfterReset`), so the flags it never
+  // reads record its stance — never trust absence, never delete — and the table is total:
+  // the per-pass context can always name a policy, whichever epoch decided the pass.
+  reset: { pushDeletes: false, applyRemoteDeletes: false, preferLocal: true },
 };
+
+/**
+ * Everything one pass mutates, built fresh in `sync()` and handed to every helper.
+ *
+ * The instance used to carry this state as a dozen `!`-typed fields written in `sync()`,
+ * which made stale state type-legal — a `policy` left over from a previous pass after the
+ * reset short-circuit — and left "one sync per instance" enforced by discipline alone. With
+ * a context, reuse is structurally safe: a second `sync()` builds a second context, and no
+ * helper can see state that belongs to another pass. `policy` is always named by the epoch
+ * that decided the pass; the reset path simply never reads it.
+ */
+interface PassContext {
+  policy: SyncPolicy;
+  tree: Map<string, ServerNode>;
+  byNodeId: Map<string, ServerNode>;
+  meta: Map<string, LocalMeta>;
+  dedup: Map<string, string>;
+  vanished: Map<string, Vanished[]>;
+  handled: Set<string>;
+  queue: VaultFile[];
+  rootNodeId: string;
+  scopeId: string;
+  state: VaultState;
+  report: SyncReport;
+}
 
 export class SyncEngine {
   constructor(
@@ -160,88 +190,73 @@ export class SyncEngine {
   /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
   private readonly scope = (path: string): boolean => isSyncable(path, this.syncObsidian);
 
-  // ---- per-sync context ---------------------------------------------------------
-  // The engine is built per sync, so these are written once in `sync()` and read by the
-  // helpers, instead of a dozen parameters threaded through every call.
-
-  private policy!: SyncPolicy;
-  private tree!: Map<string, ServerNode>;
-  private byNodeId!: Map<string, ServerNode>;
-  private meta!: Map<string, LocalMeta>;
-  private dedup!: Map<string, string>;
-  private vanished!: Map<string, Vanished[]>;
-  private handled!: Set<string>;
-  private queue!: VaultFile[];
-  private rootNodeId!: string;
-  private scopeId!: string;
-  private state!: VaultState;
-  private report!: SyncReport;
-
   async sync(): Promise<SyncReport> {
-    this.report = {
+    const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
       deleted: [], removed: [], quarantined: [], vanished: [], errors: [],
     };
-    this.state = await this.store.load();
+    const state = await this.store.load();
 
     const opened = await this.client.openVault(this.vaultId);
     const scopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
     if (!scopeId) throw new Error('the vault reports no key scope of its own');
-    this.scopeId = scopeId;
-    this.rootNodeId = opened.root_node_id;
+    const rootNodeId = opened.root_node_id;
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
     // what a missing node means (#70). The pages themselves are re-read through the walk —
     // the probe is the check, not the data.
-    const epoch: RemoteEpoch = this.state.cursor ? await this.probeEpoch(this.state.cursor) : 'continuous';
+    const epoch: RemoteEpoch = state.cursor ? await this.probeEpoch(state.cursor) : 'continuous';
 
-    const { tree, cursor } = await this.readServerTree();
-    this.tree = tree;
-    this.byNodeId = new Map();
-    for (const n of tree.values()) this.byNodeId.set(n.nodeId, n);
+    const { tree, cursor } = await this.readServerTree(rootNodeId);
+    const byNodeId = new Map<string, ServerNode>();
+    for (const n of tree.values()) byNodeId.set(n.nodeId, n);
 
     const local = (await this.vault.list()).filter((f) => this.scope(f.path));
-    this.report.scanned = local.length;
+    report.scanned = local.length;
 
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
     // an actual upload, costs I/O this trades for that.
-    this.meta = new Map();
+    const meta = new Map<string, LocalMeta>();
     for (const f of local) {
       const bytes = await this.vault.read(f.path);
-      this.meta.set(f.path, {
+      meta.set(f.path, {
         plainHash: toHex(sha256(bytes)),
         tag: dedupTag(this.vaultKey, bytes),
         mtime: f.mtime,
         size: bytes.length,
       });
     }
-    this.dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...this.meta.values()].map((m) => m.tag))]);
+    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag))]);
 
     const here = new Set(local.map((f) => f.path));
 
-    if (epoch === 'reset') {
-      await this.resyncAfterReset(local);
-      this.state.cursor = cursor;
-      await this.store.save(this.state);
-      return this.report;
-    }
+    const ctx: PassContext = {
+      policy: POLICY[epoch],
+      tree, byNodeId, meta, dedup,
+      state, report, rootNodeId, scopeId,
+      vanished: new Map(), handled: new Set(), queue: [],
+    };
 
-    this.policy = POLICY[epoch];
+    if (epoch === 'reset') {
+      await this.resyncAfterReset(local, ctx);
+      ctx.state.cursor = cursor;
+      await this.store.save(ctx.state);
+      return ctx.report;
+    }
 
     // Paths this device had synced and can no longer find. A rename shows up as exactly this
     // plus a new path holding the same bytes, and the pairing has to be decided BEFORE the
     // walk creates a second node for the new one.
-    this.vanished = new Map();
-    for (const [path, known] of Object.entries(this.state.nodes)) {
+    for (const [path, known] of Object.entries(ctx.state.nodes)) {
       // Out of scope paths are frozen, not vanished: turning the `.obsidian/` switch off
       // must not read "still on the server, not on disk" as a deletion to push. They stay
       // in state so flipping the switch back on resumes them as ordinary files.
       if (!this.scope(path)) continue;
       if (here.has(path)) continue;
-      const list = this.vanished.get(known.plainHash) ?? [];
+      const list = ctx.vanished.get(known.plainHash) ?? [];
       list.push({ path, nodeId: known.nodeId, rev: known.rev, address: known.address });
-      this.vanished.set(known.plainHash, list);
+      ctx.vanished.set(known.plainHash, list);
     }
 
     // Shallowest first, so a folder exists before the file that lives in it. A FIFO queue
@@ -249,21 +264,20 @@ export class SyncEngine {
     // and uploaded in this same pass, not left for the next click. Its folder is always
     // already there — it lands beside the file it came from, which this loop has by then
     // already ensured a parent for.
-    this.handled = new Set();
-    this.queue = [...local].sort((a, b) => depth(a.path) - depth(b.path));
+    ctx.queue = [...local].sort((a, b) => depth(a.path) - depth(b.path));
 
     // A folder renamed is ONE move of the folder node, not a move per child. Detect the
     // whole-folder case before the per-file walk, so the children are not moved individually
     // and the empty source folder does not linger on the server.
-    await this.moveRenamedFolders(local, here);
+    await this.moveRenamedFolders(local, here, ctx);
 
-    while (this.queue.length) {
-      const file = this.queue.shift()!;
-      this.handled.add(file.path);
+    while (ctx.queue.length) {
+      const file = ctx.queue.shift()!;
+      ctx.handled.add(file.path);
       try {
-        await this.reconcileLocal(file);
+        await this.reconcileLocal(file, ctx);
       } catch (e) {
-        this.report.errors.push({ path: file.path, message: message(e) });
+        ctx.report.errors.push({ path: file.path, message: message(e) });
       }
     }
 
@@ -271,24 +285,24 @@ export class SyncEngine {
     // Pushing the delete is safe: the row soft-deletes into the trash and the content
     // survives (docs/03). The only thing that stops us is an epoch that makes the absence
     // unreadable — under a restore we cannot tell "deleted" from "never arrived".
-    for (const list of this.vanished.values()) {
+    for (const list of ctx.vanished.values()) {
       for (const v of list) {
-        this.handled.add(v.path);
-        if (!this.policy.pushDeletes) {
-          delete this.state.nodes[v.path];
+        ctx.handled.add(v.path);
+        if (!ctx.policy.pushDeletes) {
+          delete ctx.state.nodes[v.path];
           continue;
         }
-        await this.pushDelete(v);
+        await this.pushDelete(v, ctx);
       }
     }
 
     // What is left: server files no local copy ever stood in for. Ordinary pull.
-    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !this.handled.has(n.path));
-    await this.pull(serverOnly);
+    const serverOnly = [...ctx.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !ctx.handled.has(n.path));
+    await this.pull(serverOnly, ctx);
 
-    this.state.cursor = cursor;
-    await this.store.save(this.state);
-    return this.report;
+    ctx.state.cursor = cursor;
+    await this.store.save(ctx.state);
+    return ctx.report;
   }
 
   /**
@@ -317,13 +331,13 @@ export class SyncEngine {
    * all (docs/03) — so a path exists only once a client has decrypted every name on the way
    * down. `list` returns nodes shallowest-first, which is what makes one pass enough.
    */
-  private async readServerTree(): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
+  private async readServerTree(rootNodeId: string): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
     const res = await this.client.listNodes(this.vaultId);
-    const pathOf = new Map<string, string>([[this.rootNodeId, '']]);
+    const pathOf = new Map<string, string>([[rootNodeId, '']]);
     const tree = new Map<string, ServerNode>();
 
     for (const n of res.nodes) {
-      if (n.node_id === this.rootNodeId) continue;
+      if (n.node_id === rootNodeId) continue;
       const parentPath = pathOf.get(n.parent_id ?? '') ?? '';
       const name = n.name_enc ? decryptName(this.vaultKey, n.name_enc) : n.node_id;
       const path = parentPath ? `${parentPath}/${name}` : name;
@@ -350,12 +364,12 @@ export class SyncEngine {
    * this file. The queue is the same FIFO `sync()` is draining — a conflict resolution
    * pushes the local original onto it as a brand new file to upload.
    */
-  private async reconcileLocal(file: VaultFile): Promise<void> {
+  private async reconcileLocal(file: VaultFile, ctx: PassContext): Promise<void> {
     // A conflict file born during this same pass has no pre-pass entry; compute it now.
-    const m = this.meta.get(file.path) ?? (await this.hashAndTag(file.path));
+    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file.path));
 
-    const known = this.state.nodes[file.path];
-    const onServer = this.tree.get(file.path);
+    const known = ctx.state.nodes[file.path];
+    const onServer = ctx.tree.get(file.path);
 
     // The node we know is still at this path on the server.
     if (onServer && known && known.nodeId === onServer.nodeId) {
@@ -369,8 +383,8 @@ export class SyncEngine {
 
       // Under a restore the server's "change" is the backup going backwards, and our copy is
       // the newer one — so the usual remote-wins pull is inverted into a push.
-      if (!localChanged && remoteChanged && !this.policy.preferLocal) {
-        await this.pull([onServer]);
+      if (!localChanged && remoteChanged && !ctx.policy.preferLocal) {
+        await this.pull([onServer], ctx);
         return;
       }
 
@@ -378,21 +392,21 @@ export class SyncEngine {
       // precondition is what decides which it was, and the server is a better arbiter of
       // that than a client comparing two hashes it fetched a moment ago. If they diverged,
       // the 409 comes back and `pushEdit` writes the conflict file (docs/04).
-      await this.pushEdit(file, m, known, onServer);
+      await this.pushEdit(file, m, known, onServer, ctx);
       return;
     }
 
     // A node at this path, but not the one we know — deleted and recreated, or a fresh
     // adoption. Content, not history, decides what happens next (docs/07).
     if (onServer && (!known || known.nodeId !== onServer.nodeId)) {
-      const matched = this.dedup.get(m.tag);
+      const matched = ctx.dedup.get(m.tag);
       if (matched === onServer.address) {
         // Same plaintext, already at this exact address: record and move on.
-        this.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
-        this.report.matched.push({ path: file.path });
+        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+        ctx.report.matched.push({ path: file.path });
         return;
       }
-      await this.resolveConflict(file, onServer);
+      await this.resolveConflict(file, onServer, ctx);
       return;
     }
 
@@ -400,32 +414,32 @@ export class SyncEngine {
     // gone — and which of those it is decides whether this is a rename, a delete, or a
     // rescue. If we never knew it, it is a rename source or genuinely new.
     if (known) {
-      const movedTo = this.byNodeId.get(known.nodeId);
+      const movedTo = ctx.byNodeId.get(known.nodeId);
       if (movedTo) {
-        await this.applyRemoteRename(file, m, known, movedTo);
+        await this.applyRemoteRename(file, m, known, movedTo, ctx);
         return;
       }
 
       // Gone entirely. Deleted on the server — or lost to a restore. The policy knows which.
       const localChanged = known.plainHash !== m.plainHash;
-      if (this.policy.applyRemoteDeletes && !localChanged) {
+      if (ctx.policy.applyRemoteDeletes && !localChanged) {
         await this.vault.delete(file.path);
-        delete this.state.nodes[file.path];
-        this.report.removed.push({ path: file.path });
+        delete ctx.state.nodes[file.path];
+        ctx.report.removed.push({ path: file.path });
         return;
       }
       // A restore (absence proves nothing) or local edits worth keeping: upload as new.
-      await this.pushNew(file, m);
+      await this.pushNew(file, m, ctx);
       return;
     }
 
     // Never known here, not on the server: a rename source, or genuinely new.
-    const source = this.renameSourceFor(m);
+    const source = this.renameSourceFor(m, ctx);
     if (source) {
-      await this.pushMove(file, m, source);
+      await this.pushMove(file, m, source, ctx);
       return;
     }
-    await this.pushNew(file, m);
+    await this.pushNew(file, m, ctx);
   }
 
   /**
@@ -441,18 +455,18 @@ export class SyncEngine {
    * Failing any of these is not a failure. It falls through to delete-and-create, and the
    * blob deduplicates, so the cost of being conservative here is metadata.
    */
-  private renameSourceFor(m: LocalMeta): Vanished | undefined {
+  private renameSourceFor(m: LocalMeta, ctx: PassContext): Vanished | undefined {
     if (m.size < RENAME_MIN_BYTES) return undefined;
 
-    const candidates = this.vanished.get(m.plainHash);
+    const candidates = ctx.vanished.get(m.plainHash);
     if (!candidates || candidates.length !== 1) return undefined;
 
     const source = candidates[0]!;
-    const node = this.tree.get(source.path);
+    const node = ctx.tree.get(source.path);
     if (!node || node.nodeId !== source.nodeId) return undefined;
 
     // Consumed: a second file with these bytes must not claim the same source.
-    this.vanished.delete(m.plainHash);
+    ctx.vanished.delete(m.plainHash);
     return source;
   }
 
@@ -481,11 +495,11 @@ export class SyncEngine {
    * moved into a folder that is itself new — falls through to the per-file walk, which is
    * conservative by construction (docs/04).
    */
-  private async moveRenamedFolders(local: VaultFile[], here: Set<string>): Promise<void> {
+  private async moveRenamedFolders(local: VaultFile[], here: Set<string>, ctx: PassContext): Promise<void> {
     // Group vanished files by their parent directory. A "folder" is a path prefix: every
     // child shares it.
     const byParent = new Map<string, { rel: string; v: Vanished; hash: string }[]>();
-    for (const [hash, list] of this.vanished) {
+    for (const [hash, list] of ctx.vanished) {
       for (const v of list) {
         const slash = v.path.lastIndexOf('/');
         const parent = slash === -1 ? '' : v.path.slice(0, slash);
@@ -499,14 +513,14 @@ export class SyncEngine {
     for (const [parent, children] of byParent) {
       // Only a path that IS a server folder node can be moved as one. And only when the
       // parent is a real folder with children — the vault root ('' ) is not movable.
-      const source = this.tree.get(parent);
+      const source = ctx.tree.get(parent);
       if (!source || source.isFile || children.length === 0) continue;
 
       // Every child must reappear under the SAME new parent, at the same relative path,
       // with the same content.
       let newParent: string | undefined;
       const move = children.every(({ rel, v, hash }) => {
-        const appeared = this.appearedUnder(rel, hash, here);
+        const appeared = this.appearedUnder(rel, hash, here, ctx);
         if (!appeared || appeared.path === v.path) return false;
         const slash = appeared.path.lastIndexOf('/');
         const np = slash === -1 ? '' : appeared.path.slice(0, slash);
@@ -519,47 +533,47 @@ export class SyncEngine {
       // The destination folder must not already exist (that would be a merge, not a move),
       // and its own parent chain must already be present so no folder is created in the
       // middle of a walk that has not processed it yet.
-      if (this.tree.has(newParent)) continue;
-      if (newParent && !this.parentChainExists(newParent)) continue;
+      if (ctx.tree.has(newParent)) continue;
+      if (newParent && !this.parentChainExists(newParent, ctx)) continue;
 
       // One move of the folder node. The server recomputes ancestry for the whole subtree.
       const name = basename(newParent);
       const destParent = newParent ? parentOf(newParent) : '';
-      const destParentId = destParent ? this.tree.get(destParent)!.nodeId : this.rootNodeId;
+      const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
       try {
         const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
           parent_id: destParentId,
           name_enc: encryptName(this.vaultKey, name),
           name_hmac: nameHmac(this.vaultKey, name),
-          name_key_id: this.scopeId,
+          name_key_id: ctx.scopeId,
         });
-        this.remapTreePaths(parent, newParent, out.rev);
-        this.remapStatePaths(parent, newParent);
+        this.remapTreePaths(parent, newParent, out.rev, ctx);
+        this.remapStatePaths(parent, newParent, ctx);
         for (const { rel, v, hash } of children) {
-          this.vanished.delete(hash);
-          this.handled.add(`${newParent}/${rel}`);
+          ctx.vanished.delete(hash);
+          ctx.handled.add(`${newParent}/${rel}`);
         }
-        this.handled.add(newParent === '' ? '' : newParent);
+        ctx.handled.add(newParent === '' ? '' : newParent);
         // The moved files' local copies were handled in this pass — do not upload them.
         for (const f of local) {
-          if (f.path.startsWith(`${newParent}/`)) this.handled.add(f.path);
+          if (f.path.startsWith(`${newParent}/`)) ctx.handled.add(f.path);
         }
-        this.report.renamed.push({ from: parent, to: newParent });
+        ctx.report.renamed.push({ from: parent, to: newParent });
       } catch (e) {
         // A refused move is not a failure we can resolve here — the per-file fallback
         // already ran nothing for these, so report and let the next pass retry.
-        this.report.errors.push({ path: parent, message: message(e) });
+        ctx.report.errors.push({ path: parent, message: message(e) });
       }
     }
   }
 
   /** A local file at `N/<rel>` whose hash matches the vanished one, or nothing. */
-  private appearedUnder(rel: string, plainHash: string, here: Set<string>): VaultFile | undefined {
+  private appearedUnder(rel: string, plainHash: string, here: Set<string>, ctx: PassContext): VaultFile | undefined {
     // The candidate new path is the same relative path under any parent. We search the
     // appeared paths by scanning local files with this exact hash and the right suffix.
     for (const f of here) {
       if (!f.endsWith(`/${rel}`)) continue;
-      const m = this.meta.get(f);
+      const m = ctx.meta.get(f);
       if (m && m.plainHash === plainHash) {
         return { path: f, mtime: m.mtime };
       }
@@ -568,25 +582,25 @@ export class SyncEngine {
   }
 
   /** Every ancestor ABOVE the destination already exists as a server folder node. */
-  private parentChainExists(path: string): boolean {
+  private parentChainExists(path: string, ctx: PassContext): boolean {
     // The destination itself is not part of its own parent chain; only the folders above it.
     const parent = parentOf(path);
     if (!parent) return true;
     let sofar = '';
     for (const part of parent.split('/')) {
       sofar = sofar ? `${sofar}/${part}` : part;
-      const node = this.tree.get(sofar);
+      const node = ctx.tree.get(sofar);
       if (!node || node.isFile) return false;
     }
     return true;
   }
 
   /** Rewrite `from/…` paths in the walked tree to `to/…`, refreshing the moved folder's rev. */
-  private remapTreePaths(from: string, to: string, rev: number): void {
+  private remapTreePaths(from: string, to: string, rev: number, ctx: PassContext): void {
     const prefix = from ? `${from}/` : '';
     const dest = to ? `${to}/` : '';
     const next = new Map<string, ServerNode>();
-    for (const [path, node] of this.tree) {
+    for (const [path, node] of ctx.tree) {
       if (path === from) {
         next.set(to, { ...node, path: to, rev });
       } else if (path.startsWith(prefix)) {
@@ -595,22 +609,22 @@ export class SyncEngine {
         next.set(path, node);
       }
     }
-    this.tree = next;
+    ctx.tree = next;
   }
 
   /** The same rewrite for the local state, so the moved files are remembered at their new paths. */
-  private remapStatePaths(from: string, to: string): void {
+  private remapStatePaths(from: string, to: string, ctx: PassContext): void {
     const prefix = from ? `${from}/` : '';
     const dest = to ? `${to}/` : '';
     const next: VaultState['nodes'] = {};
-    for (const [path, known] of Object.entries(this.state.nodes)) {
+    for (const [path, known] of Object.entries(ctx.state.nodes)) {
       if (path.startsWith(prefix)) {
         next[dest + path.slice(prefix.length)] = known;
       } else {
         next[path] = known;
       }
     }
-    this.state.nodes = next;
+    ctx.state.nodes = next;
   }
 
   /**
@@ -623,25 +637,25 @@ export class SyncEngine {
    * `If-Match` on the revision, because here placement really is the subject of the write:
    * unlike content, where `rev` moving on a rename would make an unrelated edit a conflict.
    */
-  private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished): Promise<void> {
-    const parentId = await this.ensureFolders(file.path);
+  private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished, ctx: PassContext): Promise<void> {
+    const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
 
     const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
       parent_id: parentId,
       name_enc: encryptName(this.vaultKey, name),
       name_hmac: nameHmac(this.vaultKey, name),
-      name_key_id: this.scopeId,
+      name_key_id: ctx.scopeId,
     });
 
-    delete this.state.nodes[source.path];
-    this.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address };
+    delete ctx.state.nodes[source.path];
+    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address };
 
     // The tree follows, so the pull at the end of the pass does not see the old path as a
     // server-only node and fetch a file that has just moved.
-    this.tree.delete(source.path);
-    this.byNodeId.set(source.nodeId, { ...this.byNodeId.get(source.nodeId)!, path: file.path, parentId });
-    this.tree.set(file.path, {
+    ctx.tree.delete(source.path);
+    ctx.byNodeId.set(source.nodeId, { ...ctx.byNodeId.get(source.nodeId)!, path: file.path, parentId });
+    ctx.tree.set(file.path, {
       nodeId: source.nodeId,
       parentId,
       path: file.path,
@@ -650,7 +664,7 @@ export class SyncEngine {
       isFile: true,
     });
 
-    this.report.renamed.push({ from: source.path, to: file.path });
+    ctx.report.renamed.push({ from: source.path, to: file.path });
   }
 
   /**
@@ -667,9 +681,9 @@ export class SyncEngine {
    * same text independently — very common, editing frontmatter back and forth — and calling
    * that a conflict would bury the user in files for nothing.
    */
-  private async pushEdit(file: VaultFile, m: LocalMeta, known: { address: string } | undefined, onServer: ServerNode): Promise<void> {
+  private async pushEdit(file: VaultFile, m: LocalMeta, known: { address: string } | undefined, onServer: ServerNode, ctx: PassContext): Promise<void> {
     const plain = await this.vault.read(file.path);
-    const { sha256: address, material } = await this.resolveContent(plain, m.tag);
+    const { sha256: address, material } = await this.resolveContent(plain, m.tag, ctx);
 
     const out = await this.client.putContent(this.vaultId, onServer.nodeId, {
       sha256: address,
@@ -677,7 +691,7 @@ export class SyncEngine {
       mtime: new Date(file.mtime).toISOString(),
       // Under a restore we pin the base to what the (rolled-back) server holds, so our newer
       // copy lands on top of it instead of bouncing off a base it never had.
-      base_sha256: this.policy.preferLocal ? onServer.address : (known?.address ?? onServer.address),
+      base_sha256: ctx.policy.preferLocal ? onServer.address : (known?.address ?? onServer.address),
       ...material,
     });
 
@@ -685,12 +699,12 @@ export class SyncEngine {
       if (out.conflict !== 'base_mismatch') {
         // rev_mismatch or share_boundary: not about content, and not something a conflict
         // file would resolve.
-        this.report.errors.push({ path: file.path, message: `refused: ${out.conflict}` });
+        ctx.report.errors.push({ path: file.path, message: `refused: ${out.conflict}` });
         return;
       }
 
       const current: ServerNode = { ...onServer, address: out.sha256 ?? onServer.address, rev: out.rev ?? onServer.rev };
-      const serverPlain = await this.fetchPlain(current);
+      const serverPlain = await this.fetchPlain(current, ctx);
 
       // Compared as PLAINTEXT, and it cannot be done any other way. `KC` is random, so the
       // same text sealed twice lands at two different addresses (docs/06) — comparing the
@@ -698,32 +712,32 @@ export class SyncEngine {
       // conflict, which is precisely the case docs/04 says must not become one. Two devices
       // reach identical content constantly, editing frontmatter back and forth.
       if (toHex(sha256(serverPlain)) === m.plainHash) {
-        this.state.nodes[file.path] = {
+        ctx.state.nodes[file.path] = {
           nodeId: onServer.nodeId,
           rev: current.rev,
           plainHash: m.plainHash,
           address: current.address!,
         };
-        this.report.matched.push({ path: file.path });
+        ctx.report.matched.push({ path: file.path });
         return;
       }
 
       // A real conflict: both sides moved from a common base. Same resolution as adoption's
       // no-common-ancestor case, because the outcome the user needs is identical — the
       // server version takes the path, this device's work survives beside it.
-      await this.resolveConflict(file, current, serverPlain);
+      await this.resolveConflict(file, current, ctx, serverPlain);
       return;
     }
 
-    this.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address };
-    this.report.pushed.push({ path: file.path });
+    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address };
+    ctx.report.pushed.push({ path: file.path });
   }
 
   /** A path with no node on the server at all: create one, folders and all. */
-  private async pushNew(file: VaultFile, m: LocalMeta): Promise<void> {
+  private async pushNew(file: VaultFile, m: LocalMeta, ctx: PassContext): Promise<void> {
     const plain = await this.vault.read(file.path);
-    const { sha256: address, material } = await this.resolveContent(plain, m.tag);
-    const parentId = await this.ensureFolders(file.path);
+    const { sha256: address, material } = await this.resolveContent(plain, m.tag, ctx);
+    const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
 
     const created = await this.client.createNode(this.vaultId, {
@@ -734,13 +748,13 @@ export class SyncEngine {
       mtime: new Date(file.mtime).toISOString(),
       name_enc: encryptName(this.vaultKey, name),
       name_hmac: nameHmac(this.vaultKey, name),
-      name_key_id: this.scopeId,
+      name_key_id: ctx.scopeId,
       ...material,
     });
-    this.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address };
-    this.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true });
-    this.byNodeId.set(created.node_id, this.tree.get(file.path)!);
-    this.report.pushed.push({ path: file.path });
+    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address };
+    ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true });
+    ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
+    ctx.report.pushed.push({ path: file.path });
   }
 
   /**
@@ -751,8 +765,9 @@ export class SyncEngine {
   private async resolveContent(
     plain: Uint8Array,
     tag: string,
+    ctx: PassContext,
   ): Promise<{ sha256: string; material: { blob_envelopes: { sha256: string; scope_id: string; wrapped_key: string }[]; dedup_tags: { sha256: string; scope_id: string; content_tag: string }[] } }> {
-    const dedupMatch = this.dedup.get(tag);
+    const dedupMatch = ctx.dedup.get(tag);
     if (dedupMatch) {
       return { sha256: dedupMatch, material: { blob_envelopes: [], dedup_tags: [] } };
     }
@@ -761,8 +776,8 @@ export class SyncEngine {
     return {
       sha256: sealed.sha256,
       material: {
-        blob_envelopes: [{ sha256: sealed.sha256, scope_id: this.scopeId, wrapped_key: wrapContentKey(this.vaultKey, sealed.contentKey) }],
-        dedup_tags: [{ sha256: sealed.sha256, scope_id: this.scopeId, content_tag: tag }],
+        blob_envelopes: [{ sha256: sealed.sha256, scope_id: ctx.scopeId, wrapped_key: wrapContentKey(this.vaultKey, sealed.contentKey) }],
+        dedup_tags: [{ sha256: sealed.sha256, scope_id: ctx.scopeId, content_tag: tag }],
       },
     };
   }
@@ -775,33 +790,34 @@ export class SyncEngine {
   private async resolveConflict(
     file: VaultFile,
     onServer: ServerNode,
+    ctx: PassContext,
     /** Already fetched by the caller that had to read it to decide this was a conflict at all. */
     fetched?: Uint8Array,
   ): Promise<void> {
-    const serverPlain = fetched ?? (await this.fetchPlain(onServer));
+    const serverPlain = fetched ?? (await this.fetchPlain(onServer, ctx));
     const localPlain = await this.vault.read(file.path);
     const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
 
     await this.vault.write(file.path, serverPlain);
     await this.vault.write(conflictPath, localPlain);
 
-    this.state.nodes[file.path] = {
+    ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
     };
-    this.report.conflicts.push({ path: file.path, conflictPath });
-    this.queue.push({ path: conflictPath, mtime: Date.now() });
+    ctx.report.conflicts.push({ path: file.path, conflictPath });
+    ctx.queue.push({ path: conflictPath, mtime: Date.now() });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
-  private async fetchPlain(node: ServerNode): Promise<Uint8Array> {
+  private async fetchPlain(node: ServerNode, ctx: PassContext): Promise<Uint8Array> {
     if (!node.address) throw new Error('a folder has no content — this is a bug if it happens');
 
     const envelope = (await this.client.blobKeys(this.vaultId, [node.address]))
       .get(node.address)
-      ?.find((e) => e.scopeId === this.scopeId);
+      ?.find((e) => e.scopeId === ctx.scopeId);
     if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
 
     const ciphertext = await this.client.getBlob(node.address);
@@ -816,21 +832,21 @@ export class SyncEngine {
    * the walk just saw. The row soft-deletes into the trash, so a wrong call is recoverable;
    * the precondition is what stops a delete racing a write from winning.
    */
-  private async pushDelete(v: Vanished): Promise<void> {
-    const onServer = this.byNodeId.get(v.nodeId);
+  private async pushDelete(v: Vanished, ctx: PassContext): Promise<void> {
+    const onServer = ctx.byNodeId.get(v.nodeId);
     // Gone from the server too — another device deleted it first. Nothing to push.
     if (!onServer) {
-      delete this.state.nodes[v.path];
+      delete ctx.state.nodes[v.path];
       return;
     }
     try {
       await this.client.deleteNode(this.vaultId, v.nodeId, onServer.rev);
-      this.tree.delete(onServer.path);
-      this.byNodeId.delete(v.nodeId);
-      delete this.state.nodes[v.path];
-      this.report.deleted.push({ path: v.path });
+      ctx.tree.delete(onServer.path);
+      ctx.byNodeId.delete(v.nodeId);
+      delete ctx.state.nodes[v.path];
+      ctx.report.deleted.push({ path: v.path });
     } catch (e) {
-      this.report.errors.push({ path: v.path, message: message(e) });
+      ctx.report.errors.push({ path: v.path, message: message(e) });
     }
   }
 
@@ -841,7 +857,7 @@ export class SyncEngine {
    * local file follows it, and if we had edits in hand they go up against the moved node —
    * by node id, not by path, so a rename and an edit never collide into a conflict (#52).
    */
-  private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode): Promise<void> {
+  private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode, ctx: PassContext): Promise<void> {
     const localChanged = known.plainHash !== m.plainHash;
 
     // Move the local file to where the server put the node. The content goes with it.
@@ -849,14 +865,14 @@ export class SyncEngine {
     await this.vault.delete(file.path);
     await this.vault.write(movedTo.path, plain, file.mtime);
 
-    delete this.state.nodes[file.path];
-    this.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address! };
-    this.handled.add(movedTo.path);
-    this.report.renamed.push({ from: file.path, to: movedTo.path });
+    delete ctx.state.nodes[file.path];
+    ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address! };
+    ctx.handled.add(movedTo.path);
+    ctx.report.renamed.push({ from: file.path, to: movedTo.path });
 
     // Our edits, if any, still go up — against the node at its new path.
     if (localChanged) {
-      await this.pushEdit({ path: movedTo.path, mtime: file.mtime }, m, known, movedTo);
+      await this.pushEdit({ path: movedTo.path, mtime: file.mtime }, m, known, movedTo, ctx);
     }
   }
 
@@ -868,20 +884,20 @@ export class SyncEngine {
    * rebinds nearly free (the blobs are already on the server), and everything it does NOT
    * hold is moved to `_Reset <date>/` — quarantined, never erased (#80, docs/07).
    */
-  private async resyncAfterReset(local: VaultFile[]): Promise<void> {
+  private async resyncAfterReset(local: VaultFile[], ctx: PassContext): Promise<void> {
     const quarantineRoot = `_Reset ${new Date().toISOString().slice(0, 10)}`;
-    this.state.nodes = {};
-    this.handled = new Set();
+    ctx.state.nodes = {};
+    ctx.handled = new Set();
 
     for (const file of local) {
-      this.handled.add(file.path);
-      const m = this.meta.get(file.path)!;
-      const onServer = this.tree.get(file.path);
+      ctx.handled.add(file.path);
+      const m = ctx.meta.get(file.path)!;
+      const onServer = ctx.tree.get(file.path);
       try {
-        if (onServer && this.dedup.get(m.tag) === onServer.address) {
+        if (onServer && ctx.dedup.get(m.tag) === onServer.address) {
           // Same plaintext at the same path in the winning tree: rebind, nothing moves.
-          this.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
-          this.report.matched.push({ path: file.path });
+          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+          ctx.report.matched.push({ path: file.path });
           continue;
         }
         // Displaced. The local copy is kept, out of sync's reach.
@@ -889,22 +905,22 @@ export class SyncEngine {
         const bytes = await this.vault.read(file.path);
         await this.vault.write(dest, bytes, file.mtime);
         await this.vault.delete(file.path);
-        this.report.quarantined.push({ from: file.path, to: dest });
+        ctx.report.quarantined.push({ from: file.path, to: dest });
         // If the winning tree has its own file at this path, it now comes down.
-        if (onServer && onServer.isFile) await this.pull([onServer]);
+        if (onServer && onServer.isFile) await this.pull([onServer], ctx);
       } catch (e) {
-        this.report.errors.push({ path: file.path, message: message(e) });
+        ctx.report.errors.push({ path: file.path, message: message(e) });
       }
     }
 
     // What the winning tree holds that we never had.
-    const serverOnly = [...this.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !this.handled.has(n.path));
-    await this.pull(serverOnly);
+    const serverOnly = [...ctx.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !ctx.handled.has(n.path));
+    await this.pull(serverOnly, ctx);
   }
 
   // ---- pull -------------------------------------------------------------------------
 
-  private async pull(nodes: ServerNode[]): Promise<void> {
+  private async pull(nodes: ServerNode[], ctx: PassContext): Promise<void> {
     // One request for every envelope, not one per file: applying a delta means opening
     // everything that changed, and a round trip per note is what makes a first sync feel
     // broken on a home connection.
@@ -912,7 +928,7 @@ export class SyncEngine {
 
     for (const node of nodes) {
       try {
-        const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === this.scopeId);
+        const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === ctx.scopeId);
         if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
 
         const ciphertext = await this.client.getBlob(node.address!);
@@ -921,23 +937,23 @@ export class SyncEngine {
         const plain = openBlob(unwrapContentKey(this.vaultKey, envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
-        this.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
-        this.report.pulled.push({ path: node.path });
+        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
+        ctx.report.pulled.push({ path: node.path });
       } catch (e) {
-        this.report.errors.push({ path: node.path, message: message(e) });
+        ctx.report.errors.push({ path: node.path, message: message(e) });
       }
     }
   }
 
   /** Every folder on the way to a file, created once and remembered in the tree we are holding. */
-  private async ensureFolders(filePath: string): Promise<string> {
+  private async ensureFolders(filePath: string, ctx: PassContext): Promise<string> {
     const parts = filePath.split('/').slice(0, -1);
-    let parentId = this.rootNodeId;
+    let parentId = ctx.rootNodeId;
     let sofar = '';
 
     for (const part of parts) {
       sofar = sofar ? `${sofar}/${part}` : part;
-      const existing = this.tree.get(sofar);
+      const existing = ctx.tree.get(sofar);
       if (existing) {
         parentId = existing.nodeId;
         continue;
@@ -948,10 +964,10 @@ export class SyncEngine {
         mtime: new Date().toISOString(),
         name_enc: encryptName(this.vaultKey, part),
         name_hmac: nameHmac(this.vaultKey, part),
-        name_key_id: this.scopeId,
+        name_key_id: ctx.scopeId,
       });
-      this.tree.set(sofar, { nodeId: created.node_id, parentId, path: sofar, rev: created.rev, address: null, isFile: false });
-      this.byNodeId.set(created.node_id, this.tree.get(sofar)!);
+      ctx.tree.set(sofar, { nodeId: created.node_id, parentId, path: sofar, rev: created.rev, address: null, isFile: false });
+      ctx.byNodeId.set(created.node_id, ctx.tree.get(sofar)!);
       parentId = created.node_id;
     }
 
