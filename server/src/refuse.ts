@@ -39,7 +39,11 @@ export type Refusal =
   /**
    * The schema refused the write, and `detail` is what it said (see `refusalFromDatabase`).
    */
-  | { kind: 'invalid_write'; detail: string };
+  | { kind: 'invalid_write'; detail: string }
+  /** A pairing was approved or claimed already; both are once-only (docs/06). */
+  | { kind: 'already_settled' }
+  /** A pairing exists and nobody has approved it yet — a state to wait in, not a fault. */
+  | { kind: 'not_approved' };
 
 /** One place decides what a refusal looks like, so every route family answers the same way. */
 export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
@@ -81,6 +85,12 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
     case 'invalid_write':
       return reply.code(400).send({ error: 'invalid_write', detail: refusal.detail });
+    case 'already_settled':
+      return reply.code(409).send({ error: 'already_settled' });
+    case 'not_approved':
+      // 409 rather than 404: the caller holds a valid pairing and the answer is "not yet",
+      // which is what it should keep asking about. A 404 would tell it to give up.
+      return reply.code(409).send({ error: 'not_approved' });
   }
 };
 

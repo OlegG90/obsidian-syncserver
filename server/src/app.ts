@@ -9,6 +9,7 @@ import { registerDeltaRoutes } from './delta/routes.js';
 import { registerVaultRoutes } from './vaults/routes.js';
 import { registerHistoryRoutes } from './history/routes.js';
 import { registerNodeRoutes } from './nodes/routes.js';
+import { registerPairingRoutes } from './pairing/routes.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, rearmBootstrapInvitation, registerBootstrapGuard } from './bootstrap.js';
@@ -37,6 +38,7 @@ export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise
 
   registerBootstrapGuard(app, db);
   registerAuthRoutes(app, db, cfg);
+  registerPairingRoutes(app, db, cfg);
   const blobStore = openStore(cfg.blobStorePath);
   const blobService = new BlobService(db, blobStore, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute), cfg.limits);
   registerBlobRoutes(app, db, blobStore, blobService);

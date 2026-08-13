@@ -61,6 +61,14 @@ export interface Config {
     unboundBlobTtlSeconds: number;
     /** docs/04: 90 days on the delta journal. */
     journalTtlSeconds: number;
+    /**
+     * docs/04: 10 minutes on an unclaimed device pairing.
+     *
+     * The clock a human runs on while carrying a code from one device to the other, with
+     * room for fumbling — and short because an unapproved pairing is an open invitation to
+     * be approved by mistake.
+     */
+    pairingTtlSeconds: number;
   };
   /**
    * How often the collector wakes. Operational, not a protocol contract: it decides only
@@ -93,6 +101,7 @@ export const loadConfig = (): Config => {
       abandonedPartTtlSeconds: int('ABANDONED_PART_TTL_SECONDS', 24 * 60 * 60),
       unboundBlobTtlSeconds: int('UNBOUND_BLOB_TTL_SECONDS', 48 * 60 * 60),
       journalTtlSeconds: int('JOURNAL_TTL_SECONDS', 90 * 24 * 60 * 60),
+      pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
   };

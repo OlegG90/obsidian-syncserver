@@ -11,7 +11,7 @@ POST /auth/redeem         {invitation_token, auth_secret, account_salt, kdf_para
                              pubkey, enc_privkey, wrapped_seed, recovery_key,
                              recovery_code_hash, initial_vault_id, initial_vault_name_enc}
                                                    → access + refresh + device_id + vault_id
-POST /auth/pairings       {device_pubkey}               → {pairing_id, pairing_secret}
+POST /auth/pairings       {device_pubkey, pairing_token_hash} → {pairing_id}   anonymous (#110)
 POST /auth/pairings/{id}/approve
                             {pairing_secret, seed_envelope} authenticated existing device only
 POST /auth/pairings/{id}/claim
@@ -71,6 +71,14 @@ operation: it hard-deletes only unshared nodes, retains the root, every marked s
 ancestor chain each replica hangs from** (`parent_id` is `ON DELETE RESTRICT`, so a delete set that ignored
 those parents would simply fail), increments that vault's `reset_epoch`, and returns the new epoch before
 the client uploads its replacement tree.
+
+**The pairing secret is made by the new device** ([#110](09-decisions.md)), which sends only
+`sha256(secret)` when it starts the pairing and the secret itself when approving and claiming. The server
+storing `pairing_token_hash` is the reason: a hash of a value the server generated and handed back would
+prove nothing about who is presenting it later, and the secret would be known to the server from the first
+moment rather than from the moment it must be shown. Both anonymous endpoints answer a wrong secret and an
+unknown id **identically** — the id travels in a URL and can be guessed at, so distinguishing them would say
+which pairings exist.
 
 Claiming an approved pairing consumes it exactly once, creates the `devices` row from the supplied `name`
 and `platform`, and binds that row to the approved account before returning the seed envelope **and** that
@@ -643,6 +651,7 @@ and it does not take an attacker, just a client stuck in a retry loop.
 | TTL on abandoned parts | **24 h** | an interrupted upload must not live forever |
 | TTL on an **unbound** blob | **48 h** | uploaded and never referenced by a node: swept after this, counted against quota while alive |
 | TTL on the delta journal | **90 days** | append-only log, pruned on its TTL so a stale cursor gets `410 journal_ttl` instead of being answered from a gap |
+| TTL on an unclaimed device pairing | **10 min** | the clock a human runs on carrying a code between two devices, with room for fumbling — and short, because an unapproved pairing is an open invitation to be approved by mistake |
 
 | part size, resumable upload | **8 MB** | large enough that a vault of attachments is not a thousand round trips, small enough that a dropped connection costs one part |
 
