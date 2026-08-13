@@ -1,0 +1,11 @@
+{
+  // The tests run in Node, so they get Node's types — which the bundle deliberately does
+  // not (see tsconfig.json). Kept separate rather than merged so that a Node API cannot
+  // reach the shipped code by way of a type that was only meant for a test.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

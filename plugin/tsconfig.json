@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // No "node": the bundle runs in Electron and in a Capacitor WebView, so Node APIs
+    // must not even be reachable by the type checker (docs/02, Client constraints).
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "noEmit": true,
+    "rootDir": "src",
+    "composite": false
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../shared" }]
+}

@@ -1,0 +1,4 @@
+# One line ending everywhere, in the repository and in the working tree.
+# The server runs on Linux and the schema is fed to psql; a CRLF checkout on
+# Windows is the only thing that would make those two disagree.
+* text=auto eol=lf

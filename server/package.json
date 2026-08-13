@@ -1,0 +1,24 @@
+{
+  "name": "@syncserver/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync API and background worker: delta, node writes, blobs, shares, quota",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b ../shared && tsc --noEmit -p tsconfig.test.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/jwt": "^10.2.1",
+    "@syncserver/shared": "*",
+    "fastify": "^5.11.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.4",
+    "tsx": "^4.23.9"
+  }
+}

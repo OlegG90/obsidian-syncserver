@@ -1,0 +1,28 @@
+{
+  "name": "syncserver-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-hosted synchronisation server for Obsidian vaults: multi-device sync plus per-folder sharing, end-to-end encrypted",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "plugin"
+  ],
+  "scripts": {
+    "db:reset": "./scripts/db-reset.sh",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "check:compose": "node scripts/check-compose.mjs",
+    "pack": "./scripts/pack.sh",
+    "test:live": "SYNCSERVER_DB=syncserver_plugin ./scripts/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "yaml": "^2.9.0"
+  }
+}

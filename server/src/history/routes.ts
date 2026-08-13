@@ -1,0 +1,72 @@
+import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../auth/guard.js';
+import type { Db } from '../db.js';
+import { listTrash, listVersions, restoreNode } from './service.js';
+
+const ownsVault = async (db: Db, userId: string, vaultId: string): Promise<boolean> => {
+  const row = await db.one<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2) AS ok`,
+    [vaultId, userId],
+  );
+  return row?.ok ?? false;
+};
+
+export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
+  app.get<{ Params: { vaultId: string; nodeId: string } }>(
+    '/vaults/:vaultId/versions/:nodeId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      return listVersions(db, req.params.vaultId, req.params.nodeId);
+    },
+  );
+
+  app.get<{ Params: { vaultId: string }; Querystring: { under?: string } }>(
+    '/vaults/:vaultId/trash',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      return listTrash(db, req.params.vaultId, req.query.under);
+    },
+  );
+
+  app.post<{ Params: { vaultId: string }; Body: { node_id: string; rev: number } }>(
+    '/vaults/:vaultId/restore',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      if (!req.body?.node_id || !Number.isInteger(req.body?.rev)) {
+        return reply.code(400).send({ error: 'node_id_and_rev_required' });
+      }
+
+      const out = await restoreNode(db, {
+        vaultId: req.params.vaultId,
+        nodeId: req.body.node_id,
+        rev: req.body.rev,
+      });
+
+      if ('kind' in out) {
+        switch (out.kind) {
+          case 'not_found':
+            return reply.code(404).send({ error: 'not_found' });
+          case 'no_such_version':
+            return reply.code(404).send({ error: 'no_such_version' });
+          case 'frozen':
+            return reply.code(413).send({ error: 'frozen' });
+          case 'name_taken':
+            // The blocking node is named because the client has to offer the user a
+            // choice, and "something is in the way" is not a choice.
+            return reply.code(409).send({ error: 'name_taken', blocked_by: out.blockedBy });
+        }
+      }
+
+      return { rev: out.rev, lifted: out.lifted };
+    },
+  );
+};

@@ -1,0 +1,460 @@
+/**
+ * The protocol of docs/04, as functions.
+ *
+ * Nothing here encrypts, decides or remembers anything: names arrive already encrypted and
+ * blobs already sealed. That is deliberate — the one place that knows plaintext is the
+ * engine above it, and a client that took a `string` name would eventually be handed one.
+ *
+ * Statuses that mean something are RETURNED, not thrown. `409` on a stale base, `410` with
+ * its reason, `404` on a blob the caller does not hold — each is an instruction to the
+ * engine, and an exception would only be caught to read the status back out.
+ */
+import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, type HttpResponse, type Transport } from './transport.js';
+
+export interface KdfParams {
+  v: number;
+  m: number;
+  t: number;
+  p: number;
+}
+
+export interface Material {
+  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+}
+
+export interface Change {
+  node_id: string;
+  parent_id: string | null;
+  name_enc: string | null;
+  name_hmac: string | null;
+  name_key_id: string | null;
+  op: 'put' | 'del' | 'move' | string;
+  rev: number;
+  sha256: string | null;
+  size: number | null;
+  mtime: string;
+  share_id: string | null;
+  author_id: string | null;
+}
+
+export interface Delta {
+  changes: Change[];
+  events: { type: string; [k: string]: unknown }[];
+  next_cursor: string;
+  has_more: boolean;
+}
+
+/** Why a cursor could not be answered. The reason decides whether deletions are applied (#70, #79). */
+export interface CursorRejected {
+  rejected: true;
+  reason: 'journal_ttl' | 'restore' | 'reset';
+}
+
+/** The three refusals that share `409` on a write. Only `base_mismatch` carries content. */
+export interface PutConflict {
+  conflict: 'base_mismatch' | 'rev_mismatch' | 'share_boundary';
+  /** What the content actually is now — the difference between "same text reached twice" and a real conflict. */
+  sha256?: string;
+  rev?: number;
+}
+
+/** One envelope: the content key wrapped to a scope. A blob may have several — one per scope that sees it. */
+export interface Envelope {
+  scopeId: string;
+  wrappedKey: string;
+}
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    readonly body: string,
+  ) {
+    super(`${status} ${code}`);
+  }
+}
+
+export class SyncClient {
+  private access: string | undefined;
+  /**
+   * From the most recent `login` or `redeem`. Its whole purpose is to outlive the access
+   * token WITHOUT the passphrase: `send` spends it to mint a new access token in place when
+   * a request meets an expired one. The access token lives 15 minutes (docs/04); a sync of a
+   * vault with enough files runs longer than that, and without this it would die partway
+   * through with `401 unauthenticated` and have to be started over by hand.
+   */
+  private refresh: string | undefined;
+  /** One `/auth/refresh` in flight at a time, so several requests hitting 401 together do not send several. */
+  private refreshing: Promise<boolean> | undefined;
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly transport: Transport,
+    /** Overridable mainly so a test can prove a hung call is bounded without waiting 30 real seconds for it. */
+    private readonly defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
+  ) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
+
+  setAccessToken(token: string | undefined): void {
+    this.access = token;
+  }
+
+  setRefreshToken(token: string | undefined): void {
+    this.refresh = token;
+  }
+
+  private async send(
+    req: Omit<HttpRequest, 'url'> & { path: string; auth?: boolean; timeoutMs?: number },
+    retried = false,
+  ): Promise<HttpResponse> {
+    const headers: Record<string, string> = { ...req.headers };
+    if (req.auth !== false && this.access) headers['authorization'] = `Bearer ${this.access}`;
+
+    const res = await withTimeout(
+      this.transport({ method: req.method, url: this.baseUrl + req.path, headers, body: req.body }),
+      req.timeoutMs ?? this.defaultTimeoutMs,
+    );
+
+    // Refreshed and retried ONCE, and only for the one 401 that refreshing can fix: an
+    // expired or otherwise invalid access token. `device_revoked` is also a 401 (on the
+    // upload path) and refreshing would not help it — `/auth/refresh` excludes a revoked
+    // device's token by the same condition — so retrying it would only trade one failure
+    // for a less specific one. `auth === false` requests (kdf, redeem, login, refresh
+    // itself) are never retried, which is what stops this from recursing into itself.
+    if (res.status === 401 && req.auth !== false && !retried && this.refresh) {
+      if (parsedBody(res.text()).error === 'unauthenticated' && (await this.tryRefresh())) {
+        return this.send(req, true);
+      }
+    }
+
+    return res;
+  }
+
+  private async tryRefresh(): Promise<boolean> {
+    this.refreshing ??= (async () => {
+      try {
+        const out = await this.refreshAccess(this.refresh!);
+        this.access = out.access;
+        return true;
+      } catch {
+        // The refresh token itself is spent, invalid, or its device was revoked. Cleared so
+        // the next 401 does not retry a refresh that can only fail the same way again.
+        this.refresh = undefined;
+        return false;
+      } finally {
+        this.refreshing = undefined;
+      }
+    })();
+    return this.refreshing;
+  }
+
+  /** JSON in, JSON out, with the failure shape the server actually uses: `{error: "..."}`. */
+  private async json<T>(
+    method: HttpRequest['method'],
+    path: string,
+    body?: unknown,
+    opts: { auth?: boolean; headers?: Record<string, string>; expect?: number[]; timeoutMs?: number } = {},
+  ): Promise<T> {
+    const res = await this.send({
+      method,
+      path,
+      headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...opts.headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(opts.auth === undefined ? {} : { auth: opts.auth }),
+      ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+    });
+
+    const ok = opts.expect ?? [200, 201, 204];
+    if (!ok.includes(res.status)) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return (res.text() ? JSON.parse(res.text()) : undefined) as T;
+  }
+
+  // ---- account -----------------------------------------------------------------
+
+  health(): Promise<{ status: string; bootstrap_pending: boolean }> {
+    return this.json('GET', '/health', undefined, { auth: false });
+  }
+
+  /**
+   * Pre-auth, and it answers an unknown login with a deterministic fake rather than a 404
+   * (#73) — so a caller cannot read "no such account" out of it, and must not try.
+   */
+  kdf(login: string): Promise<{ account_salt: string; kdf_params: KdfParams }> {
+    return this.json('GET', `/auth/kdf?login=${encodeURIComponent(login)}`, undefined, { auth: false });
+  }
+
+  redeem(body: {
+    invitation_token: string;
+    auth_secret: string;
+    account_salt: string;
+    kdf_params: KdfParams;
+    pubkey: string;
+    enc_privkey: string;
+    wrapped_seed: string;
+    recovery_key: string;
+    recovery_code_hash: string;
+    initial_vault_id: string;
+    initial_vault_name_enc: string;
+    device_name?: string;
+    device_platform?: string;
+  }): Promise<{ access: string; refresh: string; device_id: string; vault_id: string; root_node_id: string }> {
+    return this.json('POST', '/auth/redeem', body, { auth: false });
+  }
+
+  login(body: {
+    login: string;
+    auth_secret: string;
+    device_id: string;
+  }): Promise<{ access: string; refresh: string }> {
+    return this.json('POST', '/auth/login', body, { auth: false });
+  }
+
+  refreshAccess(refresh: string): Promise<{ access: string }> {
+    return this.json('POST', '/auth/refresh', { refresh }, { auth: false });
+  }
+
+  usage(): Promise<{ used: number; quota: number; frozen: boolean }> {
+    return this.json('GET', '/usage');
+  }
+
+  // ---- vaults ------------------------------------------------------------------
+
+  listVaults(): Promise<{ id: string; name_enc: string }[]> {
+    return this.json('GET', '/vaults');
+  }
+
+  createVault(id: string, nameEnc: string): Promise<{ id: string; root_node_id: string }> {
+    return this.json('POST', '/vaults', { id, name_enc: nameEnc });
+  }
+
+  /** Where a client starts syncing: the root, the head, and the key scope per scope (docs/06). */
+  openVault(vaultId: string): Promise<{
+    root_node_id: string;
+    head_rev: number;
+    scopes: { scope: string; key_id: string }[];
+  }> {
+    return this.json('GET', `/vaults/${vaultId}`);
+  }
+
+  // ---- the tree ----------------------------------------------------------------
+
+  createNode(
+    vaultId: string,
+    body: Material & {
+      parent_id: string;
+      type: 'file' | 'folder';
+      sha256?: string;
+      size?: number;
+      mtime: string;
+      name_enc: string;
+      name_hmac: string;
+      name_key_id: string;
+    },
+  ): Promise<{ node_id: string; rev: number }> {
+    return this.json('POST', `/vaults/${vaultId}/nodes`, body);
+  }
+
+  /**
+   * The precondition is CONTENT, not a revision (#52): `rev` moves on a rename too, so using
+   * it would make "renamed here, edited there" a conflict between changes that do not
+   * overlap. A `409` comes back as a value, because it is the conflict path, not a failure.
+   *
+   * **Which** 409 is read from the `error` field rather than assumed from the shape. Three
+   * refusals share this status — `base_mismatch`, `rev_mismatch` and `share_boundary` — and
+   * only the first carries a `sha256`. Today a `PUT` produces only that one, so reading the
+   * body positionally would work; when M3 adds shared folders it would silently produce
+   * `sha256: undefined` and send the engine to resolve a conflict that is not one.
+   */
+  async putContent(
+    vaultId: string,
+    nodeId: string,
+    body: Material & { sha256: string; size: number; mtime: string; base_sha256: string | null },
+  ): Promise<{ rev: number } | PutConflict> {
+    const res = await this.send({
+      method: 'PUT',
+      path: `/vaults/${vaultId}/nodes/${nodeId}`,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 409) {
+      const parsed = JSON.parse(res.text()) as { error?: string; sha256?: string; rev?: number };
+      if (parsed.error === 'base_mismatch' || parsed.error === 'rev_mismatch' || parsed.error === 'share_boundary') {
+        const out: PutConflict = { conflict: parsed.error };
+        if (parsed.sha256 !== undefined) out.sha256 = parsed.sha256;
+        if (parsed.rev !== undefined) out.rev = parsed.rev;
+        return out;
+      }
+      // A 409 this client does not know is not a conflict it can resolve.
+      throw new ApiError(res.status, parsed.error ?? 'unknown_conflict', res.text());
+    }
+
+    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return JSON.parse(res.text()) as { rev: number };
+  }
+
+  /** Here the revision IS the right precondition: the subject of the operation is the node. */
+  deleteNode(vaultId: string, nodeId: string, ifMatchRev: number): Promise<{ rev: number }> {
+    return this.json('DELETE', `/vaults/${vaultId}/nodes/${nodeId}`, undefined, {
+      headers: { 'if-match': String(ifMatchRev) },
+    });
+  }
+
+  moveNode(
+    vaultId: string,
+    nodeId: string,
+    ifMatchRev: number,
+    body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
+  ): Promise<{ rev: number }> {
+    return this.json('POST', `/vaults/${vaultId}/nodes/${nodeId}/move`, body, {
+      headers: { 'if-match': String(ifMatchRev) },
+    });
+  }
+
+  /**
+   * The whole tree as it stands, with the cursor it was taken at.
+   *
+   * A first sync uses this rather than a delta from nothing: the delta describes changes,
+   * and a client with no state needs the state. The `snapshot` it returns is the cursor to
+   * carry from then on — pinned, so a resync of a large vault cannot lose a change that
+   * happened mid-walk or apply it twice (#24).
+   */
+  listNodes(vaultId: string, under?: string): Promise<{ nodes: Change[]; snapshot: string }> {
+    const q = under ? `?under=${encodeURIComponent(under)}` : '';
+    return this.json('GET', `/vaults/${vaultId}/list${q}`);
+  }
+
+  // ---- delta -------------------------------------------------------------------
+
+  async delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected> {
+    const q = new URLSearchParams();
+    if (cursor) q.set('cursor', cursor);
+    if (limit) q.set('limit', String(limit));
+    const suffix = q.toString() ? `?${q}` : '';
+
+    const res = await this.send({ method: 'GET', path: `/vaults/${vaultId}/delta${suffix}`, headers: {} });
+    if (res.status === 410) {
+      return { rejected: true, reason: (JSON.parse(res.text()) as { reason: CursorRejected['reason'] }).reason };
+    }
+    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return JSON.parse(res.text()) as Delta;
+  }
+
+  // ---- blobs -------------------------------------------------------------------
+
+  /**
+   * There is deliberately no "do you already have this" call before this one (#46): the
+   * server never short-circuits, because answering "already have it" would turn the address
+   * into an existence oracle. Sending twice is correct and costs the bytes.
+   */
+  async putBlob(
+    sealed: { sha256: string; bytes: Uint8Array; keyId: string },
+    encAlg = 'xchacha20-poly1305',
+  ): Promise<{ sha256: string; size: number }> {
+    const q = new URLSearchParams({
+      sha256: sealed.sha256,
+      size: String(sealed.bytes.length),
+      enc_alg: encAlg,
+      key_id: sealed.keyId,
+    });
+    const res = await this.send({
+      method: 'POST',
+      path: `/blobs?${q}`,
+      headers: { 'content-type': 'application/octet-stream' },
+      body: sealed.bytes,
+      // The metadata timeout would punish a large file on a slow home upload link for a
+      // failure it did not have — "still sending" and "server is not there" are not the
+      // same thing and must not share a clock.
+      timeoutMs: BLOB_TIMEOUT_MS,
+    });
+    if (res.status !== 201) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return JSON.parse(res.text()) as { sha256: string; size: number };
+  }
+
+  /** `undefined` for 404, which here means "you hold no live reference to it" (#20), not "it is gone". */
+  async getBlob(sha256: string): Promise<Uint8Array | undefined> {
+    const res = await this.send({ method: 'GET', path: `/blobs/${sha256}`, headers: {}, timeoutMs: BLOB_TIMEOUT_MS });
+    if (res.status === 404) return undefined;
+    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    return res.bytes;
+  }
+
+  /**
+   * The content keys for these addresses, wrapped to the scopes this caller holds.
+   *
+   * Batched because applying a delta means opening every file that changed, and one request
+   * per note is a round trip per note. An address the caller cannot open is **absent** from
+   * the answer rather than an error — the same rule as a blob read (#20).
+   *
+   * A **list** per address, carrying the scope each envelope belongs to. One blob can hold
+   * envelopes in several scopes — the owner's `KV` and the `KS` of every share that sees it
+   * (docs/06) — so keeping only the wrapped key would mean picking one of them by accident.
+   * Today a vault has one scope and the list has one entry; the caller still has to say
+   * which key it is unwrapping with.
+   */
+  async blobKeys(vaultId: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
+    if (addresses.length === 0) return new Map();
+    const q = new URLSearchParams({ sha256: addresses.join(',') });
+    const out = await this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
+      'GET',
+      `/vaults/${vaultId}/blob-keys?${q}`,
+    );
+
+    const byAddress = new Map<string, Envelope[]>();
+    for (const k of out.keys) {
+      const list = byAddress.get(k.sha256) ?? [];
+      list.push({ scopeId: k.scope_id, wrappedKey: k.wrapped_key });
+      byAddress.set(k.sha256, list);
+    }
+    return byAddress;
+  }
+
+  async hasBlob(sha256: string): Promise<boolean> {
+    const res = await this.send({ method: 'HEAD', path: `/blobs/${sha256}`, headers: {} });
+    return res.status === 200;
+  }
+
+  /**
+   * Which of these content tags the vault's own scope already knows, and the address each
+   * maps to now.
+   *
+   * This is what adoption asks BEFORE sealing a file: if the plaintext is already known here,
+   * a node can bind to the existing address with no upload and no fresh envelope (docs/04,
+   * docs/07). A tag with no match is simply absent from the result — not new content by
+   * itself, only "not something this vault has tagged before."
+   */
+  async dedupLookup(vaultId: string, tags: string[]): Promise<Map<string, string>> {
+    if (tags.length === 0) return new Map();
+    const q = new URLSearchParams({ tags: tags.join(',') });
+    const out = await this.json<{ matches: { content_tag: string; sha256: string }[] }>(
+      'GET',
+      `/vaults/${vaultId}/dedup?${q}`,
+    );
+    return new Map(out.matches.map((m) => [m.content_tag, m.sha256]));
+  }
+}
+
+/**
+ * The most informative thing the body actually says.
+ *
+ * This server's own refusals are `{error: "over_quota"}` and that is the whole answer. But an
+ * unhandled exception comes back in Fastify's default shape, where `error` is the generic
+ * status name — "Internal Server Error" — and the sentence that identifies the fault is in
+ * `message`. Reading only `error` turns every server bug into the same four useless words,
+ * which is exactly what it did the first time one appeared.
+ */
+const parsedBody = (text: string): { error?: string; message?: string } => {
+  try {
+    return JSON.parse(text) as { error?: string; message?: string };
+  } catch {
+    return {};
+  }
+};
+
+const errorCode = (text: string): string => {
+  const body = parsedBody(text);
+  if (body.error && body.error !== 'Internal Server Error') return body.error;
+  return body.message ?? body.error ?? (text.slice(0, 200) || 'unknown');
+};

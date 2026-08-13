@@ -1,0 +1,95 @@
+# The whole deployment. Quick start: docs/13-deployment.md.
+#
+# Two containers and nothing else: PostgreSQL, and the server that depends on it. Every
+# setting that differs between one installation and the next comes from `.env` — this file
+# holds no value anybody would want to change, so a deployment is a `.env` and never an
+# edit here.
+#
+# The perimeter is the private network: this publishes on the host, and nothing in front of
+# it terminates TLS yet. Public exposure stays out of scope until authentication has had a
+# review of its own (docs/02).
+
+# The project and container names are fixed rather than derived from the directory, so the
+# tools that watch this host — Dockhand, WUD — see the same names wherever the checkout
+# happens to sit.
+name: syncserver
+
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: syncserver-db
+    restart: unless-stopped
+    # A home server shares its memory with everything else on it, so each service declares a
+    # ceiling rather than discovering it during someone else's backup.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    environment:
+      # One source for each of these: the server's DATABASE_URL below is built from the
+      # same variables, so a changed user or database name cannot half-apply.
+      POSTGRES_DB: ${POSTGRES_DB:-syncserver}
+      POSTGRES_USER: ${POSTGRES_USER:-syncserver}
+      # No default, deliberately. An unset password is a database open to whatever else
+      # runs on this host, and a compose file that supplied one would be a password in git.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. From 18 the image puts the
+      # cluster in a major-version subdirectory of this path and refuses to start against
+      # the old layout, so that an upgrade can hard-link across versions instead of
+      # crossing a mount boundary. Mounting the inner path is the pre-18 convention and
+      # produces a wall of text about pg_ctlcluster rather than "wrong mount point".
+      - ${DB_DIR:-./data/db}:/var/lib/postgresql
+      # Applied once, on an empty data directory — which is also when it seeds the
+      # tombstone and the first administrator's invitation (#107). There is no migration
+      # tool yet (docs/README), so this is the whole of schema management: a schema change
+      # means an empty directory and a fresh start.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      # $$ escapes for compose, not for the shell.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    image: syncserver:dev
+    container_name: syncserver
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    # The blob directory on the host must be writable by this uid:gid, or the server starts
+    # and then fails on the first upload rather than at boot — see docs/13.
+    user: ${RUN_AS:-1001:100}
+    depends_on:
+      db:
+        # Not "started": the server reads the seeded rows at boot, and against a database
+        # still initialising it would come up and answer wrongly.
+        condition: service_healthy
+    environment:
+      # Discrete variables, not a URL: pg reads these directly, and a password never has
+      # to survive being escaped into one. `openssl rand -base64` emits / and +, and a
+      # single / turns the authority into a path — the server then dies with "Invalid URL"
+      # and no hint that the password is what broke it.
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-syncserver}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-syncserver}
+      # Signs access tokens, the delta cursor and the salt an unknown login receives.
+      # Losing it invalidates every session and every cursor; leaking it forges all three.
+      SERVER_SECRET: ${SERVER_SECRET:?set SERVER_SECRET in .env}
+      HOST: 0.0.0.0
+      PORT: 8080
+      BLOB_STORE_PATH: /data/blobs
+    volumes:
+      - ${BLOB_DIR:-./data/blobs}:/data/blobs
+    ports:
+      - "${PUBLISH_PORT:-8080}:8080"

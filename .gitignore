@@ -1,0 +1,36 @@
+# Build output and dependencies
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Local environment and secrets. `.env` is the whole of a deployment's configuration and
+# holds both of its secrets, so the example is the only one that may ever be committed.
+.env
+.env.*
+!.env.example
+
+# Logs and database dumps. A dump is plaintext metadata for a whole installation.
+*.log
+pg_dump_*.sql
+
+# The development blob store: real encrypted content, at real addresses.
+var/
+
+# Deployment: bind-mounted data, packed archives, and the stamps pack.sh writes into them.
+data/
+dist-deploy/
+VERSION
+MANIFEST.sha256
+
+# Host profiles: the scripts and settings for named machines. A hostname, an address, a
+# share layout and an account are nobody else's business, and the generic half of every one
+# of them is already in scripts/ — see docs/13, "Host profiles".
+deploy/
+
+# Editors and operating systems. Nothing here is anyone else's business.
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

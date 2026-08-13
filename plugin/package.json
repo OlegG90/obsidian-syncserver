@@ -1,0 +1,24 @@
+{
+  "name": "@syncserver/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Obsidian plugin: one bundle for Electron and the Capacitor WebView. Holds every key; the server holds none",
+  "scripts": {
+    "typecheck": "tsc -b ../shared && tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "tsx --test test/*.test.ts",
+    "build": "node esbuild.mjs",
+    "dev": "node esbuild.mjs --watch"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@syncserver/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.13.1",
+    "tsx": "^4.23.12"
+  }
+}
