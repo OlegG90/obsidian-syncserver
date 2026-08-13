@@ -16,7 +16,6 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
 import { SyncEngine } from './engine/engine.js';
-import { summary } from './engine/report.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
@@ -24,6 +23,7 @@ import { PushListener } from './obsidian/push.js';
 import { shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { obsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
+import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 
 interface PluginData {
   connection?: Connection;
@@ -43,10 +43,34 @@ export default class SyncServerPlugin extends Plugin {
   private phase: SyncPhase = { kind: 'disconnected' };
   private statusBar: HTMLElement | undefined;
   private push: PushListener | undefined;
+  /** The sync coordinator (sync.ts) — owns unlock → one pass → render, and the re-entry guard. */
+  private sync: SyncCoordinator | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
     this.addSettingTab(new SyncServerSettings(this.app, this));
+
+    // Everything Obsidian is bound here, at the edge; the coordinator itself is a module.
+    this.sync = openSyncCoordinator({
+      sessionState: () => (this.sess ? this.sess.state : 'none'),
+      unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
+      askPassphrase: () => askPassphrase(this.app),
+      runPass: async () =>
+        this.sess!.use(async ({ client, kv }) => {
+          const engine = new SyncEngine(
+            client,
+            this.sess!.connection.vaultId,
+            kv,
+            new ObsidianVaultAdapter(this.app.vault),
+            this.stateStore(),
+            deviceLabel(),
+            this.data.syncObsidian === true,
+          );
+          return engine.sync();
+        }),
+      setPhase: (phase) => this.setPhase(phase),
+      notify: (message, durationMs) => new Notice(message, durationMs),
+    });
 
     // Desktop only — Obsidian does not render a status bar on a phone (docs/02), which is
     // exactly why the same state is a command as well, and not only here.
@@ -66,7 +90,7 @@ export default class SyncServerPlugin extends Plugin {
     this.addCommand({
       id: 'sync-now',
       name: 'Sync now',
-      callback: () => void this.syncNow(),
+      callback: () => void this.sync?.run(),
     });
 
     this.addCommand({
@@ -111,9 +135,10 @@ export default class SyncServerPlugin extends Plugin {
       tokenSource: () => this.sess?.accessToken,
       refresh: () => this.sess?.refreshAccessToken() ?? Promise.resolve(false),
       onNotify: () => {
-        // Skip when locked (the passphrase would be asked for a background hint) and when a
-        // sync is already running (it will see the change anyway).
-        if (this.sess?.state === 'open' && this.phase.kind !== 'syncing') void this.syncNow();
+        // A hint: the coordinator's `runIfIdle` skips when locked (a background hint must
+        // not prompt for the passphrase) and when a sync is already running (it will see
+        // the change anyway).
+        void this.sync?.runIfIdle();
       },
     });
     this.push.start();
@@ -179,70 +204,6 @@ export default class SyncServerPlugin extends Plugin {
     this.setPhase({ kind: 'locked' });
     void this.stopPush();
     new Notice('SyncServer: locked.');
-  }
-
-  /**
-   * Turn the session into an authenticated client and run one pass.
-   *
-   * The session module owns the lifecycle: `open()` unlocks (Argon2id, once), `use()` lends
-   * the client for the length of the sync, and `lock()` can only refuse while one is out.
-   */
-  async syncNow(): Promise<void> {
-    try {
-      if (!this.sess) {
-        new Notice('SyncServer: not connected. Open the plugin settings first.');
-        return;
-      }
-
-      const state = this.sess.state;
-      if (state === 'locked') {
-        const passphrase = await askPassphrase(this.app);
-        if (!passphrase) return; // dismissed
-        const unlocked = await this.sess.open(passphrase);
-        if (unlocked === 'locked') return; // the modal was dismissed with an empty field
-      }
-
-      this.setPhase({ kind: 'syncing' });
-
-      const report = await this.sess.use(async ({ client, kv }) => {
-        const engine = new SyncEngine(
-          client,
-          this.sess!.connection.vaultId,
-          kv,
-          new ObsidianVaultAdapter(this.app.vault),
-          this.stateStore(),
-          deviceLabel(),
-          this.data.syncObsidian === true,
-        );
-        return engine.sync();
-      });
-
-      this.setPhase({ kind: 'idle', at: Date.now(), report });
-
-      // One precedence rule for the report's meaning (report.ts); this surface only joins
-      // the parts. `scanned` belongs in the summary because a pass that moved nothing is
-      // the one result that says nothing about itself: "0 up, 0 down" reads as success
-      // whether the vault was already in step or the plugin never saw it.
-      const parts = summary(report);
-      const head = parts.length ? parts.join(', ') : report.scanned === 0 ? 'vault looks empty' : 'nothing changed';
-      new Notice(`SyncServer: ${head} — ${report.scanned} local files seen.`);
-
-      // Named individually, because "3 failed" — or "3 conflicts" — is not something
-      // anybody can act on without knowing which files.
-      for (const e of report.errors.slice(0, 5)) new Notice(`SyncServer: ${e.path} — ${e.message}`, 10000);
-      for (const c of report.conflicts.slice(0, 5)) {
-        new Notice(`SyncServer: conflict — ${c.path}\nyour copy: ${c.conflictPath}`, 15000);
-      }
-      // A reset on another device moves the user's unsynced work aside. That is the one thing
-      // the user must be told about directly, not left in a list — the cost of missing it is data.
-      for (const q of report.quarantined.slice(0, 5)) {
-        new Notice(`SyncServer: vault was reset elsewhere — ${q.from} was kept as ${q.to}`, 15000);
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      this.setPhase({ kind: 'failed', message, at: Date.now() });
-      new Notice(`SyncServer: ${message}`, 10000);
-    }
   }
 }
 
