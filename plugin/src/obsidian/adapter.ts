@@ -11,6 +11,7 @@
  */
 import type { Vault } from 'obsidian';
 import type { VaultAdapter, VaultFile } from '../engine/vault.js';
+import { arrayBufferOf } from './buffer.js';
 
 export class ObsidianVaultAdapter implements VaultAdapter {
   constructor(private readonly vault: Vault) {}
@@ -33,9 +34,7 @@ export class ObsidianVaultAdapter implements VaultAdapter {
       await this.vault.adapter.mkdir(parent);
     }
 
-    const copy = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(copy).set(bytes);
-    await this.vault.adapter.writeBinary(path, copy);
+    await this.vault.adapter.writeBinary(path, arrayBufferOf(bytes));
     // `mtime` is deliberately not forced. Obsidian stamps a written file with now, and the
     // engine compares content hashes rather than times, so nothing depends on winning here.
   }

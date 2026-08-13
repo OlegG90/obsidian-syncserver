@@ -8,6 +8,7 @@
  */
 import { requestUrl } from 'obsidian';
 import type { HttpResponse, Transport } from '../api/transport.js';
+import { arrayBufferOf } from './buffer.js';
 
 export const obsidianTransport: Transport = async (req): Promise<HttpResponse> => {
   const res = await requestUrl({
@@ -15,10 +16,12 @@ export const obsidianTransport: Transport = async (req): Promise<HttpResponse> =
     method: req.method,
     headers: req.headers,
     // `Uint8Array` is not an `ArrayBuffer`, and a view is not its buffer: passing `.buffer`
-    // of a subarray would send the whole underlying allocation. `slice` is the honest copy.
+    // of a subarray would send the whole underlying allocation, which for a resumable
+    // upload's parts is the entire file per part. `arrayBufferOf` copies exactly when that
+    // is the case and lends the buffer when it is not.
     ...(req.body === undefined
       ? {}
-      : { body: typeof req.body === 'string' ? req.body : toArrayBuffer(req.body) }),
+      : { body: typeof req.body === 'string' ? req.body : arrayBufferOf(req.body) }),
     // Statuses carry meaning in this protocol — 404, 409, 410 are all instructions — so the
     // transport must hand them over rather than turn them into exceptions.
     throw: false,
@@ -37,8 +40,3 @@ export const obsidianTransport: Transport = async (req): Promise<HttpResponse> =
   };
 };
 
-const toArrayBuffer = (b: Uint8Array): ArrayBuffer => {
-  const copy = new ArrayBuffer(b.byteLength);
-  new Uint8Array(copy).set(b);
-  return copy;
-};

@@ -73,11 +73,12 @@ the wait while the app is open ([04](04-sync-protocol.md)). The status-bar rule 
 **sync, status and lock are commands**, and the status bar carries the same state without being the only
 place it lives.
 
-What is left is memory, and one thing that cannot be automated.
+What is left is memory, and one thing that cannot be automated. Two copies of a file is now the peak in
+both directions, which is the floor for this format.
 
 | Scenario | What it proves |
 |---|---|
-| **a large attachment is pulled without three copies of it in memory** ☐ | Sealing costs two copies of a file since the blob became one allocation, but a pull still costs three: the ciphertext, the plaintext `openBlob` returns, and a third the vault adapter makes because `writeBinary` takes an `ArrayBuffer` and a `Uint8Array` is not one. The copy is avoidable — a decrypted blob is a fresh exact allocation, so its buffer can be handed over directly when it covers exactly its view, and copied only when it does not |
+| **a large attachment is pulled without three copies of it in memory** ☑ | Sealing has cost two copies of a file since the blob became one allocation; a pull cost three, because the vault adapter copied again on the way to `writeBinary`, which takes an `ArrayBuffer` that a `Uint8Array` is not. Both boundaries into Obsidian now lend the buffer when the view covers exactly all of it — which a sealed or a decrypted blob does — and copy only a view into something larger. That exception is load-bearing rather than defensive: a resumable upload's parts are `subarray`s of one blob, and lending there would send the whole file as every part |
 | **the size ceiling is a written number** ☐ | `requestUrl` buffers a whole request and a whole response, so there is an attachment size a phone will not survive. Two copies of a file is the floor for this format — one nonce and one tag cover the whole ciphertext ([06](06-key-model.md)) — so the ceiling is a consequence of the format, not a bug to fix. It belongs in [01](01-context.md) as a limit the user is told, rather than discovered |
 | **one real pass on a phone** ☐ | Install the bundle, adopt a vault, sync both ways, watch a conflict resolve. No suite will ever run this: the tests exercise a Node transport against a real server, which proves the protocol and says nothing about a Capacitor WebView. This is the scenario that decides whether M2 is done |
 
