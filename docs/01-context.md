@@ -76,10 +76,33 @@ reports instead.
 |---|---|
 | quota per account | the accounting unit, summed across the account's vaults; see [03](03-data-model.md) |
 | upload rate and unfinished-upload ceilings | anti-abuse; see [04](04-sync-protocol.md) |
+| one file, 2 GB | the same unfinished-upload ceiling, applied to a single blob: an upload that could never fit inside it could never complete, so it is refused at its first part rather than after the last (`413 too_large`) |
 
-These two are the whole list. There is no cap on the size of a single file and none on the number of nodes
-in a vault: the account quota is what bounds both, and a second limit that nothing enforces reads as a
-safeguard while being none.
+There is **no** cap on the number of nodes in a vault: the account quota is what bounds it, and a second
+limit that nothing enforces reads as a safeguard while being none.
+
+### What a device can carry
+
+The 2 GB above is a rule the server applies. This is not a rule at all, and the difference matters: it is a
+property of the machine, which no server can know and the client cannot honestly enforce.
+
+**Reckon on a file costing twice its size in memory, briefly.** One nonce and one Poly1305 tag cover the
+whole ciphertext ([06](06-key-model.md)), so a blob is sealed and opened in one pass over the whole value —
+there is no chunk that can be encrypted and released before the next is read. Sending holds the plaintext
+and the sealed blob together; receiving holds the ciphertext and the plaintext. Resumable upload
+([04](04-sync-protocol.md)) divides what crosses the *wire*, not what is held in memory, and Obsidian's
+request API buffers a whole request and a whole response besides.
+
+On a desktop this is irrelevant — the 2 GB ceiling is reached long before the memory is. On a phone, where
+the plugin runs in a WebView working within a few hundred megabytes and the operating system ends the
+process rather than slowing it, the practical ceiling is **tens of megabytes, not hundreds**: a 100 MB
+attachment is 200 MB of transient allocation before Obsidian's own filesystem layer takes its copy.
+
+This is written down so it is told rather than discovered, since what a user sees when it is exceeded is
+Obsidian closing, not an error. It is deliberately not enforced as a number in the client: the budget
+depends on the device, the platform and what else is open, and a fixed figure would refuse files that work
+on one phone while still failing on another. **Going below two copies would need a framed blob format** — a
+nonce and a tag per frame — which is a format decision, not a limit ([10](10-roadmap.md)).
 
 ## Scope
 
