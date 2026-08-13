@@ -49,6 +49,21 @@ export const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 export const fromUtf8 = (b: Uint8Array): string => new TextDecoder().decode(b);
 
 /**
+ * Join byte strings. RFC 9180 is written in `a || b || c` and reads that way here; the two
+ * sealing formats build their own output buffers instead, because for them the allocation
+ * is the file (see `blob.ts`).
+ */
+export const concat = (...parts: Uint8Array[]): Uint8Array => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+};
+
+/**
  * The one source of randomness. Present in Electron, the WebView and Node 22.
  *
  * Filled in chunks because `getRandomValues` refuses more than 65,536 bytes per call, with
