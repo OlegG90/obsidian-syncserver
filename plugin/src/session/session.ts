@@ -35,12 +35,24 @@
  *   separate, non-caching call; it is not this one.
  */
 
-import { authSecret, vaultKey, type Account } from '../crypto/account.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { authSecret, deriveKek, vaultKey, type Account } from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
+import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
+import { seal } from '../crypto/sealed.js';
 import { SyncClient } from '../api/client.js';
 import type { Transport } from '../api/transport.js';
-import { fromBase64, toBase64 } from '../crypto/bytes.js';
+import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
+
+/**
+ * The HPKE `info` for a seed envelope. It names what the envelope is for, so one made for
+ * pairing cannot be presented as any other envelope this design produces (docs/06).
+ */
+const PAIRING_INFO = 'syncserver/pairing/seed';
+
+/** An X25519 public key, which is what the envelope carries in front of its ciphertext. */
+const PUBKEY_BYTES = 32;
 
 /** What the plugin persists in `data.json`. Everything a `create()` needs to be a session. */
 export interface Connection {
@@ -69,6 +81,18 @@ export interface Handle {
 export interface Derivation {
   create(passphrase: string, params?: KdfParams): Account;
   open(passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): Account;
+}
+
+/** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
+export interface PairArgs {
+  serverUrl: string;
+  login: string;
+  passphrase: string;
+  pairingCode: string;
+  /** Only needed when the account holds more than one vault. */
+  vaultId?: string;
+  deviceName?: string;
+  devicePlatform?: string;
 }
 
 /** What connect() needs that the plugin cannot know: the raw vault name, device strings, and the passphrase itself. */
@@ -185,6 +209,134 @@ export class Session {
     this.handle?.client.setRefreshToken(undefined);
     this.handle = undefined;
     return 'locked';
+  }
+
+  /**
+   * Approve a pairing from **this** device: seal the seed to the waiting public key.
+   *
+   * Only an open session can do it — the seed is the thing being sealed — which is why this
+   * is an instance method and not a static one. The envelope is HPKE to the ephemeral key
+   * the server hands back with the pairing, and `info` names what the envelope is for, so
+   * it cannot be replayed as any other envelope this design makes (docs/06).
+   *
+   * The public key is fetched and used in one step deliberately: there is nothing useful the
+   * caller could do by inspecting it first. A malicious server could substitute a key here,
+   * which is a limitation of relaying through it at all — the mitigation is that the human
+   * approving has just read the code off the device that generated the key, and a
+   * substituted pairing would have to have been started by the attacker in the same
+   * ten-minute window with a code the human never saw.
+   */
+  async approvePairing(pairingCode: string): Promise<void> {
+    if (!this.seed) throw new Error('session is locked');
+    const seed = this.seed;
+
+    await this.use(async (h) => {
+      // Two calls, and they cannot be one: sealing needs the key, and the key is what the
+      // waiting device registered. The lookup is authenticated for the same reason the
+      // approval is — only a device that already holds the seed has any business asking.
+      const { device_pubkey } = await h.client.lookupPairing({ pairing_secret: pairingCode });
+
+      const envelope = sealTo(
+        fromBase64(device_pubkey),
+        utf8(PAIRING_INFO),
+        new Uint8Array(0),
+        seed,
+      );
+
+      await h.client.approvePairing({
+        pairing_secret: pairingCode,
+        seed_envelope: toBase64(concat(envelope.enc, envelope.ciphertext)),
+      });
+    });
+  }
+
+  /**
+   * Join an account that already exists, as a **second device** (docs/07).
+   *
+   * This is the flow `connect()` is not: nothing is generated, because the account's seed
+   * already exists and is the one thing this device must end up holding. It makes an
+   * ephemeral X25519 keypair, shows a code, and waits for an authorised device to seal the
+   * seed to that key.
+   *
+   * **The device re-wraps the seed itself, and that is why it needs the passphrase.** Claim
+   * returns `account_salt` and `kdf_params` but never `wrapped_seed` — the server declines
+   * to hand a passphrase-wrapped seed to anyone who knows a login (docs/06). With the salt,
+   * the parameters and the person, this device derives the same KEK and wraps the same seed
+   * locally, producing a `Connection` indistinguishable from one `connect()` made. Without
+   * that step the session could never lock: there would be nothing to unwrap on the way back.
+   *
+   * `poll` is called between attempts so a caller can show that it is waiting and stop.
+   */
+  static async pair(
+    args: PairArgs,
+    deps: { derivation: Derivation; transport: Transport },
+    poll: () => Promise<boolean> = async () => true,
+  ): Promise<Session> {
+    const ephemeral = newKeypair();
+    const client = new SyncClient(args.serverUrl, deps.transport);
+
+    const { pairing_id } = await client.beginPairing({
+      device_pubkey: toBase64(ephemeral.publicKey),
+      pairing_token_hash: toHex(sha256(utf8(args.pairingCode))),
+    });
+
+    let claimed = await client.claimPairing(pairing_id, {
+      pairing_secret: args.pairingCode,
+      name: args.deviceName ?? 'obsidian',
+      platform: args.devicePlatform ?? 'unknown',
+    });
+    while (!claimed) {
+      if (!(await poll())) throw new Error('pairing was cancelled before it was approved');
+      claimed = await client.claimPairing(pairing_id, {
+        pairing_secret: args.pairingCode,
+        name: args.deviceName ?? 'obsidian',
+        platform: args.devicePlatform ?? 'unknown',
+      });
+    }
+
+    const envelope = fromBase64(claimed.seed_envelope);
+    const seed = openFrom(
+      ephemeral.secretKey,
+      { enc: envelope.subarray(0, PUBKEY_BYTES), ciphertext: envelope.subarray(PUBKEY_BYTES) },
+      utf8(PAIRING_INFO),
+      new Uint8Array(0),
+    );
+
+    const accountSalt = fromBase64(claimed.account_salt);
+    const kek = deriveKek(args.passphrase, accountSalt, claimed.kdf_params);
+
+    const session = await client.login({
+      login: args.login,
+      auth_secret: authSecret(seed),
+      device_id: claimed.device_id,
+    });
+    client.setAccessToken(session.access);
+    client.setRefreshToken(session.refresh);
+
+    // Which vault: the account may hold several, and only the caller knows which this
+    // device is for. One is the ordinary case and choosing it silently is right; more than
+    // one without being told is a question, not a default.
+    const vaults = await client.listVaults();
+    const vaultId = args.vaultId ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
+    if (!vaultId) {
+      throw new Error(
+        `this account has ${vaults.length} vaults; name the one to sync: ${vaults.map((v) => v.id).join(', ')}`,
+      );
+    }
+
+    const conn: Connection = {
+      serverUrl: args.serverUrl,
+      login: args.login,
+      deviceId: claimed.device_id,
+      vaultId,
+      wrappedSeed: seal(kek, seed),
+      accountSalt: claimed.account_salt,
+      kdfParams: claimed.kdf_params,
+    };
+    const paired = new Session(conn, deps);
+    paired.seed = seed;
+    paired.handle = { client, kv: vaultKey(seed, vaultId) };
+    return paired;
   }
 
   /**

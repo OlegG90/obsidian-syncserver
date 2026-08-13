@@ -62,29 +62,60 @@ export const beginPairing = async (
  * Returns the public key it approved against, so the caller can see what it sealed to
  * rather than trusting that the id it was given still means what it meant.
  */
+/**
+ * What key to seal to — the step that has to come before approval, because sealing needs
+ * the key and the key is what the waiting device registered.
+ *
+ * Authenticated for the same reason approval is: only a device that already holds the seed
+ * has any business asking. Knowing the secret is still the credential; the token only says
+ * the asker is somebody's device rather than the whole internet.
+ *
+ * **A malicious server could answer with a key of its own** and read the seed the approver
+ * then seals. That is the standing limitation of relaying a bootstrap through the server at
+ * all, and it is stated rather than papered over: the mitigations are that the human
+ * approving has just read the code off the device that generated the key, and that the
+ * pairing lives ten minutes. Removing it needs the public key to travel the human channel
+ * too, which is a longer code than a person will type.
+ */
+export const lookupPairing = async (
+  db: Db,
+  input: { pairingSecret: string },
+): Promise<{ devicePubkey: Buffer } | Refusal> => {
+  const row = await db.one<{ pubkey: Buffer; approved: string | null; expired: boolean }>(
+    `SELECT device_pubkey AS pubkey, approved_user_id AS approved, (expires_at <= now()) AS expired
+       FROM device_pairings WHERE pairing_token_hash = $1`,
+    [hashToken(input.pairingSecret)],
+  );
+  if (!row || row.expired) return { kind: 'not_found' };
+  if (row.approved) return { kind: 'already_settled' };
+  return { devicePubkey: row.pubkey };
+};
+
 export const approvePairing = async (
   db: Db,
-  input: { pairingId: string; pairingSecret: string; seedEnvelope: Buffer; userId: string },
+  input: { pairingSecret: string; seedEnvelope: Buffer; userId: string },
 ): Promise<{ devicePubkey: Buffer } | Refusal> =>
   db.tx(async (c) => {
-    const found = await c.query<{ hash: string; pubkey: Buffer; approved: string | null; expired: boolean }>(
-      `SELECT pairing_token_hash AS hash, device_pubkey AS pubkey,
-              approved_user_id AS approved, (expires_at <= now()) AS expired
-         FROM device_pairings WHERE id = $1 FOR UPDATE`,
-      [input.pairingId],
+    // Found by the SECRET, not by an id in the URL. The human carries the secret between
+    // two devices (docs/06) and nothing else; requiring the pairing's id here would mean
+    // carrying a UUID alongside it for no gain, since `pairing_token_hash` is unique and
+    // the secret already identifies exactly one row. The id stays what it is — a handle
+    // for the device that created the pairing and polls its claim.
+    const found = await c.query<{ id: string; pubkey: Buffer; approved: string | null; expired: boolean }>(
+      `SELECT id, device_pubkey AS pubkey, approved_user_id AS approved, (expires_at <= now()) AS expired
+         FROM device_pairings WHERE pairing_token_hash = $1 FOR UPDATE`,
+      [hashToken(input.pairingSecret)],
     );
-    // One answer for "no such pairing", "wrong secret" and "expired": the id is a bearer
-    // reference and the secret is the credential, so telling them apart would say which
-    // ids exist to anyone who can guess one.
+    // A secret that matches nothing and one whose pairing has expired answer the same way.
     const row = found.rows[0];
-    if (!row || row.expired || hashToken(input.pairingSecret) !== row.hash) return { kind: 'not_found' } as Refusal;
+    if (!row || row.expired) return { kind: 'not_found' } as Refusal;
     if (row.approved) return { kind: 'already_settled' } as Refusal;
 
     await c.query(
       `UPDATE device_pairings
           SET approved_user_id = $2, approved_at = now(), seed_envelope = $3
         WHERE id = $1`,
-      [input.pairingId, input.userId, input.seedEnvelope],
+      [row.id, input.userId, input.seedEnvelope],
     );
     return { devicePubkey: row.pubkey };
   });

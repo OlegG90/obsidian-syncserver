@@ -30,6 +30,7 @@ import { HEADER_BYTES } from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { MemoryStateStore } from '../src/engine/state.js';
+import { newPairingCode } from '../src/crypto/pairing-code.js';
 import { session, type Session } from '../src/session/index.js';
 import { PushListener } from '../src/obsidian/push.js';
 import { FakeVault } from './fake-vault.js';
@@ -313,6 +314,74 @@ describe('a vault, end to end', () => {
       assert.ok(mine, 'an envelope under this vault’s own key');
       assert.deepEqual(openBlob(unwrapContentKey(h.kv, mine.wrappedKey), ciphertext), plaintext);
     });
+  });
+
+  it('pairs a second device, which then reads the vault without ever seeing the passphrase path', async () => {
+    // The scenario the plugin could not perform at all until now: a phone joining an
+    // account that already exists. `connect()` mints a new account and spends an invitation;
+    // this spends nothing and generates nothing — the seed already exists, and the whole
+    // flow is about moving it to a second device without the server being able to read it.
+    const code = newPairingCode();
+
+    // B begins and polls; A approves on the first wait. Concurrency is the point — a
+    // pairing that could only be approved before it was started would not be a pairing.
+    let approvals = 0;
+    const second = await session.pair(
+      {
+        serverUrl: base,
+        login: 'admin',
+        passphrase,
+        pairingCode: code,
+        deviceName: 'phone',
+        devicePlatform: 'android',
+      },
+      fetchTransport,
+      async () => {
+        if (approvals++ === 0) await sess.approvePairing(code);
+        return true;
+      },
+    );
+
+    assert.equal(approvals, 1, 'one wait, one approval — the claim succeeded straight after');
+    assert.equal(second.state, 'open', 'a paired device is open: it holds the seed it was sent');
+
+    // A DIFFERENT device row, on the SAME account and vault.
+    assert.notEqual(second.connection.deviceId, sess.connection.deviceId);
+    assert.equal(second.connection.vaultId, vaultId);
+
+    // The proof that the seed arrived intact rather than merely something 32 bytes long:
+    // the vault key it derives opens what the first device wrote.
+    await second.use(async (h) => {
+      const delta = await h.client.delta(vaultId);
+      assert.ok(!('rejected' in delta));
+      const change = delta.changes.find((c) => c.sha256 === address);
+      assert.ok(change, 'the file the first device uploaded');
+      assert.equal(decryptName(h.kv, change.name_enc!), filename, 'and its name, under the same KV');
+    });
+
+    // And it can lock and come back on the passphrase alone — which it could not do if it
+    // had not re-wrapped the seed for itself, since the server never sent a wrapped one.
+    assert.equal(second.lock(), 'locked');
+    assert.equal(await second.open(passphrase), 'open');
+    assert.equal(second.lock(), 'locked');
+  });
+
+  it('refuses a pairing code that was already used', async () => {
+    const code = newPairingCode();
+    await assert.rejects(
+      session.pair(
+        { serverUrl: base, login: 'admin', passphrase, pairingCode: code },
+        fetchTransport,
+        async () => {
+          // Approve once, then approve again: the second must be refused, and the refusal
+          // must reach the caller rather than leaving the pairing half-settled.
+          await sess.approvePairing(code);
+          await sess.approvePairing(code);
+          return true;
+        },
+      ),
+      /already_settled|409/,
+    );
   });
 
   it('hands out no envelope for an address the caller does not hold', async () => {

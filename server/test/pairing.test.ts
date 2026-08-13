@@ -63,10 +63,11 @@ const begin = async (secret: string) => {
   return r.json().pairing_id as string;
 };
 
-const approve = (id: string, secret: string, token = access, envelope = 'ZW52ZWxvcGU=') =>
+/** Approval carries the secret and nothing else — that is all the human moved. */
+const approve = (secret: string, token = access, envelope = 'ZW52ZWxvcGU=') =>
   app.inject({
     method: 'POST',
-    url: `/auth/pairings/${id}/approve`,
+    url: '/auth/pairings/approve',
     headers: { authorization: `Bearer ${token}` },
     payload: { pairing_secret: secret, seed_envelope: envelope },
   });
@@ -97,7 +98,7 @@ describe('pairing a second device', () => {
     const secret = secretFor('a-secret-the-human-carries');
     const id = await begin(secret);
 
-    const approved = await approve(id, secret);
+    const approved = await approve(secret);
     assert.equal(approved.statusCode, 200, approved.body);
     assert.ok(approved.json().device_pubkey, 'the approver is told what it sealed to');
 
@@ -123,8 +124,8 @@ describe('pairing a second device', () => {
     const secret = secretFor('once-only');
     const id = await begin(secret);
 
-    assert.equal((await approve(id, secret)).statusCode, 200);
-    const twice = await approve(id, secret);
+    assert.equal((await approve(secret)).statusCode, 200);
+    const twice = await approve(secret);
     assert.equal(twice.statusCode, 409);
     assert.equal(twice.json().error, 'already_settled', 'a second approval cannot replace the envelope');
 
@@ -169,7 +170,7 @@ describe('pairing a second device', () => {
 
     const anonymous = await app.inject({
       method: 'POST',
-      url: `/auth/pairings/${id}/approve`,
+      url: '/auth/pairings/approve',
       payload: { pairing_secret: secret, seed_envelope: 'ZQ==' },
     });
     assert.equal(anonymous.statusCode, 401, 'only a device that already holds the seed can seal it');
@@ -182,7 +183,7 @@ describe('pairing a second device', () => {
     const secret = secretFor('whose-account');
     const id = await begin(secret);
 
-    assert.equal((await approve(id, secret, strangerAccess)).statusCode, 200);
+    assert.equal((await approve(secret, strangerAccess)).statusCode, 200);
     const out = await claim(id, secret);
     assert.equal(out.statusCode, 200);
 
@@ -228,7 +229,7 @@ describe('pairing a second device', () => {
 
     await new Promise((r) => setTimeout(r, 1100));
 
-    assert.equal((await approve(id, secret)).statusCode, 404, 'expired reads as absent');
+    assert.equal((await approve(secret)).statusCode, 404, 'expired reads as absent');
     assert.equal((await claim(id, secret)).statusCode, 404);
   });
 });

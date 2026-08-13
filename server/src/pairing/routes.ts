@@ -13,7 +13,7 @@ import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse.js';
-import { approvePairing, beginPairing, claimPairing } from './service.js';
+import { approvePairing, beginPairing, claimPairing, lookupPairing } from './service.js';
 
 /** X25519 public keys are 32 bytes; nothing else is a public key here. */
 const PUBKEY_BYTES = 32;
@@ -46,14 +46,35 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
   );
 
   /**
-   * An authorised device leaves the sealed seed.
+   * What to seal to. Sealing needs the waiting device's key, so this necessarily precedes
+   * approval — see the service for the substitution limitation this admits.
+   */
+  app.post<{ Body: { pairing_secret?: string } }>(
+    '/auth/pairings/lookup',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const secret = req.body?.pairing_secret;
+      if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
+
+      const out = await lookupPairing(db, { pairingSecret: secret });
+      if ('kind' in out) return refuse(reply, out);
+      return { device_pubkey: out.devicePubkey.toString('base64') };
+    },
+  );
+
+  /**
+   * An authorised device leaves the sealed seed, addressed by the **secret alone**.
+   *
+   * No id in the path, because the human carries the secret and nothing else (docs/06);
+   * making them also carry a UUID would buy nothing — the secret is unique and identifies
+   * the pairing exactly.
    *
    * The account bound is the **caller's own**, taken from the token and never from the
    * body: a device approves into the account it belongs to, and letting a request name a
    * different one would be an invitation to bind somebody else's.
    */
-  app.post<{ Params: { id: string }; Body: { pairing_secret?: string; seed_envelope?: string } }>(
-    '/auth/pairings/:id/approve',
+  app.post<{ Body: { pairing_secret?: string; seed_envelope?: string } }>(
+    '/auth/pairings/approve',
     { preHandler: requireAuth },
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
@@ -62,7 +83,6 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
       if (!envelope) return reply.code(400).send({ error: 'seed_envelope_required' });
 
       const out = await approvePairing(db, {
-        pairingId: req.params.id,
         pairingSecret: secret,
         seedEnvelope: Buffer.from(envelope, 'base64'),
         userId: req.caller!.userId,

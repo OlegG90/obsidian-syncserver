@@ -208,6 +208,47 @@ export class SyncClient {
     return this.json('POST', '/auth/refresh', { refresh }, { auth: false });
   }
 
+  // ---- pairing a second device (docs/07) ---------------------------------------
+
+  /**
+   * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to
+   * authenticate with. It registers where to send the seed and a hash of the code the
+   * human is about to carry — never the code itself (#110).
+   */
+  beginPairing(body: { device_pubkey: string; pairing_token_hash: string }): Promise<{ pairing_id: string }> {
+    return this.json('POST', '/auth/pairings', body, { auth: false });
+  }
+
+  /** What to seal to. Precedes approval, because sealing needs the waiting device's key. */
+  lookupPairing(body: { pairing_secret: string }): Promise<{ device_pubkey: string }> {
+    return this.json('POST', '/auth/pairings/lookup', body);
+  }
+
+  /** From an authorised device, addressed by the secret alone — there is no id to carry. */
+  approvePairing(body: { pairing_secret: string; seed_envelope: string }): Promise<{ device_pubkey: string }> {
+    return this.json('POST', '/auth/pairings/approve', body);
+  }
+
+  /**
+   * Take the envelope, once. `undefined` means **not yet approved** — the pairing is real
+   * and the caller should keep asking, which is why that case is not an error here: a
+   * polling loop written against exceptions would treat waiting as failure.
+   */
+  async claimPairing(
+    pairingId: string,
+    body: { pairing_secret: string; name: string; platform: string },
+  ): Promise<
+    | { seed_envelope: string; enc_privkey: string; account_salt: string; kdf_params: KdfParams; device_id: string }
+    | undefined
+  > {
+    try {
+      return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body, { auth: false });
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'not_approved') return undefined;
+      throw e;
+    }
+  }
+
   usage(): Promise<{ used: number; quota: number; frozen: boolean }> {
     return this.json('GET', '/usage');
   }

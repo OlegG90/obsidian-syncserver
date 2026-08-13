@@ -16,9 +16,9 @@
 import { createAccount, openAccount, type Account } from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
 import type { Transport } from '../api/transport.js';
-import { Session, type ConnectArgs, type Connection, type Derivation } from './session.js';
+import { Session, type ConnectArgs, type Connection, type Derivation, type PairArgs } from './session.js';
 
-export type { Connection, ConnectArgs, Derivation, Handle } from './session.js';
+export type { Connection, ConnectArgs, Derivation, Handle, PairArgs } from './session.js';
 export { Session };
 
 const realDerivation: Derivation = {
@@ -32,10 +32,14 @@ export const session = {
   connect: (args: ConnectArgs, transport: Transport) =>
     Session.connect(args, { derivation: realDerivation, transport }),
   create: (conn: Connection, transport: Transport) => Session.create(conn, { derivation: realDerivation, transport }),
+  /** A second device joining an account that already exists (docs/07). */
+  pair: (args: PairArgs, transport: Transport, poll?: () => Promise<boolean>) =>
+    Session.pair(args, { derivation: realDerivation, transport }, poll),
 };
 
 /** Tests: a factory the caller binds to fakes. The real path above has no such parameter. */
 export const forTests = (deps: { derivation: Derivation; transport: Transport }) => ({
   connect: (args: ConnectArgs) => Session.connect(args, deps),
   create: (conn: Connection) => Session.create(conn, deps),
+  pair: (args: PairArgs, poll?: () => Promise<boolean>) => Session.pair(args, deps, poll),
 });

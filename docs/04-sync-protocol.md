@@ -12,8 +12,9 @@ POST /auth/redeem         {invitation_token, auth_secret, account_salt, kdf_para
                              recovery_code_hash, initial_vault_id, initial_vault_name_enc}
                                                    → access + refresh + device_id + vault_id
 POST /auth/pairings       {device_pubkey, pairing_token_hash} → {pairing_id}   anonymous (#110)
-POST /auth/pairings/{id}/approve
-                            {pairing_secret, seed_envelope} authenticated existing device only
+POST /auth/pairings/approve
+                            {pairing_secret, seed_envelope} authenticated existing device only;
+                                                            addressed by the secret, no id (#110)
 POST /auth/pairings/{id}/claim
                              {pairing_secret, name, platform}
                                                     → {seed_envelope, enc_privkey, account_salt, kdf_params, device_id}
@@ -76,9 +77,14 @@ the client uploads its replacement tree.
 `sha256(secret)` when it starts the pairing and the secret itself when approving and claiming. The server
 storing `pairing_token_hash` is the reason: a hash of a value the server generated and handed back would
 prove nothing about who is presenting it later, and the secret would be known to the server from the first
-moment rather than from the moment it must be shown. Both anonymous endpoints answer a wrong secret and an
-unknown id **identically** — the id travels in a URL and can be guessed at, so distinguishing them would say
-which pairings exist.
+moment rather than from the moment it must be shown. Claim answers a wrong secret and an unknown id
+**identically** — the id travels in a URL and can be guessed at, so distinguishing them would say which
+pairings exist.
+
+**Approval is addressed by the secret, with no id in the path.** The human carries the secret and nothing
+else; requiring the pairing's id as well would mean carrying a UUID beside it for no gain, since the secret
+is unique and already names exactly one pairing. The id stays what it is — a handle for the device that
+created the pairing and polls its claim.
 
 Claiming an approved pairing consumes it exactly once, creates the `devices` row from the supplied `name`
 and `platform`, and binds that row to the approved account before returning the seed envelope **and** that
