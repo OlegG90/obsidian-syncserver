@@ -26,6 +26,7 @@ class FakeConnection implements ListenConnection {
   async query(sql: string): Promise<unknown> {
     this.queries.push(sql);
     if (this.failListen && sql.startsWith('LISTEN ')) throw new Error('protocol error');
+    return undefined;
   }
 
   on(event: string, listener: (msg?: NotificationMsg) => void): void {

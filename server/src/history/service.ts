@@ -8,6 +8,8 @@
  */
 import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
+import { oneFrom } from '../db.js';
+import { ownerAndFrozen } from '../account.js';
 import { nextRev } from '../revision.js';
 
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
@@ -88,15 +90,12 @@ export const restoreNode = async (
   input: { vaultId: string; nodeId: string; rev: number },
 ): Promise<{ rev: number; lifted: string[] } | RestoreFailure> =>
   db.tx(async (c) => {
-    const owner = await c.query<{ userId: string }>(`SELECT user_id AS "userId" FROM vaults WHERE id = $1`, [input.vaultId]);
-    if (owner.rowCount === 0) return { kind: 'not_found' } as RestoreFailure;
-    const userId = owner.rows[0]!.userId;
-
-    const frozen = await c.query<{ frozen: boolean }>(
-      `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`, [userId]);
+    const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
+    if (access.kind === 'not_found') return { kind: 'not_found' } as RestoreFailure;
     // Restoring brings content back into the live tree, so it grows usage — a frozen
     // account may not (SH-20). Deleting stays available; that is the way out.
-    if (frozen.rows[0]?.frozen) return { kind: 'frozen' } as RestoreFailure;
+    if (access.kind === 'frozen') return { kind: 'frozen' } as RestoreFailure;
+    const userId = access.userId;
 
     const node = await c.query<{ parentId: string | null; nameHmac: Buffer | null; ancestry: string[]; type: string }>(
       `SELECT parent_id AS "parentId", name_hmac AS "nameHmac", ancestry, type::text AS type

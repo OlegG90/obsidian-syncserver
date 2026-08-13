@@ -12,6 +12,8 @@
  */
 import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
+import { oneFrom } from '../db.js';
+import { ownerAndFrozen } from '../account.js';
 import { nextRev } from '../revision.js';
 
 /**
@@ -127,19 +129,6 @@ const releaseBlob = async (c: PoolClient, userId: string, sha256Hex: string): Pr
   );
 };
 
-const ownerOf = async (c: PoolClient, vaultId: string): Promise<string | undefined> => {
-  const r = await c.query<{ userId: string }>(`SELECT user_id AS "userId" FROM vaults WHERE id = $1`, [vaultId]);
-  return r.rows[0]?.userId;
-};
-
-const isFrozen = async (c: PoolClient, userId: string): Promise<boolean> => {
-  const r = await c.query<{ frozen: boolean }>(
-    `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`,
-    [userId],
-  );
-  return r.rows[0]?.frozen ?? false;
-};
-
 export interface CreateInput {
   vaultId: string;
   parentId: string;
@@ -155,9 +144,10 @@ export interface CreateInput {
 
 export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: string; rev: number } | WriteFailure> =>
   db.tx(async (c) => {
-    const owner = await ownerOf(c, input.vaultId);
-    if (!owner) return fail('not_found');
-    if (await isFrozen(c, owner)) return fail('frozen');
+    const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
+    if (access.kind === 'not_found') return fail('not_found');
+    if (access.kind === 'frozen') return fail('frozen');
+    const owner = access.userId;
 
     const parent = await c.query<{ ancestry: string[] }>(
       `SELECT ancestry FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL`,
@@ -214,9 +204,10 @@ export const putContent = async (
   input: { vaultId: string; nodeId: string; sha256: string; size: number; mtime: string; baseSha256: string | null; material: Material },
 ): Promise<{ rev: number } | WriteFailure> =>
   db.tx(async (c) => {
-    const owner = await ownerOf(c, input.vaultId);
-    if (!owner) return fail('not_found');
-    if (await isFrozen(c, owner)) return fail('frozen');
+    const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
+    if (access.kind === 'not_found') return fail('not_found');
+    if (access.kind === 'frozen') return fail('frozen');
+    const owner = access.userId;
 
     const cur = await c.query<{ sha256: Buffer | null; rev: string; type: string }>(
       `SELECT sha256, rev::text AS rev, type FROM nodes
@@ -268,8 +259,8 @@ export const deleteNode = async (
   input: { vaultId: string; nodeId: string; ifMatchRev: number },
 ): Promise<{ rev: number } | WriteFailure> =>
   db.tx(async (c) => {
-    const owner = await ownerOf(c, input.vaultId);
-    if (!owner) return fail('not_found');
+    const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
+    if (access.kind === 'not_found') return fail('not_found');
 
     const cur = await c.query<{ rev: string }>(
       `SELECT rev::text AS rev FROM nodes
@@ -309,9 +300,9 @@ export const moveNode = async (
   input: { vaultId: string; nodeId: string; parentId: string; nameEnc: string; nameHmac: string; nameKeyId: string; ifMatchRev: number },
 ): Promise<{ rev: number } | WriteFailure> =>
   db.tx(async (c) => {
-    const owner = await ownerOf(c, input.vaultId);
-    if (!owner) return fail('not_found');
-    if (await isFrozen(c, owner)) return fail('frozen');
+    const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
+    if (access.kind === 'not_found') return fail('not_found');
+    if (access.kind === 'frozen') return fail('frozen');
 
     const cur = await c.query<{ rev: string; parentId: string | null; ancestry: string[]; shareId: string | null }>(
       `SELECT rev::text AS rev, parent_id AS "parentId", ancestry, share_id AS "shareId"

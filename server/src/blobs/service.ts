@@ -1,6 +1,7 @@
 import type { FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
+import { isFrozen } from '../account.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 import type { RateLimiter } from './rate.js';
@@ -301,9 +302,13 @@ export class BlobService {
   }
 
   private async mayAccept(userId: string, sha256: Buffer, size: number): Promise<{ ok: true } | { ok: false; reason: 'frozen' | 'over_quota' }> {
-    const row = await this.db.one<{ frozen: boolean; quota: string; used: string; alreadyHeld: boolean }>(
-      `SELECT u.frozen_at IS NOT NULL       AS frozen,
-              u.quota_bytes::text           AS quota,
+    // A frozen account may not send anything that grows usage (SH-20). Reads and deletes
+    // stay available — deleting is the only way out, so a freeze that blocked it would be a
+    // deadlock. The frozen rule lives in account.ts, the same place every write checks it.
+    if (await isFrozen(this.db, userId)) return { ok: false, reason: 'frozen' };
+
+    const row = await this.db.one<{ quota: string; used: string; alreadyHeld: boolean }>(
+      `SELECT u.quota_bytes::text           AS quota,
               COALESCE(SUM(b.size), 0)::text AS used,
               EXISTS (SELECT 1 FROM user_blobs u2
                        WHERE u2.user_id = u.id AND u2.sha256 = $2) AS "alreadyHeld"
@@ -315,11 +320,6 @@ export class BlobService {
       [userId, sha256],
     );
     if (!row) return { ok: false, reason: 'over_quota' };
-
-    // A frozen account may not send anything that grows usage (SH-20). Reads and deletes
-    // stay available — deleting is the only way out, so a freeze that blocked it would be a
-    // deadlock.
-    if (row.frozen) return { ok: false, reason: 'frozen' };
 
     // The blob already counts against the account, so this upload grows usage by zero.
     const growth = row.alreadyHeld ? 0n : BigInt(size);

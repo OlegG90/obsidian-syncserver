@@ -56,6 +56,21 @@ export interface Db {
 }
 
 /**
+ * The smallest surface a predicate needs: run one statement, keep the first row.
+ *
+ * Both `Db` (the route and hub seam) and a `PoolClient` inside `db.tx` (the write seam)
+ * satisfy it — the latter through `oneFrom`. Account-scope predicates take this so one
+ * formulation serves both seams (account.ts): the write paths that run in a transaction
+ * use the same function the routes use, instead of restating the fact as a second query.
+ */
+export type Queryable = Pick<Db, 'one'>;
+
+/** The one line that lets a predicate run on the client a transaction already holds. */
+export const oneFrom = (c: PoolClient): Queryable => ({
+  one: async (sql, params) => (await c.query(sql, params ?? [])).rows[0],
+});
+
+/**
  * With no connection string, `pg` reads `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` and
  * `PGDATABASE` from the environment — which is how the container is configured, and
  * deliberately so.

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { ownsVault, ownerOf } from '../src/account.js';
+import { ownsVault, ownerOf, ownerAndFrozen, isFrozen } from '../src/account.js';
 
 let db: Db;
 const createdUsers: string[] = [];
@@ -99,5 +99,35 @@ describe('ownerOf', () => {
 
   it('returns undefined for a vault that does not exist', async () => {
     assert.equal(await ownerOf(db, randomUUID()), undefined);
+  });
+});
+
+describe('ownerAndFrozen — the write guard', () => {
+  it('answers ok with the owner for a healthy vault', async () => {
+    const a = await makeAccount(`guard-a-${process.pid}`);
+    assert.deepEqual(await ownerAndFrozen(db, a.vaultId), { kind: 'ok', userId: a.userId });
+  });
+
+  it('answers not_found for a vault that does not exist', async () => {
+    assert.deepEqual(await ownerAndFrozen(db, randomUUID()), { kind: 'not_found' });
+  });
+
+  it('answers frozen with the owner, so a delete can still proceed through it', async () => {
+    const a = await makeAccount(`guard-b-${process.pid}`);
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [a.userId]);
+    assert.deepEqual(await ownerAndFrozen(db, a.vaultId), { kind: 'frozen', userId: a.userId });
+  });
+});
+
+describe('isFrozen', () => {
+  it('sees a freeze and an unremarkable account', async () => {
+    const a = await makeAccount(`frozen-a-${process.pid}`);
+    assert.equal(await isFrozen(db, a.userId), false, 'not frozen by default');
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [a.userId]);
+    assert.equal(await isFrozen(db, a.userId), true, 'frozen once frozen_at is set');
+  });
+
+  it('answers false for an account that does not exist', async () => {
+    assert.equal(await isFrozen(db, randomUUID()), false);
   });
 });
