@@ -107,6 +107,65 @@ ln -sfn "$root/.env" .env
 say "build and start"
 docker compose up -d --build
 
+say "schema"
+# db/schema.sql is an INIT script: PostgreSQL runs it once, on an empty data directory. So
+# a build whose schema gained something arrives with code that expects it and a database
+# that has never seen it, and nothing says so — which is exactly how this deployment ran
+# for a while with the change-notification trigger missing. The server LISTENed, nothing
+# ever NOTIFYed, and push was simply inert.
+#
+# Only FUNCTIONS and TRIGGERS are compared, and that is the point rather than a shortcut: a
+# missing table or column fails loudly at the first query, while a missing trigger or
+# function fails by not happening. This checks the silent class.
+SCHEMA_SQL="SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public'
+            UNION
+            SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"
+
+schema_drift() {
+    # Names as declared. `sort -u` because a trigger may carry its function's name —
+    # `journal_notify` is both — and the answer from the database is a set either way.
+    declared="$(sed -n 's/^CREATE FUNCTION \([a-z_][a-z0-9_]*\).*/\1/p;s/^CREATE TRIGGER \([a-z_][a-z0-9_]*\).*/\1/p' db/schema.sql | sort -u)"
+    [ -n "$declared" ] || { echo "  could not read db/schema.sql; skipping the comparison"; return 0; }
+
+    # The credentials come from the container's own environment, the way the healthcheck
+    # takes them: .env is read by compose and never sourced into this shell, so a deployment
+    # that renamed the user would otherwise be compared against the wrong database — and
+    # "everything is missing" is the least useful way to be told about a typo.
+    actual="$(docker compose exec -T -e Q="$SCHEMA_SQL" db \
+        sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$Q"' 2>/dev/null | tr -d '\r' | sort -u)" || true
+    [ -n "$actual" ] || { echo "  could not query the database; skipping the comparison"; return 0; }
+
+    # A temp file and `grep -Fxv`, not `comm` and a process substitution: neither is certain
+    # on a NAS userland, and a check that dies on the box it was written for is worse than
+    # no check, because it dies during a deployment.
+    printf '%s\n' "$actual" > "$tmp_actual"
+    printf '%s\n' "$declared" | grep -Fxv -f "$tmp_actual" || true
+}
+
+tmp_actual="$(mktemp)"
+trap 'rm -f "$tmp_actual"' EXIT
+missing="$(schema_drift)"
+if [ -z "$missing" ]; then
+    echo "  every function and trigger in db/schema.sql is present"
+else
+    cat >&2 <<EOF
+
+  The database is BEHIND db/schema.sql. Missing:
+
+$(printf '    %s\n' $missing)
+
+  db/schema.sql is applied only to an empty data directory, so a schema change in a new
+  build does not reach a database that already exists. The server is running and will
+  answer, but whatever these objects do is not happening.
+
+  Either apply the missing definitions from db/schema.sql by hand, or remove the db/ and
+  blobs/ directories and start over — there is no migration tool, deliberately.
+
+EOF
+    exit 1
+fi
+
 say "waiting for health"
 for i in $(seq 1 60); do
     health="$(curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null || true)"

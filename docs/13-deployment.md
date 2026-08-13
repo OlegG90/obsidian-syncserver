@@ -285,6 +285,15 @@ now reports `bootstrap_pending: false`, and the rest of the API answers.
   discarding the database and starting again. That is fine while nothing in it matters, and it is
   exactly what stops being fine on the day something does.
 
+  **The deploy refuses to finish when the database is behind**, rather than leaving it to be
+  noticed. After the containers are up it compares the functions and triggers `schema.sql`
+  declares against the ones the database actually has, names any that are missing, and exits
+  non-zero — so a walk chained after a deploy does not run against a database the build does not
+  match. Functions and triggers rather than tables, because that is the silent class: a missing
+  column fails at the first query, while a missing trigger fails by not happening. This exists
+  because it happened — a build arrived whose schema had gained the change-notification trigger,
+  the database had never seen it, and push was inert with nothing anywhere saying so.
+
 ## Two things that will look like bugs
 
 **The container is healthy while the server refuses everything.** That is `bootstrap_pending` —
