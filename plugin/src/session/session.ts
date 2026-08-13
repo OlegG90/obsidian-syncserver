@@ -35,7 +35,8 @@
  *   separate, non-caching call; it is not this one.
  */
 
-import { authSecret, vaultKey, type Account, type KdfParams } from '../crypto/account.js';
+import { authSecret, vaultKey, type Account } from '../crypto/account.js';
+import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
 import { SyncClient } from '../api/client.js';
 import type { Transport } from '../api/transport.js';

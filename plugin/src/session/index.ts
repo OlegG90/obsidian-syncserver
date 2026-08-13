@@ -13,7 +13,8 @@
  * already knows it.
  */
 
-import { createAccount, openAccount, type Account, type KdfParams } from '../crypto/account.js';
+import { createAccount, openAccount, type Account } from '../crypto/account.js';
+import type { KdfParams } from '@syncserver/shared';
 import type { Transport } from '../api/transport.js';
 import { Session, type ConnectArgs, type Connection, type Derivation } from './session.js';
 

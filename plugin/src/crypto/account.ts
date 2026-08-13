@@ -15,18 +15,12 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import type { KdfParams } from '@syncserver/shared';
 import { concat, fromBase64, randomBytes, toBase64, utf8 } from './bytes.js';
 import { KEY_BYTES, NONCE_BYTES } from './format.js';
 
 /** docs/06: the ceiling of a mobile WebView, and the reason it is not higher. */
 export const DEFAULT_KDF_PARAMS = { v: 19, m: 65536, t: 3, p: 1 } as const;
-
-export interface KdfParams {
-  v: number;
-  m: number;
-  t: number;
-  p: number;
-}
 
 /**
  * One expensive pass per account (AC-11). Everything else in this file is cheap, which is

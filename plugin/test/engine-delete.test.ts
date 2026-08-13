@@ -10,7 +10,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { Delta, CursorRejected, Change, Envelope } from '../src/api/client.js';
+import type { CursorRejected, Envelope } from '../src/api/client.js';
+import type { Change, Delta } from '@syncserver/shared';
 import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
 import { sealBlob } from '../src/crypto/blob.js';

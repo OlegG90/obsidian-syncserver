@@ -1,4 +1,4 @@
-import type { CursorPayload } from '@syncserver/shared';
+import type { CursorFaultBody, CursorPayload } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
@@ -50,7 +50,8 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
           // Both are recoverable on purpose: "start again from an empty cursor, applying no
           // deletions". Without that a device offline across two key rotations is bricked —
           // its token verifies under no surviving key and it cannot ask for a new one.
-          return reply.code(400).send({ error: decoded });
+          const fault: CursorFaultBody = { error: decoded };
+          return reply.code(400).send(fault);
         }
         cursor = decoded;
       } else {

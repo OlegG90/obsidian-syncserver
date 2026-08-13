@@ -9,15 +9,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
+import type { KdfParams } from '@syncserver/shared';
 import { hashToken, newToken, tokenMatches } from '../crypto.js';
 import type { Db } from '../db.js';
-
-export interface KdfParams {
-  v: number;
-  m: number;
-  t: number;
-  p: number;
-}
 
 export interface RedeemInput {
   invitationToken: string;

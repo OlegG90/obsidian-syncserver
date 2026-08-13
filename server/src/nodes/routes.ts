@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { Material as WireMaterial } from '@syncserver/shared';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
@@ -28,12 +29,8 @@ const refuse = (reply: FastifyReply, f: WriteFailure) => {
   }
 };
 
-interface MaterialBody {
-  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
-}
-
-const material = (b: MaterialBody): Material => ({
+/** The wire fragment (snake_case) normalised to the service's internal shape. */
+const material = (b: WireMaterial): Material => ({
   envelopes: (b.blob_envelopes ?? []).map((e) => ({ sha256: e.sha256, scopeId: e.scope_id, wrappedKey: e.wrapped_key })),
   dedupTags: (b.dedup_tags ?? []).map((t) => ({ sha256: t.sha256, scopeId: t.scope_id, contentTag: t.content_tag })),
 });
@@ -67,7 +64,7 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{
     Params: { vaultId: string };
-    Body: MaterialBody & {
+    Body: WireMaterial & {
       parent_id: string;
       type: 'file' | 'folder';
       sha256?: string;
@@ -102,7 +99,7 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.put<{
     Params: { vaultId: string; nodeId: string };
-    Body: MaterialBody & { sha256: string; size: number; mtime: string; base_sha256: string | null };
+    Body: WireMaterial & { sha256: string; size: number; mtime: string; base_sha256: string | null };
   }>('/vaults/:vaultId/nodes/:nodeId', { preHandler: requireAuth }, async (req, reply) => {
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });

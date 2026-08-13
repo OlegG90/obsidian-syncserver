@@ -8,8 +8,8 @@ import {
   issueRefreshToken,
   redeemInvitation,
   verifyAuthSecret,
-  type KdfParams,
 } from './service.js';
+import type { KdfParams } from '@syncserver/shared';
 
 const b64 = (s: string): Buffer => Buffer.from(s, 'base64');
 

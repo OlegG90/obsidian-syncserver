@@ -9,54 +9,25 @@
  * its reason, `404` on a blob the caller does not hold — each is an instruction to the
  * engine, and an exception would only be caught to read the status back out.
  */
+import type { Change, CursorRejection, CursorStaleBody, Delta, KdfParams, Material, NodeType, WriteConflict } from '@syncserver/shared';
 import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, type HttpResponse, type Transport } from './transport.js';
 
-export interface KdfParams {
-  v: number;
-  m: number;
-  t: number;
-  p: number;
-}
-
-export interface Material {
-  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
-}
-
-export interface Change {
-  node_id: string;
-  parent_id: string | null;
-  name_enc: string | null;
-  name_hmac: string | null;
-  name_key_id: string | null;
-  op: 'put' | 'del' | 'move' | string;
-  rev: number;
-  sha256: string | null;
-  size: number | null;
-  mtime: string;
-  share_id: string | null;
-  author_id: string | null;
-}
-
-export interface Delta {
-  changes: Change[];
-  events: { type: string; [k: string]: unknown }[];
-  next_cursor: string;
-  has_more: boolean;
-}
-
-/** Why a cursor could not be answered. The reason decides whether deletions are applied (#70, #79). */
-export interface CursorRejected {
-  rejected: true;
-  reason: 'journal_ttl' | 'restore' | 'reset';
-}
-
-/** The three refusals that share `409` on a write. Only `base_mismatch` carries content. */
+/**
+ * The client's parsed result of a refused write: the wire body is `{ error: <code> }`, this
+ * is the three codes a PUT can produce, read from the `error` field rather than assumed from
+ * the shape (docs/04). `name_taken` (restore) is a thrown `ApiError`, not a conflict to resolve.
+ */
 export interface PutConflict {
   conflict: 'base_mismatch' | 'rev_mismatch' | 'share_boundary';
   /** What the content actually is now — the difference between "same text reached twice" and a real conflict. */
   sha256?: string;
   rev?: number;
+}
+
+/** The client's marker for a 410: the wire body is just `{ reason }`; `rejected` is this side's flag. */
+export interface CursorRejected {
+  rejected: true;
+  reason: CursorRejection;
 }
 
 /** One envelope: the content key wrapped to a scope. A blob may have several — one per scope that sees it. */
@@ -301,7 +272,7 @@ export class SyncClient {
     vaultId: string,
     body: Material & {
       parent_id: string;
-      type: 'file' | 'folder';
+      type: NodeType;
       sha256?: string;
       size?: number;
       mtime: string;
@@ -337,7 +308,7 @@ export class SyncClient {
     });
 
     if (res.status === 409) {
-      const parsed = JSON.parse(res.text()) as { error?: string; sha256?: string; rev?: number };
+      const parsed = JSON.parse(res.text()) as { error?: WriteConflict; sha256?: string; rev?: number };
       if (parsed.error === 'base_mismatch' || parsed.error === 'rev_mismatch' || parsed.error === 'share_boundary') {
         const out: PutConflict = { conflict: parsed.error };
         if (parsed.sha256 !== undefined) out.sha256 = parsed.sha256;
@@ -393,7 +364,7 @@ export class SyncClient {
 
     const res = await this.send({ method: 'GET', path: `/vaults/${vaultId}/delta${suffix}`, headers: {} });
     if (res.status === 410) {
-      return { rejected: true, reason: (JSON.parse(res.text()) as { reason: CursorRejected['reason'] }).reason };
+      return { rejected: true, reason: (JSON.parse(res.text()) as CursorStaleBody).reason };
     }
     if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
     return JSON.parse(res.text()) as Delta;

@@ -1,8 +1,23 @@
 /**
  * Reading the delta, and deciding when a cursor can no longer be answered.
  */
-import type { CursorPayload, CursorRejection } from '@syncserver/shared';
+import type { Change, CursorPayload, CursorRejection } from '@syncserver/shared';
 import type { Db } from '../db.js';
+
+/**
+ * The row as `pg` hands it back — bigint columns arrive as text, so the wire shape (numbers)
+ * is restored after the query. The mapping below is the only place that conversion happens.
+ * A type alias, not an interface: only the former satisfies the Row constraint (an
+ * interface has no implicit index signature).
+ */
+type ChangeRow = Omit<Change, 'rev' | 'size'> & { rev: string; size: string | null };
+
+/** Convert a row's text columns back to the wire shape. */
+const toChange = (r: ChangeRow): Change => ({
+  ...r,
+  rev: Number(r.rev),
+  size: r.size === null ? null : Number(r.size),
+});
 
 export interface VaultPosition {
   headRev: number;
@@ -57,23 +72,6 @@ export const rejectionFor = (cursor: CursorPayload, at: VaultPosition): CursorRe
   return undefined;
 };
 
-// A type alias, not an interface: only the former satisfies the Row constraint (an
-// interface has no implicit index signature).
-export type Change = {
-  node_id: string;
-  parent_id: string | null;
-  name_enc: string | null;
-  name_hmac: string | null;
-  name_key_id: string | null;
-  op: string;
-  rev: number;
-  sha256: string | null;
-  size: number | null;
-  mtime: string;
-  share_id: string | null;
-  author_id: string | null;
-};
-
 /**
  * One row per node, not one per revision.
  *
@@ -91,7 +89,7 @@ export const readChanges = async (
   upTo: number,
   limit: number,
 ): Promise<Change[]> =>
-  db.query<Change & { rev: string; size: string | null }>(
+  db.query<ChangeRow>(
     `SELECT DISTINCT ON (j.node_id)
             j.node_id,
             n.parent_id,
@@ -114,10 +112,8 @@ export const readChanges = async (
       LIMIT $4`,
     [vaultId, after, upTo, limit],
   ).then((rows) =>
-    rows
-      .map((r) => ({ ...r, rev: Number(r.rev), size: r.size === null ? null : Number(r.size) }))
-      // DISTINCT ON needs its own ordering; the client wants them in the order they happened.
-      .sort((a, b) => a.rev - b.rev) as unknown as Change[],
+    // DISTINCT ON needs its own ordering; the client wants them in the order they happened.
+    rows.map(toChange).sort((a, b) => a.rev - b.rev),
   );
 
 export const listSubtree = async (
@@ -125,7 +121,7 @@ export const listSubtree = async (
   vaultId: string,
   under: string | undefined,
 ): Promise<Change[]> =>
-  db.query<Change & { rev: string; size: string | null }>(
+  db.query<ChangeRow>(
     `SELECT n.id AS node_id, n.parent_id,
             encode(n.name_enc, 'base64') AS name_enc,
             encode(n.name_hmac, 'hex')   AS name_hmac,
@@ -142,6 +138,4 @@ export const listSubtree = async (
         AND ($2::uuid IS NULL OR n.id = $2 OR n.ancestry @> ARRAY[$2::uuid])
       ORDER BY array_length(n.ancestry, 1) NULLS FIRST, n.id`,
     [vaultId, under ?? null],
-  ).then((rows) =>
-    rows.map((r) => ({ ...r, rev: Number(r.rev), size: r.size === null ? null : Number(r.size) })) as unknown as Change[],
-  );
+  ).then((rows) => rows.map(toChange));

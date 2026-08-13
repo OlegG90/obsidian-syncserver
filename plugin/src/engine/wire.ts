@@ -11,10 +11,13 @@
  * structurally with no change to itself, a test double implements it natively, and the
  * protocol can grow without widening what synchronisation is coupled to.
  *
- * The types come from the protocol client because they ARE the wire's shapes — a second set
+ * The types come from the shared package because they ARE the wire's shapes — a second set
  * of identical interfaces here would be the duplication this file exists to argue against.
+ * The client-only shapes (`Envelope`, the parsed `PutConflict`/`CursorRejected`) stay on
+ * the client, which is where the parsing happens.
  */
-import type { Change, CursorRejected, Delta, Envelope, Material, PutConflict } from '../api/client.js';
+import type { Change, Delta, Material, NodeType } from '@syncserver/shared';
+import type { CursorRejected, Envelope, PutConflict } from '../api/client.js';
 
 export interface VaultWire {
   /** Where a client starts: the root, the head, and the key scope per scope (docs/06). */
@@ -45,7 +48,7 @@ export interface VaultWire {
     vaultId: string,
     body: Material & {
       parent_id: string;
-      type: 'file' | 'folder';
+      type: NodeType;
       sha256?: string;
       size?: number;
       mtime: string;
