@@ -100,6 +100,53 @@ It first obtains the seed by one of two explicit bootstrap flows:
 Only then does the device derive `auth_secret`, perform normal login, list vaults and enter adoption for the
 vault it chooses. The server never returns a passphrase-wrapped seed merely for a known login.
 
+### Pairing, step by step
+
+Pairing is implemented; recovery is not (see the end of this section). Four calls, and only one of them is
+authenticated — a device with no seed has nothing to authenticate with, which is the shape of the whole
+problem.
+
+| | New device | Already authorised device |
+|---|---|---|
+| 1 | makes an ephemeral X25519 keypair and a **pairing code**, and registers `POST /auth/pairings` with the public key and `sha256(code)` | |
+| 2 | shows the code; the person carries it | |
+| 3 | | reads the code, `POST /auth/pairings/lookup` for the public key |
+| 4 | | seals the seed with **HPKE** to that key and leaves it: `POST /auth/pairings/approve` |
+| 5 | polls `POST /auth/pairings/{id}/claim`, which answers `409 not_approved` until step 4 happens | |
+| 6 | opens the envelope, logs in, re-wraps the seed, and enters adoption | |
+
+**The code is the credential, and the id is not.** The pairing's id is a handle for the device that created
+it — it polls its own claim with it. Approval is addressed by the **code alone**, because that is the only
+thing that crossed the human channel; requiring the id there would have meant carrying a UUID beside the
+code for nothing ([#110](09-decisions.md)). Claim answers a wrong code exactly as it answers an unknown id.
+
+**The code is 128 bits**, in Crockford's base32 — 26 characters, grouped. Not shorter: nothing rate-limits
+approval or claim, and a pairing lives ten minutes ([04](04-sync-protocol.md)). Crockford's alphabet rather
+than RFC 4648's because it omits `I`, `L`, `O` and `U`, which is what makes normalising a typed code safe —
+in RFC 4648 a `L` is a legitimate character and "the user probably meant a one" would corrupt a code that
+was read correctly.
+
+**The lookup step is not decoration, and it admits a limitation.** Sealing needs the recipient's public
+key, and approval is the call that *submits* the envelope, so the key has to be fetched first. That means a
+**malicious server could answer with a key of its own** and read the seed the approver then seals. Removing
+it needs the public key to travel the human channel too, which is a longer code than a person will type;
+the mitigations are the ten-minute life and that the human has just read the code off the device that
+generated the key. It is recorded rather than papered over.
+
+A shape that looks simpler and is broken, so that it is not proposed again: deriving the X25519 keypair
+*from the pairing code*, which removes the lookup entirely. The server learns the code at approval — so it
+would hold the private key and could open the envelope.
+
+**The new device re-wraps the seed itself.** Claim returns `account_salt` and `kdf_params` but never
+`wrapped_seed`, so the device asks for the passphrase, derives the same KEK and wraps the same seed
+locally. This is why joining asks for a passphrase even though the seed arrives sealed: without it the
+device could hold the seed but never lock and come back, having nothing to unwrap.
+
+**Recovery is specified above and not built.** Worse than absent: `connect()` writes placeholder
+`recovery_key` and `recovery_code_hash` values, so an account created today *claims* to have a recovery
+path and has none. Until that is fixed, pairing with an already authorised device is the only bootstrap,
+and an account whose every device is lost is lost with them.
+
 ## Adoption
 
 What happens when the plugin first meets a vault that **already contains something**.
