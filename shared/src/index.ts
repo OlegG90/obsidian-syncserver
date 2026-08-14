@@ -24,16 +24,55 @@ export interface KdfParams {
   p: number;
 }
 
-/** Why a write was refused with 409. The server emits all four; the client resolves three as a conflict. */
-export type WriteConflict =
-  /** The content precondition failed: someone else wrote first (#52). */
+/**
+ * Every code that carries a **decision** — the `{ "error": … }` a caller is expected to
+ * read and act on, rather than merely show.
+ *
+ * One home, because both sides name these: the server builds them, the client branches on
+ * them, and a pair that disagrees compiles perfectly on each side alone. That is not
+ * hypothetical here — `restore.lifted` was declared twice and had already drifted.
+ *
+ * **Request-validation codes are deliberately absent.** `bad_address`, `login_required`,
+ * `key_id_required` and their two dozen siblings say a request was malformed; no client
+ * branches on them and none should, so naming them here would be twenty entries with no
+ * second reader to drift from. A code earns a place in this union by being *decided* rather
+ * than *diagnosed*.
+ */
+export type RefusalCode =
+  // The subject does not exist, or the caller may not know that it does (#20).
+  | 'not_found'
+  | 'no_such_version'
+  // Authentication and the device behind it (#33, #90).
+  | 'unauthenticated'
+  | 'invalid_credentials'
+  | 'device_revoked'
+  // Quota and its limits (AC-Q2, docs/04).
+  | 'frozen'
+  | 'over_quota'
+  | 'too_large'
+  | 'part_too_large'
+  | 'too_many_unfinished'
+  | 'rate_limited'
+  // A write the schema or a precondition refused.
+  | 'invalid_write'
   | 'base_mismatch'
-  /** The revision precondition failed: placement moved on, and it is the subject of the write. */
   | 'rev_mismatch'
-  /** A move may not cross into or out of a shared folder; copy/put then delete the source. */
   | 'share_boundary'
-  /** Restoring into a name that has since been taken; no automatic renaming (#36). */
-  | 'name_taken';
+  | 'name_taken'
+  // Blob upload, whole and resumable.
+  | 'address_mismatch'
+  | 'size_mismatch'
+  | 'parts_missing'
+  // Device pairing (docs/07).
+  | 'already_settled'
+  | 'not_approved'
+  // A vault that is not the caller's to remove yet.
+  | 'not_empty'
+  | 'named_by_a_share'
+  | 'vault_exists';
+
+/** Why a write was refused with 409. The server emits all four; the client resolves three as a conflict. */
+export type WriteConflict = Extract<RefusalCode, 'base_mismatch' | 'rev_mismatch' | 'share_boundary' | 'name_taken'>;
 
 /** One node as the delta (or the listing) describes it. */
 export interface Change {

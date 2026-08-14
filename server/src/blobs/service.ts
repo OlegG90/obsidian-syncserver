@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
 import { isFrozen } from '../account.js';
 import { fits } from '../quota.js';
-import type { Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refuse.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 import type { RateLimiter } from './rate.js';
@@ -177,7 +177,8 @@ export class BlobService {
       return { ok: false, refusal: { kind: 'size_mismatch' } };
     }
 
-    await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    const recorded = await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    if (recorded) return { ok: false, refusal: recorded };
     return { ok: true, value: { sha256: input.sha256.toString('hex'), size: stored.size } };
   }
 
@@ -231,7 +232,13 @@ export class BlobService {
       return { ok: false, refusal: { kind: 'size_mismatch' } };
     }
 
-    await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    const recorded = await this.recordUpload(input.userId, input.deviceId, input.sha256, stored.size, stored.storageKey, input.encAlg, input.keyId);
+    if (recorded) {
+      // The bytes are assembled and the claim was refused, so the staging goes with the
+      // rest of the failures: keeping it would let the client retry into the same refusal.
+      await this.store.discardStaging(input.userId, hex);
+      return { ok: false, refusal: recorded };
+    }
     await this.store.discardStaging(input.userId, hex);
     return { ok: true, value: { sha256: hex, size: stored.size } };
   }
@@ -289,37 +296,46 @@ export class BlobService {
     storageKey: string,
     encAlg: string,
     keyId: string,
-  ): Promise<void> {
-    await this.db.tx(async (c) => {
-      // The address IS the content, so a second upload of the same bytes is not a conflict:
-      // the row already there is correct by construction (#19).
-      //
-      // `DO UPDATE`, not `DO NOTHING`, and the update is deliberately a no-op: what is wanted
-      // is the **row lock** the update branch takes. `DO NOTHING` takes none, which leaves a
-      // window where the collector removes this blob as an orphan between this statement and
-      // the next one — and the next one is an FK child of it, so the upload dies on a
-      // constraint violation. Holding the lock makes that DELETE wait for this transaction
-      // and then re-check its references, which is exactly what the collector's re-checking
-      // DELETE is documented to do.
-      //
-      // The assignment is to `gc_marked_at` rather than to any identity column so that
-      // `blobs_identity_immutable` — which fires only on the columns it names — is not
-      // involved at all. A no-op write should not have to be forgiven by a guard.
-      await c.query(
-        `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (sha256) DO UPDATE SET gc_marked_at = blobs.gc_marked_at`,
-        [sha256, size, storageKey, encAlg, keyId],
-      );
-      await c.query(
-        `INSERT INTO user_blobs (user_id, sha256, refs_pending, pending_since, pending_device_id)
-         VALUES ($1, $2, 1, now(), $3)
-         ON CONFLICT (user_id, sha256)
-         DO UPDATE SET refs_pending = user_blobs.refs_pending + 1,
-                       pending_since = COALESCE(user_blobs.pending_since, now()),
-                       pending_device_id = EXCLUDED.pending_device_id`,
-        [userId, sha256, deviceId],
-      );
-    });
+  ): Promise<Refusal | undefined> {
+    try {
+      await this.db.tx(async (c) => {
+        // The address IS the content, so a second upload of the same bytes is not a conflict:
+        // the row already there is correct by construction (#19).
+        //
+        // `DO UPDATE`, not `DO NOTHING`, and the update is deliberately a no-op: what is wanted
+        // is the **row lock** the update branch takes. `DO NOTHING` takes none, which leaves a
+        // window where the collector removes this blob as an orphan between this statement and
+        // the next one — and the next one is an FK child of it, so the upload dies on a
+        // constraint violation. Holding the lock makes that DELETE wait for this transaction
+        // and then re-check its references, which is exactly what the collector's re-checking
+        // DELETE is documented to do.
+        //
+        // The assignment is to `gc_marked_at` rather than to any identity column so that
+        // `blobs_identity_immutable` — which fires only on the columns it names — is not
+        // involved at all. A no-op write should not have to be forgiven by a guard.
+        await c.query(
+          `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (sha256) DO UPDATE SET gc_marked_at = blobs.gc_marked_at`,
+          [sha256, size, storageKey, encAlg, keyId],
+        );
+        await c.query(
+          `INSERT INTO user_blobs (user_id, sha256, refs_pending, pending_since, pending_device_id)
+           VALUES ($1, $2, 1, now(), $3)
+           ON CONFLICT (user_id, sha256)
+           DO UPDATE SET refs_pending = user_blobs.refs_pending + 1,
+                         pending_since = COALESCE(user_blobs.pending_since, now()),
+                         pending_device_id = EXCLUDED.pending_device_id`,
+          [userId, sha256, deviceId],
+        );
+      });
+      return undefined;
+    } catch (e) {
+      // The schema guards the blob and its claim with triggers; unhandled, one leaves as a
+      // 500 for something the caller could fix — the rule the node writes already follow.
+      const refusal = refusalFromDatabase(e);
+      if (refusal) return refusal;
+      throw e;
+    }
   }
 }

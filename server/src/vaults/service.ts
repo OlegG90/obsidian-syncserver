@@ -8,6 +8,10 @@
 import { randomUUID } from 'node:crypto';
 import { isFrozen } from '../account.js';
 import type { Db } from '../db.js';
+import { refusalFromDatabase, type Refusal } from '../refuse.js';
+
+/** PostgreSQL's `unique_violation`. */
+const UNIQUE_VIOLATION = '23505';
 import { usageOf } from '../quota.js';
 
 export type VaultRow = { id: string; nameEnc: string };
@@ -30,28 +34,40 @@ export const createVault = async (
   db: Db,
   userId: string,
   input: { id: string; nameEnc: string },
-): Promise<{ id: string; rootNodeId: string }> =>
-  db.tx(async (c) => {
-    const scope = await c.query<{ id: string }>(`INSERT INTO key_scopes (kind) VALUES ('vault') RETURNING id`);
-    const rootId = randomUUID();
+): Promise<{ id: string; rootNodeId: string } | Refusal> => {
+  try {
+    return await db.tx(async (c) => {
+      const scope = await c.query<{ id: string }>(`INSERT INTO key_scopes (kind) VALUES ('vault') RETURNING id`);
+      const rootId = randomUUID();
 
-    // Vault before root: a node's owner is resolved through its vault, so a node inserted
-    // first has no owner to check and is refused. The other direction is allowed for —
-    // vaults.root_node_id is deferred precisely so a transaction may name a root it has
-    // not created yet.
-    await c.query(
-      `INSERT INTO vaults (id, user_id, name_enc, root_node_id, vault_key_id, vault_key_scope_kind)
-       VALUES ($1, $2, decode($3,'base64'), $4, $5, 'vault')`,
-      [input.id, userId, input.nameEnc, rootId, scope.rows[0]!.id],
-    );
-    await c.query(
-      `INSERT INTO nodes (vault_id, id, parent_id, type, mtime, rev)
-       VALUES ($1, $2, NULL, 'folder', now(), 0)`,
-      [input.id, rootId],
-    );
+      // Vault before root: a node's owner is resolved through its vault, so a node inserted
+      // first has no owner to check and is refused. The other direction is allowed for —
+      // vaults.root_node_id is deferred precisely so a transaction may name a root it has
+      // not created yet.
+      await c.query(
+        `INSERT INTO vaults (id, user_id, name_enc, root_node_id, vault_key_id, vault_key_scope_kind)
+         VALUES ($1, $2, decode($3,'base64'), $4, $5, 'vault')`,
+        [input.id, userId, input.nameEnc, rootId, scope.rows[0]!.id],
+      );
+      await c.query(
+        `INSERT INTO nodes (vault_id, id, parent_id, type, mtime, rev)
+         VALUES ($1, $2, NULL, 'folder', now(), 0)`,
+        [input.id, rootId],
+      );
 
-    return { id: input.id, rootNodeId: rootId };
-  });
+      return { id: input.id, rootNodeId: rootId };
+    });
+  } catch (e) {
+    // A repeated id is the ordinary retry, not a fault: the client generates the vault's
+    // UUID before it encrypts the label (AC-11), so it is the one asking again with the id
+    // it already chose. Owned here rather than in the route, where it was the third
+    // different idiom this one surface used to refuse things.
+    if ((e as { code?: string }).code === UNIQUE_VIOLATION) return { kind: 'vault_exists' } as Refusal;
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
 
 export const renameVault = async (db: Db, userId: string, vaultId: string, nameEnc: string): Promise<boolean> => {
   const rows = await db.query(
@@ -60,8 +76,6 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
   );
   return rows.length > 0;
 };
-
-export type DeleteRefusal = 'not_found' | 'not_empty' | 'named_by_a_share';
 
 /**
  * Deleting a vault waits for more than "it looks empty", and the second reason surprises
@@ -72,19 +86,19 @@ export type DeleteRefusal = 'not_found' | 'not_empty' | 'named_by_a_share';
  *
  * The foreign keys would refuse it anyway; this refuses it with a reason.
  */
-export const deleteVault = async (db: Db, userId: string, vaultId: string): Promise<DeleteRefusal | undefined> =>
+export const deleteVault = async (db: Db, userId: string, vaultId: string): Promise<Refusal | undefined> =>
   db.tx(async (c) => {
     const found = await c.query<{ rootNodeId: string }>(
       `SELECT root_node_id AS "rootNodeId" FROM vaults WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [vaultId, userId],
     );
-    if (found.rowCount === 0) return 'not_found';
+    if (found.rowCount === 0) return { kind: 'not_found' } as Refusal;
 
     const others = await c.query(
       `SELECT 1 FROM nodes WHERE vault_id = $1 AND id <> $2 LIMIT 1`,
       [vaultId, found.rows[0]!.rootNodeId],
     );
-    if ((others.rowCount ?? 0) > 0) return 'not_empty';
+    if ((others.rowCount ?? 0) > 0) return { kind: 'not_empty' } as Refusal;
 
     const named = await c.query(
       `SELECT 1 FROM shares WHERE initiator_vault_id = $1
@@ -93,7 +107,7 @@ export const deleteVault = async (db: Db, userId: string, vaultId: string): Prom
         LIMIT 1`,
       [vaultId],
     );
-    if ((named.rowCount ?? 0) > 0) return 'named_by_a_share';
+    if ((named.rowCount ?? 0) > 0) return { kind: 'named_by_a_share' } as Refusal;
 
     await c.query(`DELETE FROM nodes WHERE vault_id = $1`, [vaultId]);
     await c.query(`DELETE FROM vaults WHERE id = $1`, [vaultId]);

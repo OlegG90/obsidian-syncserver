@@ -11,8 +11,19 @@ import type { RestoreResult } from '@syncserver/shared';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
-import type { Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refuse.js';
 import { nextRev } from '../revision.js';
+
+/** The schema's own refusals, returned rather than thrown — see `nodes/service.ts`. */
+const txGuarded = async <T>(db: Db, fn: (c: PoolClient) => Promise<T>): Promise<T | Refusal> => {
+  try {
+    return await db.tx(fn);
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
 
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
 
@@ -84,7 +95,10 @@ export const restoreNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; rev: number },
 ): Promise<RestoreResult | Refusal> =>
-  db.tx(async (c) => {
+  // Guarded like the node writes: restore is a write, the schema enforces most of what it
+  // may do, and an unhandled `check_violation` leaves as a 500 for something the caller
+  // could fix. `nodes` had this and the other two write families did not.
+  txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return { kind: 'not_found' } as Refusal;
     // Restoring brings content back into the live tree, so it grows usage — a frozen

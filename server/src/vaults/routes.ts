@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Db } from '../db.js';
+import { refuse } from '../refuse.js';
 import { resetVault } from './reset.js';
 import { createVault, deleteVault, listVaults, readUsage, renameVault } from './service.js';
 
@@ -18,14 +19,9 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
     if (!UUID.test(req.body?.id ?? '')) return reply.code(400).send({ error: 'bad_vault_id' });
     if (!req.body?.name_enc) return reply.code(400).send({ error: 'name_enc_required' });
 
-    try {
-      const out = await createVault(db, req.caller!.userId, { id: req.body.id, nameEnc: req.body.name_enc });
-      return reply.code(201).send({ id: out.id, root_node_id: out.rootNodeId });
-    } catch (e) {
-      // A repeated id is the ordinary retry, not an error worth a stack trace.
-      if ((e as { code?: string }).code === '23505') return reply.code(409).send({ error: 'vault_exists' });
-      throw e;
-    }
+    const out = await createVault(db, req.caller!.userId, { id: req.body.id, nameEnc: req.body.name_enc });
+    if ('kind' in out) return refuse(reply, out);
+    return reply.code(201).send({ id: out.id, root_node_id: out.rootNodeId });
   });
 
   app.put<{ Params: { vaultId: string }; Body: { name_enc: string } }>(
@@ -41,11 +37,7 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
   app.delete<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preHandler: requireAuth }, async (req, reply) => {
     const refusal = await deleteVault(db, req.caller!.userId, req.params.vaultId);
     if (!refusal) return reply.code(204).send();
-    if (refusal === 'not_found') return reply.code(404).send({ error: 'not_found' });
-    // 409 rather than 403: nothing is forbidden here, the vault is simply still in use —
-    // and `named_by_a_share` says which kind of use, because "not empty" would be wrong
-    // and baffling for a vault whose last share ended a month ago.
-    return reply.code(409).send({ error: refusal });
+    return refuse(reply, refusal);
   });
 
   app.post<{ Params: { vaultId: string } }>(

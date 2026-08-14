@@ -9,7 +9,18 @@
  * its reason, `404` on a blob the caller does not hold — each is an instruction to the
  * engine, and an exception would only be caught to read the status back out.
  */
-import type { Change, CursorRejection, CursorStaleBody, Delta, KdfParams, Material, NodeType, WriteConflict, RestoreResult } from '@syncserver/shared';
+import type {
+  Change,
+  CursorRejection,
+  CursorStaleBody,
+  Delta,
+  KdfParams,
+  Material,
+  NodeType,
+  RefusalCode,
+  RestoreResult,
+  WriteConflict,
+} from '@syncserver/shared';
 import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, type HttpResponse, type Transport } from './transport.js';
 
 /**
@@ -18,7 +29,7 @@ import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, typ
  * the shape (docs/04). `name_taken` (restore) is a thrown `ApiError`, not a conflict to resolve.
  */
 export interface PutConflict {
-  conflict: 'base_mismatch' | 'rev_mismatch' | 'share_boundary';
+  conflict: Extract<RefusalCode, 'base_mismatch' | 'rev_mismatch' | 'share_boundary'>;
   /** What the content actually is now — the difference between "same text reached twice" and a real conflict. */
   sha256?: string;
   rev?: number;
@@ -117,7 +128,7 @@ export class SyncClient {
     // for a less specific one. `auth === false` requests (kdf, redeem, login, refresh
     // itself) are never retried, which is what stops this from recursing into itself.
     if (res.status === 401 && req.auth !== false && !retried && this.refresh) {
-      if (parsedBody(res.text()).error === 'unauthenticated' && (await this.tryRefresh())) {
+      if (errorIs(res.text(), 'unauthenticated') && (await this.tryRefresh())) {
         return this.send(req, true);
       }
     }
@@ -244,7 +255,7 @@ export class SyncClient {
     try {
       return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body, { auth: false });
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'not_approved') return undefined;
+      if (e instanceof ApiError && isCode(e.code, 'not_approved')) return undefined;
       throw e;
     }
   }
@@ -301,7 +312,7 @@ export class SyncClient {
     });
     if (res.status === 409) {
       const body = JSON.parse(res.text()) as { error?: string; blocked_by?: string };
-      if (body.error === 'name_taken') throw new ApiError(409, 'name_taken', `blocked by ${body.blocked_by}`);
+      if (isCode(body.error, 'name_taken')) throw new ApiError(409, 'name_taken', `blocked by ${body.blocked_by}`);
     }
     if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
     return JSON.parse(res.text()) as RestoreResult;
@@ -572,6 +583,17 @@ export class SyncClient {
  * `message`. Reading only `error` turns every server bug into the same four useless words,
  * which is exactly what it did the first time one appeared.
  */
+/**
+ * A comparison against a code `shared` declares, rather than against a string literal.
+ *
+ * These are the codes this client acts on — refreshes a token, waits for an approval,
+ * surfaces a blocked restore — and a typo in one of them used to be a branch that silently
+ * never taken. `RefusalCode` makes it a compile error instead.
+ */
+const isCode = (value: string | undefined, code: RefusalCode): boolean => value === code;
+
+const errorIs = (text: string, code: RefusalCode): boolean => isCode(parsedBody(text).error, code);
+
 const parsedBody = (text: string): { error?: string; message?: string } => {
   try {
     return JSON.parse(text) as { error?: string; message?: string };

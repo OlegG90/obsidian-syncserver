@@ -14,6 +14,7 @@
  * is the only place that maps them to the response body.
  */
 import type { FastifyReply } from 'fastify';
+import type { RefusalCode } from '@syncserver/shared';
 
 export type Refusal =
   | { kind: 'not_found' }
@@ -43,7 +44,23 @@ export type Refusal =
   /** A pairing was approved or claimed already; both are once-only (docs/06). */
   | { kind: 'already_settled' }
   /** A pairing exists and nobody has approved it yet — a state to wait in, not a fault. */
-  | { kind: 'not_approved' };
+  | { kind: 'not_approved' }
+  /** A vault still holding nodes: emptying it is the caller's to do, not the server's. */
+  | { kind: 'not_empty' }
+  /** An ended share still names this vault, and will until the journal TTL prunes it (#44). */
+  | { kind: 'named_by_a_share' }
+  /** That vault id already exists for this account — the ordinary retry, not a fault. */
+  | { kind: 'vault_exists' };
+
+/**
+ * Every `kind` above is a code `shared` declares, checked here rather than trusted.
+ *
+ * Without this the union could grow a member the client has no name for, which is exactly
+ * the drift `shared` exists to prevent and exactly what happened to `restore.lifted`. The
+ * assignment is never executed; it fails at compile time or not at all.
+ */
+const _everyKindIsDeclared: RefusalCode = null as unknown as Refusal['kind'];
+void _everyKindIsDeclared;
 
 /** One place decides what a refusal looks like, so every route family answers the same way. */
 export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
@@ -83,6 +100,13 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
         .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
     case 'parts_missing':
       return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
+    case 'not_empty':
+    case 'named_by_a_share':
+    case 'vault_exists':
+      // 409 rather than 403: nothing is forbidden, the vault is simply still in use — and
+      // which kind of use is the difference between an answer a person can act on and one
+      // that baffles them a month after their last share ended.
+      return reply.code(409).send({ error: refusal.kind });
     case 'invalid_write':
       return reply.code(400).send({ error: 'invalid_write', detail: refusal.detail });
     case 'already_settled':
