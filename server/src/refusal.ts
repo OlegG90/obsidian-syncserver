@@ -57,7 +57,23 @@ export type Refusal =
    * a share somebody may already hold a copy of is ended by finalization, not by a state
    * change. `state` is carried because it decides which operation *is* right.
    */
-  | { kind: 'share_not_preparing'; state: string };
+  | { kind: 'share_not_preparing'; state: string }
+  /** Invite and join need an activated share; `state` says how far it actually got. */
+  | { kind: 'share_not_active'; state: string }
+  /**
+   * Activation refused: interior nodes still carry material a participant could not use.
+   * The gaps travel with it — the initiator's client has to know WHICH nodes to prepare,
+   * and a bare "not prepared" would send it to re-scan the whole subtree.
+   */
+  | { kind: 'share_not_prepared'; gaps: { nodeId: string; missing: string }[] }
+  /**
+   * An invitation did not apply, and deliberately does not say why: no such account and
+   * already a member answer identically, because distinguishing them would turn this into
+   * the login oracle #73 closed on /auth/kdf.
+   */
+  | { kind: 'invite_failed' }
+  /** Removing the initiator is not a removal — it ends the share, which is its own act. */
+  | { kind: 'initiator_cannot_be_removed' };
 
 /**
  * Every `kind` above is a code `shared` declares, checked here rather than trusted.

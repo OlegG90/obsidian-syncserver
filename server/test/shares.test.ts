@@ -28,6 +28,8 @@ let app: FastifyInstance;
 let access: string;
 let userId: string;
 let strangerAccess: string;
+let strangerId: string;
+let strangerVaultId: string;
 let vaultId: string;
 let vaultKeyId: string;
 let rootId: string;
@@ -60,7 +62,9 @@ before(async () => {
   const initiator = await makeAccount('shares');
   userId = initiator.id;
   access = initiator.access;
-  strangerAccess = (await makeAccount('shares-other')).access;
+  const stranger = await makeAccount('shares-other');
+  strangerAccess = stranger.access;
+  strangerId = stranger.id;
 
   vaultId = randomUUID();
   const created = await app.inject({
@@ -77,6 +81,15 @@ before(async () => {
     [vaultId],
   );
   vaultKeyId = scope!.id;
+
+  strangerVaultId = randomUUID();
+  const theirs = await app.inject({
+    method: 'POST',
+    url: '/vaults',
+    headers: { authorization: `Bearer ${strangerAccess}` },
+    payload: { id: strangerVaultId, name_enc: b64('their vault') },
+  });
+  assert.equal(theirs.statusCode, 201, theirs.body);
 });
 
 after(async () => {
@@ -85,13 +98,13 @@ after(async () => {
   await rm(STORE, { recursive: true, force: true });
 });
 
-const createNode = async (type: 'folder', name: string) => {
+const createNode = async (type: 'folder', name: string, parent = rootId) => {
   const r = await app.inject({
     method: 'POST',
     url: `/vaults/${vaultId}/nodes`,
     headers: auth(),
     payload: {
-      parent_id: rootId,
+      parent_id: parent,
       type,
       mtime: new Date().toISOString(),
       name_enc: b64(name),
@@ -256,5 +269,240 @@ describe('the lists a client opens', () => {
       headers: { authorization: `Bearer ${strangerAccess}` },
     });
     assert.equal(r.statusCode, 404, 'the same answer as a share that does not exist');
+  });
+});
+
+describe('activation, the one completeness check the schema cannot make', () => {
+  it('opens an empty share, where there is nothing left to prepare', async () => {
+    const folder = await createNode('folder', `activate-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+
+    const r = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().state, 'active');
+  });
+
+  it('refuses while an interior name is still under the vault key, and names the node', async () => {
+    // The hole activation exists to close: a participant holds `KS` and nothing else, so a
+    // name left under `KV` is one they could never decrypt. The gap list is the point —
+    // without it the client would have to re-scan the whole subtree to find the work.
+    const folder = await createNode('folder', `unprepared-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const shareId = (await openShare(folder)).json().share_id;
+
+    const r = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'share_not_prepared');
+    assert.deepEqual(r.json().gaps, [{ nodeId: inside, missing: 'name' }]);
+  });
+
+  it('accepts once the interior name is re-keyed to the share key', async () => {
+    const folder = await createNode('folder', `prepared-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const created = await openShare(folder);
+    const shareId = created.json().share_id;
+
+    // Preparation is the client's `POST /shares/{id}/prepare`, which is not built yet; the
+    // effect it will have is written directly so activation can be tested on its own.
+    const keyId = await db.one<{ id: string }>(`SELECT subtree_key_id AS id FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    await db.query(`UPDATE nodes SET name_key_id = $1 WHERE vault_id = $2 AND id = $3`, [
+      keyId!.id,
+      vaultId,
+      inside,
+    ]);
+
+    const r = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(r.statusCode, 200, r.body);
+  });
+
+  it('is not something a second activation can do', async () => {
+    const folder = await createNode('folder', `twice-active-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+
+    const again = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(again.statusCode, 409);
+    assert.equal(again.json().state, 'active');
+  });
+});
+
+/** A folder that is shared and open for invitations. */
+const activeShare = async (label: string) => {
+  const folder = await createNode('folder', `${label}-${randomUUID()}`);
+  const shareId = (await openShare(folder)).json().share_id;
+  const r = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+  assert.equal(r.statusCode, 200, r.body);
+  return shareId;
+};
+
+const inviteTo = (shareId: string, target: string, token = access) =>
+  app.inject({
+    method: 'POST',
+    url: `/shares/${shareId}/invite`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { user_id: target, wrapped_key: b64('an HPKE envelope') },
+  });
+
+describe('inviting somebody', () => {
+  it('puts an unanswered membership row in their list, and in the share', async () => {
+    const shareId = await activeShare('invite');
+    const r = await inviteTo(shareId, strangerId);
+    assert.equal(r.statusCode, 204, r.body);
+
+    const theirs = await app.inject({
+      method: 'GET',
+      url: '/shares',
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const waiting = theirs.json().invitations.find((i: { share_id: string }) => i.share_id === shareId);
+    assert.ok(waiting, 'it is waiting for them');
+    assert.ok(waiting.initiator_login, 'and says who is asking');
+
+    // Not in `joined`: an invitation is a decision they have not made, not a folder they hold.
+    assert.ok(!theirs.json().joined.some((s: { share_id: string }) => s.share_id === shareId));
+
+    const members = await app.inject({ method: 'GET', url: `/shares/${shareId}/members`, headers: auth() });
+    const row = members.json().find((m: { user_id: string }) => m.user_id === strangerId);
+    assert.equal(row.joined_at, null, 'outstanding is joined_at being null; there is no state column');
+  });
+
+  it('refuses while the share is still preparing', async () => {
+    const folder = await createNode('folder', `early-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+
+    const r = await inviteTo(shareId, strangerId);
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'share_not_active');
+    assert.equal(r.json().state, 'preparing');
+  });
+
+  it('answers an unknown account exactly as it answers one already invited', async () => {
+    // Deliberate: two different situations, one answer. Telling them apart would say
+    // whether a login exists, which is the oracle #73 closed on /auth/kdf.
+    const shareId = await activeShare('oracle');
+    assert.equal((await inviteTo(shareId, strangerId)).statusCode, 204);
+
+    const twice = await inviteTo(shareId, strangerId);
+    const nobody = await inviteTo(shareId, randomUUID());
+
+    assert.equal(twice.statusCode, 409);
+    assert.equal(nobody.statusCode, 409);
+    assert.deepEqual(twice.json(), nobody.json(), 'the same answer, byte for byte');
+  });
+
+  it('is the initiator’s to do and nobody else’s', async () => {
+    const shareId = await activeShare('not-yours');
+    const r = await inviteTo(shareId, strangerId, strangerAccess);
+    assert.equal(r.statusCode, 404, 'a share they are not in stays invisible');
+  });
+});
+
+describe('an invitation nobody accepted', () => {
+  it('vanishes when declined, leaving nothing behind', async () => {
+    const shareId = await activeShare('decline');
+    await inviteTo(shareId, strangerId);
+
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/decline`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(r.statusCode, 204, r.body);
+
+    // Absence IS the record. There is no declined state to read, by design.
+    const members = await app.inject({ method: 'GET', url: `/shares/${shareId}/members`, headers: auth() });
+    assert.ok(!members.json().some((m: { user_id: string }) => m.user_id === strangerId));
+
+    const rows = await db.query(`SELECT 1 FROM share_members WHERE share_id = $1 AND user_id = $2`, [
+      shareId,
+      strangerId,
+    ]);
+    assert.equal(rows.length, 0, 'the row is deleted, not marked');
+  });
+
+  it('frees its slot at once, so the same person can be invited again', async () => {
+    const shareId = await activeShare('reinvite');
+    await inviteTo(shareId, strangerId);
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/decline`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+
+    assert.equal((await inviteTo(shareId, strangerId)).statusCode, 204, 'the slot came back');
+  });
+
+  it('is withdrawn by the initiator the same way, from the other side', async () => {
+    const shareId = await activeShare('withdraw');
+    await inviteTo(shareId, strangerId);
+
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().outcome, 'withdrawn', 'not "revoked" — there is no replica to finalize');
+
+    const rows = await db.query(`SELECT 1 FROM share_members WHERE share_id = $1 AND user_id = $2`, [
+      shareId,
+      strangerId,
+    ]);
+    assert.equal(rows.length, 0);
+  });
+
+  it('cannot be declined by somebody who was never invited', async () => {
+    const shareId = await activeShare('uninvited');
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/decline`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(r.statusCode, 404);
+  });
+});
+
+describe('removing a member', () => {
+  it('revokes rather than withdraws once they have joined, and stops propagation now', async () => {
+    // Joining is not built yet, so the row is put in the state joining will leave it in.
+    // What is asserted is the branch: a joined member is revoked, and revocation is only
+    // begun here — their client finalizes the copy it alone holds the keys for.
+    const shareId = await activeShare('revoke');
+    await inviteTo(shareId, strangerId);
+    await db.query(`UPDATE share_members SET joined_at = now(), vault_id = $3 WHERE share_id = $1 AND user_id = $2`, [
+      shareId,
+      strangerId,
+      strangerVaultId,
+    ]);
+
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().outcome, 'revoked');
+
+    const row = await db.one<{ started: string | null; left: string | null }>(
+      `SELECT finalization_started_at AS started, left_at AS left FROM share_members
+        WHERE share_id = $1 AND user_id = $2`,
+      [shareId, strangerId],
+    );
+    assert.ok(row!.started, 'propagation stopped');
+    assert.equal(row!.left, null, 'but they have not left: that needs their own metadata pass');
+
+    const members = await app.inject({ method: 'GET', url: `/shares/${shareId}/members`, headers: auth() });
+    const them = members.json().find((m: { user_id: string }) => m.user_id === strangerId);
+    assert.equal(them.finalizing, true, 'and the list says so');
+  });
+
+  it('refuses to remove the initiator, because that is ending the share', async () => {
+    const shareId = await activeShare('self');
+    const r = await app.inject({ method: 'DELETE', url: `/shares/${shareId}/members/${userId}`, headers: auth() });
+
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'initiator_cannot_be_removed');
   });
 });

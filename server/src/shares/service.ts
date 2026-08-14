@@ -23,8 +23,10 @@
 import type { Db } from '../db.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
 
-/** PostgreSQL's `foreign_key_violation` — here, a vault or node that is not the caller's. */
+/** PostgreSQL's `foreign_key_violation` — here, a vault, node or account that is not there. */
 const FOREIGN_KEY_VIOLATION = '23503';
+/** PostgreSQL's `unique_violation` — here, an account already in the share. */
+const UNIQUE_VIOLATION = '23505';
 
 export interface CreateShareInput {
   vaultId: string;
@@ -83,9 +85,27 @@ export const createShare = async (
       // inside the transaction, but never a committed half: a node carrying `share_id`
       // without `share_item_id` is the shape the RESTRICT on `nodes_share_fkey` exists to
       // make impossible.
+      await c.query(`UPDATE nodes SET share_id = $1, share_item_id = $2 WHERE vault_id = $3 AND id = $4`, [
+        row.id,
+        row.rootItemId,
+        input.vaultId,
+        input.nodeId,
+      ]);
+
+      // And every node below it. `nodes_check_share_membership` refuses a node that sits
+      // inside a shared folder without a mark of its own, so this is not housekeeping —
+      // the root's mark is illegal until the subtree carries one too. An empty folder
+      // hides it completely, which is why the first version of this passed its tests.
+      //
+      // Each descendant gets its **own** `share_item_id`, freshly generated: it is the
+      // identity of that item *within the share*, which is what lets a participant's copy
+      // of a file be recognised as the same item as the initiator's when neither can see
+      // the other's node ids (docs/05, corresponding nodes). Only the root reuses the
+      // share's `root_item_id`, because the share itself is that item.
       await c.query(
-        `UPDATE nodes SET share_id = $1, share_item_id = $2 WHERE vault_id = $3 AND id = $4`,
-        [row.id, row.rootItemId, input.vaultId, input.nodeId],
+        `UPDATE nodes SET share_id = $1, share_item_id = gen_random_uuid()
+          WHERE vault_id = $2 AND ancestry @> ARRAY[$3]::uuid[]`,
+        [row.id, input.vaultId, input.nodeId],
       );
 
       return { shareId: row.id, state: row.state };
@@ -283,4 +303,196 @@ export const listMembers = async (db: Db, userId: string, shareId: string): Prom
       ORDER BY "isInitiator" DESC, m.invited_at`,
     [shareId],
   );
+};
+
+/**
+ * The material a participant would need and does not have yet.
+ *
+ * Activation is the server's one real check, and it exists because everything after it
+ * assumes the answer. A share activated with a hole hands somebody a folder they cannot
+ * open — and they would find out later, file by file, with no way to tell a missing
+ * envelope from a corrupt one.
+ */
+export type PreparationGap = {
+  nodeId: string;
+  /** `name` — still under `KV`; `content` — no `KS` envelope for bytes it references. */
+  missing: string;
+};
+
+/**
+ * What is not yet prepared under `KS`, for the interior of a share.
+ *
+ * **Interior, not the root.** The share's own folder keeps its `KV` label for the life of
+ * the share and after (SH-01, SH-25): it sits beside private siblings, and a participant
+ * who cannot read `KV` never needs to read it — they name their own copy's root when they
+ * join. Every node *below* it is different, because a participant may create and rename
+ * there, so those names must be under `KS`.
+ *
+ * Two ways to be unprepared, and both matter:
+ *
+ * - a **name** still under the vault key, which a participant could not decrypt;
+ * - **content** with no `KS` envelope — for the live file and for every version still
+ *   reachable, since joining delivers a file's retained history and not only its head
+ *   (SH-15, SH-23). A head that opens beside a history that does not is the subtler hole,
+ *   and the one a check written against current nodes alone would miss.
+ */
+const preparationGaps = (db: Db, vaultId: string, rootId: string, keyId: string): Promise<PreparationGap[]> =>
+  db.query<PreparationGap>(
+    `SELECT n.id AS "nodeId", 'name' AS missing
+       FROM nodes n
+      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
+        AND n.deleted_at IS NULL AND n.name_key_id IS DISTINCT FROM $3
+      UNION
+     SELECT n.id, 'content'
+       FROM nodes n
+      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
+        AND n.deleted_at IS NULL AND n.type = 'file' AND n.sha256 IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
+      UNION
+     SELECT v.node_id, 'content'
+       FROM versions v
+       JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id
+      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
+        AND NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = v.sha256 AND k.scope_id = $3)
+      LIMIT 20`,
+    [vaultId, rootId, keyId],
+  );
+
+/**
+ * Verify preparation and open the share for invitations.
+ *
+ * `preparing → active` is the schema's transition; what the schema does **not** check is
+ * whether anything was actually prepared, and it leaves that here on purpose (docs/05):
+ * completeness is a statement about client-produced key material, which no constraint can
+ * evaluate without the keys.
+ */
+export const activateShare = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+): Promise<{ state: string } | Refusal> => {
+  const share = await db.one<{ vaultId: string; nodeId: string; keyId: string; state: string }>(
+    `SELECT initiator_vault_id AS "vaultId", subtree_node_id AS "nodeId",
+            subtree_key_id AS "keyId", state::text AS state
+       FROM shares WHERE id = $1 AND initiator_id = $2`,
+    [shareId, userId],
+  );
+  if (!share) return { kind: 'not_found' };
+  if (share.state !== 'preparing') return { kind: 'share_not_preparing', state: share.state };
+
+  const gaps = await preparationGaps(db, share.vaultId, share.nodeId, share.keyId);
+  if (gaps.length > 0) return { kind: 'share_not_prepared', gaps };
+
+  await db.query(`UPDATE shares SET state = 'active' WHERE id = $1`, [shareId]);
+  return { state: 'active' };
+};
+
+/**
+ * Invite an account into an active share.
+ *
+ * **A membership row is the invitation.** There is no separate table and no state column:
+ * `joined_at IS NULL` is what "outstanding" means, and a deleted row is a decline. That is
+ * why declining leaves no trace and frees its slot at once.
+ *
+ * The ceiling of eight, the initiator included, is the schema's (SH-11) — it is what keeps
+ * synchronous fan-out bounded, so it belongs where it cannot be bypassed.
+ *
+ * **An unknown account fails generically** (docs/04). `/auth/kdf` answers a deterministic
+ * fake rather than a 404 so it cannot be used to enumerate logins, and an invite that
+ * said "no such account" would be the same oracle one call later.
+ */
+export const invite = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+  input: { targetUserId: string; wrappedKey: Buffer },
+): Promise<Refusal | undefined> => {
+  const share = await db.one<{ state: string; initiator: string }>(
+    `SELECT state::text AS state, initiator_id AS initiator FROM shares WHERE id = $1`,
+    [shareId],
+  );
+  // Invisible to anyone but the initiator: a share somebody is not in should not become
+  // visible through the error it returns.
+  if (!share || share.initiator !== userId) return { kind: 'not_found' };
+  if (share.state !== 'active') return { kind: 'share_not_active', state: share.state };
+
+  try {
+    await db.query(`INSERT INTO share_members (share_id, user_id, wrapped_key) VALUES ($1, $2, $3)`, [
+      shareId,
+      input.targetUserId,
+      input.wrappedKey,
+    ]);
+    return undefined;
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    // No such account, or one already in the share. Both answer the same way, and that is
+    // the point: telling them apart would say whether a login exists.
+    if (code === FOREIGN_KEY_VIOLATION || code === UNIQUE_VIOLATION) return { kind: 'invite_failed' };
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
+
+/**
+ * Decline an invitation. The row is **deleted**, so the slot is free at once and nothing
+ * durable records the refusal (docs/05) — absence from the member list is the whole account
+ * of it.
+ *
+ * Only a row that never joined may be deleted, and that exemption is what stops an
+ * unanswered invitation from occupying a slot for the life of the share: a row with no
+ * `joined_at` can carry neither finalization nor `left_at`, so without it the row would be
+ * unremovable.
+ */
+export const declineInvitation = async (db: Db, userId: string, shareId: string): Promise<Refusal | undefined> => {
+  const gone = await db.one<{ shareId: string }>(
+    `DELETE FROM share_members
+      WHERE share_id = $1 AND user_id = $2 AND joined_at IS NULL
+  RETURNING share_id AS "shareId"`,
+    [shareId, userId],
+  );
+  return gone ? undefined : { kind: 'not_found' };
+};
+
+/**
+ * The initiator removes somebody. One endpoint, two operations, told apart by whether they
+ * ever joined (docs/04):
+ *
+ * - an outstanding **invitation** is withdrawn — the same deletion a decline performs, seen
+ *   from the other side;
+ * - a **joined** participant is revoked, which stops propagation now and leaves their copy
+ *   to be finalized by their own client later. It cannot be finished here: only that client
+ *   holds the `KV` and the plaintext names its replica has to be converted back to.
+ */
+export const removeMember = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+  targetUserId: string,
+): Promise<{ outcome: 'withdrawn' | 'revoked' } | Refusal> => {
+  const share = await db.one<{ initiator: string }>(`SELECT initiator_id AS initiator FROM shares WHERE id = $1`, [
+    shareId,
+  ]);
+  if (!share || share.initiator !== userId) return { kind: 'not_found' };
+  // The initiator leaving is what ends a share, and that is a different operation with a
+  // different meaning for everybody else.
+  if (targetUserId === userId) return { kind: 'initiator_cannot_be_removed' };
+
+  const member = await db.one<{ joined: string | null }>(
+    `SELECT joined_at AS joined FROM share_members WHERE share_id = $1 AND user_id = $2 AND left_at IS NULL`,
+    [shareId, targetUserId],
+  );
+  if (!member) return { kind: 'not_found' };
+
+  if (member.joined === null) {
+    await db.query(`DELETE FROM share_members WHERE share_id = $1 AND user_id = $2`, [shareId, targetUserId]);
+    return { outcome: 'withdrawn' };
+  }
+
+  await db.query(
+    `UPDATE share_members SET finalization_started_at = now()
+      WHERE share_id = $1 AND user_id = $2 AND finalization_started_at IS NULL`,
+    [shareId, targetUserId],
+  );
+  return { outcome: 'revoked' };
 };

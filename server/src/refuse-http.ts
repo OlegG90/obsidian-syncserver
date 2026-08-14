@@ -65,6 +65,16 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       // 409 rather than 404: the caller holds a valid pairing and the answer is "not yet",
       // which is what it should keep asking about. A 404 would tell it to give up.
       return reply.code(409).send({ error: 'not_approved' });
+    case 'share_not_active':
+      return reply.code(409).send({ error: 'share_not_active', state: refusal.state });
+    case 'share_not_prepared':
+      // 409, and it carries the work list: this is not a malformed request, it is one that
+      // arrived before the client had finished a job only the client can do.
+      return reply.code(409).send({ error: 'share_not_prepared', gaps: refusal.gaps });
+    case 'invite_failed':
+      return reply.code(409).send({ error: 'invite_failed' });
+    case 'initiator_cannot_be_removed':
+      return reply.code(409).send({ error: 'initiator_cannot_be_removed' });
     case 'share_not_preparing':
       // The state travels with it: "cancel" is wrong for an active share, and what is
       // right — end it by finalizing — depends on which state it actually reached.

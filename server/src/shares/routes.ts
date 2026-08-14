@@ -9,7 +9,16 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
-import { cancelShare, createShare, listMembers, listShares } from './service.js';
+import {
+  activateShare,
+  cancelShare,
+  createShare,
+  declineInvitation,
+  invite,
+  listMembers,
+  listShares,
+  removeMember,
+} from './service.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -42,6 +51,56 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
       const refusal = await cancelShare(db, req.caller!.userId, req.params.shareId);
       if (!refusal) return reply.code(204).send();
       return refuse(reply, refusal);
+    },
+  );
+
+  app.post<{ Params: { shareId: string } }>(
+    '/shares/:shareId/activate',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const out = await activateShare(db, req.caller!.userId, req.params.shareId);
+      if ('kind' in out) return refuse(reply, out);
+      return { state: out.state };
+    },
+  );
+
+  app.post<{ Params: { shareId: string }; Body: { user_id: string; wrapped_key: string } }>(
+    '/shares/:shareId/invite',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const body = req.body ?? ({} as Record<string, string>);
+      if (!UUID.test(body.user_id ?? '')) return reply.code(400).send({ error: 'bad_user_id' });
+      if (!body.wrapped_key) return reply.code(400).send({ error: 'wrapped_key_required' });
+
+      const refusal = await invite(db, req.caller!.userId, req.params.shareId, {
+        targetUserId: body.user_id,
+        wrappedKey: Buffer.from(body.wrapped_key, 'base64'),
+      });
+      if (!refusal) return reply.code(204).send();
+      return refuse(reply, refusal);
+    },
+  );
+
+  app.post<{ Params: { shareId: string } }>(
+    '/shares/:shareId/decline',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const refusal = await declineInvitation(db, req.caller!.userId, req.params.shareId);
+      if (!refusal) return reply.code(204).send();
+      return refuse(reply, refusal);
+    },
+  );
+
+  app.delete<{ Params: { shareId: string; userId: string } }>(
+    '/shares/:shareId/members/:userId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const out = await removeMember(db, req.caller!.userId, req.params.shareId, req.params.userId);
+      if ('kind' in out) return refuse(reply, out);
+      // The outcome is reported rather than left to be inferred: withdrawing frees a slot
+      // immediately, revoking leaves a replica somebody still has to finalize, and a client
+      // that cannot tell them apart cannot say which happened.
+      return { outcome: out.outcome };
     },
   );
 
