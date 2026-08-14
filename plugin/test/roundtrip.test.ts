@@ -848,6 +848,14 @@ describe('the engine, device A pushes and device B pulls', () => {
     const restored = await client.restore(ownVaultId, entry!.node_id, newest.rev);
     assert.ok(restored.rev >= newest.rev, 'the restore wrote a new version');
 
+    // `lifted` is the ancestor folders that had to come back out of the trash, and here
+    // there are none — `Devices/` was never deleted. An EMPTY LIST is the assertion worth
+    // making: the client used to declare this field a boolean, and `[]` is truthy, so
+    // "nothing was lifted" arrived as "something was" and no test could see it.
+    // `history.test.ts` covers the non-empty case, where the id of the folder appears.
+    assert.ok(Array.isArray(restored.lifted), 'a list of node ids, not a flag');
+    assert.deepEqual(restored.lifted, [], 'nothing had to be lifted to put this file back');
+
     const after = await client.delta(ownVaultId);
     assert.ok(!('rejected' in after));
     assert.ok(

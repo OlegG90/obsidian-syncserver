@@ -59,6 +59,20 @@ export interface Delta {
   has_more: boolean;
 }
 
+/**
+ * What a restore did: the revision it wrote, and the **ancestor folders it had to lift out
+ * of the trash** to put the node back where it belongs (docs/04).
+ *
+ * `lifted` is a list of node ids, not a flag. It was declared here after the two sides had
+ * already disagreed about it — the server returning ids, the client reading a boolean, and
+ * an empty array being truthy, so "nothing was lifted" read as "something was". The whole
+ * point of this package is that such a pair cannot compile.
+ */
+export interface RestoreResult {
+  rev: number;
+  lifted: string[];
+}
+
 /** Client-produced key material for a node: the sealed blob's envelopes and dedup tags (docs/06). */
 export interface Material {
   blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];

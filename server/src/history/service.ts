@@ -7,6 +7,7 @@
  * That one decision is why "the trash" is a query rather than a place.
  */
 import type { PoolClient } from 'pg';
+import type { RestoreResult } from '@syncserver/shared';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
@@ -82,7 +83,7 @@ const blockingSibling = async (
 export const restoreNode = async (
   db: Db,
   input: { vaultId: string; nodeId: string; rev: number },
-): Promise<{ rev: number; lifted: string[] } | Refusal> =>
+): Promise<RestoreResult | Refusal> =>
   db.tx(async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return { kind: 'not_found' } as Refusal;

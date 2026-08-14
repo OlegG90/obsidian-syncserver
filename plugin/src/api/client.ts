@@ -9,7 +9,7 @@
  * its reason, `404` on a blob the caller does not hold — each is an instruction to the
  * engine, and an exception would only be caught to read the status back out.
  */
-import type { Change, CursorRejection, CursorStaleBody, Delta, KdfParams, Material, NodeType, WriteConflict } from '@syncserver/shared';
+import type { Change, CursorRejection, CursorStaleBody, Delta, KdfParams, Material, NodeType, WriteConflict, RestoreResult } from '@syncserver/shared';
 import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, type HttpResponse, type Transport } from './transport.js';
 
 /**
@@ -292,7 +292,7 @@ export class SyncClient {
   }
 
   /** Restore = a new write with an old hash (docs/04). `409 name_taken` names the blocker. */
-  async restore(vaultId: string, nodeId: string, rev: number): Promise<{ rev: number; lifted: boolean }> {
+  async restore(vaultId: string, nodeId: string, rev: number): Promise<RestoreResult> {
     const res = await this.send({
       method: 'POST',
       path: `/vaults/${vaultId}/restore`,
@@ -304,7 +304,7 @@ export class SyncClient {
       if (body.error === 'name_taken') throw new ApiError(409, 'name_taken', `blocked by ${body.blocked_by}`);
     }
     if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
-    return JSON.parse(res.text()) as { rev: number; lifted: boolean };
+    return JSON.parse(res.text()) as RestoreResult;
   }
 
   // ---- the tree ----------------------------------------------------------------
