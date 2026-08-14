@@ -7,7 +7,7 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development, version 0.1.1.** Two-way sync works on desktop and on Android against a
+> **Status: in development, version 0.2.0.** Two-way sync works on desktop and on Android against a
 > self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
 > keep both versions. It has not yet been used to hold anything anyone would miss. See
 > [Status](#status) for exactly how far it goes.
@@ -117,7 +117,7 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.1.1"}` and serves
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.2.0"}` and serves
 nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
@@ -144,7 +144,7 @@ both at once.
 
 ## Status
 
-Current release: **0.1.1** — see [Versions](#versions).
+Current release: **0.2.0** — see [Versions](#versions).
 
 | Milestone | |
 |---|---|
@@ -187,7 +187,7 @@ authentication and before an administrator exists, which is exactly when a clien
 
 ```bash
 curl -s localhost:8080/health
-# {"status":"ok","bootstrap_pending":false,"version":"0.1.1"}
+# {"status":"ok","bootstrap_pending":false,"version":"0.2.0"}
 ```
 
 The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does
