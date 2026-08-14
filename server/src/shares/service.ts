@@ -632,10 +632,12 @@ type SourceNode = {
  * **Quota is the one point where joining is refused** (docs/05). Not invitation, not
  * activation: only here, because only here does the account actually take on the bytes.
  *
- * **Not yet: history.** A join is meant to deliver each file's retained versions from its
- * entry into the share (SH-15, SH-23); this materialises current state only. The gap is
- * additive rather than structural — versions reference blobs this already claims — but it
- * is a gap, and until it is closed a participant joins with files and no past.
+ * **History comes too** (SH-15, SH-23). A join delivers each file's retained versions, not
+ * merely its head: a folder that arrives with no past is a folder whose "restore an earlier
+ * version" does nothing, and the difference only shows up on the day somebody needs it.
+ * The revisions are renumbered into the joiner's own sequence — a version's  orders
+ * history within its node, and numbers from another vault's journal would interleave wrongly
+ * with everything written after the join.
  */
 export const joinShare = async (
   db: Db,
@@ -738,6 +740,20 @@ export const joinShare = async (
 
         const ancestry = isRoot ? [...baseAncestry, input.parentId] : [...ancestryOf.get(n.parentId)!, newParent];
 
+        // Every retained version of the source, oldest first, so the copy can be numbered
+        // in the joiner's own sequence while keeping its order.
+        const past = await c.query<{ sha256: string; size: string; authorId: string; at: string }>(
+          `SELECT encode(v.sha256,'hex') AS sha256, v.size::text AS size,
+                  v.author_id AS "authorId", v.at
+             FROM versions v WHERE v.vault_id = $1 AND v.node_id = $2
+            ORDER BY v.rev`,
+          [share.vaultId, n.id],
+        );
+        // Revisions for the history are taken BEFORE the node's own, so the head is the
+        // highest and "latest version" means what it says.
+        const pastRevs: number[] = [];
+        for (let i = 0; i < past.rows.length - 1; i++) pastRevs.push(await nextRev(c, input.vaultId));
+
         const rev = await nextRev(c, input.vaultId);
         const created = await c.query<{ id: string }>(
           `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
@@ -774,16 +790,28 @@ export const joinShare = async (
         ]);
 
         if (n.sha256) {
-          // The version row records the ORIGINAL writer, not the joiner (SH-19): this
+          // Every version row records the ORIGINAL writer, not the joiner (SH-19): this
           // content is somebody else's work arriving, and attributing it to whoever
           // received it would rewrite authorship on every join.
+          for (let i = 0; i < pastRevs.length; i++) {
+            const v = past.rows[i]!;
+            await c.query(
+              `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id, at)
+               VALUES ($1, $2, $3, decode($4,'hex'), $5, $6, $7)`,
+              [input.vaultId, newId, pastRevs[i], v.sha256, v.size, v.authorId, v.at],
+            );
+            await c.query(
+              `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
+               ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
+              [userId, v.sha256],
+            );
+          }
+
+          const head = past.rows[past.rows.length - 1];
           await c.query(
             `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-             SELECT $1, $2, $3, decode($4,'hex'), $5, v.author_id
-               FROM versions v
-              WHERE v.vault_id = $6 AND v.node_id = $7
-              ORDER BY v.rev DESC LIMIT 1`,
-            [input.vaultId, newId, rev, n.sha256, n.size, share.vaultId, n.id],
+             VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
+            [input.vaultId, newId, rev, n.sha256, n.size, head?.authorId ?? userId],
           );
           await c.query(
             `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
@@ -794,6 +822,188 @@ export const joinShare = async (
       }
 
       return { rootNodeId };
+    });
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
+
+/**
+ * Stop propagation and begin leaving.
+ *
+ * Leaving, revocation and dissolution are one operation seen from three sides (docs/05).
+ * All three stop propagation immediately and hand the copy to the affected client, because
+ * only it holds the `KV` and the plaintext names its replica must be converted back to.
+ * The server cannot finish any of them.
+ *
+ * **A departure ends the share, never a head count.** Two departures do it:
+ * the initiator's (SH-17) and the last joined participant's other than them (SH-07). A
+ * share of one that nobody has left is alive and waiting — which is the ordinary state
+ * while preparing, after activation before anybody accepts, and again after a decline.
+ */
+export const leaveShare = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+): Promise<{ ended: boolean } | Refusal> => {
+  try {
+    return await db.tx(async (c) => {
+      const shareRes = await c.query<{ state: string; initiator: string }>(
+        `SELECT state::text AS state, initiator_id AS initiator FROM shares WHERE id = $1 FOR UPDATE`,
+        [shareId],
+      );
+      const share = shareRes.rows[0];
+      if (!share) return { kind: 'not_found' } as Refusal;
+
+      const mine = await c.query(
+        `SELECT 1 FROM share_members
+          WHERE share_id = $1 AND user_id = $2 AND joined_at IS NOT NULL
+            AND finalization_started_at IS NULL AND left_at IS NULL
+            FOR UPDATE`,
+        [shareId, userId],
+      );
+      if (mine.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+      // Who would still be in it afterwards. The initiator does not count towards this:
+      // a share is people sharing WITH somebody, and the initiator alone is nobody.
+      const remaining = await c.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM share_members
+          WHERE share_id = $1 AND user_id <> $2 AND user_id <> $3
+            AND joined_at IS NOT NULL AND finalization_started_at IS NULL AND left_at IS NULL`,
+        [shareId, userId, share.initiator],
+      );
+      const ends = userId === share.initiator || Number(remaining.rows[0]!.n) === 0;
+
+      if (ends) {
+        // Terminal first, then everybody starts finalizing — the same ring cancel walks,
+        // and for the same reason: the initiator may not leave a share that still lives.
+        // A terminal share MAY hold members who are finalizing; what it may not hold is one
+        // who has not begun. Their clients finish at their own pace, offline ones later.
+        await c.query(`UPDATE shares SET state = 'ended', terminal_at = now() WHERE id = $1`, [shareId]);
+        await c.query(
+          `UPDATE share_members SET finalization_started_at = now()
+            WHERE share_id = $1 AND left_at IS NULL AND finalization_started_at IS NULL`,
+          [shareId],
+        );
+      } else {
+        await c.query(
+          `UPDATE share_members SET finalization_started_at = now() WHERE share_id = $1 AND user_id = $2`,
+          [shareId, userId],
+        );
+      }
+
+      return { ended: ends };
+    });
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
+
+/** One node of a replica, converted back to the leaver's own vault key. */
+export type FinalizeNode = {
+  nodeId: string;
+  nameEnc: string;
+  nameHmac: string;
+  nameKeyId: string;
+} & Material;
+
+/**
+ * Complete a departure: the replica becomes ordinary private files.
+ *
+ * **Everyone keeps their copy** (SH-05) — that is the promise replication exists to make,
+ * and it is why ending a share is a metadata pass rather than a deletion. What changes is
+ * only the naming: interior names come back from `KS` to `KV`, so the folder keeps working
+ * after the share key stops being shared.
+ *
+ * **Completeness is checked, not trusted.** A replica half-converted is a folder whose
+ * files the owner can no longer open — the failure is silent, permanent, and belongs to
+ * the person least able to diagnose it. So every live node still marked for this share must
+ * be in the request, and a missing one refuses the whole pass.
+ *
+ * **History goes for an added participant, and stays for the initiator** (SH-22, SH-25).
+ * Theirs was the folder before the share and remains so afterwards; a participant who
+ * joined keeps the files without the past that arrived with them. Nothing is removed from
+ * anybody ELSE's history — including this leaver's authorship of versions in other copies.
+ */
+export const finalizeLeave = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+  nodes: FinalizeNode[],
+): Promise<Refusal | undefined> => {
+  try {
+    return await db.tx(async (c) => {
+      const memberRes = await c.query<{ vaultId: string; initiator: string }>(
+        `SELECT m.vault_id AS "vaultId", s.initiator_id AS initiator
+           FROM share_members m JOIN shares s ON s.id = m.share_id
+          WHERE m.share_id = $1 AND m.user_id = $2
+            AND m.finalization_started_at IS NOT NULL AND m.left_at IS NULL
+            FOR UPDATE OF m`,
+        [shareId, userId],
+      );
+      const member = memberRes.rows[0];
+      if (!member) return { kind: 'not_found' } as Refusal;
+
+      const live = await c.query<{ id: string }>(
+        `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+        [member.vaultId, shareId],
+      );
+      const supplied = new Set(nodes.map((n) => n.nodeId));
+      const missing = live.rows.filter((r) => !supplied.has(r.id)).map((r) => r.id);
+      if (missing.length > 0) {
+        return { kind: 'finalization_incomplete', missing: missing.slice(0, 20) } as Refusal;
+      }
+
+      for (const n of nodes) {
+        await writeMaterial(c, { envelopes: n.envelopes ?? [], dedupTags: n.dedupTags ?? [] });
+        const res = await c.query(
+          `UPDATE nodes
+              SET name_enc = decode($1,'base64'), name_hmac = decode($2,'hex'), name_key_id = $3,
+                  share_id = NULL, share_item_id = NULL
+            WHERE vault_id = $4 AND id = $5 AND share_id = $6`,
+          [n.nameEnc, n.nameHmac, n.nameKeyId, member.vaultId, n.nodeId, shareId],
+        );
+        if (res.rowCount === 0) {
+          return { kind: 'invalid_write', detail: `node ${n.nodeId} is not part of this share` } as Refusal;
+        }
+      }
+
+      if (userId !== member.initiator) {
+        // The past arrived with the share and leaves with it. The head version stays: it is
+        // the file they keep, and removing it would take the content with it.
+        await c.query(
+          `DELETE FROM versions v
+            USING nodes n
+            WHERE n.vault_id = v.vault_id AND n.id = v.node_id
+              AND v.vault_id = $1 AND v.node_id = ANY($2::uuid[])
+              AND v.rev < n.rev`,
+          [member.vaultId, nodes.map((n) => n.nodeId)],
+        );
+
+        // And the claims those versions were holding. Quota counts the ROW rather than the
+        // count on it (docs/03), so a blob this account no longer references anywhere must
+        // lose its row or the leaver keeps paying for history they no longer have.
+        await c.query(
+          `DELETE FROM user_blobs ub
+            WHERE ub.user_id = $1
+              AND NOT EXISTS (SELECT 1 FROM nodes n JOIN vaults va ON va.id = n.vault_id
+                               WHERE va.user_id = $1 AND n.sha256 = ub.sha256 AND n.deleted_at IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM versions v JOIN vaults va ON va.id = v.vault_id
+                               WHERE va.user_id = $1 AND v.sha256 = ub.sha256)
+              AND ub.refs_pending = 0`,
+          [userId],
+        );
+      }
+
+      await c.query(`UPDATE share_members SET left_at = now() WHERE share_id = $1 AND user_id = $2`, [
+        shareId,
+        userId,
+      ]);
+      return undefined;
     });
   } catch (e) {
     const refusal = refusalFromDatabase(e);

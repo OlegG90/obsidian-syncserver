@@ -75,6 +75,8 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       return reply.code(409).send({ error: 'invite_failed' });
     case 'initiator_cannot_be_removed':
       return reply.code(409).send({ error: 'initiator_cannot_be_removed' });
+    case 'finalization_incomplete':
+      return reply.code(409).send({ error: 'finalization_incomplete', missing: refusal.missing });
     case 'share_not_preparing':
       // The state travels with it: "cancel" is wrong for an active share, and what is
       // right — end it by finalizing — depends on which state it actually reached.

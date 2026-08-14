@@ -118,6 +118,63 @@ const createNode = async (type: 'folder', name: string, parent = rootId, keyId?:
   return (r.json() as { node_id: string }).node_id;
 };
 
+
+/** Upload bytes and return their address — a node may only reference a blob that exists. */
+const putBlob = async (body: Buffer, keyId: string): Promise<string> => {
+  const hex = sha(body);
+  const r = await app.inject({
+    method: 'POST',
+    url: '/blobs',
+    query: { sha256: hex, size: String(body.length), key_id: keyId },
+    headers: { ...auth(), 'content-type': 'application/octet-stream' },
+    payload: body,
+  });
+  assert.equal(r.statusCode, 201, r.body);
+  return hex;
+};
+
+const materialFor = (hex: string, keyId: string) => ({
+  blob_envelopes: [{ sha256: hex, scope_id: keyId, wrapped_key: Buffer.alloc(48, 9).toString('base64') }],
+  dedup_tags: [{ sha256: hex, scope_id: keyId, content_tag: sha(Buffer.from(`tag:${hex}`)) }],
+});
+
+/** A file inside a share, sealed under the share key like every interior node. */
+const createFile = async (parentId: string, name: string, body: string, keyId: string) => {
+  const bytes = Buffer.from(body);
+  const hex = await putBlob(bytes, keyId);
+  const r = await app.inject({
+    method: 'POST',
+    url: `/vaults/${vaultId}/nodes`,
+    headers: auth(),
+    payload: {
+      parent_id: parentId, type: 'file', sha256: hex, size: bytes.length,
+      mtime: new Date().toISOString(),
+      name_enc: b64(name), name_hmac: sha(Buffer.from(name)), name_key_id: keyId,
+      ...materialFor(hex, keyId),
+    },
+  });
+  assert.equal(r.statusCode, 201, r.body);
+  return { nodeId: (r.json() as { node_id: string }).node_id, sha256: hex, keyId };
+};
+
+/** A second revision of that file, which is what gives it a history to carry. */
+const putFile = async (file: { nodeId: string; sha256: string; keyId: string }, body: string) => {
+  const bytes = Buffer.from(body);
+  const hex = await putBlob(bytes, file.keyId);
+  const r = await app.inject({
+    method: 'PUT',
+    url: `/vaults/${vaultId}/nodes/${file.nodeId}`,
+    headers: auth(),
+    payload: {
+      sha256: hex, size: bytes.length, mtime: new Date().toISOString(),
+      base_sha256: file.sha256,
+      ...materialFor(hex, file.keyId),
+    },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  file.sha256 = hex;
+};
+
 const openShare = (nodeId: string, token = access) =>
   app.inject({
     method: 'POST',
@@ -1037,5 +1094,197 @@ describe('all of them or none of them', () => {
     const afterDst = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [strangerVaultId]);
     assert.equal(afterSrc.length, beforeSrc.length, 'the ORIGINAL rolled back too, not only the replica');
     assert.equal(afterDst.length, beforeDst.length + 1, 'and the replica gained nothing beyond the row we planted');
+  });
+});
+
+
+/** Every node of the stranger's replica, in the shape finalize-leave wants. */
+const theirReplicaNodes = async (shareId: string) => {
+  const rows = await db.query<{ id: string }>(
+    `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL`,
+    [strangerVaultId, shareId],
+  );
+  const keyId = await strangerVaultKey();
+  return rows.map((r) => {
+    const name = `back-under-kv-${r.id}`;
+    return { node_id: r.id, name_enc: b64(name), name_hmac: sha(Buffer.from(name)), name_key_id: keyId };
+  });
+};
+
+const leaveBegin = (shareId: string, token = strangerAccess) =>
+  app.inject({
+    method: 'POST',
+    url: `/shares/${shareId}/leave/begin`,
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+const finalize = (shareId: string, nodes: unknown[], token = strangerAccess) =>
+  app.inject({
+    method: 'POST',
+    url: `/shares/${shareId}/finalize-leave`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { nodes },
+  });
+
+describe('history arrives with the folder', () => {
+  it('delivers a file’s retained versions, not only its head', async () => {
+    // A folder that arrives with no past is one whose "restore an earlier version" does
+    // nothing, and that only shows up on the day somebody needs it.
+    const { shareId, inside, ks } = await invitedShare('history');
+
+    // Two revisions of one file, made before anybody joined.
+    const file = await createFile(inside, `hist-${randomUUID()}`, 'first', ks);
+    await putFile(file, 'second');
+
+    const rootNodeId = (await join(shareId)).json().root_node_id;
+    assert.ok(rootNodeId);
+
+    const theirs = await theirCopyOf(file.nodeId);
+    const versions = await db.query<{ rev: string; author: string }>(
+      `SELECT rev::text AS rev, author_id AS author FROM versions
+        WHERE vault_id = $1 AND node_id = $2 ORDER BY rev`,
+      [strangerVaultId, theirs],
+    );
+    assert.equal(versions.length, 2, 'both revisions came across');
+    assert.ok(
+      versions.every((v) => v.author === userId),
+      'and every one credits the original writer, not the joiner (SH-19)',
+    );
+    assert.ok(Number(versions[1]!.rev) > Number(versions[0]!.rev), 'in order, renumbered into their sequence');
+  });
+});
+
+describe('leaving', () => {
+  it('stops propagation at once, before anything is converted', async () => {
+    // finalization_started_at IS the stop: the fan-out set excludes it the moment it is
+    // written, long before the client has converted anything. That exclusion is proved
+    // against a live write by the revocation test above; what matters here is that leaving
+    // writes the mark immediately rather than at the end of the pass.
+    const { shareId } = await sharedWith('leave-stops');
+    assert.equal((await leaveBegin(shareId)).statusCode, 200);
+
+    const row = await db.one<{ started: string | null; left: string | null }>(
+      `SELECT finalization_started_at AS started, left_at AS left FROM share_members
+        WHERE share_id = $1 AND user_id = $2`,
+      [shareId, strangerId],
+    );
+    assert.ok(row!.started, 'propagation stopped');
+    assert.equal(row!.left, null, 'and nothing is converted yet — that is the client’s pass');
+  });
+
+  it('ends the share when the last other participant goes', async () => {
+    // SH-07: a departure, never a head count. With only the initiator left there is nobody
+    // to share with.
+    const { shareId } = await sharedWith('leave-ends');
+    const r = await leaveBegin(shareId);
+
+    assert.equal(r.json().ended, true);
+    const state = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(state!.state, 'ended');
+  });
+
+  it('ends it for everybody when the initiator goes', async () => {
+    // SH-17: "the initiator leaves" and "the share is dissolved" are one operation, and
+    // every remaining member is put into finalization by it.
+    const { shareId } = await sharedWith('initiator-leaves');
+    const r = await leaveBegin(shareId, access);
+    assert.equal(r.json().ended, true);
+
+    const rows = await db.query<{ started: string | null }>(
+      `SELECT finalization_started_at AS started FROM share_members WHERE share_id = $1`,
+      [shareId],
+    );
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((m) => m.started), 'both sides are finalizing, each on their own client');
+  });
+
+  it('does not end a share that still has somebody in it', async () => {
+    const { shareId } = await sharedWith('two-left');
+    const third = await makeAccount('shares-third');
+    await db.query(
+      `INSERT INTO share_members (share_id, user_id, vault_id, joined_at, wrapped_key)
+       SELECT $1, $2, v.id, now(), '\\x01' FROM vaults v WHERE v.user_id = $2 LIMIT 1`,
+      [shareId, third.id],
+    ).catch(() => undefined);
+
+    // The third account has no vault, so seed one and try again through the API path.
+    const theirVault = randomUUID();
+    await app.inject({
+      method: 'POST',
+      url: '/vaults',
+      headers: { authorization: `Bearer ${third.access}` },
+      payload: { id: theirVault, name_enc: b64('third vault') },
+    });
+    await db.query(
+      `INSERT INTO share_members (share_id, user_id, vault_id, joined_at, wrapped_key)
+            VALUES ($1, $2, $3, now(), '\\x01')
+       ON CONFLICT (share_id, user_id) DO UPDATE SET joined_at = now(), vault_id = $3`,
+      [shareId, third.id, theirVault],
+    );
+
+    const r = await leaveBegin(shareId);
+    assert.equal(r.json().ended, false, 'somebody else is still in it');
+  });
+
+  it('cannot be begun twice', async () => {
+    const { shareId } = await sharedWith('twice-leave');
+    assert.equal((await leaveBegin(shareId)).statusCode, 200);
+    assert.equal((await leaveBegin(shareId)).statusCode, 404, 'already finalizing');
+  });
+});
+
+describe('finalizing a departure', () => {
+  it('refuses a pass that leaves part of the replica converted', async () => {
+    // The failure it prevents is silent and permanent: a folder whose files the owner can
+    // no longer open, discovered long after the share is gone.
+    const { shareId } = await sharedWith('partial');
+    await leaveBegin(shareId);
+
+    const all = await theirReplicaNodes(shareId);
+    const r = await finalize(shareId, all.slice(1));
+
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'finalization_incomplete');
+    assert.ok(r.json().missing.length > 0, 'and it says which nodes are missing');
+  });
+
+  it('converts the replica to private files and records the departure', async () => {
+    const { shareId } = await sharedWith('finalize');
+    await leaveBegin(shareId);
+    const r = await finalize(shareId, await theirReplicaNodes(shareId));
+    assert.equal(r.statusCode, 204, r.body);
+
+    const left = await db.query(
+      `SELECT 1 FROM nodes WHERE vault_id = $1 AND share_id = $2`,
+      [strangerVaultId, shareId],
+    );
+    assert.equal(left.length, 0, 'nothing still carries the share mark');
+
+    const member = await db.one<{ left: string | null }>(
+      `SELECT left_at AS left FROM share_members WHERE share_id = $1 AND user_id = $2`,
+      [shareId, strangerId],
+    );
+    assert.ok(member!.left, 'and the departure is recorded only now');
+  });
+
+  it('keeps the files: leaving a share leaves you with your copy (SH-05)', async () => {
+    const { shareId, replicaRoot } = await sharedWith('keeps');
+    await leaveBegin(shareId);
+    await finalize(shareId, await theirReplicaNodes(shareId));
+
+    const still = await db.one<{ id: string; keyId: string }>(
+      `SELECT id, name_key_id AS "keyId" FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [strangerVaultId, replicaRoot],
+    );
+    assert.ok(still, 'the folder is still theirs');
+    assert.equal(still!.keyId, await strangerVaultKey(), 'and everything is back under their own key');
+  });
+
+  it('is refused before finalization has been begun', async () => {
+    const { shareId } = await sharedWith('too-early');
+    const r = await finalize(shareId, await theirReplicaNodes(shareId));
+    assert.equal(r.statusCode, 404, 'nothing to finalize yet');
   });
 });

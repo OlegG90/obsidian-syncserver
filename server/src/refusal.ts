@@ -73,7 +73,13 @@ export type Refusal =
    */
   | { kind: 'invite_failed' }
   /** Removing the initiator is not a removal — it ends the share, which is its own act. */
-  | { kind: 'initiator_cannot_be_removed' };
+  | { kind: 'initiator_cannot_be_removed' }
+  /**
+   * A finalization pass that did not cover the whole replica. The missing node ids travel
+   * with it: a half-converted folder is one whose files the owner can no longer open, and
+   * the client is the only party that can finish the job.
+   */
+  | { kind: 'finalization_incomplete'; missing: string[] };
 
 /**
  * Every `kind` above is a code `shared` declares, checked here rather than trusted.

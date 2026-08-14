@@ -75,7 +75,8 @@ export type RefusalCode =
   | 'share_not_active'
   | 'share_not_prepared'
   | 'invite_failed'
-  | 'initiator_cannot_be_removed';
+  | 'initiator_cannot_be_removed'
+  | 'finalization_incomplete';
 
 /** Why a write was refused with 409. The server emits all four; the client resolves three as a conflict. */
 export type WriteConflict = Extract<RefusalCode, 'base_mismatch' | 'rev_mismatch' | 'share_boundary' | 'name_taken'>;

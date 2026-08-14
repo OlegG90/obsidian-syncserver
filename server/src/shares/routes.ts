@@ -15,7 +15,9 @@ import {
   createShare,
   declineInvitation,
   invite,
+  finalizeLeave,
   joinShare,
+  leaveShare,
   prepareShare,
   listMembers,
   listShares,
@@ -172,6 +174,64 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
       return { outcome: out.outcome };
     },
   );
+
+  app.post<{ Params: { shareId: string } }>(
+    '/shares/:shareId/leave/begin',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const out = await leaveShare(db, req.caller!.userId, req.params.shareId);
+      if ('kind' in out) return refuse(reply, out);
+      // Whether the share ended is the caller's to know: it decides what their client tells
+      // the person — "you left" or "the share is over for everybody".
+      return { ended: out.ended };
+    },
+  );
+
+  app.post<{
+    Params: { shareId: string };
+    Body: {
+      nodes: {
+        node_id: string;
+        name_enc: string;
+        name_hmac: string;
+        name_key_id: string;
+        vault_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+        vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+      }[];
+    };
+  }>('/shares/:shareId/finalize-leave', { preHandler: requireAuth }, async (req, reply) => {
+    const nodes = req.body?.nodes;
+    if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
+    for (const n of nodes) {
+      if (!UUID.test(n?.node_id ?? '')) return reply.code(400).send({ error: 'bad_node_id' });
+      if (!UUID.test(n?.name_key_id ?? '')) return reply.code(400).send({ error: 'bad_name_key_id' });
+      if (!n.name_enc || !n.name_hmac) return reply.code(400).send({ error: 'name_required' });
+    }
+
+    const refusal = await finalizeLeave(
+      db,
+      req.caller!.userId,
+      req.params.shareId,
+      nodes.map((n) => ({
+        nodeId: n.node_id,
+        nameEnc: n.name_enc,
+        nameHmac: n.name_hmac,
+        nameKeyId: n.name_key_id,
+        envelopes: (n.vault_envelopes ?? []).map((e) => ({
+          sha256: e.sha256,
+          scopeId: e.scope_id,
+          wrappedKey: e.wrapped_key,
+        })),
+        dedupTags: (n.vault_dedup_tags ?? []).map((t) => ({
+          sha256: t.sha256,
+          scopeId: t.scope_id,
+          contentTag: t.content_tag,
+        })),
+      })),
+    );
+    if (!refusal) return reply.code(204).send();
+    return refuse(reply, refusal);
+  });
 
   app.get('/shares', { preHandler: requireAuth }, async (req) => {
     const { joined, invitations } = await listShares(db, req.caller!.userId);
