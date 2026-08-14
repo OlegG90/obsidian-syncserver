@@ -35,6 +35,41 @@ declare const __SYNCSERVER_VERSION__: string | undefined;
 export const PLUGIN_VERSION: string =
   typeof __SYNCSERVER_VERSION__ === 'string' ? __SYNCSERVER_VERSION__ : '0.0.0-dev';
 
+/**
+ * Whether this install is one build or two halves of different ones.
+ *
+ * An installed plugin is two files that Obsidian reads from different places at different
+ * times: `manifest.json`, which it parses itself and shows in its plugin list, and `main.js`,
+ * whose version was baked in at build time. `check-version.mjs` keeps them equal **in the
+ * repository**, and that is where its authority ends — once the two are copied onto a device
+ * they are independent files, and an unpack over an existing folder can replace one and skip
+ * the other.
+ *
+ * That is not hypothetical: it is how a phone came to show `0.0.0` while the bundle beside it
+ * was `0.1.0`. The version reported everywhere else in this module is `main.js`'s, so without
+ * this check the two numbers simply disagree in two different screens and nothing connects
+ * them.
+ *
+ * Exact equality, not the major/minor rule: these two files leave one build together, so any
+ * difference at all means only one of them arrived.
+ *
+ * @param manifestVersion `this.manifest.version` — what Obsidian parsed and displays.
+ * @param bundleVersion defaults to this build; a parameter so tests need no bundler.
+ */
+export const installWarning = (
+  manifestVersion: string,
+  bundleVersion: string = PLUGIN_VERSION,
+): string | null => {
+  if (manifestVersion === bundleVersion) return null;
+
+  return (
+    `Incomplete install: main.js is ${bundleVersion} but manifest.json is ${manifestVersion}. ` +
+    'These ship together, so one of them did not arrive — unpacking over an existing folder ' +
+    'often replaces one file and skips the other. Delete the plugin folder, unpack again, and ' +
+    'restart Obsidian fully.'
+  );
+};
+
 interface Release {
   major: number;
   minor: number;

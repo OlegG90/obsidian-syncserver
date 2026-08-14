@@ -28,7 +28,7 @@ import { makeObsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
-import { PLUGIN_VERSION, versionWarning } from './version.js';
+import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
 /**
  * The composition root's one job that nothing else may do: hand Obsidian's own functions to
@@ -524,6 +524,15 @@ class SyncServerSettings extends PluginSettingTab {
     const line = containerEl.createEl('p', { text: `Plugin ${PLUGIN_VERSION}` });
     line.style.opacity = '0.7';
     line.style.fontSize = 'var(--font-ui-smaller)';
+
+    // Before anything about the server, because a half-copied install is the more basic
+    // fault and would otherwise show up only as two screens quietly disagreeing: Obsidian's
+    // plugin list reads manifest.json, and every version this plugin reports is main.js's.
+    const install = installWarning(this.plugin.manifest.version);
+    if (install) {
+      const el = containerEl.createEl('p', { text: install });
+      el.style.color = 'var(--text-error)';
+    }
 
     const conn = this.plugin.data.connection;
     if (!conn) return;

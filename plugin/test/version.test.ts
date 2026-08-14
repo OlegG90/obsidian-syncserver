@@ -10,7 +10,37 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { PLUGIN_VERSION, versionWarning } from '../src/version.js';
+import { installWarning, PLUGIN_VERSION, versionWarning } from '../src/version.js';
+
+describe('an install that is two halves of different builds', () => {
+  it('says so when manifest.json lags the bundle beside it', () => {
+    // The real case, from a phone on 14 August: the plugin list showed 0.0.0 while main.js
+    // next to it was 0.1.0, because unpacking over the existing folder replaced one file
+    // and skipped the other. Both numbers were on screen, in different screens, and nothing
+    // connected them.
+    const w = installWarning('0.0.0', '0.1.0');
+
+    assert.match(w!, /main\.js is 0\.1\.0/);
+    assert.match(w!, /manifest\.json is 0\.0\.0/);
+    assert.match(w!, /Delete the plugin folder/, 'and says what to actually do about it');
+  });
+
+  it('is silent when the two agree', () => {
+    assert.equal(installWarning('0.1.0', '0.1.0'), null);
+  });
+
+  it('catches a lagging bundle too, not just a lagging manifest', () => {
+    // The other direction happens when main.js is the file that fails to overwrite, and it
+    // is the more dangerous one: the manifest advertises a version the code is not.
+    assert.ok(installWarning('0.2.0', '0.1.0'));
+  });
+
+  it('demands exact equality, because the two files leave one build together', () => {
+    // Not the major/minor rule that governs client-versus-server. A patch apart still means
+    // only one of the two files arrived.
+    assert.ok(installWarning('0.1.1', '0.1.0'), 'a patch apart is still a broken install');
+  });
+});
 
 describe('while the major is zero, the minor carries the promise', () => {
   it('accepts an exact match', () => {
