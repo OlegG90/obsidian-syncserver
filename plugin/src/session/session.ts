@@ -160,12 +160,28 @@ export class Session {
     if (this.handle) return 'open';
     if (!passphrase) return 'locked';
 
-    const account = this.derivation.open(
-      passphrase,
-      fromBase64(this.conn.accountSalt),
-      this.conn.kdfParams,
-      this.conn.wrappedSeed,
-    );
+    // The AEAD says "invalid tag", which is true and useless: it is what a wrong passphrase
+    // produces, and the person holding a right one cannot act on it. The marker in the
+    // wrapping format already separated "this client cannot read that version" from this
+    // case (#109), so what is left here has exactly one ordinary cause and should say so.
+    let account: Account;
+    try {
+      account = this.derivation.open(
+        passphrase,
+        fromBase64(this.conn.accountSalt),
+        this.conn.kdfParams,
+        this.conn.wrappedSeed,
+      );
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      // A version or algorithm the client does not know is a different sentence and keeps
+      // its own; only the tag failure is rephrased.
+      if (/unknown (wrapping version|algorithm)/.test(reason)) throw e;
+      throw new Error(
+        'that passphrase does not open this account. It must be the one used when this vault was connected — ' +
+          'the server cannot check it and cannot reset it.',
+      );
+    }
     this.seed = account.seed;
 
     const client = new SyncClient(this.conn.serverUrl, this.transport);

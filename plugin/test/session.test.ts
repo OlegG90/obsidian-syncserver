@@ -15,9 +15,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { authSecret } from '../src/crypto/account.js';
+import { authSecret, createAccount, deriveKek, openAccount } from '../src/crypto/account.js';
 import { randomBytes, toBase64 } from '../src/crypto/bytes.js';
-import { forTests, type Connection, type Derivation } from '../src/session/index.js';
+import { seal } from '../src/crypto/sealed.js';
+import { Session, forTests, type Connection, type Derivation } from '../src/session/index.js';
 import type { Transport, HttpRequest, HttpResponse } from '../src/api/transport.js';
 
 /** A fixed seed, so `authSecret(seed)` is a known value the test can assert. */
@@ -220,7 +221,10 @@ describe('Session.create + open', () => {
     const { create } = forTests({ derivation, transport });
 
     const session = create(conn());
-    await assert.rejects(() => session.open('wrong'), /invalid tag/);
+    // The message is the session's, not the cipher's: whatever the derivation throws, a
+    // person is told what to do about it. Pinning /invalid tag/ here is what let that
+    // wording reach a real device.
+    await assert.rejects(() => session.open('wrong'), /does not open this account/);
     assert.equal(session.state, 'locked', 'no half-open state: the seed was never set');
     assert.equal(derivation.calls, 1, 'the derivation ran and failed');
   });
@@ -308,5 +312,40 @@ describe('the passphrase never crosses the wire', () => {
       assert.ok(!text.includes(passphrase), `${call.method} ${call.url} carried the passphrase`);
       assert.ok(!call.url.includes(encodeURIComponent(passphrase)), `${call.method} ${call.url} carried the passphrase in the URL`);
     }
+  });
+});
+
+/** Below the server's floor on purpose: this test never registers, it only unwraps. */
+const FAST = { v: 19, m: 256, t: 1, p: 1 };
+const SALT = randomBytes(16);
+
+describe('a wrong passphrase says so', () => {
+  it('does not hand the AEAD’s own words to a person', async () => {
+    // "invalid tag" is what the cipher says and is unusable advice: it is exactly what a
+    // wrong passphrase produces, and it reads like a corrupted file. This cost a real
+    // debugging session on a real device.
+    const conn: Connection = {
+      serverUrl: 'http://example.invalid',
+      login: 'admin',
+      deviceId: '11111111-1111-4111-8111-111111111111',
+      vaultId: '22222222-2222-4222-8222-222222222222',
+      wrappedSeed: seal(deriveKek('the right one', SALT, FAST), randomBytes(32)),
+      accountSalt: toBase64(SALT),
+      kdfParams: FAST,
+    };
+
+    const s = Session.create(conn, {
+      derivation: {
+        create: (passphrase, params) => createAccount(passphrase, params),
+        open: (passphrase, accountSalt, kdfParams, wrappedSeed) =>
+          openAccount(passphrase, accountSalt, kdfParams, wrappedSeed),
+      },
+      transport: async () => {
+        throw new Error('the wire must not be reached — the phrase fails first');
+      },
+    });
+
+    await assert.rejects(s.open('the wrong one'), /does not open this account/);
+    assert.equal(s.state, 'locked', 'and nothing half-opened');
   });
 });
