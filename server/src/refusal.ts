@@ -1,19 +1,20 @@
 /**
- * The refusal vocabulary: every "this write was refused" outcome, and the one place
- * that turns it into an HTTP response.
+ * The refusal vocabulary: every way a write can be refused, named as a fact.
  *
- * Three route families used to each declare their own refusal union — nodes' `WriteFailure`,
- * blobs' `BlobRefusal`, history's `RestoreFailure` — and map it with their own switch: the
- * same status rule ("404, never 403", "frozen → 413") stated three times under three names,
- * and M3's share refusals would have been the fourth. The services now return this one
- * union; this module is the one switch, and a new refusal is a new member, not a new switch
- * in a new route.
+ * Five route families used to each declare their own union and map it with their own switch
+ * — the same status rule stated five times under five names. They share this one now, and a
+ * new refusal is a new member rather than a new switch in a new route.
+ *
+ * **This module knows nothing about HTTP**, and that is the whole reason it is separate from
+ * `refuse-http.ts`. Every service returns a `Refusal`, so every service imported whatever
+ * declared it; while the union and the response mapping lived in one file, that meant five
+ * services importing a Fastify type to describe a fact about a database write. A management
+ * console or a CLI would have inherited the same dependency for the same non-reason.
  *
  * The union names the fact, not the wire: `kind` is the discriminant and the payload fields
- * are the service's own names (`currentSha256`, `retryAfterSeconds`, `blockedBy`). `refuse`
- * is the only place that maps them to the response body.
+ * are the service's own names (`currentSha256`, `retryAfterSeconds`, `blockedBy`). What each
+ * one becomes on the wire is `refuse-http.ts` and nowhere else.
  */
-import type { FastifyReply } from 'fastify';
 import type { RefusalCode } from '@syncserver/shared';
 
 export type Refusal =
@@ -61,62 +62,6 @@ export type Refusal =
  */
 const _everyKindIsDeclared: RefusalCode = null as unknown as Refusal['kind'];
 void _everyKindIsDeclared;
-
-/** One place decides what a refusal looks like, so every route family answers the same way. */
-export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
-  switch (refusal.kind) {
-    case 'not_found':
-    case 'no_such_version':
-      return reply.code(404).send({ error: refusal.kind });
-    case 'device_revoked':
-      return reply.code(401).send({ error: 'device_revoked' });
-    case 'frozen':
-    case 'over_quota':
-    case 'too_large':
-    case 'part_too_large':
-    case 'too_many_unfinished':
-      return reply.code(413).send({ error: refusal.kind });
-    case 'address_mismatch':
-    case 'size_mismatch':
-      return reply.code(400).send({ error: refusal.kind });
-    case 'share_boundary':
-      return reply.code(409).send({ error: 'share_boundary' });
-    case 'base_mismatch':
-      // The caller is told what the content actually is, because that is what lets the
-      // client decide between "same text reached independently" and a real conflict.
-      return reply
-        .code(409)
-        .send({ error: 'base_mismatch', sha256: refusal.currentSha256, rev: refusal.rev });
-    case 'rev_mismatch':
-      return reply.code(409).send({ error: 'rev_mismatch', rev: refusal.rev });
-    case 'name_taken':
-      // The blocking node is named because the client has to offer the user a choice, and
-      // "something is in the way" is not a choice.
-      return reply.code(409).send({ error: 'name_taken', blocked_by: refusal.blockedBy });
-    case 'rate_limited':
-      return reply
-        .code(429)
-        .header('retry-after', String(refusal.retryAfterSeconds))
-        .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
-    case 'parts_missing':
-      return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
-    case 'not_empty':
-    case 'named_by_a_share':
-    case 'vault_exists':
-      // 409 rather than 403: nothing is forbidden, the vault is simply still in use — and
-      // which kind of use is the difference between an answer a person can act on and one
-      // that baffles them a month after their last share ended.
-      return reply.code(409).send({ error: refusal.kind });
-    case 'invalid_write':
-      return reply.code(400).send({ error: 'invalid_write', detail: refusal.detail });
-    case 'already_settled':
-      return reply.code(409).send({ error: 'already_settled' });
-    case 'not_approved':
-      // 409 rather than 404: the caller holds a valid pairing and the answer is "not yet",
-      // which is what it should keep asking about. A 404 would tell it to give up.
-      return reply.code(409).send({ error: 'not_approved' });
-  }
-};
 
 /** PostgreSQL's `check_violation` — a CHECK constraint or a trigger's `RAISE`. */
 const CHECK_VIOLATION = '23514';

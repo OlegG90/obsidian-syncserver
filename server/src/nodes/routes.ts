@@ -3,7 +3,8 @@ import type { Material as WireMaterial } from '@syncserver/shared';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
-import { refuse, type Refusal } from '../refuse.js';
+import type { Refusal } from '../refusal.js';
+import { refuse } from '../refuse-http.js';
 import { createNode, dedupLookup, deleteNode, moveNode, putContent, type Material } from './service.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;

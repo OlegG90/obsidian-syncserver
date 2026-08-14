@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import type { Db } from '../db.js';
 import { isFrozen } from '../account.js';
 import { fits } from '../quota.js';
-import { refusalFromDatabase, type Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refusal.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 import type { RateLimiter } from './rate.js';
@@ -101,7 +101,7 @@ export const parseRange = (
   return { start, end: Math.min(end, total - 1) };
 };
 
-/** Every way an upload can be refused — the shared refusal vocabulary, see refuse.ts. */
+/** Every way an upload can be refused — the shared refusal vocabulary, see refusal.ts. */
 export type IntakeResult<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
 
 export interface AcceptWholeInput {

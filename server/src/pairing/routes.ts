@@ -12,7 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
-import { refuse } from '../refuse.js';
+import { refuse } from '../refuse-http.js';
 import { approvePairing, beginPairing, claimPairing, lookupPairing } from './service.js';
 
 /** X25519 public keys are 32 bytes; nothing else is a public key here. */

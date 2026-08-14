@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { isFrozen } from '../account.js';
 import type { Db } from '../db.js';
-import { refusalFromDatabase, type Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refusal.js';
 
 /** PostgreSQL's `unique_violation`. */
 const UNIQUE_VIOLATION = '23505';

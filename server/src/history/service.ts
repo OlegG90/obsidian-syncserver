@@ -11,7 +11,7 @@ import type { RestoreResult } from '@syncserver/shared';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
-import { refusalFromDatabase, type Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
 
 /** The schema's own refusals, returned rather than thrown — see `nodes/service.ts`. */

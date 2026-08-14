@@ -14,7 +14,7 @@ import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
-import { refusalFromDatabase, type Refusal } from '../refuse.js';
+import { refusalFromDatabase, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
 
 /**

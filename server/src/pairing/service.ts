@@ -22,7 +22,7 @@
  */
 import type { Db } from '../db.js';
 import { hashToken } from '../crypto.js';
-import type { Refusal } from '../refuse.js';
+import type { Refusal } from '../refusal.js';
 
 export interface PairingLimits {
   /** docs/04: how long a pairing may sit unclaimed. A human carries a code between two devices. */

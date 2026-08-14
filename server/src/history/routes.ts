@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
-import { refuse } from '../refuse.js';
+import { refuse } from '../refuse-http.js';
 import { listTrash, listVersions, restoreNode } from './service.js';
 
 export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
