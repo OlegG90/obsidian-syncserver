@@ -13,13 +13,14 @@
  * the person. That asymmetry is the entire point of the key model (docs/06), and it is the
  * reason the plugin asks again after every restart instead of remembering.
  */
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
 
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
+import { newPairingCode, normalisePairingCode } from './crypto/pairing-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { obsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
@@ -201,6 +202,52 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Join an account that already exists, as a second device (docs/07).
+   *
+   * The counterpart of `connect()`: nothing is generated here, because the account's seed
+   * exists and the whole flow is about receiving it. `onCode` is called once the pairing is
+   * registered, so the UI can show the code the person carries to the other device, and
+   * `waiting` is polled between attempts so they can give up.
+   */
+  async pair(
+    args: { serverUrl: string; login: string; passphrase: string; pairingCode: string },
+    waiting: () => Promise<boolean>,
+  ): Promise<void> {
+    const s = await session.pair(
+      {
+        ...args,
+        deviceName: 'obsidian',
+        devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+      },
+      obsidianTransport,
+      waiting,
+    );
+    this.sess = s;
+    this.data.connection = s.connection;
+    // A paired device meets a vault that already has contents on both sides, which is
+    // adoption's own case (docs/07) — an empty state is exactly right to start it from.
+    this.data.state = emptyState();
+    await this.save();
+    this.setPhase({ kind: 'idle' });
+    this.startPush();
+  }
+
+  /**
+   * Approve another device's pairing from here. Needs the seed, so it needs an open
+   * session — the passphrase is asked for exactly as a sync would ask.
+   */
+  async approvePairing(code: string): Promise<void> {
+    if (!this.sess) throw new Error('this vault is not connected');
+    if (this.sess.state === 'locked') {
+      const passphrase = await askPassphrase(this.app);
+      if (!passphrase) throw new Error('a passphrase is required to approve a device');
+      await this.sess.open(passphrase);
+      this.setPhase({ kind: 'idle' });
+    }
+    await this.sess.approvePairing(code);
+  }
+
+  /**
    * Forget the passphrase. The session drops the seed, the client, and both tokens — an
    * access token is the right to read and write the vault's ciphertext, and leaving one
    * behind would be theatre.
@@ -332,6 +379,8 @@ class SyncServerSettings extends PluginSettingTab {
               await this.plugin.save();
             }),
         );
+
+      this.approveSection(containerEl);
       return;
     }
 
@@ -381,6 +430,125 @@ class SyncServerSettings extends PluginSettingTab {
             b.setDisabled(false);
           }
         }),
+    );
+
+    this.pairSection(containerEl);
+  }
+
+  /**
+   * On a device that already holds the seed: take the code from the one that does not.
+   *
+   * This is the half of pairing that needs the seed, which is why it lives only here and
+   * why it may ask for the passphrase — the same question a sync asks, for the same reason.
+   */
+  private approveSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Add another device' });
+    containerEl.createEl('p', {
+      text:
+        'On the other device, choose “Join an existing account” and read the code it shows. ' +
+        'This device seals the account key to that one; the server relays it and cannot read it.',
+    });
+
+    let code = '';
+    new Setting(containerEl)
+      .setName('Pairing code')
+      .setDesc('From the other device. Case and dashes do not matter.')
+      .addText((t) => t.setPlaceholder('XXXX-XXXX-…').onChange((v) => (code = v)));
+
+    new Setting(containerEl).addButton((b) =>
+      b.setButtonText('Approve').onClick(async () => {
+        const typed = normalisePairingCode(code);
+        if (!typed) {
+          new Notice('SyncServer: enter the code shown on the other device.');
+          return;
+        }
+        try {
+          b.setDisabled(true);
+          await this.plugin.approvePairing(typed);
+          new Notice('SyncServer: approved. The other device should finish on its own.');
+        } catch (e) {
+          new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+        } finally {
+          b.setDisabled(false);
+        }
+      }),
+    );
+  }
+
+  /**
+   * On a device with nothing: show a code and wait for the other one to approve.
+   *
+   * The passphrase is asked for here even though the seed is arriving sealed, because this
+   * device must be able to lock and come back: it re-wraps the seed under the passphrase
+   * itself, the server having declined to hand a wrapped one out (docs/06).
+   */
+  private pairSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Join an existing account' });
+    containerEl.createEl('p', {
+      text:
+        'For a second device on an account that already exists. Nothing is created — this ' +
+        'device receives the account key from one that already has it.',
+    });
+
+    const draft = { serverUrl: 'http://127.0.0.1:8087', login: 'admin', passphrase: '' };
+    new Setting(containerEl)
+      .setName('Server URL')
+      .addText((t) => t.setValue(draft.serverUrl).onChange((v) => (draft.serverUrl = v.trim())));
+    new Setting(containerEl)
+      .setName('Login')
+      .addText((t) => t.setValue(draft.login).onChange((v) => (draft.login = v.trim())));
+    new Setting(containerEl)
+      .setName('Passphrase')
+      .setDesc('The account’s own passphrase. It never leaves this device.')
+      .addText((t) => {
+        t.inputEl.type = 'password';
+        t.onChange((v) => (draft.passphrase = v));
+      });
+
+    // Filled in once the pairing exists, so the code is never shown before it is real.
+    const shown = containerEl.createEl('div');
+    let cancelled = false;
+
+    new Setting(containerEl).addButton((b) =>
+      b.setButtonText('Show pairing code').onClick(async () => {
+        if (!draft.passphrase) {
+          new Notice('SyncServer: the account’s passphrase is required.');
+          return;
+        }
+        const code = newPairingCode();
+        cancelled = false;
+        shown.empty();
+        shown.createEl('p', { text: 'Type this on the device that is already connected:' });
+        // A code is read off one screen and typed into another, so it is set apart rather
+        // than left in a paragraph to be squinted at.
+        shown.createEl('pre', { text: code });
+        const status = shown.createEl('p', { text: 'Waiting for approval…' });
+        const cancel = shown.createEl('button', { text: 'Cancel' });
+        cancel.onclick = () => {
+          cancelled = true;
+          status.setText('Cancelled.');
+        };
+
+        try {
+          b.setDisabled(true);
+          await this.plugin.pair(
+            { serverUrl: draft.serverUrl, login: draft.login, passphrase: draft.passphrase, pairingCode: code },
+            async () => {
+              if (cancelled) return false;
+              // A second between attempts: the wait is a person walking to another device,
+              // not a machine, and a tighter loop would only make more requests.
+              await new Promise((r) => setTimeout(r, 1000));
+              return true;
+            },
+          );
+          new Notice('SyncServer: paired.');
+          this.display();
+        } catch (e) {
+          status.setText(e instanceof Error ? e.message : String(e));
+          new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+          b.setDisabled(false);
+        }
+      }),
     );
   }
 }
