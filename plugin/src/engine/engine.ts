@@ -39,6 +39,7 @@ import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapCon
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
+import { folderMoves, renameSourceFor, type Vanished } from './rename.js';
 
 export interface SyncReport {
   /**
@@ -95,28 +96,6 @@ interface LocalMeta {
   size: number;
 }
 
-/**
- * A path this device had synced and can no longer find, kept as a possible rename source.
- *
- * Not every disappearance is a rename, and the cost of being wrong is asymmetric: a missed
- * rename costs an upload the deduplication makes nearly free, while a wrong one moves a node
- * the user still has somewhere else. So the match is deliberately narrow — see `RENAME_MIN_BYTES`.
- */
-interface Vanished {
-  path: string;
-  nodeId: string;
-  rev: number;
-  address: string;
-}
-
-/**
- * Below this, a hash match means nothing (docs/04).
- *
- * Empty notes, a repeated icon, a stub from a template — small files collide constantly, and
- * the heuristic would move whichever one it happened to see first. Falling back to
- * delete-and-create costs nothing extra, because the blob deduplicates anyway.
- */
-const RENAME_MIN_BYTES = 512;
 
 /**
  * What the cursor probe says about the server relative to us, and so what an absence means.
@@ -487,15 +466,15 @@ export class SyncEngine {
    * Failing any of these is not a failure. It falls through to delete-and-create, and the
    * blob deduplicates, so the cost of being conservative here is metadata.
    */
+  /**
+   * The decision is `rename.ts`'s; consuming the candidate is this pass's.
+   *
+   * Kept apart on purpose: a module that quietly mutated its own input could not be asked
+   * the same question twice, which is exactly what a fixture test does.
+   */
   private renameSourceFor(m: LocalMeta, ctx: PassContext): Vanished | undefined {
-    if (m.size < RENAME_MIN_BYTES) return undefined;
-
-    const candidates = ctx.vanished.get(m.plainHash);
-    if (!candidates || candidates.length !== 1) return undefined;
-
-    const source = candidates[0]!;
-    const node = ctx.tree.get(source.path);
-    if (!node || node.nodeId !== source.nodeId) return undefined;
+    const source = renameSourceFor(m, ctx.vanished, ctx.tree);
+    if (!source) return undefined;
 
     // Consumed: a second file with these bytes must not claim the same source.
     ctx.vanished.delete(m.plainHash);
@@ -528,105 +507,40 @@ export class SyncEngine {
    * conservative by construction (docs/04).
    */
   private async moveRenamedFolders(local: VaultFile[], here: Set<string>, ctx: PassContext): Promise<void> {
-    // Group vanished files by their parent directory. A "folder" is a path prefix: every
-    // child shares it.
-    const byParent = new Map<string, { rel: string; v: Vanished; hash: string }[]>();
-    for (const [hash, list] of ctx.vanished) {
-      for (const v of list) {
-        const slash = v.path.lastIndexOf('/');
-        const parent = slash === -1 ? '' : v.path.slice(0, slash);
-        const rel = slash === -1 ? v.path : v.path.slice(slash + 1);
-        const arr = byParent.get(parent) ?? [];
-        arr.push({ rel, v, hash });
-        byParent.set(parent, arr);
-      }
-    }
-
-    for (const [parent, children] of byParent) {
-      // Only a path that IS a server folder node can be moved as one. And only when the
-      // parent is a real folder with children — the vault root ('' ) is not movable.
-      const source = ctx.tree.get(parent);
-      if (!source || source.isFile || children.length === 0) continue;
-
-      // Every child must reappear under the SAME new parent, at the same relative path,
-      // with the same content.
-      let newParent: string | undefined;
-      const move = children.every(({ rel, v, hash }) => {
-        const appeared = this.appearedUnder(rel, hash, here, ctx);
-        if (!appeared || appeared.path === v.path) return false;
-        const slash = appeared.path.lastIndexOf('/');
-        const np = slash === -1 ? '' : appeared.path.slice(0, slash);
-        if (newParent !== undefined && np !== newParent) return false;
-        newParent = np;
-        return true;
-      });
-      if (!move || newParent === undefined) continue;
-
-      // The destination folder must not already exist (that would be a merge, not a move),
-      // and its own parent chain must already be present so no folder is created in the
-      // middle of a walk that has not processed it yet.
-      if (ctx.tree.has(newParent)) continue;
-      if (newParent && !this.parentChainExists(newParent, ctx)) continue;
-
-      // One move of the folder node. The server recomputes ancestry for the whole subtree.
-      const name = basename(newParent);
-      const destParent = newParent ? parentOf(newParent) : '';
+    // Every condition that decides whether this IS a folder move lives in `rename.ts`.
+    // What is left here is what only this class can do: name the folder under the right
+    // scope, call the server, and repair the walk's own view of the tree afterwards.
+    for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
+      const name = basename(move.to);
+      const destParent = move.to ? parentOf(move.to) : '';
       const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
       try {
         // The moved folder's new name is named under the destination parent's scope.
-        const nameScopeId = this.contentScopeId(ctx, newParent);
-        const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
+        const nameScopeId = this.contentScopeId(ctx, move.to);
+        const out = await this.client.moveNode(this.vaultId, move.nodeId, move.rev, {
           parent_id: destParentId,
           name_enc: encryptName(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
           name_hmac: nameHmac(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
           name_key_id: nameScopeId,
         });
-        this.remapTreePaths(parent, newParent, out.rev, ctx);
-        this.remapStatePaths(parent, newParent, ctx);
-        for (const { rel, v, hash } of children) {
-          ctx.vanished.delete(hash);
-          ctx.handled.add(`${newParent}/${rel}`);
+        this.remapTreePaths(move.from, move.to, out.rev, ctx);
+        this.remapStatePaths(move.from, move.to, ctx);
+        for (const child of move.children) {
+          ctx.vanished.delete(child.hash);
+          ctx.handled.add(child.to);
         }
-        ctx.handled.add(newParent === '' ? '' : newParent);
+        ctx.handled.add(move.to);
         // The moved files' local copies were handled in this pass — do not upload them.
         for (const f of local) {
-          if (f.path.startsWith(`${newParent}/`)) ctx.handled.add(f.path);
+          if (f.path.startsWith(`${move.to}/`)) ctx.handled.add(f.path);
         }
-        ctx.report.renamed.push({ from: parent, to: newParent });
+        ctx.report.renamed.push({ from: move.from, to: move.to });
       } catch (e) {
-        // A refused move is not a failure we can resolve here — the per-file fallback
-        // already ran nothing for these, so report and let the next pass retry.
-        ctx.report.errors.push({ path: parent, message: message(e) });
+        // A refused move is not a failure we can resolve here — the per-file fallback ran
+        // nothing for these, so report and let the next pass retry.
+        ctx.report.errors.push({ path: move.from, message: message(e) });
       }
     }
-  }
-
-  /** A local file at `N/<rel>` whose hash matches the vanished one, or nothing. */
-  private appearedUnder(rel: string, plainHash: string, here: Set<string>, ctx: PassContext): VaultFile | undefined {
-    // The candidate new path is the same relative path under any parent. We search the
-    // appeared paths by scanning local files with this exact hash and the right suffix.
-    for (const f of here) {
-      if (!f.endsWith(`/${rel}`)) continue;
-      const m = ctx.meta.get(f);
-      if (m && m.plainHash === plainHash) {
-        return { path: f, mtime: m.mtime };
-      }
-    }
-    return undefined;
-  }
-
-  /** Every ancestor ABOVE the destination already exists as a server folder node. */
-  private parentChainExists(path: string, ctx: PassContext): boolean {
-    // The destination itself is not part of its own parent chain; only the folders above it.
-    const parent = parentOf(path);
-    if (!parent) return true;
-    let sofar = '';
-    for (const part of parent.split('/')) {
-      sofar = sofar ? `${sofar}/${part}` : part;
-      const node = ctx.tree.get(sofar);
-      if (!node || node.isFile) return false;
-    }
-    return true;
   }
 
   /** Rewrite `from/…` paths in the walked tree to `to/…`, refreshing the moved folder's rev. */
