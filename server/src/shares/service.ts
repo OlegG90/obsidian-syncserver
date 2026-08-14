@@ -853,10 +853,25 @@ const departMember = async (
   const ends = leaving === initiator || Number(remaining.rows[0]!.n) === 0;
 
   if (ends) {
+    // Which terminal state depends on where it got to, and the schema is strict about it:
+    // `preparing` may go only to `cancelled`, `active` only to `ended`. Writing `ended`
+    // unconditionally made leaving a share that was still preparing impossible — a
+    // `restrict_violation` the caller could do nothing about, on a share nothing else could
+    // remove either, since cancelling has no button.
+    //
+    // They are the same act seen from two distances: a share nobody could join yet is
+    // cancelled, one that lived is ended. Both still hand the replica back to its owner's
+    // client, which is what the pass after this does.
+    //
     // Terminal first, then everybody starts finalizing — the ring cancel walks, for the
     // same reason: the initiator may not leave a share that still lives. A terminal share
     // MAY hold members who are finalizing; what it may not hold is one who has not begun.
-    await c.query(`UPDATE shares SET state = 'ended', terminal_at = now() WHERE id = $1`, [shareId]);
+    await c.query(
+      `UPDATE shares SET state = CASE WHEN state = 'preparing' THEN 'cancelled' ELSE 'ended' END::share_state,
+              terminal_at = now()
+        WHERE id = $1`,
+      [shareId],
+    );
     await c.query(
       `UPDATE share_members SET finalization_started_at = now()
         WHERE share_id = $1 AND left_at IS NULL AND finalization_started_at IS NULL`,

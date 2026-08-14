@@ -1702,3 +1702,45 @@ describe('finishing a departure that was interrupted', () => {
     assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks), 'nothing is named under it now');
   });
 });
+
+describe('leaving a share that never got off the ground', () => {
+  it('cancels it rather than ending it, which the schema does not allow', async () => {
+    // A 500 in a live vault: departMember wrote `ended` unconditionally, and `preparing`
+    // may go only to `cancelled`. The share could not be left, and had no other way out
+    // either — cancelling has no button.
+    const folder = await createNode('folder', `leave-preparing-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+
+    const r = await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().ended, true, 'it is over, whichever word the state uses');
+
+    const state = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(state!.state, 'cancelled');
+  });
+
+  it('still hands the replica back, so its names can return to the vault key', async () => {
+    // The point of going through leave rather than a bare state change: the initiator's
+    // client owes the same conversion pass, and it needs the key to run it.
+    const folder = await createNode('folder', `leave-preparing-keys-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+
+    const member = await db.one<{ started: string | null; left: string | null }>(
+      `SELECT finalization_started_at AS started, left_at AS left FROM share_members
+        WHERE share_id = $1 AND user_id = $2`,
+      [shareId, userId],
+    );
+    assert.ok(member!.started, 'the pass is owed');
+    assert.equal(member!.left, null, 'and not yet run');
+
+    const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
+    assert.ok(
+      r.json().scopes.some((s: { key_id: string }) => s.key_id === ks),
+      'so the key it needs is still offered',
+    );
+  });
+});
