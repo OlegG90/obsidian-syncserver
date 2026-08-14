@@ -1858,3 +1858,99 @@ describe('a departure has to account for the trash too', () => {
     );
   });
 });
+
+describe('what a share is over, and how long it stays visible', () => {
+  it('marks the trash as well, because the schema refuses a subtree marked in part', async () => {
+    // I tried the opposite first and the schema said no: a node inside a shared folder whose
+    // child carries a different mark or none is "incompletely shared", with no exception for
+    // a deleted child. So a trashed node joins the share UNPREPARED — preparation only
+    // re-keys what is live, so its name stays under KV — and leaving has to cope with that
+    // rather than the share pretending it is not there.
+    const folder = await createNode('folder', `trash-marked-too-${randomUUID()}`);
+    const doomed = await createNode('folder', `gone-${randomUUID()}`, folder);
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      doomed,
+    ]);
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/vaults/${vaultId}/nodes/${doomed}`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+    });
+    assert.equal(removed.statusCode, 200, removed.body);
+
+    const opened = await openShare(folder);
+    assert.equal(opened.statusCode, 201, opened.body);
+    const shareId = opened.json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const marked = await db.one<{ share: string | null; keyId: string | null }>(
+      `SELECT share_id AS share, name_key_id AS "keyId" FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [vaultId, doomed],
+    );
+    assert.equal(marked!.share, shareId, 'the trashed node carries the share');
+    assert.notEqual(marked!.keyId, ks, 'and is NOT under the share key: nothing prepared it');
+
+    // Which the replica listing has to report, so a departure can tell the two apart:
+    // convert what was converted, and only clear the mark on what was not.
+    const r = await app.inject({ method: 'GET', url: `/shares/${shareId}/replica`, headers: auth() });
+    const entry = (r.json() as { node_id: string; name_key_id: string }[]).find((n) => n.node_id === doomed);
+    assert.ok(entry, 'it is in the set the pass must cover');
+    assert.notEqual(entry!.name_key_id, ks);
+  });
+
+  it('keeps an ended share in the list while its pass is still owed', async () => {
+    // Hiding it left the marks in place and no button to clear them: the screen went quiet
+    // and the replica stayed half-converted for good. `left_at` is what removes a share from
+    // somebody's life, and the pass writes it — not the ending.
+    const { shareId } = await sharedWith('listed-after-end');
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+
+    const r = await app.inject({
+      method: 'GET',
+      url: '/shares',
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const row = r.json().joined.find((s: { share_id: string }) => s.share_id === shareId);
+    assert.ok(row, 'still listed, so the pass can still be run');
+    assert.equal(row.state, 'ended', 'and it says what state it is in');
+  });
+
+  it('drops it once the pass has run', async () => {
+    const { shareId } = await sharedWith('unlisted-after-pass');
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const nodes = await db.query<{ id: string }>(`SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2`, [
+      strangerVaultId,
+      shareId,
+    ]);
+    const keyId = await strangerVaultKey();
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        nodes: nodes.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: keyId,
+        })),
+      },
+    });
+
+    const r = await app.inject({
+      method: 'GET',
+      url: '/shares',
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.ok(!r.json().joined.some((s: { share_id: string }) => s.share_id === shareId));
+  });
+});

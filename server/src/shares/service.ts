@@ -113,6 +113,16 @@ export const createShare = async (
     // of a file be recognised as the same item as the initiator's when neither can see
     // the other's node ids (docs/05, corresponding nodes). Only the root reuses the
     // share's `root_item_id`, because the share itself is that item.
+    //
+    // **The trash is marked too, and that is the schema's call rather than a choice here.**
+    // `nodes_check_share_membership` refuses a node inside a shared folder whose child
+    // carries a different mark or none — "the subtree is incompletely shared" — and makes no
+    // exception for a deleted one. I tried excluding the trash and the schema said no.
+    //
+    // The consequence has to be lived with rather than hidden: a trashed node joins the
+    // share **unprepared**, because preparation only re-keys what is live, so its name stays
+    // under `KV`. Leaving is where that matters, and it knows — a node that was never
+    // converted into the share needs its mark cleared and nothing else.
     await c.query(
       `UPDATE nodes SET share_id = $1, share_item_id = gen_random_uuid()
         WHERE vault_id = $2 AND ancestry @> ARRAY[$3]::uuid[]`,
@@ -223,12 +233,15 @@ export const listShares = async (
   // One branch, not two: the initiator holds an ordinary membership row from the moment
   // the share is created, so they are already in this result. `is_initiator` is a fact
   // about the share, not a role — there are none (SH-10).
+  // **Not filtered by state.** A share that has ended still owes its members the pass that
+  // converts their replica back, and a list that hides it leaves them no way to run it —
+  // the screen goes quiet while the marks stay put. `left_at` is what removes a share from
+  // somebody's life, and it is written by the pass, not by the ending.
   const joined = await db.query<JoinedShare>(
     `SELECT s.id AS "shareId", m.vault_id AS "vaultId",
             (s.initiator_id = m.user_id) AS "isInitiator", s.state::text AS state
        FROM share_members m JOIN shares s ON s.id = m.share_id
       WHERE m.user_id = $1 AND m.joined_at IS NOT NULL AND m.left_at IS NULL
-        AND s.state IN ('preparing', 'active')
       ORDER BY s.created_at`,
     [userId],
   );

@@ -487,10 +487,19 @@ export default class SyncServerPlugin extends Plugin {
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
           const replica = (await h.client.shareReplica(shareId)).map((n) => {
-            const name = n.name_enc
-              ? decryptName(n.name_key_id === scopeId ? key : h.kv, n.name_enc)
-              : n.node_id;
-            return { nodeId: n.node_id, path: name, name, address: n.sha256, deleted: n.deleted };
+            // A node can carry the mark without ever having been converted — the trash of a
+            // folder shared later, for one. Its name is under `KV` already, and there is no
+            // `KS` envelope for its content to move back, so the only thing it needs is the
+            // mark gone. Asking for a conversion it never had is how leaving got stuck.
+            const underShare = n.name_key_id === scopeId;
+            const name = n.name_enc ? decryptName(underShare ? key : h.kv, n.name_enc) : n.node_id;
+            return {
+              nodeId: n.node_id,
+              path: name,
+              name,
+              address: underShare ? n.sha256 : null,
+              deleted: n.deleted,
+            };
           });
 
           return leaveShare(
