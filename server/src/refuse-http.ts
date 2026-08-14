@@ -65,5 +65,9 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       // 409 rather than 404: the caller holds a valid pairing and the answer is "not yet",
       // which is what it should keep asking about. A 404 would tell it to give up.
       return reply.code(409).send({ error: 'not_approved' });
+    case 'share_not_preparing':
+      // The state travels with it: "cancel" is wrong for an active share, and what is
+      // right — end it by finalizing — depends on which state it actually reached.
+      return reply.code(409).send({ error: 'share_not_preparing', state: refusal.state });
   }
 };

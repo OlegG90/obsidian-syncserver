@@ -51,7 +51,13 @@ export type Refusal =
   /** An ended share still names this vault, and will until the journal TTL prunes it (#44). */
   | { kind: 'named_by_a_share' }
   /** That vault id already exists for this account — the ordinary retry, not a fault. */
-  | { kind: 'vault_exists' };
+  | { kind: 'vault_exists' }
+  /**
+   * The share is past `preparing`, so cancelling it is no longer the right operation —
+   * a share somebody may already hold a copy of is ended by finalization, not by a state
+   * change. `state` is carried because it decides which operation *is* right.
+   */
+  | { kind: 'share_not_preparing'; state: string };
 
 /**
  * Every `kind` above is a code `shared` declares, checked here rather than trusted.

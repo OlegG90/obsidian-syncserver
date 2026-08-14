@@ -11,6 +11,7 @@ import { registerVaultRoutes } from './vaults/routes.js';
 import { registerHistoryRoutes } from './history/routes.js';
 import { registerNodeRoutes } from './nodes/routes.js';
 import { registerPairingRoutes } from './pairing/routes.js';
+import { registerShareRoutes } from './shares/routes.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, rearmBootstrapInvitation, registerBootstrapGuard } from './bootstrap.js';
@@ -57,6 +58,7 @@ export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise
   registerNodeRoutes(app, db);
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
+  registerShareRoutes(app, db);
   registerDeltaRoutes(app, db, cfg);
 
   if (events) registerEventsRoutes(app, events);
