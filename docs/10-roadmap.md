@@ -5,7 +5,7 @@
 | **M0** | database schema (including `versions`), blob store, authentication, `delta`/`put`/`delete`; verified with curl, no plugin. Ships as a **Docker image** deployed to the home server for testing — see [13](13-deployment.md) | ☑ |
 | **M0.5** | plugin, **one-way** sync: local changes reach the server, delta is only ever applied to an empty vault | ☑ |
 | **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☑ |
-| **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☐ |
+| **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☐ |
 | **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
 | **M5** | WebDAV gateway | ☐ |
@@ -20,13 +20,16 @@ content is `201` rather than a short circuit (#46), and `HEAD` stays `200` after
 the trash still holds the content. The collector and the schema's 117 assertions ride along; the server's
 own integration suite is run from a development machine, not from the NAS.
 
-**Three of M2's four pieces have landed**: the `.obsidian/` switch with its per-device exceptions
+**M2 is closed.** Its four pieces: the `.obsidian/` switch with its per-device exceptions
 ([01](01-context.md)), resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with
 the part size doubling as the threshold above which a client uses them at all — and WebSocket push
 ([04](04-sync-protocol.md), Change notifications): a journal-insert notification delivered on commit, fanned
 out over `WS /events` to the account's devices, so a change wakes a connected client instead of waiting for
-the button. **Mobile is what remains**, and it was a word rather than a criterion until the section below
-gave it three — two about memory, one that no suite can run.
+the button. And **mobile**, which was a word rather than a criterion until the section
+below gave it three — two about memory, one that no suite could run and that has now been run on a real
+phone. Getting there also required the thing docs/07 had specified since the first draft and no code
+performed: **pairing**, without which a phone cannot join an account at all, because a second device has no
+seed and therefore no way to log in.
 
 Estimate: M1 is two to three weeks of evenings. Re-estimate M2 and beyond only after M1; until then the
 numbers are guesses.
@@ -69,9 +72,12 @@ Most of what [02](02-architecture.md) demands of a phone is already structural r
 bundle carries no Node API and no native dependency (the crypto is pure TypeScript for exactly this
 reason), `manifest.json` sets `isDesktopOnly: false`, the device registers under its own platform, and iOS
 having no background execution is already written into the protocol — a change notification only shortens
-the wait while the app is open ([04](04-sync-protocol.md)). The status-bar rule is met the way it had to be:
-**sync, status and lock are commands**, and the status bar carries the same state without being the only
-place it lives.
+the wait while the app is open ([04](04-sync-protocol.md)).
+
+The status-bar rule ([02](02-architecture.md)) was the one this list got wrong. Commands satisfied "never
+alone" and the row was counted as met — then a phone showed **nothing at all** until the user went hunting
+for one. A state you have to ask for is not a status. The **ribbon** carries it now, and it is also where
+the one action this plugin performs finally has a button.
 
 What is left is memory, and one thing that cannot be automated. Two copies of a file is now the peak in
 both directions, which is the floor for this format.
@@ -80,7 +86,7 @@ both directions, which is the floor for this format.
 |---|---|
 | **a large attachment is pulled without three copies of it in memory** ☑ | Sealing has cost two copies of a file since the blob became one allocation; a pull cost three, because the vault adapter copied again on the way to `writeBinary`, which takes an `ArrayBuffer` that a `Uint8Array` is not. Both boundaries into Obsidian now lend the buffer when the view covers exactly all of it — which a sealed or a decrypted blob does — and copy only a view into something larger. That exception is load-bearing rather than defensive: a resumable upload's parts are `subarray`s of one blob, and lending there would send the whole file as every part |
 | **the size ceiling is a written number** ☑ | [01](01-context.md) now carries both: the server's hard 2 GB on one blob, which the code already enforced while the document said there was no cap at all, and the device ceiling that no server can know — reckon on a file costing twice its size in memory, which on a phone puts it at tens of megabytes rather than hundreds. The second is stated and deliberately not enforced as a number: the budget depends on the device, and a fixed figure would refuse files that work on one phone while still failing on another |
-| **one real pass on a phone** ☐ | Install the bundle, adopt a vault, sync both ways, watch a conflict resolve. No suite will ever run this: the tests exercise a Node transport against a real server, which proves the protocol and says nothing about a Capacitor WebView. This is the scenario that decides whether M2 is done |
+| **one real pass on a phone** ☑ | Run on an Android phone against the home server, and it is the only row here no suite could have produced: the tests drive a Node transport, which proves the protocol and says nothing about a Capacitor WebView. The pass was install, **pair** (the phone is a second device, so it had to receive the seed sealed to an ephemeral key rather than log in), adopt, sync both ways, and a real conflict — the same file edited on both, neither version lost, the loser kept beside the winner. It found four defects that every green suite had missed: a status a phone never showed, a sync with no button, a pairing code hashed in two different forms, and a server deployed eight commits behind the client that depended on it |
 
 Going below two copies means a **framed** blob format — a nonce and a tag per frame — which is the same
 decision as giving a wrapped value a version byte ([06](06-key-model.md)): both ask whether the AEAD stays
