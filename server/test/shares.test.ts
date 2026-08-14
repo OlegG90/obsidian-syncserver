@@ -1554,3 +1554,58 @@ describe('the states the delta carries', () => {
     assert.ok(!(await eventsOf()).some((e) => e.type === 'account_frozen'), 'and stops when it stops being true');
   });
 });
+
+describe('who to seal a share key to', () => {
+  it('gives the initiator a real recipient’s public key', async () => {
+    const shareId = await activeShare('pubkey');
+    const login = (await db.one<{ login: string }>(`SELECT login FROM users WHERE id = $1`, [strangerId]))!.login;
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/shares/${shareId}/recipients/${encodeURIComponent(login)}/pubkey`,
+      headers: auth(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().user_id, strangerId);
+    assert.ok(r.json().pubkey, 'and the key to seal to');
+  });
+
+  it('answers an unknown login with a fake pair rather than a 404 (#73)', async () => {
+    // A distinct answer for "no such account" is an enumeration oracle, and this endpoint
+    // takes a login. The fake must also be indistinguishable in shape from a real answer.
+    const shareId = await activeShare('pubkey-unknown');
+    const r = await app.inject({
+      method: 'GET',
+      url: `/shares/${shareId}/recipients/nobody-at-all/pubkey`,
+      headers: auth(),
+    });
+
+    assert.equal(r.statusCode, 200, 'not a 404');
+    assert.match(r.json().user_id, /^[0-9a-f-]{36}$/, 'shaped like an id');
+    assert.ok(r.json().pubkey.length > 0);
+  });
+
+  it('gives the SAME fake twice, because a changing one gives it away', async () => {
+    // A random fake would differ between two calls and answer the question more plainly
+    // than a 404 would.
+    const shareId = await activeShare('pubkey-stable');
+    const ask = () =>
+      app.inject({
+        method: 'GET',
+        url: `/shares/${shareId}/recipients/still-nobody/pubkey`,
+        headers: auth(),
+      });
+
+    assert.deepEqual((await ask()).json(), (await ask()).json());
+  });
+
+  it('is the initiator’s question and nobody else’s', async () => {
+    const shareId = await activeShare('pubkey-whose');
+    const r = await app.inject({
+      method: 'GET',
+      url: `/shares/${shareId}/recipients/admin/pubkey`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(r.statusCode, 404);
+  });
+});

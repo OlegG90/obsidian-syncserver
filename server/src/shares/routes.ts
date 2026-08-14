@@ -7,6 +7,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
+import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
 import {
@@ -19,6 +20,7 @@ import {
   joinShare,
   leaveShare,
   prepareShare,
+  recipientPubkey,
   listMembers,
   listShares,
   removeMember,
@@ -26,7 +28,27 @@ import {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
+export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
+  /**
+   * Who to seal the share key to. Answers an unknown login with a deterministic fake rather
+   * than a 404 (#73) — the caller cannot read "no such account" out of it, and must not try.
+   */
+  app.get<{ Params: { shareId: string; login: string } }>(
+    '/shares/:shareId/recipients/:login/pubkey',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const out = await recipientPubkey(
+        db,
+        cfg.serverSecret,
+        req.caller!.userId,
+        req.params.shareId,
+        decodeURIComponent(req.params.login),
+      );
+      if ('kind' in out) return refuse(reply, out);
+      return { user_id: out.userId, pubkey: out.pubkey };
+    },
+  );
+
   app.post<{
     Body: { vault_id: string; node_id: string; subtree_key_id: string; wrapped_key_initiator: string };
   }>('/shares', { preHandler: requireAuth }, async (req, reply) => {

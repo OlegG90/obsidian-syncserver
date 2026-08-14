@@ -58,7 +58,7 @@ export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise
   registerNodeRoutes(app, db);
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
-  registerShareRoutes(app, db);
+  registerShareRoutes(app, db, cfg);
   registerDeltaRoutes(app, db, cfg);
 
   if (events) registerEventsRoutes(app, events);

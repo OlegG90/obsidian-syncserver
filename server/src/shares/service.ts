@@ -24,6 +24,7 @@ import type { DeltaEvent } from '@syncserver/shared';
 import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
+import { fakeRecipient } from '../crypto.js';
 import { headroom } from '../quota.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
@@ -1075,4 +1076,43 @@ export const deltaEventsFor = async (db: Db, userId: string, vaultId: string): P
       ? ({ type: 'share_ended', share_id: r.shareId!, at: r.at } as const)
       : ({ type: 'account_frozen', at: r.at } as const),
   );
+};
+
+/**
+ * The public key a share key must be sealed to, for a login the initiator names.
+ *
+ * **An unknown login gets a deterministic fake pair, never a 404** (#73) — the same rule
+ * `/auth/kdf` follows, and for the same reason: this endpoint takes a login, so a distinct
+ * answer for "no such account" is an enumeration oracle. The fake must also be *stable*, or
+ * two calls would differ and give the answer away more plainly than a 404 would.
+ *
+ * The residual is named rather than claimed away (docs/04): a caller who follows a probe
+ * through to an invite still learns the account does not exist, because the invitation
+ * fails. That is weaker than `/auth/kdf`'s guarantee and proportionate for a different
+ * reason — this sits behind authentication on a server where accounts exist only because an
+ * administrator made one.
+ *
+ * Initiator only: nobody else has any business asking who could be invited here.
+ */
+export const recipientPubkey = async (
+  db: Db,
+  serverSecret: string,
+  userId: string,
+  shareId: string,
+  login: string,
+): Promise<{ userId: string; pubkey: string } | Refusal> => {
+  const share = await db.one<{ initiator: string }>(`SELECT initiator_id AS initiator FROM shares WHERE id = $1`, [
+    shareId,
+  ]);
+  if (!share || share.initiator !== userId) return { kind: 'not_found' };
+
+  const found = await db.one<{ id: string; pubkey: string }>(
+    `SELECT id, encode(pubkey, 'base64') AS pubkey
+       FROM users WHERE lower(login) = lower($1) AND state = 'active'`,
+    [login],
+  );
+  if (found) return { userId: found.id, pubkey: found.pubkey };
+
+  const fake = fakeRecipient(serverSecret, login);
+  return { userId: fake.userId, pubkey: fake.pubkey.toString('base64') };
 };
