@@ -13,6 +13,7 @@ import { describe, it } from 'node:test';
 import { newKeypair, openFrom } from '../src/crypto/hpke.js';
 import { concat as concatBytes, fromBase64, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { decryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
+import type { FinalizeNode } from '../src/api/client.js';
 import { createAccount } from '../src/crypto/account.js';
 import { newShareKey, unwrapShareKey, wrapShareKey } from '../src/crypto/share.js';
 import {
@@ -20,7 +21,9 @@ import {
   preparePlan,
   shareEnvelopeAad,
   shareFolder,
+  leaveShare,
   type AcceptDeps,
+  type LeaveDeps,
   type SharedNode,
   type SharingDeps,
 } from '../src/sharing.js';
@@ -415,5 +418,105 @@ describe('placing a replica in a vault that knows nothing about it', () => {
     assert.equal(sent.name_key_id, 'vault-scope');
     assert.equal(decryptName(vaultKey, sent.name_enc!), 'Shared notes');
     assert.equal(sent.vault_id, 'vault-1', 'the vault is the one this client runs in (AC-Q4)');
+  });
+});
+
+describe('leaving, which is the conversion run backwards', () => {
+  /** Records what leaving sent, answering with an envelope under the share scope. */
+  const leaving = (vaultKey = newShareKey(), shareKey = newShareKey(), contentKey = newShareKey()) => {
+    const sent: { nodes: FinalizeNode[] }[] = [];
+    let began = 0;
+    const deps: LeaveDeps = {
+      client: {
+        leaveShare: async () => {
+          began++;
+          return { ended: false };
+        },
+        finalizeLeave: async (_id: string, nodes: FinalizeNode[]) => {
+          sent.push({ nodes });
+        },
+        blobKeys: async () =>
+          new Map([['addr-a', [{ scopeId: SHARE_SCOPE, wrappedKey: wrapContentKey(shareKey, contentKey) }]]]),
+      } as unknown as LeaveDeps['client'],
+      read: async () => utf8('the plaintext'),
+      vaultId: 'vault-1',
+      vaultKey,
+      vaultScopeId: 'vault-scope',
+    };
+    // The harness owns the share key, so a test cannot accidentally leave with a different
+    // one than the envelopes were wrapped under.
+    return { deps, sent, shareKey, vaultKey, contentKey, began: () => began };
+  };
+
+  const replica = [
+    { nodeId: 'n-root', path: 'Shared', name: 'Shared', address: null },
+    { nodeId: 'n-a', path: 'Shared/a.md', name: 'a.md', address: 'addr-a' },
+  ];
+
+  it('stops propagation before converting anything', async () => {
+    // The order is the whole safety of it: a device that dies in between has stopped
+    // receiving and has not yet left, which is exactly where a revoked offline device sits.
+    const h = leaving();
+    await leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica);
+
+    assert.equal(h.began(), 1);
+    assert.equal(h.sent.length, 1, 'and the conversion followed it');
+  });
+
+  it('returns the names to the vault key, so the folder still opens afterwards', async () => {
+    const h = leaving();
+    await leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica);
+
+    const node = h.sent[0]!.nodes.find((n) => n.node_id === 'n-a')!;
+    assert.equal(node.name_key_id, 'vault-scope');
+    assert.equal(decryptName(h.vaultKey, node.name_enc), 'a.md', 'readable with KV alone');
+  });
+
+  it('re-wraps the same content key rather than re-encrypting the file', async () => {
+    // Leaving keeps the copy (SH-05); the bytes never move. Only who can name and unwrap
+    // them changes.
+    const h = leaving();
+    await leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica);
+
+    const node = h.sent[0]!.nodes.find((n) => n.node_id === 'n-a')!;
+    const envelope = node.vault_envelopes![0]!;
+    assert.equal(envelope.sha256, 'addr-a', 'the same address');
+    assert.deepEqual(unwrapContentKey(h.vaultKey, envelope.wrapped_key), h.contentKey, 'the same KC');
+  });
+
+  it('sends the whole replica in one pass, root included', async () => {
+    // Finalization is checked for completeness, unlike preparation's resumable batches: a
+    // half-converted replica is a folder its owner can no longer open.
+    const h = leaving();
+    await leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica);
+
+    assert.equal(h.sent.length, 1, 'one request, not batches');
+    assert.deepEqual(
+      h.sent[0]!.nodes.map((n) => n.node_id).sort(),
+      ['n-a', 'n-root'],
+      'every live node, including the root that needed no work',
+    );
+  });
+
+  it('reports when the departure ended the share for everybody', async () => {
+    const h = leaving();
+    (h.deps.client as unknown as { leaveShare: () => Promise<{ ended: boolean }> }).leaveShare = async () => ({
+      ended: true,
+    });
+
+    const out = await leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica);
+    assert.equal(out.ended, true, 'the client has to say "the share is over" rather than "you left"');
+  });
+
+  it('refuses rather than guessing when a file has no key under the share scope', async () => {
+    // Guessing would produce an envelope that opens nothing, and the failure would surface
+    // as an unreadable file weeks later.
+    const h = leaving();
+    (h.deps.client as unknown as { blobKeys: () => Promise<Map<string, never[]>> }).blobKeys = async () => new Map();
+
+    await assert.rejects(
+      () => leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica),
+      /no content key under scope/,
+    );
   });
 });

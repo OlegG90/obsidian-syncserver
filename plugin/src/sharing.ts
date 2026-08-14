@@ -17,7 +17,7 @@
  * join. Everything *below* it must move to `KS`, because a participant may create and rename
  * there and their names have to be readable by everyone else.
  */
-import type { PrepareItem, ShareMember, SyncClient } from './api/client.js';
+import type { FinalizeNode, PrepareItem, ShareMember, SyncClient } from './api/client.js';
 import { newShareKey, wrapShareKey } from './crypto/share.js';
 import { dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from './crypto/scope.js';
 import { sealTo } from './crypto/hpke.js';
@@ -120,7 +120,12 @@ export const shareFolder = async (
   const plan = preparePlan(root, nodes);
   for (let i = 0; i < plan.length; i += BATCH) {
     const batch = plan.slice(i, i + BATCH);
-    await deps.client.prepareShare(shareId, await Promise.all(batch.map((item) => convert(deps, item, shareKey, scopeId))));
+    const converted = await Promise.all(
+      batch.map((item) =>
+        rekey(deps, item, { key: deps.vaultKey, scopeId: deps.vaultScopeId }, { key: shareKey, scopeId }),
+      ),
+    );
+    await deps.client.prepareShare(shareId, converted.map(asPrepareItem));
   }
 
   await deps.client.activateShare(shareId);
@@ -128,39 +133,78 @@ export const shareFolder = async (
 };
 
 /** One node's conversion: its name under `KS`, and for a file its key and tag as well. */
-const convert = async (
-  deps: SharingDeps,
+/**
+ * A node moved from one key scope to another: its name, and for a file its content key and
+ * dedup tag.
+ *
+ * One function for both directions, because they ARE one operation. Preparing a share moves
+ * the interior from `KV` to `KS`; leaving moves it back. Written twice they would drift, and
+ * the drift would be silent — a folder that converts one way and not quite the other leaves
+ * files nobody can open, discovered long after the share is gone.
+ *
+ * **The bytes are never re-encrypted.** Conversion adds a second envelope for the same `KC`,
+ * so the very blob already on the server keeps opening. Re-encrypting would double the
+ * storage and change every address the tree points at, for no gain: whoever held the old
+ * scope key has already seen the plaintext.
+ */
+const rekey = async (
+  // Exactly what it uses: one endpoint and one read. Asking for the whole sharing client
+  // would make every caller supply methods this never touches.
+  deps: { client: Pick<SyncClient, 'blobKeys'>; read(path: string): Promise<Uint8Array>; vaultId: string },
   item: PlannedItem,
-  shareKey: Uint8Array,
-  scopeId: string,
-): Promise<PrepareItem> => {
-  const out: PrepareItem = {
+  from: { key: Uint8Array; scopeId: string },
+  to: { key: Uint8Array; scopeId: string },
+): Promise<Rekeyed> => {
+  const out: Rekeyed = {
     node_id: item.nodeId,
-    name_enc: encryptName(shareKey, item.name),
-    name_hmac: nameHmac(shareKey, item.name),
-    name_key_id: scopeId,
+    name_enc: encryptName(to.key, item.name),
+    name_hmac: nameHmac(to.key, item.name),
+    name_key_id: to.scopeId,
   };
   if (!item.address) return out;
 
-  // The content key is not re-derived and the bytes are not re-encrypted: preparation adds
-  // a second envelope for the same `KC`, so a participant opens the very blob that is
-  // already there. Re-encrypting would double the storage and change every address.
   const envelopes = await deps.client.blobKeys(deps.vaultId, [item.address]);
-  const mine = envelopes.get(item.address)?.find((e) => e.scopeId === deps.vaultScopeId);
-  if (!mine) throw new Error(`no content key under this vault's scope for ${item.name}`);
+  const source = envelopes.get(item.address)?.find((e) => e.scopeId === from.scopeId);
+  if (!source) throw new Error(`no content key under scope ${from.scopeId} for ${item.name}`);
 
-  const contentKey = unwrapContentKey(deps.vaultKey, mine.wrappedKey);
-  out.blob_envelopes = [
-    { sha256: item.address, scope_id: scopeId, wrapped_key: wrapContentKey(shareKey, contentKey) },
-  ];
+  const contentKey = unwrapContentKey(from.key, source.wrappedKey);
+  out.envelopes = [{ sha256: item.address, scope_id: to.scopeId, wrapped_key: wrapContentKey(to.key, contentKey) }];
 
-  // The tag is over the PLAINTEXT, so it has to be read. Deduplication is per scope: two
-  // participants who happen to hold the same file under this share will share one blob,
-  // while the same file in a private vault stays separate because that is another scope.
+  // The tag is over the PLAINTEXT, so the file is read. Deduplication is per scope: two
+  // participants holding the same file under one share share a blob, while the same file in
+  // a private vault is another scope and is charged again.
   const plaintext = await deps.read(item.path);
-  out.dedup_tags = [{ sha256: item.address, scope_id: scopeId, content_tag: dedupTag(shareKey, plaintext) }];
+  out.tags = [{ sha256: item.address, scope_id: to.scopeId, content_tag: dedupTag(to.key, plaintext) }];
   return out;
 };
+
+/** The neutral shape, before it is spelled as a prepare item or a finalize node. */
+interface Rekeyed {
+  node_id: string;
+  name_enc: string;
+  name_hmac: string;
+  name_key_id: string;
+  envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+  tags?: { sha256: string; scope_id: string; content_tag: string }[];
+}
+
+const asPrepareItem = (r: Rekeyed): PrepareItem => ({
+  node_id: r.node_id,
+  name_enc: r.name_enc,
+  name_hmac: r.name_hmac,
+  name_key_id: r.name_key_id,
+  ...(r.envelopes ? { blob_envelopes: r.envelopes } : {}),
+  ...(r.tags ? { dedup_tags: r.tags } : {}),
+});
+
+const asFinalizeNode = (r: Rekeyed): FinalizeNode => ({
+  node_id: r.node_id,
+  name_enc: r.name_enc,
+  name_hmac: r.name_hmac,
+  name_key_id: r.name_key_id,
+  ...(r.envelopes ? { vault_envelopes: r.envelopes } : {}),
+  ...(r.tags ? { vault_dedup_tags: r.tags } : {}),
+});
 
 /**
  * Seal `KS` to somebody so they can be invited.
@@ -252,4 +296,63 @@ export const freeName = (wanted: string, siblings: ReadonlySet<string>): string 
     const candidate = `${wanted} ${n}`;
     if (!siblings.has(candidate)) return candidate;
   }
+};
+
+/** What leaving needs: the replica's own key, and a way to say it is gone. */
+export interface LeaveDeps {
+  client: Pick<SyncClient, 'leaveShare' | 'finalizeLeave' | 'blobKeys'>;
+  /** Reads a file's plaintext — the dedup tag under the new scope is over it. */
+  read(path: string): Promise<Uint8Array>;
+  vaultId: string;
+  /** `KV`, which the replica's names and content keys are returning to. */
+  vaultKey: Uint8Array;
+  vaultScopeId: string;
+}
+
+/**
+ * Leave a share, converting this device's replica back to private files.
+ *
+ * **The copy is kept** (SH-05). That is the promise replication exists to make, and it is
+ * why leaving is a metadata pass rather than a deletion: the files do not move and the bytes
+ * are not re-encrypted. Only the naming changes, so the folder keeps working once `KS` stops
+ * being shared with anybody.
+ *
+ * Two steps, and the order is the whole safety of it. `leave/begin` stops propagation
+ * immediately, so nothing new arrives while the conversion runs; only then is the replica
+ * converted and the departure recorded. A device that dies in between has stopped receiving
+ * and has not yet left — it can finish later, which is exactly the state a revoked offline
+ * device is in.
+ *
+ * **All of it in one request.** Unlike preparation, which is resumable batches, finalization
+ * is checked for completeness: the server refuses a pass that misses a live node. A
+ * half-converted replica is a folder whose files its owner can no longer open — silent,
+ * permanent, and discovered long after the share is gone — so a partial finish is worse than
+ * no finish at all.
+ *
+ * @param shareKey the `KS` this replica's interior is named under.
+ * @param nodes every live node of the replica, the root included.
+ * @returns whether this departure ended the share for everybody.
+ */
+export const leaveShare = async (
+  deps: LeaveDeps,
+  shareId: string,
+  shareKey: Uint8Array,
+  shareScopeId: string,
+  nodes: readonly PlannedItem[],
+): Promise<{ ended: boolean }> => {
+  const { ended } = await deps.client.leaveShare(shareId);
+
+  const converted = await Promise.all(
+    nodes.map((item) =>
+      // The root is in this list and is not like the others: it was already named under
+      // `KV`, so re-encrypting its name changes nothing this device could not already read.
+      // It is sent anyway, because the server asks for every live node rather than for the
+      // ones that happen to need work — and a completeness check with exceptions in it is a
+      // check nobody can verify.
+      rekey(deps, item, { key: shareKey, scopeId: shareScopeId }, { key: deps.vaultKey, scopeId: deps.vaultScopeId }),
+    ),
+  );
+
+  await deps.client.finalizeLeave(shareId, converted.map(asFinalizeNode));
+  return { ended };
 };
