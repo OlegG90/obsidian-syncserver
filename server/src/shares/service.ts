@@ -21,6 +21,7 @@
  * act on.
  */
 import type { Db } from '../db.js';
+import { writeMaterial, type Material } from '../material.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
 
 /** PostgreSQL's `foreign_key_violation` — here, a vault, node or account that is not there. */
@@ -495,4 +496,87 @@ export const removeMember = async (
     [shareId, targetUserId],
   );
   return { outcome: 'revoked' };
+};
+
+/** One node's worth of preparation: its name under `KS`, and the material its bytes need. */
+export type PrepareItem = {
+  nodeId: string;
+  nameEnc: string;
+  nameHmac: string;
+  nameKeyId: string;
+} & Material;
+
+/**
+ * Convert part of a share's interior to `KS`.
+ *
+ * This is the client half of what `activate` verifies, and the division is not arbitrary:
+ * only the client can perform it. Re-keying a name means decrypting it under `KV` and
+ * encrypting it under `KS`, and the server holds neither key — so what arrives here is
+ * finished work, and the server's job is to check that it lands where it claims to.
+ *
+ * **Batches, and therefore resumable** (docs/04). A subtree can be larger than one request
+ * and a phone can lose the connection halfway, so preparation is a sequence of independent
+ * batches rather than one atomic conversion. Each batch is a transaction; a repeat of one
+ * already applied is harmless, because writing the same name and the same envelope twice
+ * changes nothing. Nothing tracks progress — `activate` recomputes what is still missing,
+ * which is the same answer whether a batch was lost, repeated, or never sent.
+ *
+ * **Only while `preparing`.** Once the share is active a participant may hold a copy, and
+ * a name changing under them is an ordinary write with a revision, not a silent conversion.
+ */
+export const prepareShare = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+  items: PrepareItem[],
+): Promise<Refusal | undefined> => {
+  const share = await db.one<{ vaultId: string; nodeId: string; keyId: string; state: string }>(
+    `SELECT initiator_vault_id AS "vaultId", subtree_node_id AS "nodeId",
+            subtree_key_id AS "keyId", state::text AS state
+       FROM shares WHERE id = $1 AND initiator_id = $2`,
+    [shareId, userId],
+  );
+  if (!share) return { kind: 'not_found' };
+  if (share.state !== 'preparing') return { kind: 'share_not_preparing', state: share.state };
+
+  // The share's own key, not whatever the request names. A prepare that wrote some other
+  // scope would produce names no participant could read, and `activate` would then refuse
+  // the share for a reason the client had just caused.
+  const wrong = items.find((i) => i.nameKeyId !== share.keyId);
+  if (wrong) {
+    return { kind: 'invalid_write', detail: `item ${wrong.nodeId} names a key scope that is not this share's` };
+  }
+
+  try {
+    return await db.tx(async (c) => {
+      for (const item of items) {
+        // Interior only, and checked by the UPDATE rather than before it: `ancestry`
+        // already says whether the node is under the share root, and asking separately
+        // would be a second statement racing the first. The root is excluded on purpose —
+        // its label stays under `KV` for the life of the share (SH-01, SH-25).
+        const res = await c.query(
+          `UPDATE nodes
+              SET name_enc = decode($1,'base64'), name_hmac = decode($2,'hex'), name_key_id = $3
+            WHERE vault_id = $4 AND id = $5 AND deleted_at IS NULL
+              AND ancestry @> ARRAY[$6]::uuid[]`,
+          [item.nameEnc, item.nameHmac, item.nameKeyId, share.vaultId, item.nodeId, share.nodeId],
+        );
+
+        if (res.rowCount === 0) {
+          // Nothing matched: the node is deleted, in another vault, or outside this share.
+          // Refusing the batch rather than skipping the item is the point — a silently
+          // ignored item is one `activate` will later report as missing, sending the client
+          // back to prepare something it believes it already prepared.
+          return { kind: 'invalid_write', detail: `node ${item.nodeId} is not a live interior node of this share` };
+        }
+
+        await writeMaterial(c, { envelopes: item.envelopes ?? [], dedupTags: item.dedupTags ?? [] });
+      }
+      return undefined;
+    });
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
 };

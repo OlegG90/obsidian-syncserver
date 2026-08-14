@@ -15,6 +15,7 @@ import {
   createShare,
   declineInvitation,
   invite,
+  prepareShare,
   listMembers,
   listShares,
   removeMember,
@@ -53,6 +54,52 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
       return refuse(reply, refusal);
     },
   );
+
+  app.post<{
+    Params: { shareId: string };
+    Body: {
+      items: {
+        node_id: string;
+        name_enc: string;
+        name_hmac: string;
+        name_key_id: string;
+        blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+        dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+      }[];
+    };
+  }>('/shares/:shareId/prepare', { preHandler: requireAuth }, async (req, reply) => {
+    const items = req.body?.items;
+    if (!Array.isArray(items) || items.length === 0) return reply.code(400).send({ error: 'items_required' });
+    for (const i of items) {
+      if (!UUID.test(i?.node_id ?? '')) return reply.code(400).send({ error: 'bad_node_id' });
+      if (!UUID.test(i?.name_key_id ?? '')) return reply.code(400).send({ error: 'bad_name_key_id' });
+      if (!i.name_enc || !i.name_hmac) return reply.code(400).send({ error: 'name_required' });
+    }
+
+    const refusal = await prepareShare(
+      db,
+      req.caller!.userId,
+      req.params.shareId,
+      items.map((i) => ({
+        nodeId: i.node_id,
+        nameEnc: i.name_enc,
+        nameHmac: i.name_hmac,
+        nameKeyId: i.name_key_id,
+        envelopes: (i.blob_envelopes ?? []).map((e) => ({
+          sha256: e.sha256,
+          scopeId: e.scope_id,
+          wrappedKey: e.wrapped_key,
+        })),
+        dedupTags: (i.dedup_tags ?? []).map((t) => ({
+          sha256: t.sha256,
+          scopeId: t.scope_id,
+          contentTag: t.content_tag,
+        })),
+      })),
+    );
+    if (!refusal) return reply.code(204).send();
+    return refuse(reply, refusal);
+  });
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/activate',

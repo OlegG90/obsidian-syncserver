@@ -15,6 +15,7 @@ import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
+import { writeMaterial, type Material } from '../material.js';
 import { nextRev } from '../revision.js';
 
 /**
@@ -52,13 +53,6 @@ export const dedupLookup = async (
     [userId, vaultId, tags],
   );
 
-export interface Material {
-  /** `blob_keys`: the content key wrapped for a scope allowed to read it. */
-  envelopes: { sha256: string; scopeId: string; wrappedKey: string }[];
-  /** `dedup_index`: HMAC(scope key, plaintext hash) → address. */
-  dedupTags: { sha256: string; scopeId: string; contentTag: string }[];
-}
-
 const fail = (kind: Refusal['kind']): Refusal => ({ kind }) as Refusal;
 
 /**
@@ -79,35 +73,6 @@ const txGuarded = async <T>(db: Db, fn: (c: PoolClient) => Promise<T>): Promise<
     const refusal = refusalFromDatabase(e);
     if (refusal) return refusal;
     throw e;
-  }
-};
-
-const writeMaterial = async (c: PoolClient, m: Material): Promise<void> => {
-  for (const e of m.envelopes) {
-    await c.query(
-      `INSERT INTO blob_keys (sha256, scope_id, wrapped_key) VALUES (decode($1,'hex'), $2, decode($3,'base64'))
-       ON CONFLICT (sha256, scope_id) DO NOTHING`,
-      [e.sha256, e.scopeId, e.wrappedKey],
-    );
-  }
-  for (const t of m.dedupTags) {
-    // `DO UPDATE`, not `DO NOTHING`, and the difference is a 500 the client cannot avoid.
-    //
-    // The tag names the PLAINTEXT — `HMAC(scope key, sha256(plaintext))` — while the address
-    // names one encryption of it. `KC` is random, so sealing the same file twice yields the
-    // same tag and a NEW address. `DO NOTHING` then leaves the tag pointing at the old
-    // address, and `nodes_check_private_material` refuses the write because the new one has
-    // no tag: the caller sent correct material and is told the material is missing.
-    //
-    // Repointing is the right resolution rather than a workaround. Both addresses decrypt to
-    // the same plaintext, so either is a truthful answer to "where is this content"; the
-    // newest is the one a node is about to reference, and the older is left for the
-    // collector once nothing holds it.
-    await c.query(
-      `INSERT INTO dedup_index (scope_id, content_tag, sha256) VALUES ($1, decode($2,'hex'), decode($3,'hex'))
-       ON CONFLICT (scope_id, content_tag) DO UPDATE SET sha256 = EXCLUDED.sha256`,
-      [t.scopeId, t.contentTag, t.sha256],
-    );
   }
 };
 

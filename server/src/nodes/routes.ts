@@ -5,7 +5,8 @@ import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
 import type { Refusal } from '../refusal.js';
 import { refuse } from '../refuse-http.js';
-import { createNode, dedupLookup, deleteNode, moveNode, putContent, type Material } from './service.js';
+import { createNode, dedupLookup, deleteNode, moveNode, putContent } from './service.js';
+import type { Material } from '../material.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 

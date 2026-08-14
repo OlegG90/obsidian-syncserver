@@ -506,3 +506,131 @@ describe('removing a member', () => {
     assert.equal(r.json().error, 'initiator_cannot_be_removed');
   });
 });
+
+/** The share key scope of a share, which is what preparation must name. */
+const shareKeyOf = async (shareId: string) => {
+  const row = await db.one<{ id: string }>(`SELECT subtree_key_id AS id FROM shares WHERE id = $1`, [shareId]);
+  return row!.id;
+};
+
+const prepare = (shareId: string, items: unknown[], token = access) =>
+  app.inject({
+    method: 'POST',
+    url: `/shares/${shareId}/prepare`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { items },
+  });
+
+describe('preparing a subtree for its share key', () => {
+  it('re-keys an interior name, and activation then has nothing to complain about', async () => {
+    // The two halves of one job, in sequence: the client converts, the server verifies.
+    // Neither is much use alone, which is why this asserts the pair rather than the write.
+    const folder = await createNode('folder', `prep-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const blocked = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(blocked.statusCode, 409, 'unprepared to begin with');
+
+    const r = await prepare(shareId, [
+      { node_id: inside, name_enc: b64('under KS'), name_hmac: sha(Buffer.from('under KS')), name_key_id: ks },
+    ]);
+    assert.equal(r.statusCode, 204, r.body);
+
+    const ok = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(ok.statusCode, 200, ok.body);
+  });
+
+  it('applies the same batch twice without complaint, because a lost response is not a fault', async () => {
+    // Batches are resumable (docs/04) and nothing records which ones landed: a client that
+    // did not hear the answer resends, and `activate` recomputes what is still missing.
+    const folder = await createNode('folder', `resume-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+    const item = {
+      node_id: inside,
+      name_enc: b64('under KS'),
+      name_hmac: sha(Buffer.from('under KS')),
+      name_key_id: ks,
+    };
+
+    assert.equal((await prepare(shareId, [item])).statusCode, 204);
+    assert.equal((await prepare(shareId, [item])).statusCode, 204, 'a repeat changes nothing and is not an error');
+  });
+
+  it('refuses a scope that is not this share’s', async () => {
+    // It would produce names no participant could read, and activation would then refuse
+    // the share for a reason the client had just created.
+    const folder = await createNode('folder', `wrongkey-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const shareId = (await openShare(folder)).json().share_id;
+
+    const r = await prepare(shareId, [
+      { node_id: inside, name_enc: b64('x'), name_hmac: sha(Buffer.from('x')), name_key_id: vaultKeyId },
+    ]);
+    assert.equal(r.statusCode, 400, r.body);
+    assert.match(r.json().detail, /key scope/);
+  });
+
+  it('refuses a node outside the share rather than skipping it', async () => {
+    // Skipping would be the worse failure: activate would later report the item as missing
+    // and send the client back to prepare something it believes it already prepared.
+    const folder = await createNode('folder', `outside-${randomUUID()}`);
+    const elsewhere = await createNode('folder', `elsewhere-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const r = await prepare(shareId, [
+      { node_id: elsewhere, name_enc: b64('x'), name_hmac: sha(Buffer.from('x')), name_key_id: ks },
+    ]);
+    assert.equal(r.statusCode, 400, r.body);
+    assert.match(r.json().detail, /not a live interior node/);
+  });
+
+  it('will not prepare the share root, whose label stays under the vault key', async () => {
+    // SH-01/SH-25: the root sits beside private siblings, and a participant names their own
+    // copy's root when they join. `ancestry` excludes the node itself, so this is refused
+    // by the same condition that keeps outsiders out.
+    const folder = await createNode('folder', `root-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const r = await prepare(shareId, [
+      { node_id: folder, name_enc: b64('x'), name_hmac: sha(Buffer.from('x')), name_key_id: ks },
+    ]);
+    assert.equal(r.statusCode, 400, r.body);
+  });
+
+  it('stops once the share is active, when a name change is an ordinary write', async () => {
+    const shareId = await activeShare('late-prep');
+    const ks = await shareKeyOf(shareId);
+    const r = await prepare(shareId, [
+      { node_id: randomUUID(), name_enc: b64('x'), name_hmac: sha(Buffer.from('x')), name_key_id: ks },
+    ]);
+
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'share_not_preparing');
+  });
+
+  it('is the initiator’s to do', async () => {
+    const folder = await createNode('folder', `whose-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const r = await prepare(
+      shareId,
+      [{ node_id: inside, name_enc: b64('x'), name_hmac: sha(Buffer.from('x')), name_key_id: ks }],
+      strangerAccess,
+    );
+    assert.equal(r.statusCode, 404);
+  });
+
+  it('wants something to do', async () => {
+    const folder = await createNode('folder', `empty-batch-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    assert.equal((await prepare(shareId, [])).statusCode, 400);
+  });
+});
