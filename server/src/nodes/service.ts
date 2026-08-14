@@ -15,7 +15,15 @@ import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
+import { randomUUID } from 'node:crypto';
 import { writeMaterial, type Material } from '../material.js';
+import {
+  fanoutTargets,
+  propagateCreate,
+  propagateDelete,
+  propagateMove,
+  propagatePut,
+} from '../shares/propagate.js';
 import { nextRev } from '../revision.js';
 
 /**
@@ -128,11 +136,18 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
     if (access.kind === 'frozen') return fail('frozen');
     const owner = access.userId;
 
-    const parent = await c.query<{ ancestry: string[] }>(
-      `SELECT ancestry FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    const parent = await c.query<{ ancestry: string[]; shareId: string | null; shareItemId: string | null }>(
+      `SELECT ancestry, share_id AS "shareId", share_item_id AS "shareItemId"
+         FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [input.vaultId, input.parentId],
     );
     if (parent.rowCount === 0) return fail('not_found');
+    const into = parent.rows[0]!;
+
+    // A node inside a shared folder must carry a mark of its own — the schema refuses one
+    // that does not (SH-26) — and the item id it gets here is the identity every other
+    // replica will know it by.
+    const shareItemId = into.shareId ? randomUUID() : null;
 
     // Material first: the node's own trigger checks for it, and putting it after would
     // make the order of two statements decide whether a legal write succeeds.
@@ -143,13 +158,14 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
 
     const node = await c.query<{ id: string }>(
       `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
-                          sha256, size, mtime, rev, ancestry)
+                          sha256, size, mtime, rev, ancestry, share_id, share_item_id)
        VALUES ($1, $2, decode($3,'base64'), decode($4,'hex'), $5, $6,
-               CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11)
+               CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         input.vaultId, input.parentId, input.nameEnc, input.nameHmac, input.nameKeyId, input.type,
         input.sha256 ?? null, input.size ?? null, input.mtime, rev, ancestry,
+        into.shareId, shareItemId,
       ],
     );
     const nodeId = node.rows[0]!.id;
@@ -166,6 +182,22 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
         [input.vaultId, nodeId, rev, input.sha256, input.size, owner],
       );
       await bindBlob(c, owner, input.sha256);
+    }
+
+    if (into.shareId && shareItemId && into.shareItemId) {
+      await propagateCreate(c, await fanoutTargets(c, into.shareId, input.vaultId), {
+        shareId: into.shareId,
+        shareItemId,
+        parentShareItemId: into.shareItemId,
+        type: input.type,
+        nameEnc: input.nameEnc,
+        nameHmac: input.nameHmac,
+        nameKeyId: input.nameKeyId,
+        sha256: input.sha256 ?? null,
+        size: input.size ?? null,
+        mtime: input.mtime,
+        authorId: owner,
+      });
     }
 
     return { nodeId, rev };
@@ -188,9 +220,11 @@ export const putContent = async (
     if (access.kind === 'frozen') return fail('frozen');
     const owner = access.userId;
 
-    const cur = await c.query<{ sha256: Buffer | null; rev: string; type: string }>(
-      `SELECT sha256, rev::text AS rev, type FROM nodes
-        WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
+    const cur = await c.query<{
+      sha256: Buffer | null; rev: string; type: string; shareId: string | null; shareItemId: string | null;
+    }>(
+      `SELECT sha256, rev::text AS rev, type, share_id AS "shareId", share_item_id AS "shareItemId"
+         FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
       [input.vaultId, input.nodeId],
     );
     const row = cur.rows[0];
@@ -223,6 +257,16 @@ export const putContent = async (
     // The previous content keeps its claim through the version row that still names it;
     // only history thinning releases that (docs/03, retention).
 
+    if (row.shareId && row.shareItemId) {
+      await propagatePut(c, await fanoutTargets(c, row.shareId, input.vaultId), {
+        shareItemId: row.shareItemId,
+        sha256: input.sha256,
+        size: input.size,
+        mtime: input.mtime,
+        authorId: owner,
+      });
+    }
+
     return { rev };
   });
 
@@ -241,9 +285,9 @@ export const deleteNode = async (
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
 
-    const cur = await c.query<{ rev: string }>(
-      `SELECT rev::text AS rev FROM nodes
-        WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
+    const cur = await c.query<{ rev: string; shareId: string | null; shareItemId: string | null }>(
+      `SELECT rev::text AS rev, share_id AS "shareId", share_item_id AS "shareItemId"
+         FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
       [input.vaultId, input.nodeId],
     );
     const row = cur.rows[0];
@@ -261,6 +305,10 @@ export const deleteNode = async (
       `INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'del', $2)`,
       [input.vaultId, rev, input.nodeId],
     );
+
+    if (row.shareId && row.shareItemId) {
+      await propagateDelete(c, await fanoutTargets(c, row.shareId, input.vaultId), row.shareItemId);
+    }
 
     return { rev };
   });
@@ -283,8 +331,11 @@ export const moveNode = async (
     if (access.kind === 'not_found') return fail('not_found');
     if (access.kind === 'frozen') return fail('frozen');
 
-    const cur = await c.query<{ rev: string; parentId: string | null; ancestry: string[]; shareId: string | null }>(
-      `SELECT rev::text AS rev, parent_id AS "parentId", ancestry, share_id AS "shareId"
+    const cur = await c.query<{
+      rev: string; parentId: string | null; ancestry: string[]; shareId: string | null; shareItemId: string | null;
+    }>(
+      `SELECT rev::text AS rev, parent_id AS "parentId", ancestry, share_id AS "shareId",
+              share_item_id AS "shareItemId"
          FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
       [input.vaultId, input.nodeId],
     );
@@ -292,8 +343,8 @@ export const moveNode = async (
     if (!row) return fail('not_found');
     if (Number(row.rev) !== input.ifMatchRev) return { kind: 'rev_mismatch', rev: Number(row.rev) };
 
-    const dest = await c.query<{ ancestry: string[]; shareId: string | null }>(
-      `SELECT ancestry, share_id AS "shareId" FROM nodes
+    const dest = await c.query<{ ancestry: string[]; shareId: string | null; shareItemId: string | null }>(
+      `SELECT ancestry, share_id AS "shareId", share_item_id AS "shareItemId" FROM nodes
         WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [input.vaultId, input.parentId],
     );
@@ -329,6 +380,16 @@ export const moveNode = async (
        VALUES ($1, $2, $3, $4, 'move', $2)`,
       [input.vaultId, rev, input.nodeId, row.parentId],
     );
+
+    if (row.shareId && row.shareItemId && dest.rows[0]!.shareItemId) {
+      await propagateMove(c, await fanoutTargets(c, row.shareId, input.vaultId), {
+        shareItemId: row.shareItemId,
+        parentShareItemId: dest.rows[0]!.shareItemId,
+        nameEnc: input.nameEnc,
+        nameHmac: input.nameHmac,
+        nameKeyId: input.nameKeyId,
+      });
+    }
 
     return { rev };
   });

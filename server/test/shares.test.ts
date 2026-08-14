@@ -98,7 +98,7 @@ after(async () => {
   await rm(STORE, { recursive: true, force: true });
 });
 
-const createNode = async (type: 'folder', name: string, parent = rootId) => {
+const createNode = async (type: 'folder', name: string, parent = rootId, keyId?: string) => {
   const r = await app.inject({
     method: 'POST',
     url: `/vaults/${vaultId}/nodes`,
@@ -109,7 +109,9 @@ const createNode = async (type: 'folder', name: string, parent = rootId) => {
       mtime: new Date().toISOString(),
       name_enc: b64(name),
       name_hmac: sha(Buffer.from(name)),
-      name_key_id: vaultKeyId,
+      // Inside an active share a name must use the SHARE key: the schema refuses one
+      // that does not (SH-26).
+      name_key_id: keyId ?? vaultKeyId,
     },
   });
   assert.equal(r.statusCode, 201, r.body);
@@ -838,5 +840,202 @@ describe('accepting an invitation', () => {
 
     assert.equal(r.statusCode, 409, r.body);
     assert.equal(r.json().error, 'share_not_active');
+  });
+});
+
+/** A share the stranger has actually joined, with both replicas in place. */
+const sharedWith = async (label: string) => {
+  const { shareId, folder, inside, ks } = await invitedShare(label);
+  const r = await join(shareId);
+  assert.equal(r.statusCode, 201, r.body);
+  return { shareId, folder, inside, ks, replicaRoot: r.json().root_node_id };
+};
+
+/** The stranger's copy of an item the initiator holds. */
+const theirCopyOf = async (srcNodeId: string) => {
+  const row = await db.one<{ id: string }>(
+    `SELECT b.id FROM nodes a JOIN nodes b ON b.share_item_id = a.share_item_id AND b.vault_id = $3
+      WHERE a.vault_id = $1 AND a.id = $2`,
+    [vaultId, srcNodeId, strangerVaultId],
+  );
+  return row?.id;
+};
+
+describe('a write inside a shared folder reaches every copy', () => {
+  it('creates the new node in the other participant’s vault too', async () => {
+    const { inside, ks } = await sharedWith('fanout-create');
+    const made = await createNode('folder', `new-${randomUUID()}`, inside, ks);
+
+    const theirs = await theirCopyOf(made);
+    assert.ok(theirs, 'the item exists in their replica');
+
+    const row = await db.one<{ shareId: string | null; vaultId: string }>(
+      `SELECT share_id AS "shareId", vault_id AS "vaultId" FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, theirs],
+    );
+    assert.ok(row!.shareId, 'and carries the share mark, which the schema demands of it');
+  });
+
+  it('gives the recipient a journal entry, so it arrives as an ordinary change', async () => {
+    // Not a special channel: their client learns about it through the same delta as
+    // anything else they did themselves.
+    const { inside, ks } = await sharedWith('fanout-journal');
+    const made = await createNode('folder', `new-${randomUUID()}`, inside, ks);
+    const theirs = await theirCopyOf(made);
+
+    const entry = await db.one<{ op: string }>(
+      `SELECT op::text AS op FROM journal WHERE vault_id = $1 AND node_id = $2`,
+      [strangerVaultId, theirs],
+    );
+    assert.equal(entry!.op, 'put');
+  });
+
+  it('propagates a deletion', async () => {
+    const { inside, ks } = await sharedWith('fanout-delete');
+    const made = await createNode('folder', `doomed-${randomUUID()}`, inside, ks);
+    const theirs = await theirCopyOf(made);
+
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      made,
+    ]);
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/vaults/${vaultId}/nodes/${made}`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+
+    const gone = await db.one<{ deleted: string | null }>(
+      `SELECT deleted_at AS deleted FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, theirs],
+    );
+    assert.ok(gone!.deleted, 'their copy is in the trash too');
+  });
+
+  it('propagates a move within the share, and the subtree follows', async () => {
+    const { inside, ks } = await sharedWith('fanout-move');
+    const a = await createNode('folder', `a-${randomUUID()}`, inside, ks);
+    const b = await createNode('folder', `b-${randomUUID()}`, inside, ks);
+    const child = await createNode('folder', `child-${randomUUID()}`, a, ks);
+
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      a,
+    ]);
+    const moved = await app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes/${a}/move`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+      payload: {
+        parent_id: b,
+        name_enc: b64('moved'),
+        name_hmac: sha(Buffer.from(`moved-${randomUUID()}`)),
+        name_key_id: (await db.one<{ id: string }>(`SELECT name_key_id AS id FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, a]))!.id,
+      },
+    });
+    assert.equal(moved.statusCode, 200, moved.body);
+
+    const theirA = await theirCopyOf(a);
+    const theirB = await theirCopyOf(b);
+    const theirChild = await theirCopyOf(child);
+
+    const placed = await db.one<{ parentId: string; ancestry: string[] }>(
+      `SELECT parent_id AS "parentId", ancestry FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, theirA],
+    );
+    assert.equal(placed!.parentId, theirB, 'their copy moved to the same place');
+
+    const descendant = await db.one<{ ancestry: string[] }>(
+      `SELECT ancestry FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, theirChild],
+    );
+    assert.ok(
+      descendant!.ancestry.includes(theirB!),
+      'and the subtree came with it, rather than claiming its old parent',
+    );
+  });
+
+  it('does not send a participant their own write back', async () => {
+    // The fan-out set excludes the vault the write happened in. Without that the originator
+    // would get a second revision of their own change and see it as a remote edit.
+    const { inside, ks } = await sharedWith('fanout-self');
+    const made = await createNode('folder', `mine-${randomUUID()}`, inside, ks);
+
+    const copies = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1 AND share_item_id = (
+      SELECT share_item_id FROM nodes WHERE vault_id = $1 AND id = $2)`, [vaultId, made]);
+    assert.equal(copies.length, 1, 'one copy in the writer’s own vault, not two');
+  });
+});
+
+describe('who a write reaches, and who it does not', () => {
+  it('skips a participant whose account is frozen, in both directions', async () => {
+    // A freeze is the account having no room; delivering more is the one thing it cannot
+    // absorb (SH-20). Their copy catches up on thaw.
+    const { inside, ks } = await sharedWith('frozen');
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [strangerId]);
+
+    const made = await createNode('folder', `while-frozen-${randomUUID()}`, inside, ks);
+    assert.equal(await theirCopyOf(made), undefined, 'nothing was delivered');
+
+    await db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [strangerId]);
+  });
+
+  it('skips a participant who is finalizing, because revocation stops propagation now', async () => {
+    const { shareId, inside, ks } = await sharedWith('revoked');
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+    assert.equal(r.json().outcome, 'revoked');
+
+    const made = await createNode('folder', `after-revoke-${randomUUID()}`, inside, ks);
+    assert.equal(await theirCopyOf(made), undefined, 'a revoked device receives no further changes');
+  });
+});
+
+describe('all of them or none of them', () => {
+  it('advances no replica when one of them cannot be written', async () => {
+    // The atomicity contract docs/04 states, and the test it explicitly asks for. The
+    // replica is made unwritable by removing the parent the propagated create needs, so
+    // the fan-out raises inside the transaction that already wrote the original.
+    const { inside, ks } = await sharedWith('atomic-fanout');
+
+    const beforeSrc = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [vaultId]);
+    const beforeDst = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [strangerVaultId]);
+
+    // A name that is already taken in the RECIPIENT's replica but free in the source: the
+    // propagated insert violates their unique sibling name, and nothing may survive it.
+    const clashName = `clash-${randomUUID()}`;
+    const theirInside = await theirCopyOf(inside);
+    await db.query(
+      `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry,
+                          share_id, share_item_id)
+       SELECT $1, $2, decode($3,'base64'), decode($4,'hex'), n.name_key_id, 'folder', now(), 0,
+              n.ancestry || n.id, n.share_id, gen_random_uuid()
+         FROM nodes n WHERE n.vault_id = $1 AND n.id = $2`,
+      [strangerVaultId, theirInside, b64(clashName), sha(Buffer.from(clashName))],
+    );
+
+    const r = await app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes`,
+      headers: auth(),
+      payload: {
+        parent_id: inside,
+        type: 'folder',
+        mtime: new Date().toISOString(),
+        name_enc: b64(clashName),
+        name_hmac: sha(Buffer.from(clashName)),
+        name_key_id: (await db.one<{ id: string }>(`SELECT name_key_id AS id FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, inside]))!.id,
+      },
+    });
+    assert.notEqual(r.statusCode, 201, 'the write did not succeed');
+
+    const afterSrc = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [vaultId]);
+    const afterDst = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [strangerVaultId]);
+    assert.equal(afterSrc.length, beforeSrc.length, 'the ORIGINAL rolled back too, not only the replica');
+    assert.equal(afterDst.length, beforeDst.length + 1, 'and the replica gained nothing beyond the row we planted');
   });
 });
