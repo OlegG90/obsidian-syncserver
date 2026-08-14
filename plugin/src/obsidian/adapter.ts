@@ -29,7 +29,14 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   async write(path: string, bytes: Uint8Array, _mtime?: number): Promise<void> {
     // The parent folders first: writing into a folder that does not exist fails, and a pull
     // into an empty vault creates every folder it needs on the way down.
-    const parent = path.slice(0, path.lastIndexOf('/'));
+    //
+    // **A file at the root has no parent, and saying so takes an explicit check.**
+    // `lastIndexOf('/')` answers -1 there, and `slice(0, -1)` is not "nothing" — it is the
+    // path minus its last character. That created a FOLDER called `Note.m` beside every
+    // `Note.md` pulled into the root, which then synced up as a real folder and came back
+    // down on every other device.
+    const cut = path.lastIndexOf('/');
+    const parent = cut === -1 ? '' : path.slice(0, cut);
     if (parent && !(await this.vault.adapter.exists(parent))) {
       await this.vault.adapter.mkdir(parent);
     }
