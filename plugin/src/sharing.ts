@@ -163,6 +163,18 @@ const rekey = async (
   item: PlannedItem,
   from: { key: Uint8Array; scopeId: string },
   to: { key: Uint8Array; scopeId: string },
+  /**
+   * What to do when the source scope holds no envelope for this file.
+   *
+   * Preparing, that is a fault worth stopping for: the share is being built and a file
+   * nobody can open would be built into it. **Leaving, it must not stop anything.** A
+   * departure that cannot finish strands the whole vault — the names stay under a key that
+   * is about to be withdrawn — and the content is not in danger either way, since the
+   * envelope being converted TO is the one the file already had. Data that reached this
+   * state through an earlier defect is exactly what a departure has to be able to walk out
+   * of.
+   */
+  onMissingSource: 'throw' | 'skip' = 'throw',
 ): Promise<Rekeyed> => {
   const out: Rekeyed = {
     node_id: item.nodeId,
@@ -174,7 +186,10 @@ const rekey = async (
 
   const envelopes = await deps.client.blobKeys(deps.vaultId, [item.address]);
   const source = envelopes.get(item.address)?.find((e) => e.scopeId === from.scopeId);
-  if (!source) throw new Error(`no content key under scope ${from.scopeId} for ${item.name}`);
+  if (!source) {
+    if (onMissingSource === 'skip') return out;
+    throw new Error(`no content key under scope ${from.scopeId} for ${item.name}`);
+  }
 
   const contentKey = unwrapContentKey(from.key, source.wrappedKey);
   out.envelopes = [{ sha256: item.address, scope_id: to.scopeId, wrapped_key: wrapContentKey(to.key, contentKey) }];
@@ -360,7 +375,13 @@ export const leaveShare = async (
       // It is sent anyway, because the server asks for every live node rather than for the
       // ones that happen to need work — and a completeness check with exceptions in it is a
       // check nobody can verify.
-      rekey(deps, item, { key: shareKey, scopeId: shareScopeId }, { key: deps.vaultKey, scopeId: deps.vaultScopeId }),
+      rekey(
+        deps,
+        item,
+        { key: shareKey, scopeId: shareScopeId },
+        { key: deps.vaultKey, scopeId: deps.vaultScopeId },
+        'skip',
+      ),
     ),
   );
 

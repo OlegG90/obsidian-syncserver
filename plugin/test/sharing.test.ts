@@ -507,15 +507,49 @@ describe('leaving, which is the conversion run backwards', () => {
     assert.equal(out.ended, true, 'the client has to say "the share is over" rather than "you left"');
   });
 
-  it('refuses rather than guessing when a file has no key under the share scope', async () => {
-    // Guessing would produce an envelope that opens nothing, and the failure would surface
-    // as an unreadable file weeks later.
-    const h = leaving();
+  it('refuses when PREPARING meets a file with no key under the vault scope', async () => {
+    // The mirror of the rule leaving needs. Building a share around a file nobody can open
+    // is worth stopping for; walking away from one is not.
+    const h = harness(newShareKey(), newShareKey());
     (h.deps.client as unknown as { blobKeys: () => Promise<Map<string, never[]>> }).blobKeys = async () => new Map();
 
     await assert.rejects(
-      () => leaveShare(h.deps, 'share-1', h.shareKey, SHARE_SCOPE, replica),
+      () => shareFolder(h.deps, 'Team', [node('Team'), node('Team/a.md', 'addr-a')]),
       /no content key under scope/,
     );
+  });
+});
+
+describe('a departure that meets damaged material', () => {
+  it('still finishes when a file has no key under the share scope', async () => {
+    // Seen on a live vault: files edited while an earlier defect wrote their content
+    // envelope under the vault key while their NAME was under the share key. There is
+    // nothing to convert, and refusing over it stranded the whole vault — the names stay
+    // under a key that is about to be withdrawn.
+    const vaultKey = newShareKey();
+    const shareKey = newShareKey();
+    const sent: { nodes: FinalizeNode[] }[] = [];
+    const deps: LeaveDeps = {
+      client: {
+        leaveShare: async () => ({ ended: false }),
+        finalizeLeave: async (_id: string, nodes: FinalizeNode[]) => {
+          sent.push({ nodes });
+        },
+        // No envelope under the share scope — only the vault's, which is the damage.
+        blobKeys: async () => new Map([['addr-a', [{ scopeId: 'vault-scope', wrappedKey: 'x' }]]]),
+      } as unknown as LeaveDeps['client'],
+      read: async () => utf8('the plaintext'),
+      vaultId: 'vault-1',
+      vaultKey,
+      vaultScopeId: 'vault-scope',
+    };
+
+    await leaveShare(deps, 'share-1', shareKey, SHARE_SCOPE, [
+      { nodeId: 'n-a', path: 'Shared/a.md', name: 'a.md', address: 'addr-a' },
+    ]);
+
+    const node = sent[0]!.nodes[0]!;
+    assert.equal(decryptName(vaultKey, node.name_enc), 'a.md', 'the name still comes back to KV');
+    assert.equal(node.vault_envelopes, undefined, 'and nothing is invented for the content');
   });
 });
