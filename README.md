@@ -7,7 +7,7 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development, version 0.1.0.** Two-way sync works on desktop and on Android against a
+> **Status: in development, version 0.1.1.** Two-way sync works on desktop and on Android against a
 > self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
 > keep both versions. It has not yet been used to hold anything anyone would miss. See
 > [Status](#status) for exactly how far it goes.
@@ -117,7 +117,7 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.1.0"}` and serves
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.1.1"}` and serves
 nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
@@ -144,7 +144,7 @@ both at once.
 
 ## Status
 
-Current release: **0.1.0** — see [Versions](#versions).
+Current release: **0.1.1** — see [Versions](#versions).
 
 | Milestone | |
 |---|---|
@@ -187,7 +187,7 @@ authentication and before an administrator exists, which is exactly when a clien
 
 ```bash
 curl -s localhost:8080/health
-# {"status":"ok","bootstrap_pending":false,"version":"0.1.0"}
+# {"status":"ok","bootstrap_pending":false,"version":"0.1.1"}
 ```
 
 The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does
@@ -199,6 +199,18 @@ route it had never heard of, with nothing on screen to say why.
 Five files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
 requires one in `manifest.json`. `npm test` runs `scripts/check-version.mjs`, which fails when they
 disagree. The rule itself is [#111](docs/09-decisions.md).
+
+That check governs the repository, and its authority ends there. An **installed** plugin is two files
+Obsidian reads separately — `manifest.json`, which it parses and shows in its plugin list, and
+`main.js`, whose version was baked in at build time — and unpacking over an existing folder can
+replace one and skip the other. The plugin compares the two at runtime and says the install is
+incomplete, naming both. Exact equality there, not the major/minor rule: they leave one build
+together, so a patch apart still means only one of them arrived.
+
+One version it cannot report is the one that matters most on a running Obsidian: **`main.js` is read
+once, when the plugin loads.** Copying a new bundle into a vault that is already open changes nothing
+until the plugin is reloaded, while the plugin list — which re-reads manifests on its own — already
+shows the new number. Toggle the plugin off and on; refreshing the list is not enough.
 
 ## Security
 
