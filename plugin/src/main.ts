@@ -20,11 +20,12 @@ import { emptyState, type StateStore, type VaultState } from './engine/state.js'
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
-import { newPairingCode, normalisePairingCode } from './crypto/pairing-code.js';
+import { newPairingCode } from './crypto/pairing-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { makeObsidianTransport } from './obsidian/transport.js';
 
 import { session, type Connection, type Session } from './session/index.js';
+import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 
 /**
@@ -60,10 +61,13 @@ export default class SyncServerPlugin extends Plugin {
   private push: PushListener | undefined;
   /** The sync coordinator (sync.ts) — owns unlock → one pass → render, and the re-entry guard. */
   private sync: SyncCoordinator | undefined;
+  /** Kept so a finished pairing can rebuild the screen that was showing its code. */
+  private settingsTab: SyncServerSettings | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
-    this.addSettingTab(new SyncServerSettings(this.app, this));
+    this.settingsTab = new SyncServerSettings(this.app, this);
+    this.addSettingTab(this.settingsTab);
 
     // Everything Obsidian is bound here, at the edge; the coordinator itself is a module.
     this.sync = openSyncCoordinator({
@@ -252,6 +256,37 @@ export default class SyncServerPlugin extends Plugin {
     await this.save();
     this.setPhase({ kind: 'idle' });
     this.startPush();
+  }
+
+  /**
+   * The pairing coordinator, bound to the element it may draw into.
+   *
+   * Built per call rather than held: the settings tab is rebuilt on every `display()`, so a
+   * flow that outlived it would write the code into a detached element — visible to nobody
+   * and impossible to cancel.
+   */
+  pairing(target: HTMLElement): PairingFlow {
+    return openPairingFlow({
+      newCode: () => newPairingCode(),
+      join: (args, waiting) => this.pair(args, waiting),
+      approve: (code) => this.approvePairing(code),
+      showCode: (code) => {
+        target.empty();
+        target.createEl('p', { text: 'Type this on the device that is already connected:' });
+        // Set apart rather than left in a paragraph: it is read off one screen and typed
+        // into another, and 26 characters are hard enough to follow without prose around
+        // them.
+        target.createEl('pre', { text: code });
+      },
+      setStatus: (text) => {
+        const line = target.querySelector('p.syncserver-pairing-status') ?? target.createEl('p');
+        line.addClass('syncserver-pairing-status');
+        line.setText(text);
+      },
+      notify: (message, durationMs) => new Notice(message, durationMs),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      done: () => this.settingsTab?.display(),
+    });
   }
 
   /**
@@ -492,17 +527,9 @@ class SyncServerSettings extends PluginSettingTab {
 
     new Setting(containerEl).addButton((b) =>
       b.setButtonText('Approve').onClick(async () => {
-        const typed = normalisePairingCode(code);
-        if (!typed) {
-          new Notice('SyncServer: enter the code shown on the other device.');
-          return;
-        }
+        b.setDisabled(true);
         try {
-          b.setDisabled(true);
-          await this.plugin.approvePairing(typed);
-          new Notice('SyncServer: approved. The other device should finish on its own.');
-        } catch (e) {
-          new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+          await this.plugin.pairing(containerEl).approve(code);
         } finally {
           b.setDisabled(false);
         }
@@ -540,47 +567,20 @@ class SyncServerSettings extends PluginSettingTab {
         t.onChange((v) => (draft.passphrase = v));
       });
 
-    // Filled in once the pairing exists, so the code is never shown before it is real.
+    // Where the flow writes: the code, the line under it, and the cancel. The section
+    // builds the surface; every decision about what appears on it is the coordinator's.
     const shown = containerEl.createEl('div');
-    let cancelled = false;
 
     new Setting(containerEl).addButton((b) =>
       b.setButtonText('Show pairing code').onClick(async () => {
-        if (!draft.passphrase) {
-          new Notice('SyncServer: the account’s passphrase is required.');
-          return;
-        }
-        const code = newPairingCode();
-        cancelled = false;
-        shown.empty();
-        shown.createEl('p', { text: 'Type this on the device that is already connected:' });
-        // A code is read off one screen and typed into another, so it is set apart rather
-        // than left in a paragraph to be squinted at.
-        shown.createEl('pre', { text: code });
-        const status = shown.createEl('p', { text: 'Waiting for approval…' });
-        const cancel = shown.createEl('button', { text: 'Cancel' });
-        cancel.onclick = () => {
-          cancelled = true;
-          status.setText('Cancelled.');
-        };
-
+        b.setDisabled(true);
         try {
-          b.setDisabled(true);
-          await this.plugin.pair(
-            { serverUrl: draft.serverUrl, login: draft.login, passphrase: draft.passphrase, pairingCode: code },
-            async () => {
-              if (cancelled) return false;
-              // A second between attempts: the wait is a person walking to another device,
-              // not a machine, and a tighter loop would only make more requests.
-              await new Promise((r) => setTimeout(r, 1000));
-              return true;
-            },
-          );
-          new Notice('SyncServer: paired.');
-          this.display();
-        } catch (e) {
-          status.setText(e instanceof Error ? e.message : String(e));
-          new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+          await this.plugin.pairing(shown).join({
+            serverUrl: draft.serverUrl,
+            login: draft.login,
+            passphrase: draft.passphrase,
+          });
+        } finally {
           b.setDisabled(false);
         }
       }),
