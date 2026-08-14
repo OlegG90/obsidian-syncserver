@@ -20,6 +20,7 @@
  * left here is the orchestration, and turning the schema's refusal into one a caller can
  * act on.
  */
+import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
 import { headroom } from '../quota.js';
@@ -472,7 +473,7 @@ export const removeMember = async (
   userId: string,
   shareId: string,
   targetUserId: string,
-): Promise<{ outcome: 'withdrawn' | 'revoked' } | Refusal> => {
+): Promise<{ outcome: 'withdrawn' | 'revoked'; ended?: boolean } | Refusal> => {
   const share = await db.one<{ initiator: string }>(`SELECT initiator_id AS initiator FROM shares WHERE id = $1`, [
     shareId,
   ]);
@@ -492,12 +493,10 @@ export const removeMember = async (
     return { outcome: 'withdrawn' };
   }
 
-  await db.query(
-    `UPDATE share_members SET finalization_started_at = now()
-      WHERE share_id = $1 AND user_id = $2 AND finalization_started_at IS NULL`,
-    [shareId, targetUserId],
-  );
-  return { outcome: 'revoked' };
+  // Revocation is a departure, so it ends the share on exactly the same condition leaving
+  // does — the rule this used to state only once.
+  const ended = await db.tx((c) => departMember(c, shareId, targetUserId, userId));
+  return { outcome: 'revoked', ended };
 };
 
 /** One node's worth of preparation: its name under `KS`, and the material its bytes need. */
@@ -843,6 +842,58 @@ export const joinShare = async (
  * share of one that nobody has left is alive and waiting — which is the ordinary state
  * while preparing, after activation before anybody accepts, and again after a decline.
  */
+/**
+ * One departure, whichever door it came through.
+ *
+ * Leaving and being revoked are the same state (SH-22): propagation stops, the copy stays,
+ * and the client finalizes it later. So the question "did that end the share" has to be
+ * asked identically by both — it was asked by `leave` alone, and revoking the last
+ * participant therefore left a share `active` with nobody in it but the initiator, which
+ * SH-07 does not allow.
+ *
+ * **A departure, never a head count.** The initiator's ends it (SH-17), and so does the
+ * last joined participant's other than them (SH-07). The initiator does not count towards
+ * "anybody left": a share is people sharing WITH somebody, and the initiator alone is
+ * nobody. That is why a share of one survives its three ordinary moments — preparing,
+ * activated before anyone accepts, and after a decline.
+ *
+ * @param leaving the member going, whether by their own act or the initiator's.
+ * @returns whether this closed the share for everybody.
+ */
+const departMember = async (
+  c: PoolClient,
+  shareId: string,
+  leaving: string,
+  initiator: string,
+): Promise<boolean> => {
+  const remaining = await c.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM share_members
+      WHERE share_id = $1 AND user_id <> $2 AND user_id <> $3
+        AND joined_at IS NOT NULL AND finalization_started_at IS NULL AND left_at IS NULL`,
+    [shareId, leaving, initiator],
+  );
+  const ends = leaving === initiator || Number(remaining.rows[0]!.n) === 0;
+
+  if (ends) {
+    // Terminal first, then everybody starts finalizing — the ring cancel walks, for the
+    // same reason: the initiator may not leave a share that still lives. A terminal share
+    // MAY hold members who are finalizing; what it may not hold is one who has not begun.
+    await c.query(`UPDATE shares SET state = 'ended', terminal_at = now() WHERE id = $1`, [shareId]);
+    await c.query(
+      `UPDATE share_members SET finalization_started_at = now()
+        WHERE share_id = $1 AND left_at IS NULL AND finalization_started_at IS NULL`,
+      [shareId],
+    );
+  } else {
+    await c.query(
+      `UPDATE share_members SET finalization_started_at = now()
+        WHERE share_id = $1 AND user_id = $2 AND finalization_started_at IS NULL`,
+      [shareId, leaving],
+    );
+  }
+  return ends;
+};
+
 export const leaveShare = async (
   db: Db,
   userId: string,
@@ -866,33 +917,7 @@ export const leaveShare = async (
       );
       if (mine.rowCount === 0) return { kind: 'not_found' } as Refusal;
 
-      // Who would still be in it afterwards. The initiator does not count towards this:
-      // a share is people sharing WITH somebody, and the initiator alone is nobody.
-      const remaining = await c.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM share_members
-          WHERE share_id = $1 AND user_id <> $2 AND user_id <> $3
-            AND joined_at IS NOT NULL AND finalization_started_at IS NULL AND left_at IS NULL`,
-        [shareId, userId, share.initiator],
-      );
-      const ends = userId === share.initiator || Number(remaining.rows[0]!.n) === 0;
-
-      if (ends) {
-        // Terminal first, then everybody starts finalizing — the same ring cancel walks,
-        // and for the same reason: the initiator may not leave a share that still lives.
-        // A terminal share MAY hold members who are finalizing; what it may not hold is one
-        // who has not begun. Their clients finish at their own pace, offline ones later.
-        await c.query(`UPDATE shares SET state = 'ended', terminal_at = now() WHERE id = $1`, [shareId]);
-        await c.query(
-          `UPDATE share_members SET finalization_started_at = now()
-            WHERE share_id = $1 AND left_at IS NULL AND finalization_started_at IS NULL`,
-          [shareId],
-        );
-      } else {
-        await c.query(
-          `UPDATE share_members SET finalization_started_at = now() WHERE share_id = $1 AND user_id = $2`,
-          [shareId, userId],
-        );
-      }
+      const ends = await departMember(c, shareId, userId, share.initiator);
 
       return { ended: ends };
     });

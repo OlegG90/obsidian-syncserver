@@ -1039,13 +1039,31 @@ describe('who a write reaches, and who it does not', () => {
   });
 
   it('skips a participant who is finalizing, because revocation stops propagation now', async () => {
+    // A third member, and not for decoration: revoking the LAST participant ends the share
+    // (SH-07), and an ended share is no place to observe propagation. Somebody has to be
+    // left for the write to still have a destination.
     const { shareId, inside, ks } = await sharedWith('revoked');
+    const third = await makeAccount('shares-revoked-third');
+    const theirVault = randomUUID();
+    await app.inject({
+      method: 'POST',
+      url: '/vaults',
+      headers: { authorization: `Bearer ${third.access}` },
+      payload: { id: theirVault, name_enc: b64('third vault') },
+    });
+    await db.query(
+      `INSERT INTO share_members (share_id, user_id, vault_id, joined_at, wrapped_key)
+            VALUES ($1, $2, $3, now(), '\x01')`,
+      [shareId, third.id, theirVault],
+    );
+
     const r = await app.inject({
       method: 'DELETE',
       url: `/shares/${shareId}/members/${strangerId}`,
       headers: auth(),
     });
     assert.equal(r.json().outcome, 'revoked');
+    assert.equal(r.json().ended, false, 'the share carries on for the third member');
 
     const made = await createNode('folder', `after-revoke-${randomUUID()}`, inside, ks);
     assert.equal(await theirCopyOf(made), undefined, 'a revoked device receives no further changes');
@@ -1358,5 +1376,89 @@ describe('the keys a client needs to read a vault', () => {
     const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
     assert.equal(r.json().scopes[0].scope, 'vault');
     assert.equal(r.json().scopes[0].key_id, vaultKeyId);
+  });
+});
+
+describe('a departure ends a share whichever door it came through', () => {
+  it('ends the share when the initiator revokes the last participant', async () => {
+    // SH-22: leaving and being revoked are the same state, so SH-07's "the last one out
+    // ends it" has to hold for both. It held only for leaving — revoking the last
+    // participant left the share active with nobody in it but the initiator.
+    const { shareId } = await sharedWith('revoke-last');
+
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().outcome, 'revoked');
+    assert.equal(r.json().ended, true, 'and the caller is told, because it changes what they say');
+
+    const state = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(state!.state, 'ended');
+  });
+
+  it('puts the initiator into finalization too when a revoke ends it', async () => {
+    // Ending is not something one member does to another: everybody's copy has to come
+    // back to KV, the initiator's included.
+    const { shareId } = await sharedWith('revoke-ends-all');
+    await app.inject({ method: 'DELETE', url: `/shares/${shareId}/members/${strangerId}`, headers: auth() });
+
+    const rows = await db.query<{ started: string | null }>(
+      `SELECT finalization_started_at AS started FROM share_members WHERE share_id = $1`,
+      [shareId],
+    );
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((m) => m.started), 'both sides finalize, each on their own client');
+  });
+
+  it('does not end it while somebody else is still in', async () => {
+    const { shareId } = await sharedWith('revoke-not-last');
+    const third = await makeAccount('shares-revoke-third');
+    const theirVault = randomUUID();
+    await app.inject({
+      method: 'POST',
+      url: '/vaults',
+      headers: { authorization: `Bearer ${third.access}` },
+      payload: { id: theirVault, name_enc: b64('third vault') },
+    });
+    await db.query(
+      `INSERT INTO share_members (share_id, user_id, vault_id, joined_at, wrapped_key)
+            VALUES ($1, $2, $3, now(), '\x01')`,
+      [shareId, third.id, theirVault],
+    );
+
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+    assert.equal(r.json().ended, false);
+
+    const state = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(state!.state, 'active', 'the share carries on for the one who is left');
+  });
+
+  it('withdrawing an invitation is not a departure and ends nothing', async () => {
+    // Nobody joined, so nobody left. The slot simply comes back.
+    const { shareId } = await invitedShare('withdraw-not-departure');
+    const r = await app.inject({
+      method: 'DELETE',
+      url: `/shares/${shareId}/members/${strangerId}`,
+      headers: auth(),
+    });
+
+    assert.equal(r.json().outcome, 'withdrawn');
+    assert.equal(r.json().ended, undefined, 'there is no departure to report');
+
+    const state = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(state!.state, 'active');
   });
 });

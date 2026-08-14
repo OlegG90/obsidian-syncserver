@@ -171,7 +171,9 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
       // The outcome is reported rather than left to be inferred: withdrawing frees a slot
       // immediately, revoking leaves a replica somebody still has to finalize, and a client
       // that cannot tell them apart cannot say which happened.
-      return { outcome: out.outcome };
+      // `ended` travels with a revoke: removing the last participant closes the share for
+      // everybody (SH-07), and the initiator's client has a different thing to say then.
+      return out.ended === undefined ? { outcome: out.outcome } : { outcome: out.outcome, ended: out.ended };
     },
   );
 

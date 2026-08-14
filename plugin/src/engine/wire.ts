@@ -24,7 +24,14 @@ export interface VaultWire {
   openVault(vaultId: string): Promise<{
     root_node_id: string;
     head_rev: number;
-    scopes: { scope: string; key_id: string }[];
+    /**
+     * The vault's own scope, and every share scope this caller can open.
+     *
+     * `share_id` is what pairs a share with the key its interior is named under: a share
+     * root's own label stays under `KV` (SH-01), so that pairing cannot be read off the
+     * tree and has to be reported here.
+     */
+    scopes: { scope: string; key_id: string; share_id?: string; wrapped_key?: string; wrapping?: string }[];
   }>;
 
   /** The whole tree as it stands, with the cursor it was taken at. */

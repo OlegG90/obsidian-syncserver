@@ -40,6 +40,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
 import { folderMoves, renameSourceFor, type Vanished } from './rename.js';
+import { contentScopeFor } from './scopes.js';
 
 export interface SyncReport {
   /**
@@ -159,6 +160,14 @@ interface PassContext {
   rootNodeId: string;
   /** The vault's own key scope — the root default every node inherits until a share overrides it. */
   vaultScopeId: string;
+  /**
+   * Share id → the scope its interior is named under.
+   *
+   * Needed because a share root's OWN label is under `KV` (SH-01), so the scope its children
+   * belong to cannot be read off it. The server reports the pairing when the vault is
+   * opened, which is the only place it exists as one fact.
+   */
+  shareScopes: Map<string, string>;
   state: VaultState;
   report: SyncReport;
 }
@@ -202,11 +211,10 @@ export class SyncEngine {
     return key;
   }
 
-  /** The scope content at `path` is named under: its parent folder's scope, or the vault's. */
+  /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
   private contentScopeId(ctx: PassContext, path: string): string {
     const parent = parentOf(path);
-    if (!parent) return ctx.vaultScopeId;
-    return ctx.tree.get(parent)?.nameKeyId ?? ctx.vaultScopeId;
+    return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
   }
 
   async sync(): Promise<SyncReport> {
@@ -220,6 +228,9 @@ export class SyncEngine {
     const vaultScopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
     if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
     const rootNodeId = opened.root_node_id;
+    const shareScopes = new Map(
+      opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const),
+    );
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
     // what a missing node means (#70). The pages themselves are re-read through the walk —
@@ -254,6 +265,7 @@ export class SyncEngine {
       policy: POLICY[epoch],
       tree, byNodeId, meta, dedup,
       state, report, rootNodeId, vaultScopeId,
+      shareScopes,
       vanished: new Map(), handled: new Set(), queue: [],
     };
 
