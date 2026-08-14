@@ -212,3 +212,57 @@ describe('reading the lists', () => {
     assert.equal(out!.invitations[0]!.initiatorLogin, 'bob');
   });
 });
+
+describe('a refusal that carries work', () => {
+  /** An ApiError-shaped failure: the message, plus the fields the server sent with it. */
+  const refusal = (message: string, details: Record<string, unknown>) =>
+    Object.assign(new Error(message), { details });
+
+  it('says how much is not ready, and what to do about it', async () => {
+    // The server computes the gap list precisely so the client need not re-scan a subtree
+    // to find what it already knows. Shown as `409 share_not_prepared`, that reaches nobody.
+    const h = harness({
+      share: async () => {
+        throw refusal('409 share_not_prepared', { gaps: [{ nodeId: 'a' }, { nodeId: 'b' }] });
+      },
+    });
+    await h.flow.share('Team');
+
+    assert.match(h.notices[0]!, /2 item\(s\)/);
+    assert.match(h.notices[0]!, /Sync this vault and try again/, 'and the one instruction they can follow');
+  });
+
+  it('says how much of a departure was missed', async () => {
+    const h = harness({
+      leave: async () => {
+        throw refusal('409 finalization_incomplete', { missing: ['n1', 'n2', 'n3'] });
+      },
+    });
+    await h.flow.leave('share-1');
+
+    assert.match(h.notices[0]!, /3 file\(s\)/);
+  });
+
+  it('adds nothing when the refusal carries nothing', async () => {
+    // Most do not, and inventing a count for them would be noise.
+    const h = harness({
+      share: async () => {
+        throw refusal('409 already_shared', {});
+      },
+    });
+    await h.flow.share('Team');
+
+    assert.match(h.notices[0]!, /already_shared/);
+    assert.ok(!/item\(s\)/.test(h.notices[0]!));
+  });
+
+  it('survives an error that is not one of ours at all', async () => {
+    const h = harness({
+      share: async () => {
+        throw 'a string, from somewhere careless';
+      },
+    });
+    await h.flow.share('Team');
+    assert.match(h.notices[0]!, /careless/);
+  });
+});

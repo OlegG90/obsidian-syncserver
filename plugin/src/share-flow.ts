@@ -63,7 +63,29 @@ export interface ShareFlow {
   members(shareId: string): Promise<ShareMember[] | undefined>;
 }
 
-const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+/**
+ * What to tell somebody about a refusal, including the part they can act on.
+ *
+ * Two of the sharing refusals carry a work list the server went to trouble to compute:
+ * which nodes are not prepared, which the finalization pass missed. Shown as
+ * `409 share_not_prepared`, that trouble reaches nobody — and the one instruction a person
+ * could follow ("sync, then try again") is exactly what is missing.
+ */
+const message = (e: unknown): string => {
+  if (!(e instanceof Error)) return String(e);
+
+  const details = (e as { details?: Record<string, unknown> }).details ?? {};
+  const gaps = Array.isArray(details.gaps) ? details.gaps.length : 0;
+  const missing = Array.isArray(details.missing) ? details.missing.length : 0;
+
+  if (gaps > 0) {
+    return `${e.message}: ${gaps} item(s) in the folder are not ready to be shared. Sync this vault and try again.`;
+  }
+  if (missing > 0) {
+    return `${e.message}: ${missing} file(s) of your copy were not converted. Sync this vault and try again.`;
+  }
+  return e.message;
+};
 
 export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
   // Set synchronously before any await, for the reason `sync.ts` gives: two presses arrive

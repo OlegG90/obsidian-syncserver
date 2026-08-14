@@ -11,20 +11,10 @@ import type { RestoreResult } from '@syncserver/shared';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
-import { refusalFromDatabase, type Refusal } from '../refusal.js';
+import { txGuarded, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
 
 /** The schema's own refusals, returned rather than thrown — see `nodes/service.ts`. */
-const txGuarded = async <T>(db: Db, fn: (c: PoolClient) => Promise<T>): Promise<T | Refusal> => {
-  try {
-    return await db.tx(fn);
-  } catch (e) {
-    const refusal = refusalFromDatabase(e);
-    if (refusal) return refusal;
-    throw e;
-  }
-};
-
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
 
 export const listVersions = (db: Db, vaultId: string, nodeId: string): Promise<Version[]> =>

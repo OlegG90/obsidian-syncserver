@@ -67,14 +67,40 @@ export interface Envelope {
 }
 
 export class ApiError extends Error {
+  /**
+   * The refusal's own fields, parsed once.
+   *
+   * Several refusals carry a **work list** rather than only a name: `share_not_prepared`
+   * says which nodes are still under the wrong key, `finalization_incomplete` says which
+   * were missed. The server composes those precisely so the client does not have to
+   * re-scan a subtree to find what it already knows — and until now every caller saw
+   * `409 share_not_prepared` and nothing else, because the body sat unparsed in a string.
+   *
+   * Empty when the body is not an object, which is the honest answer for a refusal that
+   * carries nothing.
+   */
+  readonly details: Record<string, unknown>;
+
   constructor(
     readonly status: number,
     readonly code: string,
     readonly body: string,
   ) {
     super(`${status} ${code}`);
+    this.details = parseDetails(body);
   }
 }
+
+/** Never throws: a body that is not JSON is a refusal without fields, not a second failure. */
+const parseDetails = (body: string): Record<string, unknown> => {
+  if (!body) return {};
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
 
 /** docs/04: 8 MB per part, and the same number is the threshold for using parts at all. */
 const PART_BYTES = 8 * 1024 * 1024;

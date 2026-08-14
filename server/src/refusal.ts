@@ -16,6 +16,7 @@
  * one becomes on the wire is `refuse-http.ts` and nowhere else.
  */
 import type { RefusalCode } from '@syncserver/shared';
+import type { PoolClient } from 'pg';
 
 export type Refusal =
   | { kind: 'not_found' }
@@ -117,4 +118,34 @@ export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
   if (code !== CHECK_VIOLATION) return undefined;
   const detail = (e as { message?: unknown }).message;
   return { kind: 'invalid_write', detail: typeof detail === 'string' ? detail : 'the write violates a schema rule' };
+};
+
+/**
+ * A transaction whose schema refusals come back as answers instead of as `500`s.
+ *
+ * The rule is AGENTS.md's — a `500` for something the caller could fix is a defect — and it
+ * had been written eight times: twice as a helper in two service files, and six more inline
+ * in the sharing module, which needed it most and had it least. Every write family that
+ * arrives next would have copied it again.
+ *
+ * The `db` parameter is structural rather than the `Db` type, and the `PoolClient` import is
+ * type-only, so this file keeps the property that made it worth splitting from
+ * `refuse-http`: it pulls in nothing at runtime. A fact about a database write should not
+ * drag a driver, let alone a web framework, into everything that names it.
+ *
+ * Anything that is not a `check_violation` still throws. A unique violation or a
+ * serialization failure usually means a defect on this side, and mapping them all to `400`
+ * would file the server's own bugs under the caller's name.
+ */
+export const txGuarded = async <T>(
+  db: { tx<R>(fn: (c: PoolClient) => Promise<R>): Promise<R> },
+  fn: (c: PoolClient) => Promise<T>,
+): Promise<T | Refusal> => {
+  try {
+    return await db.tx(fn);
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
 };
