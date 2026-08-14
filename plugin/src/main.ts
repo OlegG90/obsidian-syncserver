@@ -29,6 +29,7 @@ import { session, type Connection, type Handle, type Session } from './session/i
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { unwrapShareKey } from './crypto/share.js';
+import { shareKeysFrom } from './share-keys.js';
 import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
@@ -80,15 +81,16 @@ export default class SyncServerPlugin extends Plugin {
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
       runPass: async () =>
-        this.sess!.use(async ({ client, kv }) => {
+        this.sess!.use(async (h) => {
           const engine = new SyncEngine(
-            client,
+            h.client,
             this.sess!.connection.vaultId,
-            kv,
+            h.kv,
             new ObsidianVaultAdapter(this.app.vault),
             this.stateStore(),
             deviceLabel(),
             this.data.syncObsidian === true,
+            await this.openShareKeys(h),
           );
           return engine.sync();
         }),
@@ -330,7 +332,32 @@ export default class SyncServerPlugin extends Plugin {
     );
   }
 
-  /** The share keys this device can open, refreshed whenever the vault is opened. */
+  /**
+   * The share keys this device can open, read fresh each pass.
+   *
+   * Not cached: a share can be ended by somebody else between two syncs, and a key kept
+   * from before would be offered for a scope nothing is named under any more. The server
+   * reports exactly the live ones when the vault is opened, which makes "what can I read"
+   * one question with one answer rather than a cache to invalidate.
+   *
+   * A scope this device cannot open is dropped and said out loud rather than thrown: one
+   * unreadable share must not stop the vault from syncing, and the engine still refuses at
+   * the one place it matters — meeting a name under a key it does not hold.
+   */
+  private async openShareKeys(h: Handle): Promise<Map<string, Uint8Array> | undefined> {
+    const opened = await h.client.openVault(this.data.connection!.vaultId);
+    const { keys, unopenable } = shareKeysFrom(opened.scopes, {
+      vaultKey: h.kv,
+      openIdentity: () => h.openIdentity(),
+      userId: h.userId,
+    });
+    if (unopenable.length > 0) {
+      new Notice(`SyncServer: ${unopenable.length} shared folder(s) could not be opened on this device.`, 10000);
+    }
+    return keys.size > 0 ? keys : undefined;
+  }
+
+  /** The share keys this device can open, for the operations that need one by hand. */
   private shareKeys = new Map<string, Uint8Array>();
 
   private async vaultScopeId(h: Handle): Promise<string> {

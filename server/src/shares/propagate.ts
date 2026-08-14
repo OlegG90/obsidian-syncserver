@@ -21,6 +21,7 @@
  * (SH-03) — so each recipient takes a `user_blobs` claim of their own.
  */
 import type { PoolClient } from 'pg';
+import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
 /** A participant a write must reach: their account, and the vault their replica lives in. */
@@ -68,27 +69,6 @@ const counterpart = async (
     [vaultId, shareItemId],
   );
   return res.rows[0];
-};
-
-/**
- * Reaching the limit freezes the account, every vault and every share at once (SH-20).
- *
- * Checked after a write rather than before it, and that is the design rather than a
- * shortcut: the rule is "reaching the limit freezes", not "a write that would exceed the
- * limit is refused". A participant does not get a say in what another participant writes
- * into a folder they share, so refusing the delivery would leave the two copies different
- * with nothing to reconcile them. They take the bytes, and then they are frozen until they
- * free some — which is why deleting stays available to a frozen account.
- */
-const freezeIfOverQuota = async (c: PoolClient, userId: string): Promise<void> => {
-  await c.query(
-    `UPDATE users u SET frozen_at = now()
-      WHERE u.id = $1 AND u.frozen_at IS NULL
-        AND (SELECT COALESCE(SUM(b.size), 0)
-               FROM user_blobs ub JOIN blobs b ON b.sha256 = ub.sha256
-              WHERE ub.user_id = u.id) > u.quota_bytes`,
-    [userId],
-  );
 };
 
 /** A recipient's claim on content that just arrived in their copy. */

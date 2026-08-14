@@ -121,6 +121,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
         account_salt: out.accountSalt,
         kdf_params: out.kdfParams,
         device_id: out.deviceId,
+        user_id: out.userId,
       };
     },
   );

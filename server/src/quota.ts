@@ -22,7 +22,8 @@
  * rule. What keeps them honest is `row_must_be_referenced` in the schema, which is where a
  * constraint belongs.
  */
-import type { Queryable } from './db.js';
+import type { PoolClient } from 'pg';
+import { oneFrom, type Queryable } from './db.js';
 
 export interface Usage {
   /**
@@ -100,4 +101,27 @@ export const headroom = async (q: Queryable, userId: string): Promise<bigint | u
   const row = await read(q, userId, null);
   if (!row) return undefined;
   return BigInt(row.quota) - BigInt(row.used);
+};
+
+/**
+ * Freeze the account if it has passed its limit (SH-20).
+ *
+ * The decision to ask **here** belongs to whoever calls it — propagation asks because that
+ * is where somebody else's write crosses your boundary — but the arithmetic is this
+ * module's, and it was briefly written twice. A second `SUM` over `user_blobs` is exactly
+ * the drift this file exists to prevent: the surface would keep reporting one figure while
+ * the freeze used another, and nothing would say so.
+ *
+ * Checked **after** the write rather than before it, which is what SH-20 says: reaching the
+ * limit freezes, it does not refuse. A participant has no say in what another writes into a
+ * folder they share, so refusing delivery would leave two copies different with nothing to
+ * reconcile them. They take the bytes and are frozen until they free some — which is why
+ * deleting stays available while frozen.
+ */
+export const freezeIfOverQuota = async (c: PoolClient, userId: string): Promise<boolean> => {
+  const row = await read(oneFrom(c), userId, null);
+  if (!row || BigInt(row.used) <= BigInt(row.quota)) return false;
+
+  await c.query(`UPDATE users SET frozen_at = now() WHERE id = $1 AND frozen_at IS NULL`, [userId]);
+  return true;
 };

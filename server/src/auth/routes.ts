@@ -108,6 +108,9 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       device_id: out.deviceId,
       vault_id: out.vaultId,
       root_node_id: out.rootNodeId,
+      // The account id, for the same reason login reports it: an invitation's envelope is
+      // bound to it, so a device that will ever receive a share needs to know it.
+      user_id: out.userId,
     };
   });
 
@@ -130,9 +133,20 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       );
       if (!device) return reply.code(401).send({ error: 'invalid_credentials' });
 
+      // The account's identity travels with the session, because receiving a share needs
+      // it: an invitation is an HPKE envelope sealed to this account's public key, bound to
+      // its id (docs/06). Neither half is a secret — `enc_privkey` is worthless without the
+      // seed, which is exactly why the server may hold it and hand it back.
+      const identity = await db.one<{ encPrivkey: string }>(
+        `SELECT encode(enc_privkey, 'base64') AS "encPrivkey" FROM users WHERE id = $1`,
+        [account.id],
+      );
+
       return {
         access: app.jwt.sign({ sub: account.id, device: deviceId }, { expiresIn: cfg.accessTokenTtlSeconds }),
         refresh: await issueRefreshToken(db, deviceId),
+        user_id: account.id,
+        enc_privkey: identity!.encPrivkey,
       };
     },
   );

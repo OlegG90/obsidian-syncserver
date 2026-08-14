@@ -251,7 +251,14 @@ export class SyncClient {
     initial_vault_name_enc: string;
     device_name?: string;
     device_platform?: string;
-  }): Promise<{ access: string; refresh: string; device_id: string; vault_id: string; root_node_id: string }> {
+  }): Promise<{
+    access: string;
+    refresh: string;
+    device_id: string;
+    vault_id: string;
+    root_node_id: string;
+    user_id: string;
+  }> {
     return this.json('POST', '/auth/redeem', body, { auth: false });
   }
 
@@ -259,7 +266,7 @@ export class SyncClient {
     login: string;
     auth_secret: string;
     device_id: string;
-  }): Promise<{ access: string; refresh: string }> {
+  }): Promise<{ access: string; refresh: string; user_id: string; enc_privkey: string }> {
     return this.json('POST', '/auth/login', body, { auth: false });
   }
 
@@ -297,7 +304,14 @@ export class SyncClient {
     pairingId: string,
     body: { pairing_secret: string; name: string; platform: string },
   ): Promise<
-    | { seed_envelope: string; enc_privkey: string; account_salt: string; kdf_params: KdfParams; device_id: string }
+    | {
+        seed_envelope: string;
+        enc_privkey: string;
+        account_salt: string;
+        kdf_params: KdfParams;
+        device_id: string;
+        user_id: string;
+      }
     | undefined
   > {
     try {

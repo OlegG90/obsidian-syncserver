@@ -141,6 +141,8 @@ export const claimPairing = async (
       accountSalt: string;
       kdfParams: unknown;
       deviceId: string;
+      /** `row.approved` — the account this device has just joined. */
+      userId: string;
     }
   | Refusal
 > =>
@@ -190,5 +192,6 @@ export const claimPairing = async (
       accountSalt: account.rows[0]!.accountSalt,
       kdfParams: account.rows[0]!.kdfParams,
       deviceId,
+      userId: row.approved,
     };
   });

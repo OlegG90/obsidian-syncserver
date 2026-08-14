@@ -12,7 +12,6 @@
  * are opened with different keys, which is why the server says which is which rather than
  * leaving a client to try both and read a failure as the answer.
  */
-import { unwrapIdentity } from './crypto/account.js';
 import { fromBase64 } from './crypto/bytes.js';
 import { openFrom } from './crypto/hpke.js';
 import { unwrapShareKey } from './crypto/share.js';
@@ -30,10 +29,13 @@ export interface ReportedScope {
 export interface ShareKeyDeps {
   /** `KV` for the vault being opened — what the initiator's own copy is wrapped under. */
   vaultKey: Uint8Array;
-  /** The account seed, which unwraps the identity an invitation was sealed to. */
-  seed: Uint8Array;
-  /** `enc_privkey` as the server stores it. */
-  encPrivkey: string;
+  /**
+   * The account's X25519 private half, unwrapped on demand.
+   *
+   * A function rather than the seed, so the seed stays inside the session that holds it:
+   * receiving a share needs this identity and nothing else of it.
+   */
+  openIdentity(): Uint8Array;
   /** This account, because the envelope is bound to its id (docs/06). */
   userId: string;
 }
@@ -66,7 +68,7 @@ export const shareKeysFrom = (
       }
       // Unwrapped once and reused: the identity is the same for every envelope, and
       // unwrapping it per share would repeat an AEAD open for nothing.
-      identity ??= unwrapIdentity(deps.seed, deps.encPrivkey);
+      identity ??= deps.openIdentity();
       const envelope = fromBase64(s.wrapped_key);
       keys.set(
         s.key_id,

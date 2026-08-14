@@ -14,7 +14,7 @@ import { newKeypair, openFrom } from '../src/crypto/hpke.js';
 import { concat as concatBytes, fromBase64, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { decryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import type { FinalizeNode } from '../src/api/client.js';
-import { createAccount } from '../src/crypto/account.js';
+import { createAccount, unwrapIdentity } from '../src/crypto/account.js';
 import { newShareKey, unwrapShareKey, wrapShareKey } from '../src/crypto/share.js';
 import {
   inviteTo,
@@ -305,7 +305,7 @@ describe('making the wrapped keys usable', () => {
           wrapping: 'vault',
         },
       ],
-      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+      { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId },
     );
 
     assert.deepEqual(keys.get(SHARE_SCOPE), ks);
@@ -334,7 +334,7 @@ describe('making the wrapped keys usable', () => {
           wrapping: 'account',
         },
       ],
-      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+      { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId },
     );
 
     assert.deepEqual(keys.get(SHARE_SCOPE), ks, 'the same key the initiator holds');
@@ -357,7 +357,7 @@ describe('making the wrapped keys usable', () => {
         },
         { scope: 'share', key_id: 'bad', share_id: 's2', wrapped_key: 'AAAA', wrapping: 'vault' },
       ],
-      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+      { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId },
     );
 
     assert.ok(keys.has('good'), 'the readable one still arrives');
@@ -369,8 +369,7 @@ describe('making the wrapped keys usable', () => {
     const { account, vaultKey, userId } = setup();
     const { keys } = shareKeysFrom([{ scope: 'vault', key_id: 'vault-scope' }], {
       vaultKey,
-      seed: account.seed,
-      encPrivkey: account.encPrivkey,
+      openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey),
       userId,
     });
     assert.equal(keys.size, 0);

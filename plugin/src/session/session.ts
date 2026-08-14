@@ -36,7 +36,14 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
-import { authSecret, deriveKek, vaultKey, type Account, type OpenedAccount } from '../crypto/account.js';
+import {
+  authSecret,
+  deriveKek,
+  unwrapIdentity,
+  vaultKey,
+  type Account,
+  type OpenedAccount,
+} from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
@@ -76,6 +83,18 @@ export interface Handle {
   client: SyncClient;
   /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
   kv: Uint8Array;
+  /** This account's id. An invitation's envelope is bound to it (docs/06), so opening one needs it. */
+  userId: string;
+  /** The account identity, wrapped. Worthless on its own — `openIdentity` is what opens it. */
+  encPrivkey: string;
+  /**
+   * The account's X25519 private half, unwrapped.
+   *
+   * A function rather than the seed itself, so the seed stays where it is. Receiving a
+   * share needs the identity and nothing else of it, and handing out the seed to satisfy
+   * that would widen this on-purpose-narrow surface for no reason.
+   */
+  openIdentity(): Uint8Array;
 }
 
 /** The derivation seam, mirroring account creation and account opening as two operations. */
@@ -192,7 +211,13 @@ export class Session {
     });
     client.setAccessToken(session.access);
     client.setRefreshToken(session.refresh);
-    this.handle = { client, kv: vaultKey(account.seed, this.conn.vaultId) };
+    this.handle = {
+      client,
+      kv: vaultKey(account.seed, this.conn.vaultId),
+      userId: session.user_id,
+      encPrivkey: session.enc_privkey,
+      openIdentity: () => unwrapIdentity(account.seed, session.enc_privkey),
+    };
     return 'open';
   }
 
@@ -363,7 +388,13 @@ export class Session {
     };
     const paired = new Session(conn, deps);
     paired.seed = seed;
-    paired.handle = { client, kv: vaultKey(seed, vaultId) };
+    paired.handle = {
+      client,
+      kv: vaultKey(seed, vaultId),
+      userId: claimed.user_id,
+      encPrivkey: claimed.enc_privkey,
+      openIdentity: () => unwrapIdentity(seed, claimed.enc_privkey),
+    };
     return paired;
   }
 
@@ -409,7 +440,15 @@ export class Session {
     };
     const session = new Session(conn, deps);
     session.seed = account.seed;
-    session.handle = { client, kv: vaultKey(account.seed, out.vault_id) };
+    session.handle = {
+      client,
+      kv: vaultKey(account.seed, out.vault_id),
+      userId: out.user_id,
+      // This device MADE the identity, so it holds both halves already; the wrapped form is
+      // carried anyway so every handle looks the same to whoever borrows one.
+      encPrivkey: account.encPrivkey,
+      openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey),
+    };
     return session;
   }
 
