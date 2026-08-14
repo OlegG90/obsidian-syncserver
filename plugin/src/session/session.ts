@@ -41,6 +41,7 @@ import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { seal } from '../crypto/sealed.js';
+import { normalisePairingCode } from '../crypto/pairing-code.js';
 import { SyncClient } from '../api/client.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
@@ -229,12 +230,16 @@ export class Session {
   async approvePairing(pairingCode: string): Promise<void> {
     if (!this.seed) throw new Error('session is locked');
     const seed = this.seed;
+    // Normalised HERE, not by the caller. The code crosses a human on the way to this
+    // method and a screen on the way out of `pair()`, so both ends must agree what it is
+    // before either hashes it — see the constant below.
+    const code = normalisePairingCode(pairingCode);
 
     await this.use(async (h) => {
       // Two calls, and they cannot be one: sealing needs the key, and the key is what the
       // waiting device registered. The lookup is authenticated for the same reason the
       // approval is — only a device that already holds the seed has any business asking.
-      const { device_pubkey } = await h.client.lookupPairing({ pairing_secret: pairingCode });
+      const { device_pubkey } = await h.client.lookupPairing({ pairing_secret: code });
 
       const envelope = sealTo(
         fromBase64(device_pubkey),
@@ -244,7 +249,7 @@ export class Session {
       );
 
       await h.client.approvePairing({
-        pairing_secret: pairingCode,
+        pairing_secret: code,
         seed_envelope: toBase64(concat(envelope.enc, envelope.ciphertext)),
       });
     });
@@ -275,20 +280,27 @@ export class Session {
     const ephemeral = newKeypair();
     const client = new SyncClient(args.serverUrl, deps.transport);
 
+    // The canonical form of the code, which is what BOTH sides hash. The UI shows a
+    // grouped, dashed version because that is what a person can read and type; the dashes
+    // are presentation and must never reach a hash. Registering the displayed form here
+    // and normalising on the other side is exactly the bug this line exists to prevent —
+    // two hashes of one code, and a pairing nobody can find.
+    const code = normalisePairingCode(args.pairingCode);
+
     const { pairing_id } = await client.beginPairing({
       device_pubkey: toBase64(ephemeral.publicKey),
-      pairing_token_hash: toHex(sha256(utf8(args.pairingCode))),
+      pairing_token_hash: toHex(sha256(utf8(code))),
     });
 
     let claimed = await client.claimPairing(pairing_id, {
-      pairing_secret: args.pairingCode,
+      pairing_secret: code,
       name: args.deviceName ?? 'obsidian',
       platform: args.devicePlatform ?? 'unknown',
     });
     while (!claimed) {
       if (!(await poll())) throw new Error('pairing was cancelled before it was approved');
       claimed = await client.claimPairing(pairing_id, {
-        pairing_secret: args.pairingCode,
+        pairing_secret: code,
         name: args.deviceName ?? 'obsidian',
         platform: args.devicePlatform ?? 'unknown',
       });

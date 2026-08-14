@@ -337,7 +337,11 @@ describe('a vault, end to end', () => {
       },
       fetchTransport,
       async () => {
-        if (approvals++ === 0) await sess.approvePairing(code);
+        // Typed the way a person types it: no dashes, wrong case. The displayed form and
+        // the form the approver enters are DIFFERENT STRINGS, and both must hash to one
+        // pairing — passing `code` verbatim here is what let a real 404 through, because
+        // the phone hashed the dashed form and the desktop the normalised one.
+        if (approvals++ === 0) await sess.approvePairing(code.replace(/-/g, '').toLowerCase());
         return true;
       },
     );
@@ -375,8 +379,8 @@ describe('a vault, end to end', () => {
         async () => {
           // Approve once, then approve again: the second must be refused, and the refusal
           // must reach the caller rather than leaving the pairing half-settled.
-          await sess.approvePairing(code);
-          await sess.approvePairing(code);
+          await sess.approvePairing(code.toLowerCase());
+          await sess.approvePairing(code.toLowerCase());
           return true;
         },
       ),
