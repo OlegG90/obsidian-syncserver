@@ -23,7 +23,7 @@ export { Session };
 
 const realDerivation: Derivation = {
   create: (passphrase: string, params?: KdfParams): Account => createAccount(passphrase, params),
-  open: (passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): Account =>
+  open: (passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string) =>
     openAccount(passphrase, accountSalt, kdfParams, wrappedSeed),
 };
 

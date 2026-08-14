@@ -22,6 +22,7 @@ import { newShareKey, wrapShareKey } from './crypto/share.js';
 import { dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from './crypto/scope.js';
 import { sealTo } from './crypto/hpke.js';
 import { concat, fromBase64, toBase64, utf8 } from './crypto/bytes.js';
+import { WRAP_VERSION } from './crypto/sealed.js';
 
 /** One node of the subtree being shared, as the client already knows it. */
 export interface SharedNode {
@@ -79,9 +80,6 @@ export interface SharingDeps {
   /** A fresh identifier for the share's key scope; the client chooses it (docs/04). */
   newScopeId(): string;
 }
-
-/** The HPKE label for a share key, distinct from every other envelope this client seals. */
-export const SHARE_KEY_INFO = 'syncserver/share-key/v1';
 
 /**
  * How many nodes travel in one prepare request.
@@ -180,14 +178,25 @@ export const inviteTo = async (
   shareKey: Uint8Array,
 ): Promise<void> => {
   const { user_id: userId, pubkey } = await deps.client.recipientPubkey(shareId, login);
-  // `info` binds the envelope to this purpose: one sealed for a share cannot be replayed as
-  // the seed envelope a pairing carries, which is a different label entirely.
-  const sealed = sealTo(fromBase64(pubkey), utf8(SHARE_KEY_INFO), new Uint8Array(0), shareKey);
+  const sealed = sealTo(fromBase64(pubkey), new Uint8Array(0), shareEnvelopeAad(shareId, userId), shareKey);
   await deps.client.invite(shareId, {
     user_id: userId,
     wrapped_key: toBase64(concat(sealed.enc, sealed.ciphertext)),
   });
 };
+
+/**
+ * What an envelope carrying `KS` is bound to: `format_version ‖ share_id ‖ recipient_user_id`
+ * (docs/06).
+ *
+ * The binding is the point. Without it an envelope could be handed to a different
+ * participant, or presented under a different share, and would open perfectly — the AEAD
+ * only ever proves that whoever sealed it held the recipient's public key, not what they
+ * meant by it. There is deliberately **no key epoch** in it: `KS` is never rotated (#10), so
+ * an epoch would name a generation that cannot exist.
+ */
+export const shareEnvelopeAad = (shareId: string, recipientUserId: string): Uint8Array =>
+  concat(new Uint8Array([WRAP_VERSION]), utf8(shareId), utf8(recipientUserId));
 
 /** Who holds a copy of this folder, and who has not answered yet. */
 export type Members = ShareMember[];

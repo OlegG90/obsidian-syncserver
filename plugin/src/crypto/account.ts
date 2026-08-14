@@ -17,6 +17,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import type { KdfParams } from '@syncserver/shared';
 import { randomBytes, toBase64, utf8 } from './bytes.js';
 import { KEY_BYTES } from './format.js';
+import { newKeypair } from './hpke.js';
 import { open, seal } from './sealed.js';
 
 /** docs/06: the ceiling of a mobile WebView, and the reason it is not higher. */
@@ -68,13 +69,52 @@ export const vaultKey = (seed: Uint8Array, vaultId: string): Uint8Array => {
   return branch(seed, vaultId);
 };
 
-export interface Account {
+/**
+ * What unlocking gives back: the seed, and what was needed to reach it.
+ *
+ * The identity is deliberately absent. Unlocking works from the passphrase and what the
+ * server already told this device, while `enc_privkey` is fetched separately — a device
+ * that has just been paired receives it from the pairing, not from the passphrase.
+ */
+export interface OpenedAccount {
   seed: Uint8Array;
   accountSalt: Uint8Array;
   kdfParams: KdfParams;
   /** Base64, as stored on the server. */
   wrappedSeed: string;
 }
+
+/** A newly created account, which is the one moment the identity is made rather than read. */
+export interface Account extends OpenedAccount {
+  /** The account's X25519 identity: public half plain, private half wrapped (docs/06). */
+  pubkey: string;
+  encPrivkey: string;
+}
+
+/**
+ * The account's X25519 identity — the one keypair here that encrypts nothing of its own.
+ *
+ * It exists so **other people** can send this account something: today the share key, in an
+ * envelope only this account can open (docs/06). Every device of the account holds the same
+ * one, because it identifies the account rather than the device — which is also why a paired
+ * device is handed `enc_privkey` and not a new pair of its own.
+ *
+ * Generated rather than derived, as docs/06 states, and the private half wrapped under a
+ * branch of the seed. Deriving it would have been simpler and is not what the model says:
+ * a generated key can be replaced without replacing the seed, and a derived one could not.
+ */
+export const newIdentity = (): { secretKey: Uint8Array; publicKey: Uint8Array } => newKeypair();
+
+/** The private half, sealed under an account key from the seed. */
+export const wrapIdentity = (seed: Uint8Array, secretKey: Uint8Array): string =>
+  seal(branch(seed, IDENTITY), secretKey);
+
+/** The reverse, on any device that has the seed. */
+export const unwrapIdentity = (seed: Uint8Array, encPrivkey: string): Uint8Array =>
+  open(branch(seed, IDENTITY), encPrivkey);
+
+/** The branch label. Separate from `auth`, so the two can never be each other. */
+const IDENTITY = 'identity';
 
 /**
  * The floor the server enforces (#62), checked here too.
@@ -94,11 +134,14 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
   assertKdfFloor(params);
   const accountSalt = randomBytes(16);
   const seed = newSeed();
+  const identity = newIdentity();
   return {
     seed,
     accountSalt,
     kdfParams: params,
     wrappedSeed: seal(deriveKek(passphrase, accountSalt, params), seed),
+    pubkey: toBase64(identity.publicKey),
+    encPrivkey: wrapIdentity(seed, identity.secretKey),
   };
 };
 
@@ -108,7 +151,7 @@ export const openAccount = (
   accountSalt: Uint8Array,
   kdfParams: KdfParams,
   wrappedSeed: string,
-): Account => {
+): OpenedAccount => {
   const seed = open(deriveKek(passphrase, accountSalt, kdfParams), wrappedSeed);
   return { seed, accountSalt, kdfParams, wrappedSeed };
 };

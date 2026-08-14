@@ -67,7 +67,9 @@ const client = new SyncClient(base, fetchTransport);
 
 // The shared account, created and named by the first describe, reused by the engine
 // scenario that follows — one account, two devices (AC-11).
-let account: ReturnType<typeof createAccount>;
+// Opened, not created: what a second device recovers from the passphrase alone, which
+// carries no identity of its own — that is fetched, not derived.
+let account: ReturnType<typeof openAccount>;
 let vaultId: string;
 
 /** The session the first describe block lives on — connect → open → lock → open. */

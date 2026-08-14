@@ -17,8 +17,8 @@ import { newShareKey, unwrapShareKey, wrapShareKey } from '../src/crypto/share.j
 import {
   inviteTo,
   preparePlan,
+  shareEnvelopeAad,
   shareFolder,
-  SHARE_KEY_INFO,
   type SharedNode,
   type SharingDeps,
 } from '../src/sharing.js';
@@ -167,64 +167,52 @@ describe('opening a share', () => {
 });
 
 describe('handing the key to somebody else', () => {
+  /** Seal a share key to a fresh recipient and hand back what was sent. */
+  const sealFor = async (recipientPublic: Uint8Array, shareKey: Uint8Array, userId = 'u1') => {
+    let sent = '';
+    await inviteTo(
+      {
+        client: {
+          recipientPubkey: async () => ({ user_id: userId, pubkey: toBase64(recipientPublic) }),
+          invite: async (_id: string, body: { wrapped_key: string }) => {
+            sent = body.wrapped_key;
+          },
+        } as unknown as SharingDeps['client'],
+      },
+      'share-1',
+      'someone',
+      shareKey,
+    );
+    const envelope = fromBase64(sent);
+    return { enc: envelope.subarray(0, 32), ciphertext: envelope.subarray(32) };
+  };
+
   it('seals it so only their private key opens it', async () => {
     const recipient = newKeypair();
     const shareKey = newShareKey();
-    let sent = '';
+    const sealed = await sealFor(recipient.publicKey, shareKey);
 
-    await inviteTo(
-      {
-        client: {
-          recipientPubkey: async () => ({ user_id: 'u1', pubkey: toBase64(recipient.publicKey) }),
-          invite: async (_id: string, body: { wrapped_key: string }) => {
-            sent = body.wrapped_key;
-          },
-        } as unknown as SharingDeps['client'],
-      },
-      'share-1',
-      'someone',
-      shareKey,
-    );
-
-    const envelope = fromBase64(sent);
-    const opened = openFrom(
-      recipient.secretKey,
-      { enc: envelope.subarray(0, 32), ciphertext: envelope.subarray(32) },
-      utf8(SHARE_KEY_INFO),
-      new Uint8Array(0),
-    );
+    const opened = openFrom(recipient.secretKey, sealed, new Uint8Array(0), shareEnvelopeAad('share-1', 'u1'));
     assert.deepEqual(opened, shareKey, 'the recipient recovers exactly the share key');
   });
 
-  it('binds the envelope to being a share key, so it cannot be replayed as another', async () => {
-    // `info` is the binding. Opening with a different label must fail — otherwise an
-    // envelope sealed for one purpose could be presented as one sealed for another.
+  it('binds the envelope to THIS share, so it cannot be replayed under another', async () => {
+    // docs/06: aad = format_version ‖ share_id ‖ recipient_user_id. Without it the AEAD
+    // proves only that somebody held the recipient's public key, not what they meant by it.
     const recipient = newKeypair();
-    const shareKey = newShareKey();
-    let sent = '';
+    const sealed = await sealFor(recipient.publicKey, newShareKey());
 
-    await inviteTo(
-      {
-        client: {
-          recipientPubkey: async () => ({ user_id: 'u1', pubkey: toBase64(recipient.publicKey) }),
-          invite: async (_id: string, body: { wrapped_key: string }) => {
-            sent = body.wrapped_key;
-          },
-        } as unknown as SharingDeps['client'],
-      },
-      'share-1',
-      'someone',
-      shareKey,
-    );
-
-    const envelope = fromBase64(sent);
     assert.throws(() =>
-      openFrom(
-        recipient.secretKey,
-        { enc: envelope.subarray(0, 32), ciphertext: envelope.subarray(32) },
-        utf8('syncserver/pairing/v1'),
-        new Uint8Array(0),
-      ),
+      openFrom(recipient.secretKey, sealed, new Uint8Array(0), shareEnvelopeAad('another-share', 'u1')),
+    );
+  });
+
+  it('binds it to THIS recipient, so it cannot be handed to a different participant', async () => {
+    const recipient = newKeypair();
+    const sealed = await sealFor(recipient.publicKey, newShareKey());
+
+    assert.throws(() =>
+      openFrom(recipient.secretKey, sealed, new Uint8Array(0), shareEnvelopeAad('share-1', 'somebody-else')),
     );
   });
 });
@@ -245,5 +233,46 @@ describe('the share key itself', () => {
   it('refuses to open under the wrong key rather than returning rubbish', () => {
     const ks = newShareKey();
     assert.throws(() => unwrapShareKey(newShareKey(), wrapShareKey(newShareKey(), ks)));
+  });
+});
+
+describe('the account identity, which is how a share reaches somebody', () => {
+  it('round-trips the private half through the seed', async () => {
+    // Every device of the account recovers the SAME identity, because it identifies the
+    // account rather than the device — which is why a paired device is handed enc_privkey
+    // instead of making a pair of its own.
+    const { createAccount, unwrapIdentity } = await import('../src/crypto/account.js');
+    const account = createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 });
+
+    const secret = unwrapIdentity(account.seed, account.encPrivkey);
+    const { newKeypair: _k } = await import('../src/crypto/hpke.js');
+    const sealed = await (async () => {
+      const shareKey = newShareKey();
+      const { sealTo } = await import('../src/crypto/hpke.js');
+      return { shareKey, env: sealTo(fromBase64(account.pubkey), new Uint8Array(0), new Uint8Array(0), shareKey) };
+    })();
+
+    assert.deepEqual(
+      openFrom(secret, sealed.env, new Uint8Array(0), new Uint8Array(0)),
+      sealed.shareKey,
+      'the published pubkey and the wrapped privkey are two halves of one pair',
+    );
+  });
+
+  it('is generated, not derived, so two accounts from one passphrase still differ', async () => {
+    // docs/06 says generated. A derived identity could not be replaced without replacing
+    // the seed, and this asserts the model rather than the convenience.
+    const { createAccount } = await import('../src/crypto/account.js');
+    const a = createAccount('same passphrase', { v: 19, m: 65536, t: 3, p: 1 });
+    const b = createAccount('same passphrase', { v: 19, m: 65536, t: 3, p: 1 });
+
+    assert.notEqual(a.pubkey, b.pubkey);
+  });
+
+  it('will not give up the private half under the wrong seed', async () => {
+    const { createAccount, unwrapIdentity, newSeed } = await import('../src/crypto/account.js');
+    const account = createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 });
+
+    assert.throws(() => unwrapIdentity(newSeed(), account.encPrivkey));
   });
 });

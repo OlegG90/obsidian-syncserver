@@ -36,7 +36,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
-import { authSecret, deriveKek, vaultKey, type Account } from '../crypto/account.js';
+import { authSecret, deriveKek, vaultKey, type Account, type OpenedAccount } from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
@@ -81,7 +81,7 @@ export interface Handle {
 /** The derivation seam, mirroring account creation and account opening as two operations. */
 export interface Derivation {
   create(passphrase: string, params?: KdfParams): Account;
-  open(passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): Account;
+  open(passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): OpenedAccount;
 }
 
 /** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
@@ -164,7 +164,7 @@ export class Session {
     // produces, and the person holding a right one cannot act on it. The marker in the
     // wrapping format already separated "this client cannot read that version" from this
     // case (#109), so what is left here has exactly one ordinary cause and should say so.
-    let account: Account;
+    let account: OpenedAccount;
     try {
       account = this.derivation.open(
         passphrase,
@@ -385,8 +385,8 @@ export class Session {
       auth_secret: authSecret(account.seed),
       account_salt: toBase64(account.accountSalt),
       kdf_params: account.kdfParams,
-      pubkey: 'AQ==',
-      enc_privkey: 'Ag==',
+      pubkey: account.pubkey,
+      enc_privkey: account.encPrivkey,
       wrapped_seed: account.wrappedSeed,
       recovery_key: 'BA==',
       recovery_code_hash: 'f'.repeat(64),

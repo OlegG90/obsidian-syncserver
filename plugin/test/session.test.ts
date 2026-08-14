@@ -36,6 +36,9 @@ const fakeDerivation = (): Derivation & { calls: number } => {
         accountSalt: KNOWN_SALT,
         kdfParams: { v: 19, m: 65536, t: 3, p: 1 },
         wrappedSeed: toBase64(new Uint8Array(40).fill(0x99)), // plausible, not real
+        // A created account carries its identity; only `open` does without one.
+        pubkey: toBase64(new Uint8Array(32).fill(0x11)),
+        encPrivkey: toBase64(new Uint8Array(48).fill(0x22)),
       };
     },
     open(passphrase: string, accountSalt: Uint8Array, kdfParams: { v: number; m: number; t: number; p: number }, wrappedSeed: string) {
