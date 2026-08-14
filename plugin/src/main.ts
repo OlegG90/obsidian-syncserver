@@ -13,7 +13,7 @@
  * the person. That asymmetry is the entire point of the key model (docs/06), and it is the
  * reason the plugin asks again after every restart instead of remembering.
  */
-import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, requestUrl, setIcon } from 'obsidian';
 
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
@@ -22,9 +22,21 @@ import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
 import { newPairingCode, normalisePairingCode } from './crypto/pairing-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
-import { obsidianTransport } from './obsidian/transport.js';
+import { makeObsidianTransport } from './obsidian/transport.js';
+
 import { session, type Connection, type Session } from './session/index.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
+
+/**
+ * The composition root's one job that nothing else may do: hand Obsidian's own functions to
+ * the modules that need them.
+ *
+ * `obsidian` ships declarations and no runtime, so a module that imports a VALUE from it
+ * cannot be loaded outside the application — and therefore cannot be tested. Keeping those
+ * imports here, and passing what they yield downwards, is what lets everything below have
+ * a test surface.
+ */
+const transport = makeObsidianTransport(requestUrl);
 
 interface PluginData {
   connection?: Connection;
@@ -93,7 +105,7 @@ export default class SyncServerPlugin extends Plugin {
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
     if (this.data.connection) {
-      this.sess = session.create(this.data.connection, obsidianTransport);
+      this.sess = session.create(this.data.connection, transport);
       this.setPhase({ kind: 'locked' });
       this.startPush();
     } else {
@@ -201,7 +213,7 @@ export default class SyncServerPlugin extends Plugin {
         deviceName: 'obsidian',
         devicePlatform: 'desktop',
       },
-      obsidianTransport,
+      transport,
     );
     this.sess = s;
     this.data.connection = s.connection;
@@ -229,7 +241,7 @@ export default class SyncServerPlugin extends Plugin {
         deviceName: 'obsidian',
         devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
       },
-      obsidianTransport,
+      transport,
       waiting,
     );
     this.sess = s;
