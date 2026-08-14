@@ -318,8 +318,16 @@ export default class SyncServerPlugin extends Plugin {
     return new ObsidianVaultAdapter(this.app.vault);
   }
 
-  /** An engine for reading only — the tree, which is where node ids come from. */
-  private engineFor(h: Handle): SyncEngine {
+  /**
+   * An engine for reading only — the tree, which is where node ids come from.
+   *
+   * **With the share keys**, and that is not optional: reading the tree means decrypting
+   * every name, and the interior of any share this vault is in is named under `KS`. An
+   * engine built without them fails on the first such name — which is exactly what happened
+   * on the first live share, one press after preparation had re-keyed two nodes. Every
+   * caller here is a sharing operation, so every one of them meets those names.
+   */
+  private async engineFor(h: Handle): Promise<SyncEngine> {
     return new SyncEngine(
       h.client,
       this.data.connection!.vaultId,
@@ -328,7 +336,7 @@ export default class SyncServerPlugin extends Plugin {
       this.stateStore(),
       deviceLabel(),
       this.data.syncObsidian === true,
-      this.shareKeys.size > 0 ? this.shareKeys : undefined,
+      await this.openShareKeys(h),
     );
   }
 
@@ -356,9 +364,6 @@ export default class SyncServerPlugin extends Plugin {
     }
     return keys.size > 0 ? keys : undefined;
   }
-
-  /** The share keys this device can open, for the operations that need one by hand. */
-  private shareKeys = new Map<string, Uint8Array>();
 
   private async vaultScopeId(h: Handle): Promise<string> {
     const opened = await h.client.openVault(this.data.connection!.vaultId);
@@ -419,7 +424,8 @@ export default class SyncServerPlugin extends Plugin {
         this.withSession(async (h) => {
           // The tree comes from the engine, which is the one place that turns encrypted
           // names back into paths — and a share is rooted at a node id.
-          const tree = await this.engineFor(h).readTree();
+          const engine = await this.engineFor(h);
+          const tree = await engine.readTree();
           const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({
             path,
             nodeId: n.nodeId,
@@ -450,7 +456,8 @@ export default class SyncServerPlugin extends Plugin {
 
       accept: (shareId) =>
         this.withSession(async (h) => {
-          const tree = await this.engineFor(h).readTree();
+          const engine = await this.engineFor(h);
+          const tree = await engine.readTree();
           const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
           const opened = await h.client.openVault(this.data.connection!.vaultId);
           await acceptInvitation(
@@ -471,7 +478,8 @@ export default class SyncServerPlugin extends Plugin {
 
       leave: (shareId) =>
         this.withSession(async (h) => {
-          const tree = await this.engineFor(h).readTree();
+          const engine = await this.engineFor(h);
+          const tree = await engine.readTree();
           const key = await this.shareKeyOf(h, shareId);
           const scopeId = await this.shareScopeIdOf(h, shareId);
           const replica = [...tree.entries()]
