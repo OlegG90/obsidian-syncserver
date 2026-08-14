@@ -83,6 +83,8 @@ interface ServerNode {
   rev: number;
   address: string | null;
   isFile: boolean;
+  /** The key scope the node is named under — the vault's own scope, or a share's `KS` (SH-28). */
+  nameKeyId: string | null;
 }
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
@@ -169,7 +171,8 @@ interface PassContext {
   handled: Set<string>;
   queue: VaultFile[];
   rootNodeId: string;
-  scopeId: string;
+  /** The vault's own key scope — the root default every node inherits until a share overrides it. */
+  vaultScopeId: string;
   state: VaultState;
   report: SyncReport;
 }
@@ -178,6 +181,7 @@ export class SyncEngine {
   constructor(
     private readonly client: VaultWire,
     private readonly vaultId: string,
+    /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
     private readonly vaultKey: Uint8Array,
     private readonly vault: VaultAdapter,
     private readonly store: StateStore,
@@ -185,10 +189,39 @@ export class SyncEngine {
     private readonly deviceLabel = 'device',
     /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
     private readonly syncObsidian = false,
+    /**
+     * Keys for the scopes beyond the vault's own — a share's `KS`, unwrapped by the client
+     * (docs/06: KS is random and transported, not derived from the seed). Keyed by the
+     * scope's `key_id`, which is what a node's `name_key_id` names. Empty today, which is
+     * exactly right: there are no shares yet, and every node is named under the vault scope.
+     */
+    private readonly shareScopeKeys?: Map<string, Uint8Array>,
   ) {}
 
   /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
   private readonly scope = (path: string): boolean => isSyncable(path, this.syncObsidian);
+
+  /**
+   * The key for a key scope, resolved by the scope's `key_id`.
+   *
+   * The vault's own scope is the default a node inherits from the root; any other `key_id`
+   * must be a share scope this client can open. A node named under a scope we hold no key
+   * for is a defect — if we can see the node we must be able to decrypt its name — and
+   * silently falling back to the vault key would decrypt nothing while looking like success.
+   */
+  private scopeKeyFor(nameKeyId: string | null | undefined, vaultScopeId: string): Uint8Array {
+    if (!nameKeyId || nameKeyId === vaultScopeId) return this.vaultKey;
+    const key = this.shareScopeKeys?.get(nameKeyId);
+    if (!key) throw new Error(`a node is named under a scope this client cannot open: ${nameKeyId}`);
+    return key;
+  }
+
+  /** The scope content at `path` is named under: its parent folder's scope, or the vault's. */
+  private contentScopeId(ctx: PassContext, path: string): string {
+    const parent = parentOf(path);
+    if (!parent) return ctx.vaultScopeId;
+    return ctx.tree.get(parent)?.nameKeyId ?? ctx.vaultScopeId;
+  }
 
   async sync(): Promise<SyncReport> {
     const report: SyncReport = {
@@ -198,8 +231,8 @@ export class SyncEngine {
     const state = await this.store.load();
 
     const opened = await this.client.openVault(this.vaultId);
-    const scopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
-    if (!scopeId) throw new Error('the vault reports no key scope of its own');
+    const vaultScopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
+    if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
     const rootNodeId = opened.root_node_id;
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
@@ -207,7 +240,7 @@ export class SyncEngine {
     // the probe is the check, not the data.
     const epoch: RemoteEpoch = state.cursor ? await this.probeEpoch(state.cursor) : 'continuous';
 
-    const { tree, cursor } = await this.readServerTree(rootNodeId);
+    const { tree, cursor } = await this.readServerTree(rootNodeId, vaultScopeId);
     const byNodeId = new Map<string, ServerNode>();
     for (const n of tree.values()) byNodeId.set(n.nodeId, n);
 
@@ -234,7 +267,7 @@ export class SyncEngine {
     const ctx: PassContext = {
       policy: POLICY[epoch],
       tree, byNodeId, meta, dedup,
-      state, report, rootNodeId, scopeId,
+      state, report, rootNodeId, vaultScopeId,
       vanished: new Map(), handled: new Set(), queue: [],
     };
 
@@ -331,7 +364,7 @@ export class SyncEngine {
    * all (docs/03) — so a path exists only once a client has decrypted every name on the way
    * down. `list` returns nodes shallowest-first, which is what makes one pass enough.
    */
-  private async readServerTree(rootNodeId: string): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
+  private async readServerTree(rootNodeId: string, vaultScopeId: string): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
     const res = await this.client.listNodes(this.vaultId);
     const pathOf = new Map<string, string>([[rootNodeId, '']]);
     const tree = new Map<string, ServerNode>();
@@ -339,7 +372,9 @@ export class SyncEngine {
     for (const n of res.nodes) {
       if (n.node_id === rootNodeId) continue;
       const parentPath = pathOf.get(n.parent_id ?? '') ?? '';
-      const name = n.name_enc ? decryptName(this.vaultKey, n.name_enc) : n.node_id;
+      // A node's name is encrypted under the scope it is named in — the vault's, or a
+      // share's `KS` for a node inside a shared folder (SH-28). The wire names that scope.
+      const name = n.name_enc ? decryptName(this.scopeKeyFor(n.name_key_id, vaultScopeId), n.name_enc) : n.node_id;
       const path = parentPath ? `${parentPath}/${name}` : name;
       pathOf.set(n.node_id, path);
 
@@ -351,6 +386,7 @@ export class SyncEngine {
         address: n.sha256,
         // A folder is a node with no content. The server does not label them either.
         isFile: n.sha256 !== null,
+        nameKeyId: n.name_key_id,
       });
     }
 
@@ -541,11 +577,13 @@ export class SyncEngine {
       const destParent = newParent ? parentOf(newParent) : '';
       const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
       try {
+        // The moved folder's new name is named under the destination parent's scope.
+        const nameScopeId = this.contentScopeId(ctx, newParent);
         const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
           parent_id: destParentId,
-          name_enc: encryptName(this.vaultKey, name),
-          name_hmac: nameHmac(this.vaultKey, name),
-          name_key_id: ctx.scopeId,
+          name_enc: encryptName(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
+          name_hmac: nameHmac(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
+          name_key_id: nameScopeId,
         });
         this.remapTreePaths(parent, newParent, out.rev, ctx);
         this.remapStatePaths(parent, newParent, ctx);
@@ -640,12 +678,15 @@ export class SyncEngine {
   private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished, ctx: PassContext): Promise<void> {
     const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
+    // The moved node's new name is named under the scope of its destination folder.
+    const nameScopeId = this.contentScopeId(ctx, file.path);
+    const nameKey = this.scopeKeyFor(nameScopeId, ctx.vaultScopeId);
 
     const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
       parent_id: parentId,
-      name_enc: encryptName(this.vaultKey, name),
-      name_hmac: nameHmac(this.vaultKey, name),
-      name_key_id: ctx.scopeId,
+      name_enc: encryptName(nameKey, name),
+      name_hmac: nameHmac(nameKey, name),
+      name_key_id: nameScopeId,
     });
 
     delete ctx.state.nodes[source.path];
@@ -662,6 +703,7 @@ export class SyncEngine {
       rev: out.rev,
       address: source.address,
       isFile: true,
+      nameKeyId: nameScopeId,
     });
 
     ctx.report.renamed.push({ from: source.path, to: file.path });
@@ -683,7 +725,9 @@ export class SyncEngine {
    */
   private async pushEdit(file: VaultFile, m: LocalMeta, known: { address: string } | undefined, onServer: ServerNode, ctx: PassContext): Promise<void> {
     const plain = await this.vault.read(file.path);
-    const { sha256: address, material } = await this.resolveContent(plain, m.tag, ctx);
+    // The edited content lives under the node's scope — the vault's, or a share's for a
+    // node inside a shared folder — so its envelope and tag go to that scope, not a fixed one.
+    const { sha256: address, material } = await this.resolveContent(plain, this.contentScopeId(ctx, file.path), ctx);
 
     const out = await this.client.putContent(this.vaultId, onServer.nodeId, {
       sha256: address,
@@ -736,9 +780,11 @@ export class SyncEngine {
   /** A path with no node on the server at all: create one, folders and all. */
   private async pushNew(file: VaultFile, m: LocalMeta, ctx: PassContext): Promise<void> {
     const plain = await this.vault.read(file.path);
-    const { sha256: address, material } = await this.resolveContent(plain, m.tag, ctx);
+    const scopeId = this.contentScopeId(ctx, file.path);
+    const { sha256: address, material } = await this.resolveContent(plain, scopeId, ctx);
     const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
+    const nameKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
 
     const created = await this.client.createNode(this.vaultId, {
       parent_id: parentId,
@@ -746,27 +792,32 @@ export class SyncEngine {
       sha256: address,
       size: plain.length,
       mtime: new Date(file.mtime).toISOString(),
-      name_enc: encryptName(this.vaultKey, name),
-      name_hmac: nameHmac(this.vaultKey, name),
-      name_key_id: ctx.scopeId,
+      name_enc: encryptName(nameKey, name),
+      name_hmac: nameHmac(nameKey, name),
+      name_key_id: scopeId,
       ...material,
     });
     ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address };
-    ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true });
+    ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true, nameKeyId: scopeId });
     ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
     ctx.report.pushed.push({ path: file.path });
   }
 
   /**
-   * Content already known to this vault's scope needs no envelope, no tag and no upload —
+   * Content already known to this scope needs no envelope, no tag and no upload —
    * `nodes_check_private_material` only checks that the rows EXIST (docs/04). Content that
    * is not sealed, uploaded and tagged fresh, same as before this slice.
+   *
+   * Both the envelope and the dedup tag are scoped to `scopeId` — the vault's own scope or a
+   * share's — because the trigger checks them together under the node's scope.
    */
   private async resolveContent(
     plain: Uint8Array,
-    tag: string,
+    scopeId: string,
     ctx: PassContext,
   ): Promise<{ sha256: string; material: { blob_envelopes: { sha256: string; scope_id: string; wrapped_key: string }[]; dedup_tags: { sha256: string; scope_id: string; content_tag: string }[] } }> {
+    const scopeKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
+    const tag = dedupTag(scopeKey, plain);
     const dedupMatch = ctx.dedup.get(tag);
     if (dedupMatch) {
       return { sha256: dedupMatch, material: { blob_envelopes: [], dedup_tags: [] } };
@@ -776,8 +827,8 @@ export class SyncEngine {
     return {
       sha256: sealed.sha256,
       material: {
-        blob_envelopes: [{ sha256: sealed.sha256, scope_id: ctx.scopeId, wrapped_key: wrapContentKey(this.vaultKey, sealed.contentKey) }],
-        dedup_tags: [{ sha256: sealed.sha256, scope_id: ctx.scopeId, content_tag: tag }],
+        blob_envelopes: [{ sha256: sealed.sha256, scope_id: scopeId, wrapped_key: wrapContentKey(scopeKey, sealed.contentKey) }],
+        dedup_tags: [{ sha256: sealed.sha256, scope_id: scopeId, content_tag: tag }],
       },
     };
   }
@@ -815,14 +866,17 @@ export class SyncEngine {
   private async fetchPlain(node: ServerNode, ctx: PassContext): Promise<Uint8Array> {
     if (!node.address) throw new Error('a folder has no content — this is a bug if it happens');
 
+    // The node's content is sealed under the scope it is named in; its envelope carries the
+    // content key wrapped to that scope.
+    const scopeId = node.nameKeyId ?? ctx.vaultScopeId;
     const envelope = (await this.client.blobKeys(this.vaultId, [node.address]))
       .get(node.address)
-      ?.find((e) => e.scopeId === ctx.scopeId);
-    if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
+      ?.find((e) => e.scopeId === scopeId);
+    if (!envelope) throw new Error(`no content-key envelope under the node's scope (${scopeId})`);
 
     const ciphertext = await this.client.getBlob(node.address);
     if (!ciphertext) throw new Error('the server holds no bytes at that address');
-    return openBlob(unwrapContentKey(this.vaultKey, envelope.wrappedKey), ciphertext);
+    return openBlob(unwrapContentKey(this.scopeKeyFor(scopeId, ctx.vaultScopeId), envelope.wrappedKey), ciphertext);
   }
 
   // ---- delete ---------------------------------------------------------------------
@@ -928,13 +982,14 @@ export class SyncEngine {
 
     for (const node of nodes) {
       try {
-        const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === ctx.scopeId);
-        if (!envelope) throw new Error('no content-key envelope under this vault’s own key');
+        const scopeId = node.nameKeyId ?? ctx.vaultScopeId;
+        const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === scopeId);
+        if (!envelope) throw new Error(`no content-key envelope under the node's scope (${scopeId})`);
 
         const ciphertext = await this.client.getBlob(node.address!);
         if (!ciphertext) throw new Error('the server holds no bytes at that address');
 
-        const plain = openBlob(unwrapContentKey(this.vaultKey, envelope.wrappedKey), ciphertext);
+        const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId, ctx.vaultScopeId), envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
         ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
@@ -958,15 +1013,19 @@ export class SyncEngine {
         parentId = existing.nodeId;
         continue;
       }
+      // A folder is named under its own parent's scope, so a folder inside a shared folder
+      // is itself named under the share's `KS` (SH-28).
+      const scopeId = this.contentScopeId(ctx, sofar);
+      const scopeKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
       const created = await this.client.createNode(this.vaultId, {
         parent_id: parentId,
         type: 'folder',
         mtime: new Date().toISOString(),
-        name_enc: encryptName(this.vaultKey, part),
-        name_hmac: nameHmac(this.vaultKey, part),
-        name_key_id: ctx.scopeId,
+        name_enc: encryptName(scopeKey, part),
+        name_hmac: nameHmac(scopeKey, part),
+        name_key_id: scopeId,
       });
-      ctx.tree.set(sofar, { nodeId: created.node_id, parentId, path: sofar, rev: created.rev, address: null, isFile: false });
+      ctx.tree.set(sofar, { nodeId: created.node_id, parentId, path: sofar, rev: created.rev, address: null, isFile: false, nameKeyId: scopeId });
       ctx.byNodeId.set(created.node_id, ctx.tree.get(sofar)!);
       parentId = created.node_id;
     }
