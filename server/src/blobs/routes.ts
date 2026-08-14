@@ -15,7 +15,19 @@ export const registerBlobRoutes = (
   service: BlobService,
 ): void => {
   // The body is the blob. Fastify would otherwise try to parse it.
-  app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
+  // The body is the blob. Fastify would otherwise try to parse it.
+  //
+  // **Anything that is not JSON is taken as bytes**, rather than `application/octet-stream`
+  // alone. A phone uploaded a note and got `415`: Obsidian's `requestUrl` reaches the
+  // network through a different implementation on Android than in Electron, and whatever
+  // media type it declared there was not the one this parser was registered for. The
+  // desktop worked, which is the worst way for it to fail.
+  //
+  // Widening it costs nothing real, because the server **never uses the media type**: it
+  // hashes the bytes and verifies them against the address in the URL, and refuses a
+  // mismatch (#42). A declared type it had to trust could only ever be wrong. JSON is still
+  // matched first by Fastify's own parser, so nothing about the rest of the protocol moves.
+  app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
 
   /**
    * The content keys for blobs this caller holds, wrapped to a scope they hold.

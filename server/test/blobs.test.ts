@@ -91,6 +91,34 @@ describe('uploading', () => {
     assert.equal(row!.storageKey, storageKeyFor(sha(body)), 'two levels of fan-out, full address as the name');
   });
 
+  it('takes the bytes whatever media type the client declared', async () => {
+    // A phone got `415` here and a desktop did not: Obsidian's `requestUrl` declares
+    // something different on Android, and the parser was registered for one exact type.
+    // The server never reads the media type — it hashes the body and checks it against the
+    // address — so the only thing a strict parser could do was refuse correct uploads.
+    // A type nobody registered, a parameterised one, and none at all — each was a `415`
+    // before. (A `text/*` type cannot be exercised through `inject`: it stringifies the
+    // payload and the content length stops matching, which is the injector, not the server.)
+    const body = randomBytes(512);
+    for (const contentType of [
+      'application/x-whatever',
+      'application/octet-stream; charset=utf-8',
+      undefined,
+    ]) {
+      const r = await app.inject({
+        method: 'POST',
+        url: '/blobs',
+        query: { sha256: sha(body), size: String(body.length), key_id: randomUUID() },
+        headers: {
+          authorization: `Bearer ${access}`,
+          ...(contentType === undefined ? {} : { 'content-type': contentType }),
+        },
+        payload: body,
+      });
+      assert.equal(r.statusCode, 201, `${contentType ?? 'no content-type'}: ${r.body}`);
+    }
+  });
+
   it('refuses bytes that do not hash to the address they claim', async () => {
     const body = randomBytes(64);
     const r = await upload(access, body, { sha256: sha(randomBytes(64)) });
