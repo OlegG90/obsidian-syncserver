@@ -1,8 +1,8 @@
-import type { CursorFaultBody, CursorPayload } from '@syncserver/shared';
+import type { CursorFaultBody, CursorPayload, Scope } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
-import { shareScopesFor } from '../shares/service.js';
+import { deltaEventsFor, shareScopesFor } from '../shares/service.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
@@ -28,7 +28,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
       root_node_id: row!.rootNodeId,
       head_rev: Number(row!.head),
       scopes: [
-        { scope: 'vault', key_id: row!.keyId },
+        { scope: 'vault', key_id: row!.keyId } as Scope,
         ...shares.map((s) => ({
           scope: 'share',
           key_id: s.keyId,
@@ -105,7 +105,8 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
       return {
         changes: page,
-        events: [],
+        // Recomputed each time from what is true now — see `deltaEventsFor`.
+        events: await deltaEventsFor(db, req.caller!.userId, vaultId),
         next_cursor: encodeCursor(cfg.serverSecret, next),
         has_more: hasMore,
       };

@@ -179,10 +179,21 @@ GET    /vaults/{vault_id}                → {root_node_id, head_rev,
 GET    /vaults/{vault_id}/delta?cursor=<opaque>&limit=500
        → {changes: [{node_id, parent_id, name_enc, name_hmac, name_key_id, op, rev,
                      sha256, size, mtime, share_id?, author_id?}],
-          events:  [{type: "share_ended", share_id, by, at},
-                    {type: "account_frozen"|"account_thawed", at}],
-                   the freeze is an account state, not a share one (SH-20),
-                   so its event names no share
+          events:  [{type: "share_ended", share_id, at},
+                    {type: "account_frozen", at}],
+                   STATES, recomputed on every delta from what is true now — not a log.
+                   A client that missed one is told again; one that has caught up stops
+                   being told, and nothing needs a cursor or a pruning rule of its own.
+                   `share_ended` is offered while the member still owes the finalization
+                   pass, and stops when `left_at` records that it ran.
+                   The freeze is an account state, not a share one (SH-20), so its event
+                   names no share.
+                   No `by`: nothing records who ended a share, and a column naming an
+                   actor nobody acts on is a cost with no use — the audit log (11) is
+                   where that belongs if it is ever wanted.
+                   No `account_thawed` yet: thawing does not exist (SH-21 is open), and
+                   an event for a transition nothing can perform would be a promise
+                   again rather than a state
           next_cursor, has_more}
        410 {reason: "journal_ttl" | "restore" | "reset"}
            the reason is mandatory: it decides whether the resync applies deletions.

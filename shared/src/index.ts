@@ -97,10 +97,49 @@ export interface Change {
   author_id: string | null;
 }
 
+/**
+ * A key scope this caller can open, as `GET /vaults/{id}` reports it.
+ *
+ * It lives here because it is the answer to "which key opens what", and both sides act on
+ * it: the server decides which scopes a caller may see, the client turns them into keys.
+ * It had been written by hand in three places with three different degrees of fidelity —
+ * the engine's copy knew nothing of `share_id`, which is the field that pairs a share with
+ * the scope its interior is named under.
+ */
+export interface Scope {
+  /** `vault` or `share`. */
+  scope: string;
+  key_id: string;
+  /** Present for a share scope: which share this key belongs to. */
+  share_id?: string;
+  /** The key itself, wrapped. Absent for the vault's own scope, which needs no delivery. */
+  wrapped_key?: string;
+  /**
+   * How `wrapped_key` is sealed: `vault` under `KV` (the initiator's own copy), `account`
+   * as an HPKE envelope to the account's public key (a participant's). The two are opened
+   * with different keys, so the client is told rather than left to try both.
+   */
+  wrapping?: 'vault' | 'account';
+}
+
+/**
+ * A state the client must show or act on, delivered with the delta rather than pushed.
+ *
+ * These are **states, not a log**. The server recomputes them on every delta from what is
+ * true now, so a client that missed one gets it again and a client that has caught up stops
+ * being told — which is the same shape docs/02 gives everything else here: the server holds
+ * states, the client renders them, and nothing waits for an answer.
+ *
+ * A freeze names no share, because being over quota is an ACCOUNT state (SH-20).
+ */
+export type DeltaEvent =
+  | { type: 'share_ended'; share_id: string; at: string }
+  | { type: 'account_frozen'; at: string };
+
 /** The delta response: the changes since the cursor, and the cursor to carry next (#24). */
 export interface Delta {
   changes: Change[];
-  events: { type: string; [k: string]: unknown }[];
+  events: DeltaEvent[];
   next_cursor: string;
   has_more: boolean;
 }

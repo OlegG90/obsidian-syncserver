@@ -20,6 +20,7 @@
  * left here is the orchestration, and turning the schema's refusal into one a caller can
  * act on.
  */
+import type { DeltaEvent } from '@syncserver/shared';
 import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
@@ -1078,3 +1079,36 @@ export const shareScopesFor = (db: Db, userId: string, vaultId: string): Promise
         AND m.wrapped_key IS NOT NULL AND s.subtree_key_id IS NOT NULL`,
     [userId, vaultId],
   );
+
+/**
+ * The states this caller must be shown, recomputed rather than remembered.
+ *
+ * Both are true-now questions, so they are asked on every delta: a client that missed one
+ * is told again, and one that has caught up stops being told. That is the same shape
+ * docs/02 gives everything else — the server holds states, the client renders them, and
+ * nothing waits for an answer. An event log would need a cursor of its own and a rule for
+ * pruning it, to say something the current row already says.
+ *
+ * `share_ended` is offered while the member still holds a replica to finalize: it is the
+ * only prompt that the pass is owed, and it stops when `left_at` records that it ran.
+ *
+ * The freeze names no share, because being over quota is an account state (SH-20).
+ */
+export const deltaEventsFor = async (db: Db, userId: string, vaultId: string): Promise<DeltaEvent[]> => {
+  const rows = await db.query<{ kind: string; shareId: string | null; at: string }>(
+    `SELECT 'share_ended' AS kind, s.id AS "shareId", s.terminal_at AS at
+       FROM share_members m JOIN shares s ON s.id = m.share_id
+      WHERE m.user_id = $1 AND m.vault_id = $2
+        AND s.state = 'ended' AND m.left_at IS NULL AND s.terminal_at IS NOT NULL
+      UNION ALL
+     SELECT 'account_frozen', NULL, u.frozen_at
+       FROM users u WHERE u.id = $1 AND u.frozen_at IS NOT NULL`,
+    [userId, vaultId],
+  );
+
+  return rows.map((r) =>
+    r.kind === 'share_ended'
+      ? ({ type: 'share_ended', share_id: r.shareId!, at: r.at } as const)
+      : ({ type: 'account_frozen', at: r.at } as const),
+  );
+};

@@ -1462,3 +1462,95 @@ describe('a departure ends a share whichever door it came through', () => {
     assert.equal(state!.state, 'active');
   });
 });
+
+describe('the states the delta carries', () => {
+  /** The events of this account's own vault, as a sync would meet them. */
+  const eventsOf = async (token = access, vault = vaultId) => {
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${vault}/delta`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    return r.json().events as { type: string; share_id?: string; at: string }[];
+  };
+
+  it('says nothing to an account with nothing true of it', async () => {
+    // A fresh account, because this suite's own vault accumulates ended shares — which is
+    // itself the point: the events are about what is true NOW, per account.
+    const fresh = await makeAccount('events-quiet');
+    const theirVault = randomUUID();
+    await app.inject({
+      method: 'POST',
+      url: '/vaults',
+      headers: { authorization: `Bearer ${fresh.access}` },
+      payload: { id: theirVault, name_enc: b64('quiet vault') },
+    });
+
+    assert.deepEqual(await eventsOf(fresh.access, theirVault), []);
+  });
+
+  it('tells a member their share ended, and keeps telling them until they finalize', async () => {
+    // The prompt IS the reminder that a metadata pass is owed. Delivered once and lost, a
+    // device that was offline would never learn its replica has to come back to KV.
+    const { shareId } = await sharedWith('event-ended');
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+
+    const mine = (list: { type: string; share_id?: string }[]) =>
+      list.some((e) => e.type === 'share_ended' && e.share_id === shareId);
+
+    assert.ok(mine(await eventsOf(strangerAccess, strangerVaultId)), 'the participant is told');
+    assert.ok(mine(await eventsOf(strangerAccess, strangerVaultId)), 'and again, because the pass is still owed');
+  });
+
+  it('stops once the replica has been converted back', async () => {
+    const { shareId } = await sharedWith('event-finalized');
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const nodes = await db.query<{ id: string }>(
+      `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL`,
+      [strangerVaultId, shareId],
+    );
+    const keyId = await strangerVaultKey();
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        nodes: nodes.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`back-${n.id}`),
+          name_hmac: sha(Buffer.from(`back-${n.id}`)),
+          name_key_id: keyId,
+        })),
+      },
+    });
+
+    const after = await eventsOf(strangerAccess, strangerVaultId);
+    assert.ok(
+      !after.some((e) => e.type === 'share_ended' && e.share_id === shareId),
+      'left_at is what stops it',
+    );
+  });
+
+  it('tells a frozen account it is frozen, which nothing else does', async () => {
+    // Before this the only way to learn was to be refused a write — a state discovered by
+    // bumping into it.
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [userId]);
+    const events = await eventsOf();
+
+    const frozen = events.find((e) => e.type === 'account_frozen');
+    assert.ok(frozen, 'the state is reported');
+    assert.equal(frozen!.share_id, undefined, 'and names no share: the quota is per account (SH-20)');
+
+    await db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [userId]);
+    assert.ok(!(await eventsOf()).some((e) => e.type === 'account_frozen'), 'and stops when it stops being true');
+  });
+});

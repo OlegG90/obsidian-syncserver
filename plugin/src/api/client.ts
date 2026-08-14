@@ -20,6 +20,7 @@ import type {
   KdfParams,
   Material,
   NodeType,
+  Scope,
   RefusalCode,
   RestoreResult,
   WriteConflict,
@@ -340,17 +341,7 @@ export class SyncClient {
   openVault(vaultId: string): Promise<{
     root_node_id: string;
     head_rev: number;
-    /**
-     * The vault's own scope first, then every share scope this caller can open — with the
-     * wrapped key and which key opens it, since the two wrappings are not interchangeable.
-     */
-    scopes: {
-      scope: string;
-      key_id: string;
-      share_id?: string;
-      wrapped_key?: string;
-      wrapping?: string;
-    }[];
+    scopes: Scope[];
   }> {
     return this.json('GET', `/vaults/${vaultId}`);
   }
