@@ -1,0 +1,214 @@
+/**
+ * The sharing coordinator — the decisions that would otherwise live in a settings tab.
+ *
+ * Two of the defects a real phone found on 14 August were in that class, which is why these
+ * exist at all. What is asserted is mostly what the person is *told*: sharing is a sequence
+ * of requests that change the server between them, so a message that overstates what
+ * happened is not cosmetic.
+ */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import { openShareFlow, type ShareFlowDeps } from '../src/share-flow.js';
+
+const harness = (over: Partial<ShareFlowDeps> = {}) => {
+  const notices: string[] = [];
+  const shared: string[] = [];
+  const invited: { shareId: string; login: string }[] = [];
+  let rebuilt = 0;
+
+  const deps: ShareFlowDeps = {
+    list: async () => ({ joined: [], invitations: [] }),
+    share: async (folderPath) => {
+      shared.push(folderPath);
+      return { shareId: 'share-1' };
+    },
+    invite: async (shareId, login) => {
+      invited.push({ shareId, login });
+    },
+    accept: async () => undefined,
+    decline: async () => undefined,
+    leave: async () => ({ ended: false }),
+    members: async () => [],
+    isSynced: () => true,
+    notify: (m) => notices.push(m),
+    done: () => {
+      rebuilt++;
+    },
+    ...over,
+  };
+
+  return { flow: openShareFlow(deps), notices, shared, invited, rebuilt: () => rebuilt };
+};
+
+describe('sharing a folder', () => {
+  it('refuses a folder the server has never seen, before anything is created', async () => {
+    // A share is rooted at a node id, and a folder this device never uploaded has none.
+    // Finding that out after a passphrase prompt and a request would be a worse way to
+    // learn it.
+    const h = harness({ isSynced: () => false });
+    await h.flow.share('Team');
+
+    assert.deepEqual(h.shared, [], 'nothing was created');
+    assert.match(h.notices[0]!, /sync this vault first/);
+    assert.equal(h.rebuilt(), 0);
+  });
+
+  it('refuses an empty choice without calling anything', async () => {
+    const h = harness();
+    await h.flow.share('   ');
+    assert.deepEqual(h.shared, []);
+    assert.match(h.notices[0]!, /choose a folder/);
+  });
+
+  it('reports the folder by name and rebuilds the screen', async () => {
+    const h = harness();
+    await h.flow.share('Team');
+
+    assert.deepEqual(h.shared, ['Team']);
+    assert.match(h.notices[0]!, /“Team” is shared/);
+    assert.equal(h.rebuilt(), 1);
+  });
+
+  it('surfaces a failure instead of leaving the screen looking successful', async () => {
+    const h = harness({
+      share: async () => {
+        throw new Error('already_shared');
+      },
+    });
+    await h.flow.share('Team');
+
+    assert.match(h.notices[0]!, /already_shared/);
+    assert.equal(h.rebuilt(), 0, 'the screen is not rebuilt as if it had worked');
+  });
+
+  it('refuses a second operation while one is in flight', async () => {
+    // Sharing is several requests with the server in an intermediate state between them; a
+    // second press partway through would try to create a second share over the same folder.
+    let release: (() => void) | undefined;
+    const h = harness({ share: () => new Promise((resolve) => (release = () => resolve({ shareId: 's' }))) });
+
+    const first = h.flow.share('Team');
+    await h.flow.share('Other');
+    assert.match(h.notices.at(-1)!, /still running/);
+
+    release!();
+    await first;
+  });
+
+  it('releases the guard after a failure, so a retry is possible', async () => {
+    let fail = true;
+    const h = harness({
+      share: async () => {
+        if (fail) throw new Error('nope');
+        return { shareId: 's' };
+      },
+    });
+    await h.flow.share('Team');
+    fail = false;
+    await h.flow.share('Team');
+
+    assert.equal(h.rebuilt(), 1, 'the second attempt got through');
+  });
+});
+
+describe('inviting', () => {
+  it('never claims the login exists', async () => {
+    // The pubkey endpoint answers an unknown login with a deterministic fake rather than a
+    // 404 (#73). A message saying "invited alice" would rebuild, in the interface, exactly
+    // the enumeration oracle that endpoint exists to prevent.
+    const h = harness();
+    await h.flow.invite('share-1', 'alice');
+
+    assert.deepEqual(h.invited, [{ shareId: 'share-1', login: 'alice' }]);
+    assert.match(h.notices[0]!, /if that login exists/);
+    assert.ok(!h.notices[0]!.includes('alice'), 'and does not name them back');
+  });
+
+  it('trims what was typed, because a trailing space is not a different person', async () => {
+    const h = harness();
+    await h.flow.invite('share-1', '  alice  ');
+    assert.equal(h.invited[0]!.login, 'alice');
+  });
+
+  it('refuses an empty login without calling anything', async () => {
+    const h = harness();
+    await h.flow.invite('share-1', '');
+    assert.deepEqual(h.invited, []);
+    assert.match(h.notices[0]!, /enter the login/);
+  });
+});
+
+describe('answering an invitation', () => {
+  it('says the folder is not here yet, because joining only makes it on the server', async () => {
+    // The replica is materialised server-side; the files arrive with the next delta. A
+    // message implying otherwise sends somebody looking for a folder that is not there.
+    const h = harness();
+    await h.flow.accept('share-1');
+
+    assert.match(h.notices[0]!, /arrives on the next sync/);
+    assert.equal(h.rebuilt(), 1);
+  });
+
+  it('confirms a decline, which is the only place it is ever recorded', async () => {
+    // The membership row is deleted, so absence from the list is the whole record (docs/05).
+    const h = harness();
+    await h.flow.decline('share-1');
+    assert.match(h.notices[0]!, /declined/);
+  });
+});
+
+describe('leaving', () => {
+  it('says "you left" when the share carries on without you', async () => {
+    const h = harness();
+    await h.flow.leave('share-1');
+
+    assert.match(h.notices[0]!, /you left/i);
+    assert.match(h.notices[0]!, /copy is yours/, 'and that the files stay (SH-05)');
+  });
+
+  it('says the share is over when the departure ended it for everybody', async () => {
+    // The initiator leaving, or the last participant besides them, ends it. Telling that
+    // person "you left" would be true and misleading.
+    const h = harness({ leave: async () => ({ ended: true }) });
+    await h.flow.leave('share-1');
+
+    assert.match(h.notices[0]!, /over for everybody/);
+  });
+
+  it('does not rebuild the screen when leaving failed', async () => {
+    const h = harness({
+      leave: async () => {
+        throw new Error('finalization_incomplete');
+      },
+    });
+    await h.flow.leave('share-1');
+
+    assert.match(h.notices[0]!, /finalization_incomplete/);
+    assert.equal(h.rebuilt(), 0);
+  });
+});
+
+describe('reading the lists', () => {
+  it('hands back undefined rather than throwing at the screen', async () => {
+    const h = harness({
+      list: async () => {
+        throw new Error('offline');
+      },
+    });
+    assert.equal(await h.flow.list(), undefined);
+    assert.match(h.notices[0]!, /offline/);
+  });
+
+  it('passes the lists through when the server answers', async () => {
+    const h = harness({
+      list: async () => ({
+        joined: [{ shareId: 's1', isInitiator: true, state: 'active' }],
+        invitations: [{ shareId: 's2', initiatorLogin: 'bob' }],
+      }),
+    });
+    const out = await h.flow.list();
+    assert.equal(out!.joined[0]!.shareId, 's1');
+    assert.equal(out!.invitations[0]!.initiatorLogin, 'bob');
+  });
+});

@@ -1,0 +1,175 @@
+/**
+ * The sharing coordinator: every decision "share a folder" needs, outside a settings tab.
+ *
+ * The same shape as `sync.ts` and `pairing-flow.ts`, for the reason a phone taught this
+ * project on 14 August: a `PluginSettingTab` cannot be constructed outside Obsidian, so
+ * anything decided inside one is decided where no test can watch. Four of the five defects
+ * that pass found lived in exactly that gap.
+ *
+ * What this owns, and the settings tab no longer does:
+ *
+ * - **nothing runs twice at once.** Sharing is several requests that leave the server in an
+ *   intermediate state between them; a second press partway through would create a second
+ *   share over a folder that already has one, and the failure would arrive from the schema
+ *   rather than from anything a person could act on;
+ * - **a folder must be synced before it can be shared.** Its node id is what the share is
+ *   rooted at, and a folder this device has never uploaded has none;
+ * - **the passphrase question happens once**, at the start, rather than partway through a
+ *   sequence that has already changed the server;
+ * - **what every outcome says**, including the one that is not a failure: leaving may end
+ *   the share for everybody, and "you left" would be the wrong sentence for it.
+ */
+import type { ShareMember } from './api/client.js';
+
+/** A share as the person sees it in the list. */
+export interface ShareRow {
+  shareId: string;
+  isInitiator: boolean;
+  state: string;
+}
+
+/** An invitation waiting for an answer. */
+export interface InvitationRow {
+  shareId: string;
+  initiatorLogin: string;
+}
+
+export interface ShareFlowDeps {
+  /** What this account is in and what is waiting for it. */
+  list(): Promise<{ joined: ShareRow[]; invitations: InvitationRow[] }>;
+  /** Share a folder by its vault-relative path. Resolving it to a node is the caller's. */
+  share(folderPath: string): Promise<{ shareId: string }>;
+  /** Seal the share key to a login and register the invitation. */
+  invite(shareId: string, login: string): Promise<void>;
+  accept(shareId: string): Promise<void>;
+  decline(shareId: string): Promise<void>;
+  /** Leave; `ended` is true when this departure closed the share for everybody. */
+  leave(shareId: string): Promise<{ ended: boolean }>;
+  members(shareId: string): Promise<ShareMember[]>;
+  /** True when this device has already synced that folder, so the server knows it. */
+  isSynced(folderPath: string): boolean;
+  notify(message: string, durationMs?: number): void;
+  /** The screen showing this is now out of date. */
+  done(): void;
+}
+
+export interface ShareFlow {
+  list(): Promise<{ joined: ShareRow[]; invitations: InvitationRow[] } | undefined>;
+  share(folderPath: string): Promise<void>;
+  invite(shareId: string, login: string): Promise<void>;
+  accept(shareId: string): Promise<void>;
+  decline(shareId: string): Promise<void>;
+  leave(shareId: string): Promise<void>;
+  members(shareId: string): Promise<ShareMember[] | undefined>;
+}
+
+const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
+  // Set synchronously before any await, for the reason `sync.ts` gives: two presses arrive
+  // as two calls before either has reached the network.
+  let running = false;
+
+  /** One operation at a time, with its failure reported rather than thrown at the UI. */
+  const once = async <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (running) {
+      deps.notify('SyncServer: another sharing operation is still running.');
+      return undefined;
+    }
+    running = true;
+    try {
+      return await fn();
+    } catch (e) {
+      deps.notify(`SyncServer: ${what} failed — ${message(e)}`, 10000);
+      return undefined;
+    } finally {
+      running = false;
+    }
+  };
+
+  return {
+    list: () => once('reading the share list', () => deps.list()),
+
+    async share(folderPath) {
+      // Checked before anything is created: a share rooted at a folder the server has never
+      // seen cannot be made, and finding that out after the passphrase prompt and a request
+      // would be a worse way to learn it.
+      if (!folderPath.trim()) {
+        deps.notify('SyncServer: choose a folder to share.');
+        return;
+      }
+      if (!deps.isSynced(folderPath)) {
+        deps.notify(`SyncServer: sync this vault first — the server does not know “${folderPath}” yet.`, 10000);
+        return;
+      }
+
+      const out = await once('sharing the folder', async () => {
+        const { shareId } = await deps.share(folderPath);
+        return shareId;
+      });
+      if (!out) return;
+
+      deps.notify(`SyncServer: “${folderPath}” is shared. Invite somebody to it.`);
+      deps.done();
+    },
+
+    async invite(shareId, login) {
+      if (!login.trim()) {
+        deps.notify('SyncServer: enter the login to invite.');
+        return;
+      }
+      const done = await once('inviting', async () => {
+        await deps.invite(shareId, login.trim());
+        return true;
+      });
+      if (!done) return;
+
+      // Deliberately not "invited <login>": the pubkey endpoint answers an unknown login
+      // with a deterministic fake rather than a 404 (#73), so a success here does not mean
+      // the account exists — and a message claiming it does would turn this into the
+      // enumeration oracle that endpoint exists to prevent.
+      deps.notify('SyncServer: invitation sent, if that login exists.');
+      deps.done();
+    },
+
+    async accept(shareId) {
+      const done = await once('accepting', async () => {
+        await deps.accept(shareId);
+        return true;
+      });
+      if (!done) return;
+
+      deps.notify('SyncServer: joined. The folder arrives on the next sync.');
+      deps.done();
+    },
+
+    async decline(shareId) {
+      const done = await once('declining', async () => {
+        await deps.decline(shareId);
+        return true;
+      });
+      if (!done) return;
+
+      // Absence from the member list is the whole record of a decline (docs/05), so this
+      // notice is the only place it is ever said.
+      deps.notify('SyncServer: invitation declined.');
+      deps.done();
+    },
+
+    async leave(shareId) {
+      const out = await once('leaving', () => deps.leave(shareId));
+      if (!out) return;
+
+      // Two different facts, and the wrong one is misleading: leaving as the initiator, or
+      // as the last participant besides them, ends the share for everybody.
+      deps.notify(
+        out.ended
+          ? 'SyncServer: the share is over for everybody. Your copy is yours now.'
+          : 'SyncServer: you left. Your copy is yours now.',
+      );
+      deps.done();
+    },
+
+    members: (shareId) => once('reading the members', () => deps.members(shareId)),
+  };
+};

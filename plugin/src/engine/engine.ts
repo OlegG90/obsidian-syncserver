@@ -76,7 +76,7 @@ export interface SyncReport {
 }
 
 /** A node as the server describes it, plus the path this client resolved it to. */
-interface ServerNode {
+export interface ServerNode {
   nodeId: string;
   parentId: string | null;
   path: string;
@@ -85,6 +85,14 @@ interface ServerNode {
   isFile: boolean;
   /** The key scope the node is named under — the vault's own scope, or a share's `KS` (SH-28). */
   nameKeyId: string | null;
+  /**
+   * The share this node belongs to, for a node inside a replica.
+   *
+   * Optional because the engine builds `ServerNode`s in three places and only the tree read
+   * has it: the other two describe a node this pass just wrote, where the share is whatever
+   * the parent already said it was.
+   */
+  shareId?: string | null;
 }
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
@@ -339,6 +347,22 @@ export class SyncEngine {
    * all (docs/03) — so a path exists only once a client has decrypted every name on the way
    * down. `list` returns nodes shallowest-first, which is what makes one pass enough.
    */
+  /**
+   * The server's tree as paths, for a caller that is not a sync.
+   *
+   * Sharing a folder needs exactly this and nothing else about the engine: a share is
+   * rooted at a node id, and node ids are what this class spends its pass resolving paths
+   * to. Exposed rather than copied — a second implementation of "decrypt every name and
+   * rebuild the paths" would be a second thing to get wrong about scopes.
+   */
+  async readTree(): Promise<Map<string, ServerNode>> {
+    const opened = await this.client.openVault(this.vaultId);
+    const vaultScopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
+    if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
+    const { tree } = await this.readServerTree(opened.root_node_id, vaultScopeId);
+    return tree;
+  }
+
   private async readServerTree(rootNodeId: string, vaultScopeId: string): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
     const res = await this.client.listNodes(this.vaultId);
     const pathOf = new Map<string, string>([[rootNodeId, '']]);
@@ -362,6 +386,7 @@ export class SyncEngine {
         // A folder is a node with no content. The server does not label them either.
         isFile: n.sha256 !== null,
         nameKeyId: n.name_key_id,
+        shareId: n.share_id,
       });
     }
 

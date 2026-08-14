@@ -25,8 +25,11 @@ import { newPairingCode } from './crypto/pairing-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { makeObsidianTransport } from './obsidian/transport.js';
 
-import { session, type Connection, type Session } from './session/index.js';
+import { session, type Connection, type Handle, type Session } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
+import { openShareFlow, type ShareFlow } from './share-flow.js';
+import { unwrapShareKey } from './crypto/share.js';
+import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
@@ -292,6 +295,194 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Run something with an open session, asking for the passphrase once if it is locked.
+   *
+   * The alternative is what every sharing operation would otherwise do separately: check
+   * the state, prompt, unlock, then act — four steps repeated six times, and the prompt
+   * arriving partway through a sequence that has already changed the server.
+   */
+  private async withSession<T>(fn: (h: Handle) => Promise<T>): Promise<T> {
+    if (!this.sess) throw new Error('this vault is not connected');
+    if (this.sess.state === 'locked') {
+      const passphrase = await askPassphrase(this.app);
+      if (!passphrase) throw new Error('the passphrase is needed to open this account');
+      if ((await this.sess.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
+    }
+    return this.sess.use(fn);
+  }
+
+  /** The vault adapter, built the same way the sync pass builds it. */
+  private vault(): ObsidianVaultAdapter {
+    return new ObsidianVaultAdapter(this.app.vault);
+  }
+
+  /** An engine for reading only — the tree, which is where node ids come from. */
+  private engineFor(h: Handle): SyncEngine {
+    return new SyncEngine(
+      h.client,
+      this.data.connection!.vaultId,
+      h.kv,
+      this.vault(),
+      this.stateStore(),
+      deviceLabel(),
+      this.data.syncObsidian === true,
+      this.shareKeys.size > 0 ? this.shareKeys : undefined,
+    );
+  }
+
+  /** The share keys this device can open, refreshed whenever the vault is opened. */
+  private shareKeys = new Map<string, Uint8Array>();
+
+  private async vaultScopeId(h: Handle): Promise<string> {
+    const opened = await h.client.openVault(this.data.connection!.vaultId);
+    const id = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
+    if (!id) throw new Error('the vault reports no key scope of its own');
+    return id;
+  }
+
+  /**
+   * `KS` for a share, from what the server reports when the vault is opened.
+   *
+   * Fetched rather than remembered: the wrapped form is the server's to hold and this
+   * device's to open, and caching it would mean deciding when a cache is stale about a key
+   * that can stop existing when somebody else ends the share.
+   */
+  private async shareKeyOf(h: Handle, shareId: string): Promise<Uint8Array> {
+    const opened = await h.client.openVault(this.data.connection!.vaultId);
+    const scope = opened.scopes.find((sc) => sc.share_id === shareId);
+    if (!scope?.wrapped_key) throw new Error('this device holds no key for that share');
+    if (scope.wrapping !== 'vault') {
+      throw new Error('this share key arrived as an account envelope, which needs the account identity');
+    }
+    return unwrapShareKey(h.kv, scope.wrapped_key);
+  }
+
+  private async shareScopeIdOf(h: Handle, shareId: string): Promise<string> {
+    const opened = await h.client.openVault(this.data.connection!.vaultId);
+    const scope = opened.scopes.find((sc) => sc.share_id === shareId);
+    if (!scope) throw new Error('this device holds no key for that share');
+    return scope.key_id;
+  }
+
+  /**
+   * The sharing coordinator, bound to this vault's session.
+   *
+   * Every one of these needs the vault key, so every one needs an open session — the
+   * passphrase is asked for exactly as a sync asks, and once, before the first request.
+   */
+  sharing(): ShareFlow {
+    return openShareFlow({
+      list: () =>
+        this.withSession(async (h) => {
+          const out = await h.client.shares();
+          return {
+            joined: out.joined.map((s) => ({
+              shareId: s.share_id,
+              isInitiator: s.is_initiator,
+              state: s.state,
+            })),
+            invitations: out.invitations.map((i) => ({
+              shareId: i.share_id,
+              initiatorLogin: i.initiator_login,
+            })),
+          };
+        }),
+
+      share: (folderPath) =>
+        this.withSession(async (h) => {
+          // The tree comes from the engine, which is the one place that turns encrypted
+          // names back into paths — and a share is rooted at a node id.
+          const tree = await this.engineFor(h).readTree();
+          const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({
+            path,
+            nodeId: n.nodeId,
+            address: n.address,
+            nameKeyId: n.nameKeyId ?? '',
+          }));
+          const vaultScopeId = await this.vaultScopeId(h);
+          const out = await shareFolder(
+            {
+              client: h.client,
+              read: (p) => this.vault().read(p),
+              vaultId: this.data.connection!.vaultId,
+              vaultKey: h.kv,
+              vaultScopeId,
+              newScopeId: () => crypto.randomUUID(),
+            },
+            folderPath,
+            nodes,
+          );
+          return { shareId: out.shareId };
+        }),
+
+      invite: (shareId, login) =>
+        this.withSession(async (h) => {
+          const key = await this.shareKeyOf(h, shareId);
+          await inviteTo({ client: h.client }, shareId, login, key);
+        }),
+
+      accept: (shareId) =>
+        this.withSession(async (h) => {
+          const tree = await this.engineFor(h).readTree();
+          const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
+          const opened = await h.client.openVault(this.data.connection!.vaultId);
+          await acceptInvitation(
+            {
+              client: h.client,
+              vaultId: this.data.connection!.vaultId,
+              vaultKey: h.kv,
+              vaultScopeId: await this.vaultScopeId(h),
+            },
+            shareId,
+            opened.root_node_id,
+            // At the vault root, beside their own folders, under a name that is free here.
+            freeName('Shared folder', siblings),
+          );
+        }),
+
+      decline: (shareId) => this.withSession((h) => h.client.declineShare(shareId)),
+
+      leave: (shareId) =>
+        this.withSession(async (h) => {
+          const tree = await this.engineFor(h).readTree();
+          const key = await this.shareKeyOf(h, shareId);
+          const scopeId = await this.shareScopeIdOf(h, shareId);
+          const replica = [...tree.entries()]
+            .filter(([, n]) => n.shareId === shareId)
+            .map(([path, n]) => ({
+              nodeId: n.nodeId,
+              path,
+              name: path.slice(path.lastIndexOf('/') + 1),
+              address: n.address,
+            }));
+          return leaveShare(
+            {
+              client: h.client,
+              read: (p) => this.vault().read(p),
+              vaultId: this.data.connection!.vaultId,
+              vaultKey: h.kv,
+              vaultScopeId: await this.vaultScopeId(h),
+            },
+            shareId,
+            key,
+            scopeId,
+            replica,
+          );
+        }),
+
+      members: (shareId) => this.withSession((h) => h.client.shareMembers(shareId)),
+
+      // A folder the server knows is one this device has already synced; its node id is
+      // what a share is rooted at.
+      isSynced: (folderPath) =>
+        Object.keys(this.data.state?.nodes ?? {}).some((p) => p === folderPath || p.startsWith(`${folderPath}/`)),
+
+      notify: (message, durationMs) => new Notice(message, durationMs),
+      done: () => this.settingsTab?.display(),
+    });
+  }
+
+  /**
    * Approve another device's pairing from here. Needs the seed, so it needs an open
    * session — the passphrase is asked for exactly as a sync would ask.
    */
@@ -453,6 +644,7 @@ class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.shareSection(containerEl);
       this.versionSection(containerEl);
       return;
     }
@@ -583,6 +775,72 @@ class SyncServerSettings extends PluginSettingTab {
         }
       }),
     );
+  }
+
+
+  /**
+   * Folders shared with other people, and the invitations waiting for an answer.
+   *
+   * Drawn from what the server says rather than from anything remembered: a share can be
+   * ended by somebody else while this screen is closed, and a list rebuilt from a cache
+   * would offer actions on something that is already gone.
+   */
+  private shareSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Shared folders' });
+    const list = containerEl.createEl('div');
+    list.createEl('p', { text: 'Loading…' });
+
+    const flow = this.plugin.sharing();
+    let folder = '';
+
+    new Setting(containerEl)
+      .setName('Share a folder')
+      .setDesc('Its contents are re-keyed so participants can read them. The folder must be synced first.')
+      .addText((t) => t.setPlaceholder('Folder/path').onChange((v) => (folder = v.trim())))
+      .addButton((b) =>
+        b.setButtonText('Share').onClick(async () => {
+          b.setDisabled(true);
+          try {
+            await flow.share(folder);
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
+      );
+
+    void flow.list().then((out) => {
+      list.empty();
+      if (!out) {
+        list.createEl('p', { text: 'The share list could not be read.' });
+        return;
+      }
+      if (out.joined.length === 0 && out.invitations.length === 0) {
+        list.createEl('p', { text: 'No shared folders yet.' });
+      }
+
+      for (const inv of out.invitations) {
+        const row = new Setting(list)
+          .setName(`Invitation from ${inv.initiatorLogin}`)
+          .setDesc('Accepting materialises a copy in this vault; it arrives on the next sync.');
+        row.addButton((b) => b.setButtonText('Accept').setCta().onClick(() => void flow.accept(inv.shareId)));
+        row.addButton((b) => b.setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
+      }
+
+      for (const share of out.joined) {
+        const row = new Setting(list)
+          .setName(share.isInitiator ? 'Shared by you' : 'Shared with you')
+          .setDesc(`${share.state} · ${share.shareId}`);
+
+        if (share.isInitiator) {
+          let login = '';
+          row.addText((t) => t.setPlaceholder('login to invite').onChange((v) => (login = v)));
+          row.addButton((b) => b.setButtonText('Invite').onClick(() => void flow.invite(share.shareId, login)));
+        }
+        // Leaving is everybody's, the initiator included — for them it ends the share, and
+        // the coordinator says which happened rather than guessing here.
+        row.addButton((b) => b.setButtonText('Leave').setWarning().onClick(() => void flow.leave(share.shareId)));
+      }
+    });
   }
 
   /**
