@@ -16,6 +16,7 @@ import type {
   CursorRejection,
   CursorStaleBody,
   Delta,
+  HealthResponse,
   KdfParams,
   Material,
   NodeType,
@@ -194,7 +195,7 @@ export class SyncClient {
 
   // ---- account -----------------------------------------------------------------
 
-  health(): Promise<{ status: string; bootstrap_pending: boolean }> {
+  health(): Promise<HealthResponse> {
     return this.json('GET', '/health', undefined, { auth: false });
   }
 

@@ -230,11 +230,16 @@ the postgres image takes that directory over as its own user, so create it and l
 A fresh instance answers:
 
 ```json
-{"status":"ok","bootstrap_pending":true}
+{"status":"ok","bootstrap_pending":true,"version":"0.1.0"}
 ```
 
 `bootstrap_pending` is the whole first-run state: the database has been created and seeded, and
 the server is waiting for its first administrator (#107).
+
+`version` is the release this server is, and `/health` is the only place it is reported (#111) —
+because it is the only endpoint open before authentication and before an administrator exists,
+which is precisely when a client has to decide whether it can talk to this server at all. It is
+reported on the `503` path too: the version is a fact about the process, not about the database.
 
 ## Claiming the first administrator
 

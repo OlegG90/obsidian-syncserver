@@ -15,6 +15,7 @@
  */
 import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, requestUrl, setIcon } from 'obsidian';
 
+import { SyncClient } from './api/client.js';
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
@@ -27,6 +28,7 @@ import { makeObsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Session } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
+import { PLUGIN_VERSION, versionWarning } from './version.js';
 
 /**
  * The composition root's one job that nothing else may do: hand Obsidian's own functions to
@@ -451,6 +453,7 @@ class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.versionSection(containerEl);
       return;
     }
 
@@ -503,6 +506,42 @@ class SyncServerSettings extends PluginSettingTab {
     );
 
     this.pairSection(containerEl);
+    this.versionSection(containerEl);
+  }
+
+  /**
+   * The two release numbers, and whether they agree (#111).
+   *
+   * The plugin's is known here and now; the server's takes a request, so the line is
+   * written twice — once immediately, so there is never a blank waiting for the network,
+   * and again when `/health` answers. `display()` may rebuild the tab before that lands,
+   * which leaves the callback writing into a detached element: harmless, and cheaper than
+   * a cancellation token for one line of text.
+   *
+   * The mismatch is a warning and not a refusal, for the reason `version.ts` gives.
+   */
+  private versionSection(containerEl: HTMLElement): void {
+    const line = containerEl.createEl('p', { text: `Plugin ${PLUGIN_VERSION}` });
+    line.style.opacity = '0.7';
+    line.style.fontSize = 'var(--font-ui-smaller)';
+
+    const conn = this.plugin.data.connection;
+    if (!conn) return;
+
+    void new SyncClient(conn.serverUrl, transport)
+      .health()
+      .then((health) => {
+        // A server too old to report one is not an unknown — it is "before 0.1.0".
+        line.setText(`Plugin ${PLUGIN_VERSION} · server ${health.version ?? 'before 0.1.0'}`);
+
+        const warning = versionWarning(health.version);
+        if (!warning) return;
+        const el = containerEl.createEl('p', { text: warning });
+        el.style.color = 'var(--text-error)';
+      })
+      .catch(() => {
+        line.setText(`Plugin ${PLUGIN_VERSION} · server unreachable`);
+      });
   }
 
   /**

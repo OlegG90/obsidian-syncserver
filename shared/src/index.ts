@@ -170,3 +170,26 @@ export interface CursorPayload {
   /** High-watermark pinned on the first page of a series (#24). */
   hwm?: number;
 }
+
+// ---- release version ------------------------------------------------------------
+
+/**
+ * The release the whole solution ships as: server, plugin, shared and — once it exists —
+ * the management console all carry **one** number, bumped together (#111).
+ *
+ * It appears here because it appears literally in a response: `/health` reports the
+ * server's, and that is the only way a client can learn it. The **comparison** is not
+ * here. Only the client ever asks "can I talk to this?", so the rule that answers it lives
+ * on the client, next to the other version it needs — see `plugin/src/version.ts`.
+ */
+export interface HealthResponse {
+  status: string;
+  bootstrap_pending: boolean;
+  /**
+   * The server's release, `major.minor.patch`.
+   *
+   * Optional because a client may be pointed at a server older than this field: absence
+   * means "before 0.1.0", which is a version answer rather than a missing one.
+   */
+  version?: string;
+}

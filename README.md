@@ -7,9 +7,10 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development.** The server and the plugin both run and are exercised by tests
-> against a real database and a real server, but this has not been used to hold anything anyone
-> would miss. See [Status](#status) for exactly how far it goes.
+> **Status: in development, version 0.1.0.** Two-way sync works on desktop and on Android against a
+> self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
+> keep both versions. It has not yet been used to hold anything anyone would miss. See
+> [Status](#status) for exactly how far it goes.
 
 ## What it does, and what it deliberately does not
 
@@ -88,7 +89,7 @@ Requires **PostgreSQL 18+** and **Node 22+**.
 ```bash
 npm ci
 npm run db:reset          # drop the dev database, apply schema.sql + tests.sql, report
-npm test                  # every workspace
+npm test                  # every workspace, after asserting one version across all five manifests
 npm run check:compose     # assert the shape the deployment depends on
 ```
 
@@ -116,8 +117,8 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true}` and serves nothing but
-`/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.1.0"}` and serves
+nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
 ### The plugin
@@ -143,14 +144,22 @@ both at once.
 
 ## Status
 
+Current release: **0.1.0** — see [Versions](#versions).
+
 | Milestone | |
 |---|---|
 | **M0** — schema, blob store, auth, `delta`/`put`/`delete`, deployed and walked end to end | done |
 | **M0.5** — the plugin: one-way sync, an empty vault materialised from the server | done |
-| **M1** — two-way sync on a real vault | in progress: adoption, content conflicts and file renames work; folder renames, trash reconciliation, resync after the journal TTL and migration pre-flight checks do not yet |
-| **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | not started |
+| **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
+| **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
 | **M3** — folder sharing | designed in full, not built |
 | **M4** — management console, version thinning, blob GC | not started |
+
+M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
+ways, and a real conflict with neither version lost. That pass found **five defects a hundred and fifty
+green tests had missed**, four of them at the Obsidian edge — which is why the adapters have had test
+seams since, and why [`docs/10`](docs/10-roadmap.md) records what "mobile" had to mean before it could be
+ticked.
 
 [`docs/10`](docs/10-roadmap.md) has the acceptance scenarios each milestone is measured against.
 
@@ -158,6 +167,38 @@ both at once.
 again (above); backups are documented ([`docs/08`](docs/08-backup-restore.md)) but not
 automated; and nothing here has been through the kind of use that finds the last category of
 bug.
+
+## Versions
+
+**One number for the whole solution.** The server, the plugin, `shared/` and the management console
+when it exists all ship the same `major.minor.patch` and are bumped together. They are one program
+split across two machines by necessity, not four products with independent lives, and a compatibility
+matrix between them would be a fiction nobody tests.
+
+**The major number carries the compatibility promise.** Two builds with the same major are meant to
+work together.
+
+**While the major is `0`, the minor carries it instead** — which is what a leading zero means. `0.1`
+and `0.2` are as unrelated as `1.x` and `2.x` will be. The rule collapses to the plain "same major"
+on the day the first `1.0.0` ships, with no code change: the zero test simply stops being true.
+
+The server reports its version from `/health`, and only there — it is the one endpoint open before
+authentication and before an administrator exists, which is exactly when a client needs the answer:
+
+```bash
+curl -s localhost:8080/health
+# {"status":"ok","bootstrap_pending":false,"version":"0.1.0"}
+```
+
+The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does
+not refuse to sync: locking someone out of their own vault over a version string is the worse failure,
+and it would happen in precisely the situation where the numbers are least trustworthy. The warning
+exists because the alternative was watching a server eight commits behind its client answer `404` to a
+route it had never heard of, with nothing on screen to say why.
+
+Five files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
+requires one in `manifest.json`. `npm test` runs `scripts/check-version.mjs`, which fails when they
+disagree. The rule itself is [#111](docs/09-decisions.md).
 
 ## Security
 

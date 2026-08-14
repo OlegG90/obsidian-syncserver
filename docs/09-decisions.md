@@ -117,6 +117,7 @@ Three prefixes appear across the corpus:
 | 101 | A negative test states the expected SQLSTATE and a fragment of the message; `expect_fail` compares both |
 | 107 | The schema **seeds** the two accounts nothing else can create: the tombstone (#55) and the first administrator, as an unredeemed invitation. Until that invitation is redeemed the server answers nothing but its redemption |
 | 108 | The four stored verifiers (`auth_secret_hash`, `recovery_code_hash`, `invite_token_hash`, `refresh_token_hash`) are **SHA-256 over the token's UTF-8 bytes, hex, constant-time compared** — no salt, no pepper, no slow KDF, because every one of their inputs is ≥128 bits from a CSPRNG. That entropy floor is itself the rule; the seeded bootstrap token is its one exception |
+| 111 | **One version for the whole solution**, `major.minor.patch`, carried by the server, the plugin, `shared/` and the console alike and bumped together. The **major** number carries the compatibility promise — while it is `0`, the **minor** carries it instead, which is what a leading zero means. `/health` is the only place the server reports its own, because it is the only endpoint open before authentication and before an administrator exists. The client compares and **warns**; it does not refuse to sync, because locking someone out of their own vault over a version string is the worse failure. Five manifests must agree and `scripts/check-version.mjs` fails when they do not |
 
 ## Management console
 

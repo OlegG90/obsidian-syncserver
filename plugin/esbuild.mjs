@@ -10,7 +10,7 @@
  *     node esbuild.mjs --vault ... --watch
  */
 import { context } from 'esbuild';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,12 @@ if (!vault) {
 
 const outDir = path.join(vault, '.obsidian', 'plugins', 'syncserver');
 await mkdir(outDir, { recursive: true });
-await copyFile(path.join(here, 'manifest.json'), path.join(outDir, 'manifest.json'));
+
+// The bundle's version comes from the same file Obsidian reads for its plugin list, so the
+// number a person sees there and the number this build reports cannot disagree (#111).
+const manifestPath = path.join(here, 'manifest.json');
+const { version } = JSON.parse(await readFile(manifestPath, 'utf8'));
+await copyFile(manifestPath, path.join(outDir, 'manifest.json'));
 
 const ctx = await context({
   entryPoints: [path.join(here, 'src/main.ts')],
@@ -41,6 +46,7 @@ const ctx = await context({
   target: 'es2020',
   // Provided by the host. Bundling it would ship a second, dead copy of the editor's API.
   external: ['obsidian', 'electron'],
+  define: { __SYNCSERVER_VERSION__: JSON.stringify(version) },
   sourcemap: process.argv.includes('--watch') ? 'inline' : false,
   minify: !process.argv.includes('--watch'),
   logLevel: 'info',
