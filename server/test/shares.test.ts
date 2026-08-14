@@ -1288,3 +1288,75 @@ describe('finalizing a departure', () => {
     assert.equal(r.statusCode, 404, 'nothing to finalize yet');
   });
 });
+
+describe('the keys a client needs to read a vault', () => {
+  it('gives the initiator their own share key, wrapped under the vault key', async () => {
+    // Without this a restart leaves a client able to see shared nodes and unable to name
+    // them: the interior is under KS, and KS reaches a device only wrapped.
+    const folder = await createNode('folder', `scopes-${randomUUID()}`);
+    const created = await openShare(folder);
+    const shareId = created.json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
+    assert.equal(r.statusCode, 200, r.body);
+    const scope = r.json().scopes.find((s: { key_id: string }) => s.key_id === ks);
+
+    assert.ok(scope, 'the share scope is reported');
+    assert.equal(scope.scope, 'share');
+    assert.equal(scope.share_id, shareId);
+    assert.equal(scope.wrapping, 'vault', 'theirs is a wrap, not an envelope — it needed no delivery');
+    assert.ok(scope.wrapped_key);
+  });
+
+  it('gives a participant theirs as an account envelope instead', async () => {
+    // Different row, different wrapping, and the client cannot guess which: the two are
+    // opened with different keys entirely.
+    const { shareId } = await sharedWith('scopes-member');
+    const ks = await shareKeyOf(shareId);
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const scope = r.json().scopes.find((s: { key_id: string }) => s.key_id === ks);
+
+    assert.ok(scope, 'the participant is told about the scope their replica is named under');
+    assert.equal(scope.wrapping, 'account');
+  });
+
+  it('says nothing about a share the caller is not in', async () => {
+    const folder = await createNode('folder', `private-scope-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks));
+  });
+
+  it('stops reporting it once the share is over', async () => {
+    // A key for a share that ended names nothing: the replica's names have gone back to KV,
+    // and offering it would invite a client to try opening what is no longer under it.
+    const { shareId } = await sharedWith('scopes-ended');
+    const ks = await shareKeyOf(shareId);
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+
+    const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
+    assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks));
+  });
+
+  it('still reports the vault’s own scope first, which everything else defaults to', async () => {
+    const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
+    assert.equal(r.json().scopes[0].scope, 'vault');
+    assert.equal(r.json().scopes[0].key_id, vaultKeyId);
+  });
+});

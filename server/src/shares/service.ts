@@ -1011,3 +1011,45 @@ export const finalizeLeave = async (
     throw e;
   }
 };
+
+/** A key scope this vault's nodes may be named under, and how the caller opens it. */
+export type ShareScope = {
+  shareId: string;
+  keyId: string;
+  wrappedKey: string;
+  /**
+   * `vault` — wrapped under `KV`, which is how the initiator keeps their own copy;
+   * `account` — an HPKE envelope to the account's public key, which is how a participant
+   * received theirs. The client cannot guess: the two are opened with different keys.
+   */
+  wrapping: 'vault' | 'account';
+};
+
+/**
+ * The share keys this caller needs to read this vault.
+ *
+ * Without these a client that restarts can see shared nodes and cannot name them: the
+ * interior of a share is under `KS`, and `KS` reaches a device only in a wrapped form the
+ * server stores but cannot open. It is returned when a vault is opened rather than through
+ * an endpoint of its own because that is the moment the answer is needed — a sync that
+ * begins without it fails on the first shared name.
+ *
+ * Both directions of ownership in one query, and they are genuinely different rows: the
+ * initiator's copy lives on `shares`, a participant's on their membership.
+ */
+export const shareScopesFor = (db: Db, userId: string, vaultId: string): Promise<ShareScope[]> =>
+  db.query<ShareScope>(
+    `SELECT s.id AS "shareId", s.subtree_key_id AS "keyId",
+            encode(s.wrapped_key_initiator, 'base64') AS "wrappedKey", 'vault' AS wrapping
+       FROM shares s
+      WHERE s.initiator_id = $1 AND s.initiator_vault_id = $2
+        AND s.state IN ('preparing', 'active')
+        AND s.subtree_key_id IS NOT NULL
+      UNION ALL
+     SELECT s.id, s.subtree_key_id, encode(m.wrapped_key, 'base64'), 'account'
+       FROM share_members m JOIN shares s ON s.id = m.share_id
+      WHERE m.user_id = $1 AND m.vault_id = $2 AND m.user_id <> s.initiator_id
+        AND m.joined_at IS NOT NULL AND m.left_at IS NULL
+        AND m.wrapped_key IS NOT NULL AND s.subtree_key_id IS NOT NULL`,
+    [userId, vaultId],
+  );

@@ -200,3 +200,56 @@ export const shareEnvelopeAad = (shareId: string, recipientUserId: string): Uint
 
 /** Who holds a copy of this folder, and who has not answered yet. */
 export type Members = ShareMember[];
+
+/** What accepting needs: where the copy lands, and what this device calls it. */
+export interface AcceptDeps {
+  client: Pick<SyncClient, 'joinShare'>;
+  vaultId: string;
+  /** `KV` — the replica's root is named under it, because it lands among private folders. */
+  vaultKey: Uint8Array;
+  vaultScopeId: string;
+}
+
+/**
+ * Accept an invitation, materialising a copy in **this** vault.
+ *
+ * The vault is not asked for, it is observed (AC-Q4): a plugin instance can only reach the
+ * vault it runs in, so accepting *is* choosing where the folder lands. There is no second
+ * chance to place it elsewhere — an invitation is redeemed once.
+ *
+ * The name is this side's alone. The interior arrives under `KS` and stays there, but the
+ * root sits among the joiner's own folders, so they name it under their own `KV` and may
+ * call it whatever they like. That is also why a free name has to be chosen here: the
+ * destination folder may already hold something called the same thing, and the server
+ * enforces unique names among siblings.
+ */
+export const acceptInvitation = async (
+  deps: AcceptDeps,
+  shareId: string,
+  parentNodeId: string,
+  name: string,
+): Promise<{ rootNodeId: string }> => {
+  const { root_node_id: rootNodeId } = await deps.client.joinShare(shareId, {
+    vault_id: deps.vaultId,
+    parent_id: parentNodeId,
+    name_enc: encryptName(deps.vaultKey, name),
+    name_hmac: nameHmac(deps.vaultKey, name),
+    name_key_id: deps.vaultScopeId,
+  });
+  return { rootNodeId };
+};
+
+/**
+ * A name not already taken among `siblings`, by appending a counter.
+ *
+ * Joining is the one moment a share meets a vault it knows nothing about, so a collision is
+ * ordinary rather than exceptional — two people can easily both have a folder called
+ * "Notes". Refusing the join over it would be a poor trade for the person accepting.
+ */
+export const freeName = (wanted: string, siblings: ReadonlySet<string>): string => {
+  if (!siblings.has(wanted)) return wanted;
+  for (let n = 2; ; n++) {
+    const candidate = `${wanted} ${n}`;
+    if (!siblings.has(candidate)) return candidate;
+  }
+};

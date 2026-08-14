@@ -11,14 +11,16 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { newKeypair, openFrom } from '../src/crypto/hpke.js';
-import { fromBase64, toBase64, utf8 } from '../src/crypto/bytes.js';
+import { concat as concatBytes, fromBase64, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { decryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
+import { createAccount } from '../src/crypto/account.js';
 import { newShareKey, unwrapShareKey, wrapShareKey } from '../src/crypto/share.js';
 import {
   inviteTo,
   preparePlan,
   shareEnvelopeAad,
   shareFolder,
+  type AcceptDeps,
   type SharedNode,
   type SharingDeps,
 } from '../src/sharing.js';
@@ -274,5 +276,144 @@ describe('the account identity, which is how a share reaches somebody', () => {
     const account = createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 });
 
     assert.throws(() => unwrapIdentity(newSeed(), account.encPrivkey));
+  });
+});
+
+describe('making the wrapped keys usable', () => {
+  const setup = () => ({
+    account: createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 }),
+    vaultKey: newShareKey(),
+    userId: 'user-1',
+  });
+
+  it('opens the initiator’s own copy with the vault key', async () => {
+    const { shareKeysFrom } = await import('../src/share-keys.js');
+    const { account, vaultKey, userId } = setup();
+    const ks = newShareKey();
+
+    const { keys, unopenable } = shareKeysFrom(
+      [
+        { scope: 'vault', key_id: 'vault-scope' },
+        {
+          scope: 'share',
+          key_id: SHARE_SCOPE,
+          share_id: 'share-1',
+          wrapped_key: wrapShareKey(vaultKey, ks),
+          wrapping: 'vault',
+        },
+      ],
+      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+    );
+
+    assert.deepEqual(keys.get(SHARE_SCOPE), ks);
+    assert.deepEqual(unopenable, []);
+  });
+
+  it('opens a participant’s copy with the account identity instead', async () => {
+    const { shareKeysFrom } = await import('../src/share-keys.js');
+    const { sealTo } = await import('../src/crypto/hpke.js');
+    const { account, vaultKey, userId } = setup();
+    const ks = newShareKey();
+
+    const sealed = sealTo(
+      fromBase64(account.pubkey),
+      new Uint8Array(0),
+      shareEnvelopeAad('share-1', userId),
+      ks,
+    );
+    const { keys } = shareKeysFrom(
+      [
+        {
+          scope: 'share',
+          key_id: SHARE_SCOPE,
+          share_id: 'share-1',
+          wrapped_key: toBase64(concatBytes(sealed.enc, sealed.ciphertext)),
+          wrapping: 'account',
+        },
+      ],
+      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+    );
+
+    assert.deepEqual(keys.get(SHARE_SCOPE), ks, 'the same key the initiator holds');
+  });
+
+  it('drops a scope it cannot open rather than failing the whole vault', async () => {
+    // One unreadable share must not stop a vault from syncing. The engine still refuses
+    // loudly at the one place it matters — meeting a name under a key it does not hold.
+    const { shareKeysFrom } = await import('../src/share-keys.js');
+    const { account, vaultKey, userId } = setup();
+
+    const { keys, unopenable } = shareKeysFrom(
+      [
+        {
+          scope: 'share',
+          key_id: 'good',
+          share_id: 's1',
+          wrapped_key: wrapShareKey(vaultKey, newShareKey()),
+          wrapping: 'vault',
+        },
+        { scope: 'share', key_id: 'bad', share_id: 's2', wrapped_key: 'AAAA', wrapping: 'vault' },
+      ],
+      { vaultKey, seed: account.seed, encPrivkey: account.encPrivkey, userId },
+    );
+
+    assert.ok(keys.has('good'), 'the readable one still arrives');
+    assert.deepEqual(unopenable, ['bad'], 'and the other is reported, not swallowed');
+  });
+
+  it('ignores the vault’s own scope, which is not a share key', async () => {
+    const { shareKeysFrom } = await import('../src/share-keys.js');
+    const { account, vaultKey, userId } = setup();
+    const { keys } = shareKeysFrom([{ scope: 'vault', key_id: 'vault-scope' }], {
+      vaultKey,
+      seed: account.seed,
+      encPrivkey: account.encPrivkey,
+      userId,
+    });
+    assert.equal(keys.size, 0);
+  });
+});
+
+describe('placing a replica in a vault that knows nothing about it', () => {
+  it('keeps the wanted name when it is free', async () => {
+    const { freeName } = await import('../src/sharing.js');
+    assert.equal(freeName('Notes', new Set(['Other'])), 'Notes');
+  });
+
+  it('steps aside when something is already called that', async () => {
+    // Two people can easily both have a folder called "Notes"; refusing the join over it
+    // would be a poor trade for the person accepting.
+    const { freeName } = await import('../src/sharing.js');
+    assert.equal(freeName('Notes', new Set(['Notes'])), 'Notes 2');
+    assert.equal(freeName('Notes', new Set(['Notes', 'Notes 2'])), 'Notes 3');
+  });
+
+  it('names the replica root under the joiner’s OWN key, not the share’s', async () => {
+    // The interior stays under KS; the root lands among their private folders, so it is
+    // theirs to read and theirs to call anything.
+    const { acceptInvitation } = await import('../src/sharing.js');
+    const vaultKey = newShareKey();
+    let sent: Record<string, string> = {};
+
+    await acceptInvitation(
+      {
+        client: {
+          joinShare: async (_id: string, body: Record<string, string>) => {
+            sent = body;
+            return { root_node_id: 'new-root' };
+          },
+        } as unknown as AcceptDeps['client'],
+        vaultId: 'vault-1',
+        vaultKey,
+        vaultScopeId: 'vault-scope',
+      },
+      'share-1',
+      'parent-node',
+      'Shared notes',
+    );
+
+    assert.equal(sent.name_key_id, 'vault-scope');
+    assert.equal(decryptName(vaultKey, sent.name_enc!), 'Shared notes');
+    assert.equal(sent.vault_id, 'vault-1', 'the vault is the one this client runs in (AC-Q4)');
   });
 });
