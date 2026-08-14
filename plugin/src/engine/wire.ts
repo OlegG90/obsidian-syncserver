@@ -17,7 +17,7 @@
  * the client, which is where the parsing happens.
  */
 import type { Change, Delta, Material, NodeType } from '@syncserver/shared';
-import type { CursorRejected, Envelope, PutConflict } from '../api/client.js';
+import type { CursorRejected, Envelope, PutConflict, CursorUnverifiable } from '../api/client.js';
 
 export interface VaultWire {
   /** Where a client starts: the root, the head, and the key scope per scope (docs/06). */
@@ -86,6 +86,11 @@ export interface VaultWire {
    * the server is continuous with what the client last saw (so an absence in the tree is a
    * genuine deletion), and a 410 names the epoch that moved (docs/04). The changes
    * themselves are re-read through the full walk; incremental application is M2.
+   *
+   * **Three answers, and all three are declared.** A `400` about the cursor used to arrive
+   * as a thrown `ApiError` that the engine caught by status — a policy decision read out of
+   * an exception the seam never mentioned, which the second consumer of this interface
+   * would have had to learn by reading `client.ts`.
    */
-  delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected>;
+  delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected | CursorUnverifiable>;
 }

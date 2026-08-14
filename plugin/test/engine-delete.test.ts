@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { CursorRejected, Envelope } from '../src/api/client.js';
+import type { CursorRejected, Envelope, CursorUnverifiable } from '../src/api/client.js';
 import type { Change, Delta } from '@syncserver/shared';
 import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
@@ -111,7 +111,7 @@ class FakeWire implements VaultWire {
     private readonly files: FileSpec[],
     private readonly sealed: Map<string, { sha256: string; bytes: Uint8Array; contentKey: Uint8Array }>,
     /** What the cursor probe answers. */
-    public deltaAnswer: Delta | CursorRejected,
+    public deltaAnswer: Delta | CursorRejected | CursorUnverifiable,
   ) {}
 
   async openVault(): Promise<{ root_node_id: string; head_rev: number; scopes: { scope: string; key_id: string }[] }> {
@@ -146,7 +146,7 @@ class FakeWire implements VaultWire {
     return { nodes, snapshot: 'cursor-new' };
   }
 
-  async delta(): Promise<Delta | CursorRejected> {
+  async delta(): Promise<Delta | CursorRejected | CursorUnverifiable> {
     return this.deltaAnswer;
   }
 
@@ -205,6 +205,14 @@ class FakeWire implements VaultWire {
 const continuous: Delta = { changes: [], events: [], next_cursor: 'cursor-new', has_more: false };
 const restore: CursorRejected = { rejected: true, reason: 'restore' };
 const ttl: CursorRejected = { rejected: true, reason: 'journal_ttl' };
+/**
+ * The 400, not a 410: a cursor this server cannot verify at all (#100).
+ *
+ * It was the one epoch with no test, and the reason is worth recording — it used to reach
+ * the engine as a thrown `ApiError` caught by status, so simulating it meant a fake that
+ * threw rather than one that answered. Now `delta` declares it, and it costs a literal.
+ */
+const unverifiable: CursorUnverifiable = { unverifiable: true, fault: 'cursor_unverifiable' };
 
 const knownState = (spec: FileSpec, plainText: string, address: string): VaultState => ({
   cursor: 'cursor-old',
@@ -262,6 +270,25 @@ describe('delete propagation', () => {
     assert.equal(wire.deleted.length, 0, 'no delete is pushed');
     assert.equal(wire.created.length, 1, 'it is re-uploaded as new — the server lost it');
     assert.deepEqual(report.removed, []);
+  });
+
+  it('an unverifiable cursor deletes nothing, exactly as a restore does not', async () => {
+    // The server cannot say whether it went backwards, so absence proves nothing and the
+    // only safe reading is the cautious one. This is the difference between a signature it
+    // cannot check and a cursor it knows to be stale — the second is answered by a 410 and
+    // trusted; this one is not answered at all.
+    const spec: FileSpec = { path: 'unverified.md', text: 'the only copy', nodeId: 'node-9', rev: 4 };
+    const wire = new FakeWire([], new Map(), unverifiable);
+    const vault = new FakeVault();
+    vault.seed('unverified.md', 'the only copy');
+    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'the only copy', 'addr-gone')));
+
+    const report = await engine.sync();
+
+    assert.equal(vault.contents('unverified.md'), 'the only copy', 'nothing local is removed');
+    assert.equal(wire.deleted.length, 0, 'and nothing is deleted on the server');
+    assert.deepEqual(report.removed, []);
+    assert.equal(wire.created.length, 1, 'the file is re-uploaded, because the tree does not hold it');
   });
 
   it('a 410 journal_ttl still reads absence as deletion — the server moved forwards', async () => {

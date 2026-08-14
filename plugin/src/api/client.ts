@@ -11,6 +11,8 @@
  */
 import type {
   Change,
+  CursorFault,
+  CursorFaultBody,
   CursorRejection,
   CursorStaleBody,
   Delta,
@@ -39,6 +41,21 @@ export interface PutConflict {
 export interface CursorRejected {
   rejected: true;
   reason: CursorRejection;
+}
+
+/**
+ * The client's marker for the **400** a cursor can draw: it is not a token this server can
+ * verify, or it was issued for another subject (#100).
+ *
+ * Returned rather than thrown, unlike every other 400, and the difference is which side
+ * owns the decision. A malformed request is the caller's mistake; this is a *policy* — the
+ * engine's answer is "resync from an empty cursor, applying no deletions", and a policy
+ * that arrives as an exception is one the seam does not declare and the next consumer of
+ * `VaultWire` would have to learn by reading this file.
+ */
+export interface CursorUnverifiable {
+  unverifiable: true;
+  fault: CursorFault;
 }
 
 /** One envelope: the content key wrapped to a scope. A blob may have several — one per scope that sees it. */
@@ -408,7 +425,7 @@ export class SyncClient {
 
   // ---- delta -------------------------------------------------------------------
 
-  async delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected> {
+  async delta(vaultId: string, cursor?: string, limit?: number): Promise<Delta | CursorRejected | CursorUnverifiable> {
     const q = new URLSearchParams();
     if (cursor) q.set('cursor', cursor);
     if (limit) q.set('limit', String(limit));
@@ -417,6 +434,15 @@ export class SyncClient {
     const res = await this.send({ method: 'GET', path: `/vaults/${vaultId}/delta${suffix}`, headers: {} });
     if (res.status === 410) {
       return { rejected: true, reason: (JSON.parse(res.text()) as CursorStaleBody).reason };
+    }
+    if (res.status === 400) {
+      // The only 400 this endpoint produces is about the cursor itself (#100), and the
+      // engine has an answer for it. Anything else here would be a defect on one side or
+      // the other, and still throws.
+      const fault = (parsedBody(res.text()) as Partial<CursorFaultBody>).error;
+      if (fault === 'cursor_unverifiable' || fault === 'cursor_wrong_subject') {
+        return { unverifiable: true, fault };
+      }
     }
     if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
     return JSON.parse(res.text()) as Delta;

@@ -32,7 +32,6 @@
  * *pages* are not applied incrementally — the full walk is the data source, the probe is
  * only the provenance check (incremental application is M2).
  */
-import { ApiError } from '../api/client.js';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
@@ -342,19 +341,16 @@ export class SyncEngine {
    * The one question the delta endpoint is asked: can this cursor still be answered, and if
    * not, why. `limit: 1` because we are after the verdict, not the page.
    *
-   * A `400 cursor_unverifiable` is caught here rather than in the client because the client
-   * rightly treats it as an error, while for the engine it is a policy: resync from an empty
-   * cursor, deleting nothing (#100).
+   * A cursor this server cannot verify is one of the three answers `delta` declares, not an
+   * exception to be caught by status (#100). For the client that `400` is a refusal; for the
+   * engine it is a policy — resync from an empty cursor, deleting nothing — and a policy
+   * belongs on the type, where the next consumer of `VaultWire` can see it.
    */
   private async probeEpoch(cursor: string): Promise<RemoteEpoch> {
-    try {
-      const res = await this.client.delta(this.vaultId, cursor, 1);
-      if ('rejected' in res) return res.reason;
-      return 'continuous';
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 400) return 'unverifiable';
-      throw e;
-    }
+    const res = await this.client.delta(this.vaultId, cursor, 1);
+    if ('rejected' in res) return res.reason;
+    if ('unverifiable' in res) return 'unverifiable';
+    return 'continuous';
   }
 
   /**

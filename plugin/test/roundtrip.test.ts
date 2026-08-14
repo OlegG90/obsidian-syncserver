@@ -21,7 +21,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 
-import { ApiError, SyncClient } from '../src/api/client.js';
+import { ApiError, SyncClient, type CursorRejected, type CursorUnverifiable } from '../src/api/client.js';
+import type { Delta } from '@syncserver/shared';
 import { fetchTransport, type Transport } from '../src/api/transport.js';
 import { authSecret, createAccount, openAccount, vaultKey } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
@@ -34,6 +35,19 @@ import { newPairingCode } from '../src/crypto/pairing-code.js';
 import { session, type Session } from '../src/session/index.js';
 import { PushListener } from '../src/obsidian/push.js';
 import { FakeVault } from './fake-vault.js';
+
+/**
+ * A delta answer narrowed to its page.
+ *
+ * `delta` declares three outcomes — a page, a `410` with its reason, and a cursor this
+ * server cannot verify (#100) — and a test that wants the page has to say so about both
+ * refusals. Said once here rather than twice at each of eleven call sites.
+ */
+const page = (res: Delta | CursorRejected | CursorUnverifiable): Delta => {
+  assert.ok(!('rejected' in res), `the cursor was rejected: ${'rejected' in res ? res.reason : ''}`);
+  assert.ok(!('unverifiable' in res), 'the server could not verify the cursor');
+  return res;
+};
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
@@ -274,8 +288,7 @@ describe('a vault, end to end', () => {
   });
 
   it('shows the server holding nothing it can read', async () => {
-    const delta = await client.delta(vaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(vaultId));
     const change = delta.changes[0]!;
 
     // Everything the server has about this file, and none of it is the file or its name.
@@ -298,8 +311,7 @@ describe('a vault, end to end', () => {
     // was given a passphrase and nothing else.
     assert.equal(await sess.open(passphrase), 'open');
     await sess.use(async (h) => {
-      const delta = await h.client.delta(vaultId);
-      assert.ok(!('rejected' in delta));
+      const delta = page(await h.client.delta(vaultId));
       const change = delta.changes[0]!;
 
       assert.equal(decryptName(h.kv, change.name_enc!), filename);
@@ -356,8 +368,7 @@ describe('a vault, end to end', () => {
     // The proof that the seed arrived intact rather than merely something 32 bytes long:
     // the vault key it derives opens what the first device wrote.
     await second.use(async (h) => {
-      const delta = await h.client.delta(vaultId);
-      assert.ok(!('rejected' in delta));
+      const delta = page(await h.client.delta(vaultId));
       const change = delta.changes.find((c) => c.sha256 === address);
       assert.ok(change, 'the file the first device uploaded');
       assert.equal(decryptName(h.kv, change.name_enc!), filename, 'and its name, under the same KV');
@@ -448,8 +459,7 @@ describe('the engine, device A pushes and device B pulls', () => {
   });
 
   it('the server never saw a name', async () => {
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     const change = delta.changes[0]!;
     assert.notEqual(change.name_enc, name);
     assert.equal(decryptName(kv2, change.name_enc!), name);
@@ -622,8 +632,7 @@ describe('the engine, device A pushes and device B pulls', () => {
 
     // And it is on the server too, not merely on disk: the conflict file uploads in the
     // same pass, so the other device sees it on its next sync rather than never.
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     assert.ok(
       delta.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === basenameOf(conflict.conflictPath)),
       'the conflict file reached the server',
@@ -639,8 +648,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.equal(report.pushed.length, 1, 'a node WAS created — dedup binds, it does not skip the file');
 
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     const original = delta.changes.find((c) => decryptName(kv2, c.name_enc!) === name)!;
     const copy = delta.changes.find((c) => decryptName(kv2, c.name_enc!) === basenameOf(copyPath))!;
 
@@ -677,8 +685,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(reportB.removed.some((r) => r.path === path), 'B reports the removal');
 
     // And the delete is a soft delete: the content is still in the trash on the server.
-    const trash = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in trash));
+    const trash = page(await client.delta(ownVaultId));
   });
 
   it('the .obsidian/ switch gates pull, so a device with it off never receives configuration', async () => {
@@ -732,8 +739,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(report.renamed.some((r) => r.from === before && r.to === after), 'the folder moved as one node');
 
     // The server tree has `new/…` and no live node under `old/` (the empty source folder is gone).
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     const names = delta.changes.map((c) => c.name_enc && decryptName(kv2, c.name_enc)).filter(Boolean);
     assert.ok(names.includes('one.md') && names.includes('two.md'), 'the children are live under the new folder');
     assert.ok(!names.includes('old'), 'the empty source folder did not linger');
@@ -778,8 +784,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     // A syncs once more and sees exactly one node: the moved, edited file. No duplicate.
     const reportA2 = await engineA.sync();
     assert.equal(reportA2.errors.length, 0, JSON.stringify(reportA2.errors));
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     const names = delta.changes
       .map((c) => c.name_enc && decryptName(kv2, c.name_enc))
       .filter(Boolean);
@@ -819,8 +824,7 @@ describe('the engine, device A pushes and device B pulls', () => {
 
     // Exactly one node holds the file. The interrupted upload sits as `refs_pending` until
     // the collector's unbound TTL sweeps it — nothing was bound to a duplicate node.
-    const delta = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in delta));
+    const delta = page(await client.delta(ownVaultId));
     const matches = delta.changes.filter((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'interrupted.md');
     assert.equal(matches.length, 1, 'one node, not two');
   });
@@ -856,8 +860,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(Array.isArray(restored.lifted), 'a list of node ids, not a flag');
     assert.deepEqual(restored.lifted, [], 'nothing had to be lifted to put this file back');
 
-    const after = await client.delta(ownVaultId);
-    assert.ok(!('rejected' in after));
+    const after = page(await client.delta(ownVaultId));
     assert.ok(
       after.changes.some((c) => c.name_enc && decryptName(kv2, c.name_enc) === 'trashable.md'),
       'the file is live again',

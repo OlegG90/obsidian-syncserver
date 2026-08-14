@@ -16,7 +16,7 @@ import { encryptName, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { MemoryStateStore } from '../src/engine/state.js';
 import type { VaultWire } from '../src/engine/wire.js';
-import type { CursorRejected, Envelope, PutConflict } from '../src/api/client.js';
+import type { CursorRejected, Envelope, PutConflict, CursorUnverifiable } from '../src/api/client.js';
 import { FakeVault } from './fake-vault.js';
 
 const vaultId = '11111111-1111-4111-8111-111111111111';
@@ -91,7 +91,7 @@ class FakeWire implements VaultWire {
     throw new Error('unexpected');
   }
 
-  async delta(): Promise<Delta | CursorRejected> {
+  async delta(): Promise<Delta | CursorRejected | CursorUnverifiable> {
     throw new Error('unexpected');
   }
 }

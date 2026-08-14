@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { CursorRejected, Envelope } from '../src/api/client.js';
+import type { CursorRejected, Envelope, CursorUnverifiable } from '../src/api/client.js';
 import type { Change, Delta } from '@syncserver/shared';
 import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
@@ -68,7 +68,7 @@ class OneFileWire implements VaultWire {
   private readonly sealed = new Map<string, { sha256: string; bytes: Uint8Array; contentKey: Uint8Array }>();
   constructor(
     private readonly server: { path: string; text: string; nodeId: string; rev: number }[],
-    private readonly deltaAnswer: Delta | CursorRejected,
+    private readonly deltaAnswer: Delta | CursorRejected | CursorUnverifiable,
   ) {
     for (const f of server) this.sealed.set(f.path, sealBlob(utf8(f.text)));
   }
@@ -96,7 +96,7 @@ class OneFileWire implements VaultWire {
     return { nodes, snapshot: 'cursor-new' };
   }
 
-  async delta(): Promise<Delta | CursorRejected> {
+  async delta(): Promise<Delta | CursorRejected | CursorUnverifiable> {
     return this.deltaAnswer;
   }
 
