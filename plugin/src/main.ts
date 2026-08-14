@@ -83,7 +83,12 @@ export default class SyncServerPlugin extends Plugin {
     // The ribbon is the glanceable surface that DOES render on a phone, and it is where
     // Obsidian's own sync puts its state — so it is where someone will look. Both this and
     // the status bar are fed by `setPhase` and by nothing else: two surfaces, one source.
-    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), shortStatus(this.phase), () => this.showStatus());
+    //
+    // Clicking it **syncs**, and does not open the status. Obsidian's own sync icon opens a
+    // panel because that sync runs by itself; this one does not run until asked, so the
+    // obvious gesture on it has to be the asking. The status stays one command away, and on
+    // a desktop one click of the status bar away.
+    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), shortStatus(this.phase), () => void this.syncNow());
 
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
@@ -98,7 +103,7 @@ export default class SyncServerPlugin extends Plugin {
     this.addCommand({
       id: 'sync-now',
       name: 'Sync now',
-      callback: () => void this.sync?.run(),
+      callback: () => void this.syncNow(),
     });
 
     this.addCommand({
@@ -116,6 +121,11 @@ export default class SyncServerPlugin extends Plugin {
 
   async save(): Promise<void> {
     await this.saveData(this.data);
+  }
+
+  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
+  syncNow(): Promise<void> {
+    return this.sync?.run() ?? Promise.resolve();
   }
 
   private setPhase(phase: SyncPhase): void {
@@ -365,6 +375,19 @@ class SyncServerSettings extends PluginSettingTab {
       containerEl.createEl('p', {
         text: 'The passphrase is not stored. It is asked for once per session, the first time a sync runs.',
       });
+
+      // A button, because the command palette is not somewhere a person looks for the one
+      // thing this plugin does. The ribbon icon syncs too; this is where someone who has
+      // just finished connecting is already standing.
+      new Setting(containerEl)
+        .setName('Sync now')
+        .setDesc('Also on the ribbon icon, and in the command palette.')
+        .addButton((b) =>
+          b
+            .setButtonText('Sync now')
+            .setCta()
+            .onClick(() => void this.plugin.syncNow()),
+        );
 
       new Setting(containerEl)
         .setName('Synchronise .obsidian/ configuration')
