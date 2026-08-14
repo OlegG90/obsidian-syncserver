@@ -20,9 +20,11 @@
  * left here is the orchestration, and turning the schema's refusal into one a caller can
  * act on.
  */
-import type { Db } from '../db.js';
+import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
+import { headroom } from '../quota.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
+import { nextRev } from '../revision.js';
 
 /** PostgreSQL's `foreign_key_violation` — here, a vault, node or account that is not there. */
 const FOREIGN_KEY_VIOLATION = '23503';
@@ -573,6 +575,225 @@ export const prepareShare = async (
         await writeMaterial(c, { envelopes: item.envelopes ?? [], dedupTags: item.dedupTags ?? [] });
       }
       return undefined;
+    });
+  } catch (e) {
+    const refusal = refusalFromDatabase(e);
+    if (refusal) return refusal;
+    throw e;
+  }
+};
+
+export interface JoinInput {
+  /** The vault the accepting client is running in — observed, never asked (AC-Q4). */
+  vaultId: string;
+  /** Where the replica root lands in that vault. */
+  parentId: string;
+  /** The joiner's own label for the root, under their own `KV`. */
+  nameEnc: string;
+  nameHmac: string;
+  nameKeyId: string;
+}
+
+/** One node of the source subtree, in the order a copy has to be made. */
+type SourceNode = {
+  id: string;
+  parentId: string;
+  type: string;
+  nameEnc: string | null;
+  nameHmac: string | null;
+  nameKeyId: string | null;
+  sha256: string | null;
+  size: string | null;
+  mtime: string;
+  shareItemId: string;
+  depth: number;
+};
+
+/**
+ * Accept an invitation: materialise a full copy of the shared folder.
+ *
+ * **The vault is observed, not asked** (AC-Q4). An Obsidian plugin instance can only reach
+ * the vault it runs in, so accepting an invitation *is* choosing where the folder lands.
+ * There is no question to put to the user and no second choice to make later — accepting
+ * the same invitation from another vault is not a different answer, it is a second
+ * redemption, and an invitation is redeemed once.
+ *
+ * **Replication, which is the whole model.** Every node is copied into the joiner's own
+ * vault: their own node ids, their own revisions, their own journal, so their other devices
+ * learn about the folder through the same delta as any other change. What is NOT copied is
+ * identity — each replica node keeps the source's `share_item_id`, and that is what lets two
+ * participants recognise the same item without either seeing the other's node ids.
+ *
+ * Interior names are copied **verbatim**: they are already under `KS`, which the joiner can
+ * now open with the envelope their invitation carried. Only the root is named freshly, by
+ * the joiner, under their own `KV` — it lives among their private folders and is theirs to
+ * call whatever they like.
+ *
+ * **Quota is the one point where joining is refused** (docs/05). Not invitation, not
+ * activation: only here, because only here does the account actually take on the bytes.
+ *
+ * **Not yet: history.** A join is meant to deliver each file's retained versions from its
+ * entry into the share (SH-15, SH-23); this materialises current state only. The gap is
+ * additive rather than structural — versions reference blobs this already claims — but it
+ * is a gap, and until it is closed a participant joins with files and no past.
+ */
+export const joinShare = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+  input: JoinInput,
+): Promise<{ rootNodeId: string } | Refusal> => {
+  try {
+    return await db.tx(async (c) => {
+      const shareRes = await c.query<{ state: string; vaultId: string; nodeId: string }>(
+        `SELECT s.state::text AS state, s.initiator_vault_id AS "vaultId", s.subtree_node_id AS "nodeId"
+           FROM shares s WHERE s.id = $1 FOR UPDATE`,
+        [shareId],
+      );
+      const share = shareRes.rows[0];
+      if (!share) return { kind: 'not_found' } as Refusal;
+      if (share.state !== 'active') return { kind: 'share_not_active', state: share.state } as Refusal;
+
+      // An outstanding invitation, and nothing else: a row already joined would make this a
+      // second redemption, and no row at all means nobody asked them.
+      const invite = await c.query(
+        `SELECT 1 FROM share_members
+          WHERE share_id = $1 AND user_id = $2 AND joined_at IS NULL AND left_at IS NULL
+            FOR UPDATE`,
+        [shareId, userId],
+      );
+      if (invite.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+      // The destination must be the joiner's own live folder. Checked here rather than left
+      // to a foreign key so that "not yours" and "not a folder" do not both arrive as a 500.
+      const parent = await c.query<{ ancestry: string[] }>(
+        `SELECT n.ancestry FROM nodes n
+           JOIN vaults v ON v.id = n.vault_id AND v.user_id = $1
+          WHERE n.vault_id = $2 AND n.id = $3 AND n.deleted_at IS NULL AND n.type = 'folder'`,
+        [userId, input.vaultId, input.parentId],
+      );
+      if (parent.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+      const source = await c.query<SourceNode>(
+        `SELECT n.id, n.parent_id AS "parentId", n.type::text AS type,
+                encode(n.name_enc, 'base64') AS "nameEnc", encode(n.name_hmac, 'hex') AS "nameHmac",
+                n.name_key_id AS "nameKeyId", encode(n.sha256, 'hex') AS sha256,
+                n.size::text AS size, n.mtime, n.share_item_id AS "shareItemId",
+                array_length(n.ancestry, 1) AS depth
+           FROM nodes n
+          WHERE n.vault_id = $1 AND n.deleted_at IS NULL
+            AND (n.id = $2 OR n.ancestry @> ARRAY[$2]::uuid[])
+          ORDER BY array_length(n.ancestry, 1) NULLS FIRST, n.id`,
+        [share.vaultId, share.nodeId],
+      );
+
+      // What the join will cost: every distinct blob the subtree references that this
+      // account does not already hold. Blobs it holds are free — content is stored once and
+      // `user_blobs` is a claim on it, not a copy of it.
+      const sizes = new Map<string, bigint>();
+      for (const n of source.rows) {
+        if (n.sha256 && n.size !== null) sizes.set(n.sha256, BigInt(n.size));
+      }
+      let growth = 0n;
+      for (const [sha, size] of sizes) {
+        const held = await c.query(`SELECT 1 FROM user_blobs WHERE user_id = $1 AND sha256 = decode($2,'hex')`, [
+          userId,
+          sha,
+        ]);
+        if (held.rowCount === 0) growth += size;
+      }
+
+      const room = await headroom(oneFrom(c), userId);
+      if (room === undefined) return { kind: 'not_found' } as Refusal;
+      if (growth > room) return { kind: 'over_quota' } as Refusal;
+
+      // Membership before the nodes: `nodes_check_share_membership` demands that a
+      // share-marked node belong to a LIVE participant, so the replica cannot legally exist
+      // until this row says the joiner is one. The same ordering the initiator's own
+      // creation needed, for the same reason.
+      await c.query(
+        `UPDATE share_members SET joined_at = now(), vault_id = $3
+          WHERE share_id = $1 AND user_id = $2`,
+        [shareId, userId, input.vaultId],
+      );
+
+      // Copied one at a time, parents before children, mapping source ids to new ones. A
+      // recursive statement would be shorter and would have to invent new ids inside its
+      // own recursion — the mapping is the hard part, and it is clearer held in memory than
+      // expressed as a CTE nobody can debug.
+      const mapped = new Map<string, string>();
+      /** Source node id -> the ancestry its COPY has, so a child can build its own. */
+      const ancestryOf = new Map<string, string[]>();
+      const baseAncestry = parent.rows[0]!.ancestry;
+      let rootNodeId = '';
+
+      for (const n of source.rows) {
+        const isRoot = n.id === share.nodeId;
+        const newParent = isRoot ? input.parentId : mapped.get(n.parentId);
+        if (!newParent) {
+          // Only reachable if the subtree query returned a child before its parent, which
+          // the ordering forbids. Refusing beats writing a tree with a hole in it.
+          return { kind: 'invalid_write', detail: `node ${n.id} has no copied parent` } as Refusal;
+        }
+
+        const ancestry = isRoot ? [...baseAncestry, input.parentId] : [...ancestryOf.get(n.parentId)!, newParent];
+
+        const rev = await nextRev(c, input.vaultId);
+        const created = await c.query<{ id: string }>(
+          `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
+                              sha256, size, mtime, rev, ancestry, share_id, share_item_id)
+           VALUES ($1, $2, decode($3,'base64'), decode($4,'hex'), $5, $6,
+                   CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11, $12, $13)
+        RETURNING id`,
+          [
+            input.vaultId,
+            newParent,
+            isRoot ? input.nameEnc : n.nameEnc,
+            isRoot ? input.nameHmac : n.nameHmac,
+            isRoot ? input.nameKeyId : n.nameKeyId,
+            n.type,
+            n.sha256,
+            n.size,
+            n.mtime,
+            rev,
+            ancestry,
+            shareId,
+            n.shareItemId,
+          ],
+        );
+
+        const newId = created.rows[0]!.id;
+        mapped.set(n.id, newId);
+        ancestryOf.set(n.id, ancestry);
+        if (isRoot) rootNodeId = newId;
+
+        await c.query(`INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`, [
+          input.vaultId,
+          rev,
+          newId,
+        ]);
+
+        if (n.sha256) {
+          // The version row records the ORIGINAL writer, not the joiner (SH-19): this
+          // content is somebody else's work arriving, and attributing it to whoever
+          // received it would rewrite authorship on every join.
+          await c.query(
+            `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
+             SELECT $1, $2, $3, decode($4,'hex'), $5, v.author_id
+               FROM versions v
+              WHERE v.vault_id = $6 AND v.node_id = $7
+              ORDER BY v.rev DESC LIMIT 1`,
+            [input.vaultId, newId, rev, n.sha256, n.size, share.vaultId, n.id],
+          );
+          await c.query(
+            `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
+             ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
+            [userId, n.sha256],
+          );
+        }
+      }
+
+      return { rootNodeId };
     });
   } catch (e) {
     const refusal = refusalFromDatabase(e);

@@ -15,6 +15,7 @@ import {
   createShare,
   declineInvitation,
   invite,
+  joinShare,
   prepareShare,
   listMembers,
   listShares,
@@ -127,6 +128,27 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db): void => {
       return refuse(reply, refusal);
     },
   );
+
+  app.post<{
+    Params: { shareId: string };
+    Body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string };
+  }>('/shares/:shareId/join', { preHandler: requireAuth }, async (req, reply) => {
+    const body = req.body ?? ({} as Record<string, string>);
+    for (const field of ['vault_id', 'parent_id', 'name_key_id'] as const) {
+      if (!UUID.test(body[field] ?? '')) return reply.code(400).send({ error: `bad_${field}` });
+    }
+    if (!body.name_enc || !body.name_hmac) return reply.code(400).send({ error: 'name_required' });
+
+    const out = await joinShare(db, req.caller!.userId, req.params.shareId, {
+      vaultId: body.vault_id,
+      parentId: body.parent_id,
+      nameEnc: body.name_enc,
+      nameHmac: body.name_hmac,
+      nameKeyId: body.name_key_id,
+    });
+    if ('kind' in out) return refuse(reply, out);
+    return reply.code(201).send({ root_node_id: out.rootNodeId });
+  });
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/decline',

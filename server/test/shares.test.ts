@@ -634,3 +634,209 @@ describe('preparing a subtree for its share key', () => {
     assert.equal((await prepare(shareId, [])).statusCode, 400);
   });
 });
+
+/** The joiner's own root folder, where a replica can land. */
+const strangerRoot = async () => {
+  const row = await db.one<{ id: string }>(`SELECT root_node_id AS id FROM vaults WHERE id = $1`, [strangerVaultId]);
+  return row!.id;
+};
+
+const strangerVaultKey = async () => {
+  const row = await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [strangerVaultId]);
+  return row!.id;
+};
+
+// A fresh name per join: siblings must be uniquely named, and several tests land a
+// replica under the same folder of the same vault.
+const join = async (shareId: string, name = `their copy ${randomUUID()}`) =>
+  app.inject({
+    method: 'POST',
+    url: `/shares/${shareId}/join`,
+    headers: { authorization: `Bearer ${strangerAccess}` },
+    payload: {
+      vault_id: strangerVaultId,
+      parent_id: await strangerRoot(),
+      name_enc: b64(name),
+      name_hmac: sha(Buffer.from(name)),
+      name_key_id: await strangerVaultKey(),
+    },
+  });
+
+/** An active share with one interior folder, and an outstanding invitation to the stranger. */
+const invitedShare = async (label: string) => {
+  const folder = await createNode('folder', `${label}-${randomUUID()}`);
+  const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+  const shareId = (await openShare(folder)).json().share_id;
+  const ks = await shareKeyOf(shareId);
+  await prepare(shareId, [
+    { node_id: inside, name_enc: b64('interior'), name_hmac: sha(Buffer.from('interior')), name_key_id: ks },
+  ]);
+  const activated = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+  assert.equal(activated.statusCode, 200, activated.body);
+  assert.equal((await inviteTo(shareId, strangerId)).statusCode, 204);
+  return { shareId, folder, inside, ks };
+};
+
+describe('accepting an invitation', () => {
+  it('materialises a copy in the joiner’s own vault, under the folder they chose', async () => {
+    const { shareId } = await invitedShare('join');
+    const r = await join(shareId);
+
+    assert.equal(r.statusCode, 201, r.body);
+    const rootNodeId = r.json().root_node_id;
+
+    const replica = await db.one<{ vaultId: string; parentId: string; shareId: string }>(
+      `SELECT vault_id AS "vaultId", parent_id AS "parentId", share_id AS "shareId"
+         FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, rootNodeId],
+    );
+    assert.equal(replica!.vaultId, strangerVaultId, 'their vault, not the initiator’s');
+    assert.equal(replica!.parentId, await strangerRoot());
+    assert.equal(replica!.shareId, shareId);
+  });
+
+  it('gives corresponding nodes the same share_item_id, which is how two copies are one item', async () => {
+    // Neither participant can see the other's node ids, so this is the only handle that
+    // says "your file and mine are the same file".
+    const { shareId, folder, inside } = await invitedShare('items');
+    const rootNodeId = (await join(shareId)).json().root_node_id;
+
+    const pairs = await db.query<{ src: string; dst: string }>(
+      `SELECT a.id AS src, b.id AS dst
+         FROM nodes a JOIN nodes b ON b.share_item_id = a.share_item_id AND b.vault_id = $3
+        WHERE a.vault_id = $1 AND a.id = ANY($2::uuid[])`,
+      [vaultId, [folder, inside], strangerVaultId],
+    );
+    assert.equal(pairs.length, 2, 'both the root and the interior folder have a counterpart');
+    assert.ok(pairs.some((p) => p.src === folder && p.dst === rootNodeId));
+  });
+
+  it('names the replica root itself, and copies interior names untouched', async () => {
+    // The root sits among their private folders and is theirs to call anything; the
+    // interior is already under KS, which their envelope opens.
+    const { shareId, inside, ks } = await invitedShare('names');
+    const rootNodeId = (await join(shareId, 'my copy')).json().root_node_id;
+
+    const root = await db.one<{ nameEnc: string; keyId: string }>(
+      `SELECT encode(name_enc,'base64') AS "nameEnc", name_key_id AS "keyId"
+         FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [strangerVaultId, rootNodeId],
+    );
+    assert.equal(Buffer.from(root!.nameEnc, 'base64').toString(), 'my copy');
+    assert.equal(root!.keyId, await strangerVaultKey(), 'the root label is under THEIR vault key');
+
+    const copy = await db.one<{ nameEnc: string; keyId: string }>(
+      `SELECT encode(n.name_enc,'base64') AS "nameEnc", n.name_key_id AS "keyId"
+         FROM nodes n JOIN nodes src ON src.share_item_id = n.share_item_id
+        WHERE n.vault_id = $1 AND src.vault_id = $2 AND src.id = $3`,
+      [strangerVaultId, vaultId, inside],
+    );
+    assert.equal(copy!.keyId, ks, 'the interior stays under the share key');
+    assert.equal(Buffer.from(copy!.nameEnc, 'base64').toString(), 'interior', 'byte for byte');
+  });
+
+  it('puts the replica in the joiner’s journal, so their other devices learn about it', async () => {
+    const { shareId } = await invitedShare('journal');
+    const rootNodeId = (await join(shareId)).json().root_node_id;
+
+    const entry = await db.one<{ op: string }>(
+      `SELECT op::text AS op FROM journal WHERE vault_id = $1 AND node_id = $2`,
+      [strangerVaultId, rootNodeId],
+    );
+    assert.equal(entry!.op, 'put', 'a replica arrives as an ordinary change, not out of band');
+  });
+
+  it('marks them joined, in the vault they were running in', async () => {
+    const { shareId } = await invitedShare('member');
+    await join(shareId);
+
+    const row = await db.one<{ joined: string | null; vaultId: string }>(
+      `SELECT joined_at AS joined, vault_id AS "vaultId" FROM share_members
+        WHERE share_id = $1 AND user_id = $2`,
+      [shareId, strangerId],
+    );
+    assert.ok(row!.joined);
+    assert.equal(row!.vaultId, strangerVaultId, 'observed from the request, never asked of the user');
+
+    // And it moves from their invitations to the folders they hold.
+    const lists = await app.inject({
+      method: 'GET',
+      url: '/shares',
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.ok(lists.json().joined.some((s: { share_id: string }) => s.share_id === shareId));
+    assert.ok(!lists.json().invitations.some((s: { share_id: string }) => s.share_id === shareId));
+  });
+
+  it('is redeemed once: a second acceptance finds nothing outstanding', async () => {
+    const { shareId } = await invitedShare('once');
+    assert.equal((await join(shareId)).statusCode, 201);
+
+    const again = await join(shareId);
+    assert.equal(again.statusCode, 404, 'the invitation is spent, not repeatable from another vault either');
+  });
+
+  it('refuses somebody who was never invited', async () => {
+    const folder = await createNode('folder', `uninvited-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+
+    assert.equal((await join(shareId)).statusCode, 404);
+  });
+
+  it('refuses a destination folder that is not the joiner’s', async () => {
+    const { shareId } = await invitedShare('elsewhere');
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/join`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        vault_id: vaultId, // the INITIATOR's vault
+        parent_id: rootId,
+        name_enc: b64('x'),
+        name_hmac: sha(Buffer.from('x')),
+        name_key_id: await strangerVaultKey(),
+      },
+    });
+    assert.equal(r.statusCode, 404, r.body);
+  });
+
+  it('leaves nothing behind when it refuses', async () => {
+    // One transaction: a join that fails must not leave a half-materialised folder, which
+    // would be worse than no folder at all — the user would see files that sync nowhere.
+    const { shareId } = await invitedShare('atomic');
+    const before = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [strangerVaultId]);
+
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/join`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        vault_id: strangerVaultId,
+        parent_id: randomUUID(), // no such folder
+        name_enc: b64('x'),
+        name_hmac: sha(Buffer.from('x')),
+        name_key_id: await strangerVaultKey(),
+      },
+    });
+    assert.equal(r.statusCode, 404);
+
+    const after = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [strangerVaultId]);
+    assert.equal(after.length, before.length, 'no partial replica');
+
+    const row = await db.one<{ joined: string | null }>(
+      `SELECT joined_at AS joined FROM share_members WHERE share_id = $1 AND user_id = $2`,
+      [shareId, strangerId],
+    );
+    assert.equal(row!.joined, null, 'and the invitation is still outstanding');
+  });
+
+  it('refuses while the share is not active', async () => {
+    const folder = await createNode('folder', `inactive-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const r = await join(shareId);
+
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'share_not_active');
+  });
+});

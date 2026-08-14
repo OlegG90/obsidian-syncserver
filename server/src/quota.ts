@@ -84,3 +84,20 @@ export const fits = async (q: Queryable, userId: string, sha256: Buffer, size: n
   const growth = row.alreadyHeld ? 0n : BigInt(size);
   return BigInt(row.used) + growth <= BigInt(row.quota);
 };
+
+/**
+ * How many more bytes this account may hold.
+ *
+ * A third caller, and the reason it belongs here rather than in the one that needed it:
+ * joining a share adds MANY blobs at once, so `fits` — which asks about one address — does
+ * not answer its question. What it must not do is ask the question a different way; the
+ * `SUM` over `user_blobs` is this module's whole point.
+ *
+ * So the sum stays here and the caller supplies the growth. Which blobs are new is a fact
+ * about a subtree, not about quota, and it is the caller that knows it.
+ */
+export const headroom = async (q: Queryable, userId: string): Promise<bigint | undefined> => {
+  const row = await read(q, userId, null);
+  if (!row) return undefined;
+  return BigInt(row.quota) - BigInt(row.used);
+};
