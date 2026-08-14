@@ -78,6 +78,36 @@ export class ApiError extends Error {
 /** docs/04: 8 MB per part, and the same number is the threshold for using parts at all. */
 const PART_BYTES = 8 * 1024 * 1024;
 
+
+/** One node converted to the share key, with the material its bytes need under it. */
+export interface PrepareItem {
+  node_id: string;
+  name_enc: string;
+  name_hmac: string;
+  name_key_id: string;
+  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+}
+
+/** One node converted back to the vault key, when a participant leaves. */
+export interface FinalizeNode {
+  node_id: string;
+  name_enc: string;
+  name_hmac: string;
+  name_key_id: string;
+  vault_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
+  vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+}
+
+export interface ShareMember {
+  user_id: string;
+  login: string;
+  is_initiator: boolean;
+  invited_at: string;
+  joined_at: string | null;
+  finalizing: boolean;
+}
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -599,6 +629,96 @@ export class SyncClient {
     );
     return new Map(out.matches.map((m) => [m.content_tag, m.sha256]));
   }
+
+  // ---- sharing (docs/05) ---------------------------------------------------------
+
+  /**
+   * Open a share over one of this account's own folders.
+   *
+   * The scope id is the CLIENT's to choose, unlike a vault's, and the asymmetry is forced:
+   * the answer carries a share id and nothing else, so a scope the server invented could
+   * never be referenced by the `name_key_id` this client is about to write on every
+   * interior node.
+   */
+  createShare(body: {
+    vault_id: string;
+    node_id: string;
+    subtree_key_id: string;
+    wrapped_key_initiator: string;
+  }): Promise<{ share_id: string; state: string }> {
+    return this.json('POST', '/shares', body, { expect: [201] });
+  }
+
+  /** One resumable batch of interior nodes converted to `KS`. */
+  prepareShare(shareId: string, items: PrepareItem[]): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/prepare`, { items }, { expect: [204] });
+  }
+
+  /** Verify preparation and open the share for invitations. */
+  activateShare(shareId: string): Promise<{ state: string }> {
+    return this.json('POST', `/shares/${shareId}/activate`);
+  }
+
+  cancelShare(shareId: string): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/cancel`, undefined, { expect: [204] });
+  }
+
+  /**
+   * The recipient's public key, for sealing `KS` to them.
+   *
+   * An unknown login gets a deterministic FAKE pair rather than a 404 (#73), so a caller
+   * cannot read "no such account" out of it — and must not try.
+   */
+  recipientPubkey(shareId: string, login: string): Promise<{ user_id: string; pubkey: string }> {
+    return this.json('GET', `/shares/${shareId}/recipients/${encodeURIComponent(login)}/pubkey`);
+  }
+
+  invite(shareId: string, body: { user_id: string; wrapped_key: string }): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/invite`, body, { expect: [204] });
+  }
+
+  /** What this account is in, and what is waiting for it. */
+  shares(): Promise<{
+    joined: { share_id: string; vault_id: string | null; is_initiator: boolean; state: string }[];
+    invitations: { share_id: string; initiator_login: string; invited_at: string }[];
+  }> {
+    return this.json('GET', '/shares');
+  }
+
+  shareMembers(shareId: string): Promise<ShareMember[]> {
+    return this.json('GET', `/shares/${shareId}/members`);
+  }
+
+  /**
+   * Accept, materialising a copy in THIS vault — the one the client runs in, which is why
+   * the vault is never asked of the user (AC-Q4).
+   */
+  joinShare(
+    shareId: string,
+    body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
+  ): Promise<{ root_node_id: string }> {
+    return this.json('POST', `/shares/${shareId}/join`, body, { expect: [201] });
+  }
+
+  declineShare(shareId: string): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/decline`, undefined, { expect: [204] });
+  }
+
+  /** Withdraw an invitation, or revoke a participant — the server decides which by their state. */
+  removeMember(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked' }> {
+    return this.json('DELETE', `/shares/${shareId}/members/${userId}`);
+  }
+
+  /** Stop propagation and begin leaving. `ended` says whether this closed the share for everyone. */
+  leaveShare(shareId: string): Promise<{ ended: boolean }> {
+    return this.json('POST', `/shares/${shareId}/leave/begin`);
+  }
+
+  /** The metadata pass only this device can perform: the replica returns to `KV`. */
+  finalizeLeave(shareId: string, nodes: FinalizeNode[]): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/finalize-leave`, { nodes }, { expect: [204] });
+  }
+
 }
 
 /**
