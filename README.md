@@ -152,7 +152,7 @@ Current release: **0.1.1** — see [Versions](#versions).
 | **M0.5** — the plugin: one-way sync, an empty vault materialised from the server | done |
 | **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
-| **M3** — folder sharing | designed in full, not built |
+| **M3** — folder sharing | **server side done**: the whole lifecycle, synchronous fan-out and finalization, 61 tests. The plugin does none of it yet, so it cannot be walked by hand |
 | **M4** — management console, version thinning, blob GC | not started |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both

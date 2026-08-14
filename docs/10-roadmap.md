@@ -20,6 +20,23 @@ content is `201` rather than a short circuit (#46), and `HEAD` stays `200` after
 the trash still holds the content. The collector and the schema's 117 assertions ride along; the server's
 own integration suite is run from a development machine, not from the NAS.
 
+**M3's server half is done**, and its client half is not — which is why the box above is still empty. All
+twelve endpoints of [04](04-sync-protocol.md)'s table exist: create, prepare, activate, cancel, invite,
+decline, join, the two lists, removal (withdraw or revoke, decided by whether they ever joined), leave and
+finalize-leave. Writes fan out synchronously to every live non-frozen participant **in the same transaction
+as the original**, which is the atomicity contract [04](04-sync-protocol.md) states and the reason a share
+is capped at eight; a test injects a failing replica write and proves the original rolls back too.
+
+Two rules were found to have no enforcer while building it. `users.frozen_at` was read in four places and
+written in none, so SH-20's "reaching the limit freezes the account" was a sentence with nothing behind it;
+propagation is where somebody else's write crosses your boundary, so that is where the freeze now happens.
+And a node created inside a shared folder carried no share mark, which the schema refuses — so creating
+anything inside a share was impossible rather than merely untested.
+
+What is left of M3: the plugin. Nothing in the client can create a share, prepare a subtree, accept an
+invitation or finalize a departure, so none of this can be walked by hand yet. Thawing with the catch-up
+SH-21 describes is also still open — freezing exists now, the way back does not.
+
 **M2 is closed.** Its four pieces: the `.obsidian/` switch with its per-device exceptions
 ([01](01-context.md)), resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with
 the part size doubling as the threshold above which a client uses them at all — and WebSocket push
