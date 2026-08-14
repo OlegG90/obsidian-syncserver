@@ -964,8 +964,13 @@ export const finalizeLeave = async (
     const member = memberRes.rows[0];
     if (!member) return { kind: 'not_found' } as Refusal;
 
+    // **Every** marked node, the trash included. A deleted node keeps its name, and that
+    // name is under `KS`; once the pass records that it ran, the key stops being offered and
+    // anything still named under it can never be read again — so a file restored from the
+    // trash afterwards would come back unopenable. The schema says the same thing from its
+    // own side: a member may not leave while any node of theirs still carries the mark.
     const live = await c.query<{ id: string }>(
-      `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+      `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 FOR UPDATE`,
       [member.vaultId, shareId],
     );
     const supplied = new Set(nodes.map((n) => n.nodeId));
@@ -1147,4 +1152,56 @@ export const recipientPubkey = async (
 
   const fake = fakeRecipient(serverSecret, login);
   return { userId: fake.userId, pubkey: fake.pubkey.toString('base64') };
+};
+
+/** One node the departing client must convert, as only it can. */
+export type ReplicaNode = {
+  nodeId: string;
+  nameEnc: string | null;
+  nameKeyId: string | null;
+  type: string;
+  deleted: boolean;
+  /**
+   * The ciphertext address, for a file.
+   *
+   * Needed because leaving re-wraps the content key under `KV`, and for somebody who
+   * JOINED the share there is no other envelope: the blob's `KV` envelope belongs to the
+   * initiator's vault key, which this account never had. Without it their files stay
+   * readable only under a key that is about to stop being offered.
+   */
+  sha256: string | null;
+};
+
+/**
+ * Everything in this vault still carrying the share — the set finalization must cover.
+ *
+ * A purpose-built listing rather than the trash, because they answer different questions.
+ * The trash offers *what can be brought back*, so it shows only nodes that still have
+ * versions and never shows folders at all; this offers *what must be converted*, which
+ * includes both. Asking the first question in place of the second left a client unable to
+ * finish — and unable to discover why, since the nodes blocking it were invisible to every
+ * listing it had.
+ *
+ * The names come with it because the client has to re-encrypt them under `KV`, and for a
+ * node it deleted long ago the only copy of the name is here.
+ */
+export const replicaOf = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+): Promise<ReplicaNode[] | undefined> => {
+  const member = await db.one<{ vaultId: string }>(
+    `SELECT vault_id AS "vaultId" FROM share_members
+      WHERE share_id = $1 AND user_id = $2 AND left_at IS NULL`,
+    [shareId, userId],
+  );
+  if (!member?.vaultId) return undefined;
+
+  return db.query<ReplicaNode>(
+    `SELECT id AS "nodeId", encode(name_enc, 'base64') AS "nameEnc", name_key_id AS "nameKeyId",
+            type::text AS type, (deleted_at IS NOT NULL) AS deleted,
+            encode(sha256, 'hex') AS sha256
+       FROM nodes WHERE vault_id = $1 AND share_id = $2 ORDER BY deleted, id`,
+    [member.vaultId, shareId],
+  );
 };

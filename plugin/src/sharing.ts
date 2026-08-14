@@ -43,6 +43,15 @@ export interface PlannedItem {
   name: string;
   /** Present for a file: the bytes whose key and tag must move to `KS`. */
   address: string | null;
+  /**
+   * This node is in the trash, so its plaintext is not on disk.
+   *
+   * Only leaving ever sets it. The content key still has to move — a restore later must be
+   * able to open the file — but the **dedup tag** cannot be computed, because it is over the
+   * plaintext, and it is not needed either: deduplication answers "have I uploaded this
+   * before", and a deleted node is not going to be uploaded.
+   */
+  deleted?: boolean;
 }
 
 /** Everything after the last separator — the name a node is known by inside its folder. */
@@ -169,6 +178,8 @@ const rekey = async (
 
   const contentKey = unwrapContentKey(from.key, source.wrappedKey);
   out.envelopes = [{ sha256: item.address, scope_id: to.scopeId, wrapped_key: wrapContentKey(to.key, contentKey) }];
+
+  if (item.deleted) return out;
 
   // The tag is over the PLAINTEXT, so the file is read. Deduplication is per scope: two
   // participants holding the same file under one share share a blob, while the same file in

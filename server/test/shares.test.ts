@@ -1744,3 +1744,117 @@ describe('leaving a share that never got off the ground', () => {
     );
   });
 });
+
+describe('a departure has to account for the trash too', () => {
+  it('refuses a pass that leaves a deleted node still marked', async () => {
+    // The 500 a live vault hit: the schema refuses to let a member leave while any node of
+    // theirs carries the mark, and the completeness check only looked at LIVE ones. It is
+    // not a technicality — a trashed node keeps its name, that name is under KS, and after
+    // the pass the key is gone, so it would come back from the trash unopenable.
+    const { shareId, inside, ks } = await sharedWith('trash-marked');
+    const doomed = await createNode('folder', `doomed-${randomUUID()}`, inside, ks);
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      doomed,
+    ]);
+    await app.inject({
+      method: 'DELETE',
+      url: `/vaults/${vaultId}/nodes/${doomed}`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+    });
+
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+
+    // Only the live nodes, which is what the client used to send.
+    const liveOnly = await db.query<{ id: string }>(
+      `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL`,
+      [vaultId, shareId],
+    );
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: auth(),
+      payload: {
+        nodes: liveOnly.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: vaultKeyId,
+        })),
+      },
+    });
+
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'finalization_incomplete');
+    assert.ok(r.json().missing.length > 0, 'and the trashed one is named among the missing');
+  });
+
+  it('accepts the pass once the trash is included, and clears its marks', async () => {
+    const { shareId, inside, ks } = await sharedWith('trash-included');
+    const doomed = await createNode('folder', `doomed-${randomUUID()}`, inside, ks);
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      doomed,
+    ]);
+    await app.inject({
+      method: 'DELETE',
+      url: `/vaults/${vaultId}/nodes/${doomed}`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+    });
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+
+    const all = await db.query<{ id: string }>(`SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2`, [
+      vaultId,
+      shareId,
+    ]);
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: auth(),
+      payload: {
+        nodes: all.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: vaultKeyId,
+        })),
+      },
+    });
+    assert.equal(r.statusCode, 204, r.body);
+
+    const left = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1 AND share_id = $2`, [vaultId, shareId]);
+    assert.equal(left.length, 0, 'nothing carries the share any more, trashed or not');
+  });
+
+  it('lists a trashed FOLDER as part of the replica, which no other listing shows', async () => {
+    // The deeper half of the same defect. The trash offers what can be restored, so it
+    // shows only nodes with versions and never folders — and a trashed folder still carries
+    // the mark that blocks a departure. A client asking the trash could not even discover
+    // what was stopping it.
+    const { shareId, inside, ks } = await sharedWith('trash-scope');
+    const doomed = await createNode('folder', `doomed-${randomUUID()}`, inside, ks);
+    const rev = await db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+      vaultId,
+      doomed,
+    ]);
+    await app.inject({
+      method: 'DELETE',
+      url: `/vaults/${vaultId}/nodes/${doomed}`,
+      headers: { ...auth(), 'if-match': rev!.rev },
+    });
+
+    const r = await app.inject({ method: 'GET', url: `/shares/${shareId}/replica`, headers: auth() });
+    const entry = (r.json() as { node_id: string; name_key_id: string; deleted: boolean }[]).find(
+      (t) => t.node_id === doomed,
+    );
+    assert.ok(entry, 'the replica listing shows it');
+    assert.equal(entry!.deleted, true);
+    assert.equal(entry!.name_key_id, ks, 'still under the share key, which is why it must be converted');
+
+    const trash = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/trash`, headers: auth() });
+    assert.ok(
+      !(trash.json() as { node_id: string }[]).some((t) => t.node_id === doomed),
+      'and the trash does not, which is the whole point of asking somewhere else',
+    );
+  });
+});

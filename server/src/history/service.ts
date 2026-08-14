@@ -31,6 +31,13 @@ export type TrashEntry = {
   type: string;
   deleted_at: string;
   versions: number;
+  /**
+   * The scope the name is under. A trashed node of a share is still named under `KS`, so a
+   * caller that means to read the name — or to convert it back when leaving — has to know
+   * which key to reach for.
+   */
+  name_key_id: string | null;
+  share_id: string | null;
 };
 
 /**
@@ -42,7 +49,7 @@ export type TrashEntry = {
 export const listTrash = (db: Db, vaultId: string, under: string | undefined): Promise<TrashEntry[]> =>
   db.query<TrashEntry & { versions: string }>(
     `SELECT n.id AS node_id, n.parent_id, encode(n.name_enc,'base64') AS name_enc,
-            n.type::text AS type, n.deleted_at,
+            n.type::text AS type, n.deleted_at, n.name_key_id, n.share_id,
             (SELECT count(*) FROM versions v WHERE v.vault_id = n.vault_id AND v.node_id = n.id)::text AS versions
        FROM nodes n
       WHERE n.vault_id = $1

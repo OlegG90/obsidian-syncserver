@@ -28,6 +28,7 @@ import { makeObsidianTransport } from './obsidian/transport.js';
 import { session, type Connection, type Handle, type Session } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
+import { decryptName } from './crypto/scope.js';
 import { unwrapShareKey } from './crypto/share.js';
 import { shareKeysFrom } from './share-keys.js';
 import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
@@ -482,14 +483,16 @@ export default class SyncServerPlugin extends Plugin {
           const tree = await engine.readTree();
           const key = await this.shareKeyOf(h, shareId);
           const scopeId = await this.shareScopeIdOf(h, shareId);
-          const replica = [...tree.entries()]
-            .filter(([, n]) => n.shareId === shareId)
-            .map(([path, n]) => ({
-              nodeId: n.nodeId,
-              path,
-              name: path.slice(path.lastIndexOf('/') + 1),
-              address: n.address,
-            }));
+          // Asked of the server rather than assembled from the tree: the set that must be
+          // converted includes nodes no listing this client has would show — a folder in
+          // the trash carries the mark, has no versions, and appears in neither.
+          const replica = (await h.client.shareReplica(shareId)).map((n) => {
+            const name = n.name_enc
+              ? decryptName(n.name_key_id === scopeId ? key : h.kv, n.name_enc)
+              : n.node_id;
+            return { nodeId: n.node_id, path: name, name, address: n.sha256, deleted: n.deleted };
+          });
+
           return leaveShare(
             {
               client: h.client,

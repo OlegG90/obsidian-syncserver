@@ -21,6 +21,7 @@ import {
   leaveShare,
   prepareShare,
   recipientPubkey,
+  replicaOf,
   listMembers,
   listShares,
   removeMember,
@@ -196,6 +197,23 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
       // `ended` travels with a revoke: removing the last participant closes the share for
       // everybody (SH-07), and the initiator's client has a different thing to say then.
       return out.ended === undefined ? { outcome: out.outcome } : { outcome: out.outcome, ended: out.ended };
+    },
+  );
+
+  app.get<{ Params: { shareId: string } }>(
+    '/shares/:shareId/replica',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const rows = await replicaOf(db, req.caller!.userId, req.params.shareId);
+      if (!rows) return reply.code(404).send({ error: 'not_found' });
+      return rows.map((n) => ({
+        node_id: n.nodeId,
+        name_enc: n.nameEnc,
+        name_key_id: n.nameKeyId,
+        type: n.type,
+        deleted: n.deleted,
+        sha256: n.sha256,
+      }));
     },
   );
 

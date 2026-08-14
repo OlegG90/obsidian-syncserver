@@ -381,7 +381,22 @@ export class SyncClient {
   }
 
   /** Deleted nodes that can still be brought back — `deleted_at` with live versions. */
-  trash(vaultId: string, under?: string): Promise<{ node_id: string; parent_id: string | null; name_enc: string | null; type: string; deleted_at: string; versions: number }[]> {
+  trash(
+    vaultId: string,
+    under?: string,
+  ): Promise<
+    {
+      node_id: string;
+      parent_id: string | null;
+      name_enc: string | null;
+      type: string;
+      deleted_at: string;
+      versions: number;
+      /** The scope the name is under — a trashed node of a share is still under `KS`. */
+      name_key_id: string | null;
+      share_id: string | null;
+    }[]
+  > {
     const q = under ? `?under=${encodeURIComponent(under)}` : '';
     return this.json('GET', `/vaults/${vaultId}/trash${q}`);
   }
@@ -748,6 +763,22 @@ export class SyncClient {
   /** Withdraw an invitation, or revoke a participant — the server decides which by their state. */
   removeMember(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked' }> {
     return this.json('DELETE', `/shares/${shareId}/members/${userId}`);
+  }
+
+  /** Everything still carrying this share in this vault — what a departure must convert. */
+  shareReplica(
+    shareId: string,
+  ): Promise<
+    {
+      node_id: string;
+      name_enc: string | null;
+      name_key_id: string | null;
+      type: string;
+      deleted: boolean;
+      sha256: string | null;
+    }[]
+  > {
+    return this.json('GET', `/shares/${shareId}/replica`);
   }
 
   /** Stop propagation and begin leaving. `ended` says whether this closed the share for everyone. */
