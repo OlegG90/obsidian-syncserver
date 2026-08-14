@@ -885,14 +885,19 @@ export const leaveShare = async (
     const share = shareRes.rows[0];
     if (!share) return { kind: 'not_found' } as Refusal;
 
-    const mine = await c.query(
-      `SELECT 1 FROM share_members
-        WHERE share_id = $1 AND user_id = $2 AND joined_at IS NOT NULL
-          AND finalization_started_at IS NULL AND left_at IS NULL
+    const mine = await c.query<{ started: string | null }>(
+      `SELECT finalization_started_at AS started FROM share_members
+        WHERE share_id = $1 AND user_id = $2 AND joined_at IS NOT NULL AND left_at IS NULL
           FOR UPDATE`,
       [shareId, userId],
     );
     if (mine.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+    // Beginning a departure that has already begun is not an error — it is a client coming
+    // back to finish. Refusing it was a trap: the pass that converts the replica is the
+    // client's, so a device interrupted between the two steps could never reach the second
+    // one, and its vault stayed unreadable for as long as it lived.
+    if (mine.rows[0]!.started) return { ended: share.state === 'ended' };
 
     const ends = await departMember(c, shareId, userId, share.initiator);
 
@@ -1027,14 +1032,26 @@ export type ShareScope = {
  *
  * Both directions of ownership in one query, and they are genuinely different rows: the
  * initiator's copy lives on `shares`, a participant's on their membership.
+ *
+ * **The condition is `left_at IS NULL`, not the share's state**, and the difference is a
+ * deadlock. An ended share still has a replica named under `KS` until its owner runs the
+ * finalization pass — and that pass needs the very key being asked for here. Withholding it
+ * because the share is over locks the vault out of BOTH: it cannot read the names, so it
+ * cannot sync, and it cannot convert them back, so it never will. Found by ending a live
+ * share and watching the vault stop syncing.
+ *
+ * The key stops being offered when `left_at` records that the pass ran, which is the same
+ * moment the `share_ended` event stops being raised — one condition, two places that must
+ * agree about when a share is finished with somebody.
  */
 export const shareScopesFor = (db: Db, userId: string, vaultId: string): Promise<ShareScope[]> =>
   db.query<ShareScope>(
     `SELECT s.id AS "shareId", s.subtree_key_id AS "keyId",
             encode(s.wrapped_key_initiator, 'base64') AS "wrappedKey", 'vault' AS wrapping
        FROM shares s
+       JOIN share_members m ON m.share_id = s.id AND m.user_id = s.initiator_id
       WHERE s.initiator_id = $1 AND s.initiator_vault_id = $2
-        AND s.state IN ('preparing', 'active')
+        AND m.left_at IS NULL
         AND s.subtree_key_id IS NOT NULL
       UNION ALL
      SELECT s.id, s.subtree_key_id, encode(m.wrapped_key, 'base64'), 'account'

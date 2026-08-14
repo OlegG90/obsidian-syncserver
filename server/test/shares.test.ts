@@ -1246,10 +1246,16 @@ describe('leaving', () => {
     assert.equal(r.json().ended, false, 'somebody else is still in it');
   });
 
-  it('cannot be begun twice', async () => {
+  it('can be begun twice, because the second call is a client coming back', async () => {
+    // This asserted a refusal until a live vault got stuck between the two steps. The pass
+    // that converts the replica is the client's, so a device interrupted after `begin` has
+    // to be able to return — refusing it left the vault unreadable for good.
     const { shareId } = await sharedWith('twice-leave');
     assert.equal((await leaveBegin(shareId)).statusCode, 200);
-    assert.equal((await leaveBegin(shareId)).statusCode, 404, 'already finalizing');
+
+    const again = await leaveBegin(shareId);
+    assert.equal(again.statusCode, 200, again.body);
+    assert.equal(again.json().ended, true, 'and it reports the state as it now is');
   });
 });
 
@@ -1357,9 +1363,11 @@ describe('the keys a client needs to read a vault', () => {
     assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks));
   });
 
-  it('stops reporting it once the share is over', async () => {
-    // A key for a share that ended names nothing: the replica's names have gone back to KV,
-    // and offering it would invite a client to try opening what is no longer under it.
+  it('keeps reporting it after the share is over, until the pass has run', async () => {
+    // This asserted the opposite until a live vault stopped syncing. An ended share still
+    // has a replica named under KS, and converting it back needs this key — so the share
+    // being over is exactly the wrong moment to withhold it. `left_at` is what ends it, and
+    // `left_at` is what the finalization pass writes.
     const { shareId } = await sharedWith('scopes-ended');
     const ks = await shareKeyOf(shareId);
     await app.inject({
@@ -1369,7 +1377,10 @@ describe('the keys a client needs to read a vault', () => {
     });
 
     const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}`, headers: auth() });
-    assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks));
+    assert.ok(
+      r.json().scopes.some((s: { key_id: string }) => s.key_id === ks),
+      'the initiator still owes the same pass, and still needs the key',
+    );
   });
 
   it('still reports the vault’s own scope first, which everything else defaults to', async () => {
@@ -1607,5 +1618,87 @@ describe('who to seal a share key to', () => {
       headers: { authorization: `Bearer ${strangerAccess}` },
     });
     assert.equal(r.statusCode, 404);
+  });
+});
+
+describe('finishing a departure that was interrupted', () => {
+  it('keeps offering the share key while the pass is still owed', async () => {
+    // The deadlock this closes: an ended share still has a replica named under KS until its
+    // owner converts it back, and that conversion needs this key. Withholding it because
+    // the share is over locks the vault out of both — it cannot read the names, so it
+    // cannot sync, and it cannot convert them, so it never will.
+    const { shareId } = await sharedWith('key-after-end');
+    const ks = await shareKeyOf(shareId);
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.ok(
+      r.json().scopes.some((s: { key_id: string }) => s.key_id === ks),
+      'the key the finalization pass needs is still there',
+    );
+  });
+
+  it('lets a client come back and begin again, rather than refusing', async () => {
+    // A device interrupted between begin and finalize has to be able to return. Refusing
+    // the second begin left it with no way to finish at all.
+    const { shareId } = await sharedWith('begin-twice');
+    const first = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(first.statusCode, 200);
+
+    const again = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(again.statusCode, 200, again.body);
+    assert.equal(again.json().ended, true, 'and it says the share is over, which it is');
+  });
+
+  it('stops offering the key once the pass has run', async () => {
+    const { shareId } = await sharedWith('key-after-finalize');
+    const ks = await shareKeyOf(shareId);
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const nodes = await db.query<{ id: string }>(
+      `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL`,
+      [strangerVaultId, shareId],
+    );
+    const keyId = await strangerVaultKey();
+    const done = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        nodes: nodes.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: keyId,
+        })),
+      },
+    });
+    assert.equal(done.statusCode, 204, done.body);
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.ok(!r.json().scopes.some((s: { key_id: string }) => s.key_id === ks), 'nothing is named under it now');
   });
 });
