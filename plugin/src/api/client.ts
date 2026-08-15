@@ -710,6 +710,24 @@ export class SyncClient {
     return this.json('POST', `/shares/${shareId}/prepare`, { items }, { expect: [204] });
   }
 
+  /**
+   * What preparation still owes under `KS` — the mirror of `shareReplica`.
+   *
+   * Asked because a node is not one blob: the client's tree holds the head of each file, and
+   * activation also wants an envelope for every version behind it.
+   */
+  preparationOwed(shareId: string): Promise<
+    {
+      node_id: string;
+      sha256: string | null;
+      deleted: boolean;
+      needs_share_material: boolean;
+      history_needing_material: string[];
+    }[]
+  > {
+    return this.json('GET', `/shares/${shareId}/preparation`);
+  }
+
   /** Verify preparation and open the share for invitations. */
   activateShare(shareId: string): Promise<{ state: string }> {
     return this.json('POST', `/shares/${shareId}/activate`);

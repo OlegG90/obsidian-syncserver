@@ -204,6 +204,13 @@ POST   /shares            {vault_id, node_id, subtree_key_id, wrapped_key_initia
 POST   /shares/{id}/prepare
                             {items: [{node_id, name_enc, name_hmac, name_key_id,
                                      blob_envelopes, dedup_tags}]}  initiator only, resumable batches
+GET    /shares/{id}/preparation
+                          → [{node_id, name_enc, name_key_id, type, deleted, sha256,
+                              needs_share_material, history_needing_material}]
+                                                initiator only, while preparing: what still owes KS
+                                                material. A node is not one blob, and the versions
+                                                behind each head exist only here — the client's tree
+                                                holds the head alone
 POST   /shares/{id}/activate                   initiator only; verifies preparation completeness
 POST   /shares/{id}/cancel                     initiator only, while preparing; no participant copy
                                                 exists yet, so the share goes straight to cancelled
@@ -235,6 +242,14 @@ DELETE /shares/{id}/members/{user_id}          initiator only. Against a member 
                                                 later finalize-leave. Against an outstanding INVITATION
                                                 it withdraws it, deleting the row — there is no replica
                                                 to finalize and nothing to keep
+GET    /shares/{id}/replica
+                          → [{node_id, name_enc, name_key_id, type, deleted, sha256,
+                              needs_vault_material, history_needing_material}]
+                                                affected member only: everything in their vault still
+                                                carrying the mark — the trash included, which no other
+                                                listing shows — and what each still owes under KV.
+                                                The mirror of /preparation, and deliberately the same
+                                                shape: the two directions are one operation
 POST   /shares/{id}/leave/begin                member stops propagation and starts local finalization;
                                                 the initiator uses it too, and it ends the share
 POST   /shares/{id}/finalize-leave

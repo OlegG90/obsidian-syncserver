@@ -1234,33 +1234,82 @@ export const replicaOf = async (
   userId: string,
   shareId: string,
 ): Promise<ReplicaNode[] | undefined> => {
-  const member = await db.one<{ vaultId: string }>(
-    `SELECT vault_id AS "vaultId" FROM share_members
-      WHERE share_id = $1 AND user_id = $2 AND left_at IS NULL`,
+  const member = await db.one<{ vaultId: string; vaultKeyId: string }>(
+    `SELECT m.vault_id AS "vaultId", v.vault_key_id AS "vaultKeyId"
+       FROM share_members m JOIN vaults v ON v.id = m.vault_id
+      WHERE m.share_id = $1 AND m.user_id = $2 AND m.left_at IS NULL`,
     [shareId, userId],
   );
   if (!member?.vaultId) return undefined;
 
-  return db.query<ReplicaNode>(
+  const rows = await owedUnder(db, member.vaultId, shareId, member.vaultKeyId);
+  return rows.map(({ needsMaterial, ...rest }) => ({ ...rest, needsVaultMaterial: needsMaterial }));
+};
+
+/** One marked node, and what it still owes under some scope. */
+type OwedNode = Omit<ReplicaNode, 'needsVaultMaterial'> & { needsMaterial: boolean };
+
+/**
+ * Every marked node of a vault, and what each still owes under one scope key.
+ *
+ * **One query for both directions.** Preparing a share moves the interior from `KV` to `KS`
+ * and leaving moves it back; the question each side has to answer is identical — which blobs
+ * lack material under the scope being moved TO — and only the scope differs. Asked twice they
+ * would drift, and the drift is invisible until somebody cannot leave a folder they shared.
+ *
+ * The names come with it because a node the client cannot see locally — one it deleted long
+ * ago — has its only readable name here.
+ */
+const owedUnder = (db: Db, vaultId: string, shareId: string, scopeId: string): Promise<OwedNode[]> =>
+  db.query<OwedNode>(
     `SELECT n.id AS "nodeId", encode(n.name_enc, 'base64') AS "nameEnc", n.name_key_id AS "nameKeyId",
             n.type::text AS type, (n.deleted_at IS NOT NULL) AS deleted,
             encode(n.sha256, 'hex') AS sha256,
             (n.sha256 IS NOT NULL
              AND NOT (EXISTS (SELECT 1 FROM blob_keys k
-                               WHERE k.sha256 = n.sha256 AND k.scope_id = vlt.vault_key_id)
+                               WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
                       AND (n.deleted_at IS NOT NULL
                            OR EXISTS (SELECT 1 FROM dedup_index d
-                                       WHERE d.sha256 = n.sha256 AND d.scope_id = vlt.vault_key_id))))
-              AS "needsVaultMaterial",
+                                       WHERE d.sha256 = n.sha256 AND d.scope_id = $3))))
+              AS "needsMaterial",
             COALESCE((SELECT array_agg(DISTINCT encode(ver.sha256, 'hex'))
                         FROM versions ver
                        WHERE ver.vault_id = n.vault_id AND ver.node_id = n.id
                          AND ver.sha256 IS DISTINCT FROM n.sha256
                          AND NOT EXISTS (SELECT 1 FROM blob_keys k
-                                          WHERE k.sha256 = ver.sha256 AND k.scope_id = vlt.vault_key_id)),
+                                          WHERE k.sha256 = ver.sha256 AND k.scope_id = $3)),
                      ARRAY[]::text[]) AS history
-       FROM nodes n JOIN vaults vlt ON vlt.id = n.vault_id
+       FROM nodes n
       WHERE n.vault_id = $1 AND n.share_id = $2 ORDER BY deleted, n.id`,
-    [member.vaultId, shareId],
+    [vaultId, shareId, scopeId],
   );
+
+/**
+ * What preparation still owes under `KS`, for a share being built.
+ *
+ * The mirror of `replicaOf`, and needed for the same reason: a node is not one blob. A folder
+ * whose files were edited before it was shared carries versions keyed under `KV` alone, and
+ * activation refuses until every one of them has a `KS` envelope — a set no listing the
+ * client keeps would show, since its own tree holds only the head of each file.
+ *
+ * The root is excluded here as everywhere (SH-01): its name and content stay the initiator's.
+ */
+export const preparationOwed = async (
+  db: Db,
+  userId: string,
+  shareId: string,
+): Promise<OwedNode[] | undefined> => {
+  const share = await db.one<{ vaultId: string; keyId: string; rootItemId: string }>(
+    `SELECT initiator_vault_id AS "vaultId", subtree_key_id AS "keyId", root_item_id AS "rootItemId"
+       FROM shares WHERE id = $1 AND initiator_id = $2 AND state = 'preparing'`,
+    [shareId, userId],
+  );
+  if (!share) return undefined;
+
+  const rows = await owedUnder(db, share.vaultId, shareId, share.keyId);
+  const root = await db.one<{ id: string }>(
+    `SELECT id FROM nodes WHERE vault_id = $1 AND share_item_id = $2`,
+    [share.vaultId, share.rootItemId],
+  );
+  return rows.filter((n) => n.nodeId !== root?.id);
 };

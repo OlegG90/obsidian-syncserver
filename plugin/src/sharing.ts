@@ -87,7 +87,16 @@ export const preparePlan = (root: string, nodes: readonly SharedNode[]): Planned
 
 /** What `shareFolder` needs that it cannot know: the vault, its keys, and a way to talk. */
 export interface SharingDeps {
-  client: Pick<SyncClient, 'createShare' | 'prepareShare' | 'activateShare' | 'blobKeys' | 'recipientPubkey' | 'invite'>;
+  client: Pick<
+    SyncClient,
+    | 'createShare'
+    | 'prepareShare'
+    | 'preparationOwed'
+    | 'activateShare'
+    | 'blobKeys'
+    | 'recipientPubkey'
+    | 'invite'
+  >;
   /** Reads a file's plaintext from this device — the dedup tag is over the plaintext. */
   read(path: string): Promise<Uint8Array>;
   vaultId: string;
@@ -135,7 +144,13 @@ export const shareFolder = async (
     wrapped_key_initiator: wrapShareKey(deps.vaultKey, shareKey),
   });
 
-  const plan = preparePlan(root, nodes);
+  // Asked only now, because the subtree is marked by creating the share and not before.
+  // The tree this client keeps holds the head of each file; the versions behind it are the
+  // server's to name, and activation wants an envelope for every one of them.
+  const owed = new Map(
+    (await deps.client.preparationOwed(shareId)).map((n) => [n.node_id, n.history_needing_material]),
+  );
+  const plan = preparePlan(root, nodes).map((item) => ({ ...item, history: owed.get(item.nodeId) ?? [] }));
   for (let i = 0; i < plan.length; i += BATCH) {
     const batch = plan.slice(i, i + BATCH);
     const converted = await Promise.all(

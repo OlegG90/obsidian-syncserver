@@ -72,7 +72,7 @@ describe('what preparation must convert', () => {
 });
 
 /** A client that records what it was asked and answers with what the test dictates. */
-const harness = (vaultKey: Uint8Array, contentKey: Uint8Array) => {
+const harness = (vaultKey: Uint8Array, contentKey: Uint8Array, history: Record<string, string[]> = {}) => {
   const prepared: { shareId: string; items: unknown[] }[] = [];
   const created: Record<string, string>[] = [];
   let activated = 0;
@@ -86,13 +86,25 @@ const harness = (vaultKey: Uint8Array, contentKey: Uint8Array) => {
       prepareShare: async (shareId: string, items: unknown[]) => {
         prepared.push({ shareId, items });
       },
+      // What the client cannot see for itself: the versions behind each head.
+      preparationOwed: async () =>
+        Object.entries(history).map(([node_id, blobs]) => ({
+          node_id,
+          sha256: null,
+          deleted: false,
+          needs_share_material: true,
+          history_needing_material: blobs,
+        })),
       activateShare: async () => {
         activated++;
         return { state: 'active' };
       },
-      // One envelope, under the vault's own scope — what the file has before it is shared.
-      blobKeys: async () =>
-        new Map([['addr-a', [{ scopeId: VAULT_SCOPE, wrappedKey: wrapContentKey(vaultKey, contentKey) }]]]),
+      // One envelope per blob, under the vault's own scope — what a file has before it is
+      // shared, head and history alike.
+      blobKeys: async (_vaultId: string, addresses: readonly string[]) =>
+        new Map(
+          addresses.map((a) => [a, [{ scopeId: VAULT_SCOPE, wrappedKey: wrapContentKey(vaultKey, contentKey) }]]),
+        ),
       recipientPubkey: async () => ({ user_id: 'u1', pubkey: '' }),
       invite: async () => undefined,
     } as unknown as SharingDeps['client'],
@@ -153,6 +165,31 @@ describe('opening a share', () => {
 
     const items = h.prepared[0]!.items as { dedup_tags: { scope_id: string }[] }[];
     assert.equal(items[0]!.dedup_tags[0]!.scope_id, SHARE_SCOPE);
+  });
+
+  it('carries the versions behind a head, which its own tree does not hold', async () => {
+    // A folder edited before it was shared. The client's tree knows `addr-a`; the two
+    // revisions behind it exist only on the server, and activation refuses until each has an
+    // envelope under KS. The tag stays with the head alone — a superseded version's
+    // plaintext is not on disk to compute one over.
+    const h = harness(vaultKey, contentKey, { 'node:Team/a.md': ['addr-old-1', 'addr-old-2'] });
+    const { shareKey } = await shareFolder(h.deps, 'Team', tree);
+
+    const items = h.prepared[0]!.items as {
+      blob_envelopes: { sha256: string; wrapped_key: string }[];
+      dedup_tags: { sha256: string }[];
+    }[];
+    assert.deepEqual(
+      items[0]!.blob_envelopes.map((e) => e.sha256).sort(),
+      ['addr-a', 'addr-old-1', 'addr-old-2'],
+      'every blob the node points at travels, not only the head',
+    );
+    assert.deepEqual(
+      unwrapContentKey(shareKey, items[0]!.blob_envelopes.find((e) => e.sha256 === 'addr-old-1')!.wrapped_key),
+      contentKey,
+      'and a superseded revision opens under KS afterwards',
+    );
+    assert.deepEqual(items[0]!.dedup_tags.map((t) => t.sha256), ['addr-a'], 'the tag belongs to the head alone');
   });
 
   it('activates only after everything is prepared', async () => {

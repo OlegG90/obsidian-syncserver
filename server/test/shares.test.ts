@@ -613,6 +613,60 @@ describe('preparing a subtree for its share key', () => {
     assert.equal(ok.statusCode, 200, ok.body);
   });
 
+  it('names the versions behind each head, which no listing the client keeps would show', async () => {
+    // The mirror of what stopped a departure. A folder edited before it is shared carries
+    // versions under KV alone, and activation wants a KS envelope for every one of them —
+    // while the client's own tree holds only the head of each file. Left to guess, it
+    // prepares the head, is refused, and has nothing to look at to find out why.
+    const folder = await createNode('folder', `prep-history-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    // Unique content per test: a blob is addressed by its bytes, so two tests writing
+    // 'first' share one blob — and one of them giving it KV material would quietly answer
+    // the other's question.
+    const body = randomUUID();
+    const file = await createFile(inside, `note-${randomUUID()}`, `${body}-1`, vaultKeyId);
+    const superseded = file.sha256;
+    await putFile(file, `${body}-2`);
+
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const owed = await app.inject({ method: 'GET', url: `/shares/${shareId}/preparation`, headers: auth() });
+    assert.equal(owed.statusCode, 200, owed.body);
+    const rows = owed.json() as { node_id: string; history_needing_material: string[] }[];
+    assert.ok(!rows.some((n) => n.node_id === folder), 'the root is not preparation’s business (SH-01)');
+    const entry = rows.find((n) => n.node_id === file.nodeId);
+    assert.deepEqual(entry!.history_needing_material, [superseded], 'the version behind the head is named');
+
+    const named = (id: string) => ({
+      node_id: id,
+      name_enc: b64(`ks-${id}`),
+      name_hmac: sha(Buffer.from(`ks-${id}`)),
+      name_key_id: ks,
+    });
+
+    // The head alone, exactly as a client that trusted its own tree would send it.
+    assert.equal((await prepare(shareId, [named(inside), { ...named(file.nodeId), ...materialFor(file.sha256, ks) }])).statusCode, 204);
+    const short = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(short.statusCode, 409, 'and activation refuses, because the history stays unreadable');
+
+    assert.equal(
+      (
+        await prepare(shareId, [
+          {
+            ...named(file.nodeId),
+            blob_envelopes: [
+              { sha256: superseded, scope_id: ks, wrapped_key: Buffer.alloc(48, 9).toString('base64') },
+            ],
+          },
+        ])
+      ).statusCode,
+      204,
+    );
+    const ok = await app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(ok.statusCode, 200, ok.body);
+  });
+
   it('applies the same batch twice without complaint, because a lost response is not a fault', async () => {
     // Batches are resumable (docs/04) and nothing records which ones landed: a client that
     // did not hear the answer resends, and `activate` recomputes what is still missing.
@@ -1906,9 +1960,12 @@ describe('a departure owes the history, not only the head', () => {
     // not on disk, and re-downloading every one of them to HMAC a value nothing looks up is
     // not a price a departure should pay.
     const { shareId, inside, ks } = await sharedWith('history-leave');
-    const file = await createFile(inside, `hist-${randomUUID()}`, 'first', ks);
+    // Unique content, because a blob is its bytes: 'first' written by another test is the
+    // same blob, and its material would answer this test's question for it.
+    const body = randomUUID();
+    const file = await createFile(inside, `hist-${randomUUID()}`, `${body}-1`, ks);
     const superseded = file.sha256;
-    await putFile(file, 'second');
+    await putFile(file, `${body}-2`);
 
     await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
 

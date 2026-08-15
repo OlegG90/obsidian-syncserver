@@ -20,6 +20,7 @@ import {
   joinShare,
   leaveShare,
   prepareShare,
+  preparationOwed,
   recipientPubkey,
   replicaOf,
   listMembers,
@@ -214,6 +215,25 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         deleted: n.deleted,
         sha256: n.sha256,
         needs_vault_material: n.needsVaultMaterial,
+        history_needing_material: n.history,
+      }));
+    },
+  );
+
+  app.get<{ Params: { shareId: string } }>(
+    '/shares/:shareId/preparation',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const rows = await preparationOwed(db, req.caller!.userId, req.params.shareId);
+      if (!rows) return reply.code(404).send({ error: 'not_found' });
+      return rows.map((n) => ({
+        node_id: n.nodeId,
+        name_enc: n.nameEnc,
+        name_key_id: n.nameKeyId,
+        type: n.type,
+        deleted: n.deleted,
+        sha256: n.sha256,
+        needs_share_material: n.needsMaterial,
         history_needing_material: n.history,
       }));
     },
