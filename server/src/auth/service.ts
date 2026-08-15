@@ -21,8 +21,17 @@ export interface RedeemInput {
   pubkey: Buffer;
   encPrivkey: Buffer;
   wrappedSeed: Buffer;
-  recoveryKey: Buffer;
-  recoveryCodeHash: string;
+  /** Proof the account can later be recovered from the passphrase alone (#112). Required. */
+  kekVerifier: string;
+  /**
+   * The recovery code's envelope and verifier, or neither.
+   *
+   * Optional together: they answer a forgotten passphrase, which not every account insures
+   * against. Absent is written as NULL and means exactly that — the placeholder this
+   * replaced made an account claim a way back it did not have.
+   */
+  recoveryKey?: Buffer | undefined;
+  recoveryCodeHash?: string | undefined;
   initialVaultId: string;
   initialVaultNameEnc: Buffer;
   deviceName: string;
@@ -63,7 +72,8 @@ export const redeemInvitation = async (db: Db, input: RedeemInput) => {
           SET state = 'active',
               auth_secret_hash = $2, account_salt = $3, kdf_params = $4,
               pubkey = $5, enc_privkey = $6, wrapped_seed = $7,
-              recovery_key = $8, recovery_code_hash = $9,
+              kek_verifier_hash = $8,
+              recovery_key = $9, recovery_code_hash = $10,
               invite_token_hash = NULL, invite_expires_at = NULL
         WHERE id = $1`,
       [
@@ -74,8 +84,9 @@ export const redeemInvitation = async (db: Db, input: RedeemInput) => {
         input.pubkey,
         input.encPrivkey,
         input.wrappedSeed,
-        input.recoveryKey,
-        input.recoveryCodeHash,
+        hashToken(input.kekVerifier),
+        input.recoveryKey ?? null,
+        input.recoveryCodeHash ?? null,
       ],
     );
 
@@ -163,3 +174,103 @@ export const findDeviceByRefresh = async (db: Db, refresh: string) =>
       WHERE d.refresh_token_hash = $1 AND d.revoked_at IS NULL AND u.state = 'active'`,
     [hashToken(refresh)],
   );
+
+/** What recovery gives back: the envelope the proof unlocks, and a device to use it from. */
+export interface Recovered {
+  seedEnvelope: string;
+  openedBy: 'passphrase' | 'recovery_code';
+  encPrivkey: string;
+  accountSalt: string;
+  kdfParams: KdfParams;
+  userId: string;
+  deviceId: string;
+}
+
+/**
+ * Return an account to a device that holds nothing, against proof it can open the envelope.
+ *
+ * The one bootstrap that needs no second device (#112). Two proofs reach it, because two
+ * different things get lost: the passphrase answers a lost device, the recovery code answers
+ * a forgotten passphrase — and each is answered with **only** the envelope it opens. Handing
+ * back both would give whoever guessed one a second target for free.
+ *
+ * `undefined` for every failure, deliberately undifferentiated: an unknown login, an account
+ * with no recovery code, and a wrong proof are one answer, or the endpoint becomes the
+ * enumeration oracle #73 closes everywhere else.
+ */
+export const recoverAccount = async (
+  db: Db,
+  input: {
+    login: string;
+    kekVerifier?: string | undefined;
+    recoveryCode?: string | undefined;
+    name: string;
+    platform: string;
+  },
+): Promise<Recovered | undefined> =>
+  db.tx(async (c: PoolClient) => {
+    const found = await c.query<{
+      id: string;
+      login: string;
+      wrappedSeed: string;
+      recoveryKey: string | null;
+      kekVerifierHash: string | null;
+      recoveryCodeHash: string | null;
+      encPrivkey: string;
+      accountSalt: string;
+      kdfParams: KdfParams;
+    }>(
+      `SELECT id, login,
+              encode(wrapped_seed, 'base64')  AS "wrappedSeed",
+              encode(recovery_key, 'base64')  AS "recoveryKey",
+              kek_verifier_hash               AS "kekVerifierHash",
+              recovery_code_hash              AS "recoveryCodeHash",
+              encode(enc_privkey, 'base64')   AS "encPrivkey",
+              encode(account_salt, 'base64')  AS "accountSalt",
+              kdf_params                      AS "kdfParams"
+         FROM users WHERE lower(login) = lower($1) AND state = 'active'`,
+      [input.login],
+    );
+    const user = found.rows[0];
+    if (!user) return undefined;
+
+    const opened = ((): { envelope: string; by: Recovered['openedBy'] } | undefined => {
+      if (input.kekVerifier !== undefined) {
+        if (!user.kekVerifierHash || !tokenMatches(input.kekVerifier, user.kekVerifierHash)) return undefined;
+        return { envelope: user.wrappedSeed, by: 'passphrase' };
+      }
+      if (input.recoveryCode !== undefined) {
+        // An account may hold no recovery code at all, which is a null pair and not a fault.
+        if (!user.recoveryCodeHash || !user.recoveryKey) return undefined;
+        if (!tokenMatches(input.recoveryCode, user.recoveryCodeHash)) return undefined;
+        return { envelope: user.recoveryKey, by: 'recovery_code' };
+      }
+      return undefined;
+    })();
+    if (!opened) return undefined;
+
+    // Created exactly as pairing's claim creates one: recovery is a door, not a mode, and
+    // past it this is an ordinary freshly-bootstrapped device.
+    const device = await c.query<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, $3) RETURNING id`,
+      [user.id, input.name, input.platform],
+    );
+
+    // The account recovering itself is both actor and target. Recorded because a recovery is
+    // the one event that gives a new device everything without anyone approving it.
+    await c.query(
+      `INSERT INTO audit_log (actor_user_id, actor_login, action, target_user_id, target_login, details)
+       VALUES ($1, $2, 'account.recover', $1, $2, $3::jsonb)`,
+      [user.id, user.login, JSON.stringify({ opened_by: opened.by, device: input.platform })],
+    );
+
+    return {
+      seedEnvelope: opened.envelope,
+      openedBy: opened.by,
+      encPrivkey: user.encPrivkey,
+      accountSalt: user.accountSalt,
+      kdfParams: user.kdfParams,
+      userId: user.id,
+      deviceId: device.rows[0]!.id,
+    };
+  });

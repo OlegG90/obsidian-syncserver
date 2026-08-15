@@ -2,6 +2,7 @@ import fastifyJwt from '@fastify/jwt';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { HealthResponse } from '@syncserver/shared';
 import { registerAuthRoutes } from './auth/routes.js';
+import { inProcessAttemptLimiter, type AttemptLimiter } from './auth/attempts.js';
 import { registerBlobRoutes } from './blobs/routes.js';
 import { inProcessRateLimiter } from './blobs/rate.js';
 import { openStore } from './blobs/store.js';
@@ -19,7 +20,24 @@ import type { Config } from './config.js';
 import type { Db } from './db.js';
 import { SERVER_VERSION } from './version.js';
 
-export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise<FastifyInstance> => {
+/**
+ * Seams a test may replace. Nothing here changes behaviour by default — each is a thing a
+ * suite otherwise has to wait for in real time, or share unwillingly with its neighbours.
+ */
+export interface AppDeps {
+  events?: EventsHub;
+  /**
+   * The recovery attempt limiter. Counted per login **and per source**, and every injected
+   * request arrives from the same address — so one suite's deliberate failures would lock
+   * out the next suite's honest ones unless it can bring its own.
+   */
+  attempts?: AttemptLimiter;
+}
+
+export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = {}): Promise<FastifyInstance> => {
+  // The events hub used to be the only seam and was passed positionally; both shapes are
+  // accepted so every existing caller keeps working.
+  const { events, attempts } = 'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined } : deps;
   const app = Fastify({ logger: false });
 
   await app.register(fastifyJwt, { secret: cfg.serverSecret });
@@ -50,7 +68,7 @@ export const buildApp = async (db: Db, cfg: Config, events?: EventsHub): Promise
   });
 
   registerBootstrapGuard(app, db);
-  registerAuthRoutes(app, db, cfg);
+  registerAuthRoutes(app, db, cfg, attempts ?? inProcessAttemptLimiter());
   registerPairingRoutes(app, db, cfg);
   const blobStore = openStore(cfg.blobStorePath);
   const blobService = new BlobService(db, blobStore, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute), cfg.limits);

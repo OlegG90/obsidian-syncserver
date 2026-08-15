@@ -63,14 +63,14 @@ $$, '23001', 'cannot be deleted or replaced',
 -- Two accounts. Keys are dummy bytes: nothing here tests crypto, only the shape the
 -- schema demands. state must be explicit (default 'provisioned' carries no keys, #83).
 INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                    pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                    pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
 VALUES
   ('11111111-1111-1111-1111-111111111111', 'alice', 'active', 'h',
    '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-    '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 10000000),
+    '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000),
   ('22222222-2222-2222-2222-222222222222', 'bob', 'active', 'h',
    '\xffeeddccbbaa99887766554433221100'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-    '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
+    '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
 
 -- Every vault/share scope is registered before it is referenced.
 INSERT INTO key_scopes (id, kind) VALUES
@@ -151,48 +151,48 @@ $$, '23514', 'keys_match_state',
 -- An active account must carry all key material, wrapped_seed included.
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                       kdf_params, pubkey, enc_privkey, recovery_key)
+                       kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key)
     VALUES ('44444444-4444-4444-4444-444444444444', 'dave', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-            '\x01'::bytea, '\x02'::bytea, '\x03'::bytea)
+            '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea)
 $$, '23514', 'keys_match_state',
    'an active account with no wrapped_seed');
 
 -- kdf_params is validated: an empty object hands the next device an impossible derivation.
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                        kdf_params, pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed)
+                        kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed)
     VALUES ('44444444-4444-4444-4444-444444444444', 'dave', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{}'::jsonb,
-             '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea)
+             '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea)
 $$, '23514', 'kdf_params',
    'kdf_params of {} accepted by a validator meant to reject it');
 
 -- Argon2id memory below the floor is refused.
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                        kdf_params, pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed)
+                        kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed)
     VALUES ('44444444-4444-4444-4444-444444444444', 'dave', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":1024,"t":3,"p":1}',
-             '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea)
+             '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea)
 $$, '23514', 'kdf_params',
    'kdf_params below the memory floor');
 
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                        kdf_params, pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed)
+                        kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed)
     VALUES ('46444444-4444-4444-4444-444444444444', 'fractional-kdf', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536.5,"t":3,"p":1}',
-             '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea)
+             '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea)
 $$, '23514', 'kdf_params',
    'a fractional KDF parameter');
 
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                        kdf_params, pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed)
+                        kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed)
     VALUES ('47444444-4444-4444-4444-444444444444', 'wrong-kdf-version', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{"v":18,"m":65536,"t":3,"p":1}',
-             '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea)
+             '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea)
 $$, '23514', 'kdf_params',
    'an unsupported KDF version');
 
@@ -203,21 +203,45 @@ SELECT expect_fail($$
 $$, '23505', 'users_login_key',
    'a login differing only in case');
 
+-- Half a recovery pair is nobody's state: an envelope with no verifier can never be
+-- released, and a verifier with no envelope releases nothing.
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
-                       kdf_params, pubkey, enc_privkey, recovery_key, wrapped_seed)
+                       kdf_params, pubkey, enc_privkey, kek_verifier_hash, recovery_key, wrapped_seed)
     VALUES ('45444444-4444-4444-4444-444444444444', 'no-recovery-hash', 10000000, 'active', 'h',
             '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-            '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, '\x04'::bytea)
+            '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, '\x04'::bytea)
+$$, '23514', 'recovery_code_is_whole',
+   'an active account holding a recovery envelope with no verifier');
+
+-- The recovery code answers a DIFFERENT loss and is optional (#112). An account without one
+-- must be expressible, because the alternative is the placeholder that made an account claim
+-- a way back it did not have.
+SELECT expect_ok($$
+    INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
+                       kdf_params, pubkey, enc_privkey, kek_verifier_hash, wrapped_seed)
+    VALUES ('48444444-4444-4444-4444-444444444444', 'no-recovery-code', 10000000, 'active', 'h',
+            '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
+            '\x01'::bytea, '\x02'::bytea, 'kv', '\x04'::bytea)
+$$, 'an active account with no recovery code at all, which is the honest shape');
+
+-- The KEK verifier is NOT optional: without it an account that loses its last device cannot
+-- be recovered by any means, which is the state M3.5 exists to make impossible.
+SELECT expect_fail($$
+    INSERT INTO users (id, login, quota_bytes, state, auth_secret_hash, account_salt,
+                       kdf_params, pubkey, enc_privkey, wrapped_seed)
+    VALUES ('49444444-4444-4444-4444-444444444444', 'no-kek-verifier', 10000000, 'active', 'h',
+            '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
+            '\x01'::bytea, '\x02'::bytea, '\x04'::bytea)
 $$, '23514', 'keys_match_state',
-   'an active account without a recovery-code hash');
+   'an active account with no way to prove its passphrase');
 
 -- ---- last active administrator
 INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params,
-                    pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                    pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
 VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', 'h',
         '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-         '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
+         '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
 
 SELECT expect_fail($$
     UPDATE users SET role = 'user' WHERE login = 'root'
@@ -804,10 +828,10 @@ $$, '23001', 'before finalization completes and marks clear',
 -- both finalization_started_at and left_at, so without the exemption the row could never
 -- be removed and decline/withdraw would be unimplementable (the slot would leak).
 INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                   pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                   pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
 VALUES ('77777777-7777-7777-7777-777777777777', 'erin', 'active', 'h',
         '\x0f0e0d0c0b0a09080706050403020100'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-        '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
+        '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
 
 SELECT expect_ok($$
     INSERT INTO share_members (share_id, user_id)
@@ -1179,11 +1203,11 @@ SELECT expect_ok($$
     BEGIN
         FOR i IN 1..6 LOOP
             INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                                pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                                pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
             VALUES (('90000000-0000-0000-0000-00000000000' || i)::uuid,
                     'crowd' || i, 'active', 'x',
                     '\x99999999999999999999999999999999'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-                     '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 1000);
+                     '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 1000);
             INSERT INTO key_scopes (id, kind)
             VALUES (('9c000000-0000-0000-0000-00000000000' || i)::uuid, 'vault');
             INSERT INTO vaults (id, user_id, root_node_id, vault_key_id)
@@ -1207,10 +1231,10 @@ SELECT expect_fail($$
     DO $inner$
     BEGIN
         INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                            pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                            pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
         VALUES ('90000000-0000-0000-0000-000000000009', 'crowd9', 'active', 'x',
                 '\x99999999999999999999999999999999'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-                '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 1000);
+                '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 1000);
         INSERT INTO key_scopes (id, kind)
         VALUES ('9c000000-0000-0000-0000-000000000009', 'vault');
         INSERT INTO vaults (id, user_id, root_node_id, vault_key_id)
@@ -1227,10 +1251,10 @@ $$, '23514', 'at most 8 participants',
 
 -- ---- an e2ee share needs a key; joining needs an envelope
 INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                    pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                    pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
 VALUES ('55555555-5555-5555-5555-555555555555', 'frank', 'active', 'x',
         '\x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-         '\x01'::bytea, '\x02'::bytea, '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
+         '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
 INSERT INTO key_scopes (id, kind)
 VALUES ('fc000000-0000-0000-0000-000000000001', 'vault');
 INSERT INTO vaults (id, user_id, root_node_id, vault_key_id, head_rev)

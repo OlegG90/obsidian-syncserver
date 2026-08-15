@@ -25,9 +25,9 @@ const makeAccount = async (quotaBytes: number): Promise<string> => {
   const userId = randomUUID();
   await db.query(
     `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                        pubkey, enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                        pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
      VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', '\\x03', 'rh', '\\x04', $3)`,
+             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', $3)`,
     [userId, `quota-${randomUUID()}`, quotaBytes],
   );
   return userId;

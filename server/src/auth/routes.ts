@@ -6,14 +6,23 @@ import {
   findActiveAccount,
   findDeviceByRefresh,
   issueRefreshToken,
+  recoverAccount,
   redeemInvitation,
   verifyAuthSecret,
 } from './service.js';
+import { inProcessAttemptLimiter, type AttemptLimiter } from './attempts.js';
 import type { KdfParams } from '@syncserver/shared';
 
 const b64 = (s: string): Buffer => Buffer.from(s, 'base64');
 
-export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
+export const registerAuthRoutes = (
+  app: FastifyInstance,
+  db: Db,
+  cfg: Config,
+  // Injected so a test can drive the clock instead of waiting a minute for a lockout to
+  // expire, and so one limiter is shared by every route that needs it.
+  attempts: AttemptLimiter = inProcessAttemptLimiter(),
+): void => {
   /**
    * Answers before authentication, so an unknown login must not be distinguishable.
    * It gets a deterministic fake salt (#73) — never a 404, and never a random value,
@@ -46,8 +55,9 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       pubkey: string;
       enc_privkey: string;
       wrapped_seed: string;
-      recovery_key: string;
-      recovery_code_hash: string;
+      kek_verifier: string;
+      recovery_key?: string;
+      recovery_code_hash?: string;
       initial_vault_id: string;
       initial_vault_name_enc: string;
       device_name?: string;
@@ -81,6 +91,13 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       });
     }
 
+    // Without it the account could never be recovered from the passphrase, and nothing later
+    // can add one: the KEK is the client's and only exists while it holds the phrase.
+    if (!b.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
+    if ((b.recovery_key === undefined) !== (b.recovery_code_hash === undefined)) {
+      return reply.code(400).send({ error: 'recovery_pair_incomplete' });
+    }
+
     const out = await redeemInvitation(db, {
       invitationToken: b.invitation_token,
       authSecret: b.auth_secret,
@@ -89,7 +106,10 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       pubkey: b64(b.pubkey),
       encPrivkey: b64(b.enc_privkey),
       wrappedSeed: b64(b.wrapped_seed),
-      recoveryKey: b64(b.recovery_key),
+      kekVerifier: b.kek_verifier,
+      // Sent together or not at all; the schema refuses half a pair, and refusing it here
+      // names the caller's mistake instead of surfacing a constraint as a 500.
+      recoveryKey: b.recovery_key === undefined ? undefined : b64(b.recovery_key),
       recoveryCodeHash: b.recovery_code_hash,
       initialVaultId: b.initial_vault_id,
       initialVaultNameEnc: b64(b.initial_vault_name_enc),
@@ -150,6 +170,70 @@ export const registerAuthRoutes = (app: FastifyInstance, db: Db, cfg: Config): v
       };
     },
   );
+
+  /**
+   * Return an account to a device that has nothing (#112).
+   *
+   * The proof comes first and the envelope second, which is the whole difference between
+   * this and handing out seed envelopes by login name. Everything that can distinguish an
+   * account from a non-account is deliberately flattened: an unknown login, an account with
+   * no recovery code, a wrong verifier and a wrong code are one refusal (#73), and the
+   * attempt limit is counted before any of them is evaluated.
+   */
+  app.post<{
+    Body: {
+      login: string;
+      kek_verifier?: string;
+      recovery_code?: string;
+      device_name?: string;
+      device_platform?: string;
+    };
+  }>('/auth/recover', async (req, reply) => {
+    const b = req.body ?? ({} as Record<string, string>);
+    if (!b.login) return reply.code(400).send({ error: 'login_required' });
+    // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
+    // is a request that could ever succeed.
+    if ((b.kek_verifier === undefined) === (b.recovery_code === undefined)) {
+      return reply.code(400).send({ error: 'one_proof_required' });
+    }
+
+    // Two keys, because either alone is bypassable: one login from a thousand addresses, or
+    // a thousand logins from one.
+    const keys = [`login:${b.login.toLowerCase()}`, `src:${req.ip}`];
+    for (const key of keys) {
+      const allowed = attempts.check(key);
+      if (!allowed.ok) {
+        return reply
+          .code(429)
+          .header('retry-after', String(allowed.retryAfterSeconds))
+          .send({ error: 'rate_limited', retry_after: allowed.retryAfterSeconds });
+      }
+    }
+
+    const out = await recoverAccount(db, {
+      login: b.login,
+      kekVerifier: b.kek_verifier,
+      recoveryCode: b.recovery_code,
+      name: b.device_name ?? 'recovered device',
+      platform: b.device_platform ?? 'unknown',
+    });
+
+    if (!out) {
+      for (const key of keys) attempts.fail(key);
+      return reply.code(401).send({ error: 'invalid_credentials' });
+    }
+    for (const key of keys) attempts.succeed(key);
+
+    return {
+      seed_envelope: out.seedEnvelope,
+      opened_by: out.openedBy,
+      enc_privkey: out.encPrivkey,
+      account_salt: out.accountSalt,
+      kdf_params: out.kdfParams,
+      user_id: out.userId,
+      device_id: out.deviceId,
+    };
+  });
 
   app.post<{ Body: { refresh: string } }>('/auth/refresh', async (req, reply) => {
     const device = await findDeviceByRefresh(db, req.body.refresh);

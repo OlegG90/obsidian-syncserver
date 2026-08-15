@@ -85,6 +85,7 @@ before(async () => {
     `UPDATE users SET state = 'active', role = 'admin', auth_secret_hash = 'h',
             account_salt = decode('00112233445566778899aabbccddeeff','hex'),
             kdf_params = '{"v":19,"m":65536,"t":3,"p":1}', pubkey = '\\x01', enc_privkey = '\\x02',
+            kek_verifier_hash = 'kv',
             recovery_key = '\\x03', recovery_code_hash = 'rh', wrapped_seed = '\\x04',
             invite_token_hash = NULL, invite_expires_at = NULL
       WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
@@ -93,9 +94,9 @@ before(async () => {
   userId = randomUUID();
   await db.query(
     `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
-                        enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                        enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
      VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', '\\x03', 'rh', '\\x04', 104857600)`,
+             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
     [userId, `reset-${process.pid}`],
   );
   const device = await db.one<{ id: string }>(
@@ -164,9 +165,9 @@ describe('reset', () => {
     const stranger = randomUUID();
     await db.query(
       `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
-                          enc_privkey, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+                          enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
        VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', '\\x03', 'rh', '\\x04', 1048576)`,
+               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
       [stranger, `reset-stranger-${process.pid}`]);
     const scope = await db.one<{ id: string }>(`INSERT INTO key_scopes (kind) VALUES ('vault') RETURNING id`);
     const theirVault = randomUUID();

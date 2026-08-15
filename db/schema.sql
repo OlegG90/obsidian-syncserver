@@ -153,8 +153,19 @@ CREATE TABLE users (
     -- under an account key from the seed.
     pubkey       bytea,
     enc_privkey  bytea,
-    recovery_key bytea,                          -- the seed wrapped under the recovery code
+    -- Proof that a caller can OPEN wrapped_seed, without holding it: HKDF of the same
+    -- passphrase-derived KEK, bound to the login and salt (#112). It is what lets a device
+    -- with nothing at all recover the account — the server hands back the envelope only
+    -- against evidence that whoever asks can already unwrap it.
+    kek_verifier_hash text,
+    -- The same seed wrapped a second time, under a high-entropy recovery code, for the
+    -- other loss: a forgotten passphrase. NULLABLE, and null is the honest answer for an
+    -- account that has no code — a placeholder here would satisfy every check and fail the
+    -- one moment the column exists for.
+    recovery_key bytea,
     recovery_code_hash text,
+    CONSTRAINT recovery_code_is_whole CHECK (
+        (recovery_key IS NULL) = (recovery_code_hash IS NULL)),
 
     role         user_role   NOT NULL DEFAULT 'user',
     state        user_state  NOT NULL DEFAULT 'provisioned',
@@ -173,21 +184,27 @@ CREATE TABLE users (
     CONSTRAINT keys_match_state CHECK (
         (state = 'provisioned'
             AND auth_secret_hash IS NULL AND pubkey IS NULL AND wrapped_seed IS NULL
+            AND kek_verifier_hash IS NULL
             AND invite_token_hash IS NOT NULL AND invite_expires_at IS NOT NULL)
         OR
         -- The tombstone holds NOTHING: no keys to steal, no token to redeem, no way in.
         (state = 'tombstone'
             AND auth_secret_hash IS NULL AND account_salt IS NULL AND kdf_params IS NULL
             AND pubkey IS NULL AND enc_privkey IS NULL AND recovery_key IS NULL
-            AND recovery_code_hash IS NULL AND wrapped_seed IS NULL
+            AND recovery_code_hash IS NULL AND kek_verifier_hash IS NULL
+            AND wrapped_seed IS NULL
             AND invite_token_hash IS NULL AND invite_expires_at IS NULL
             AND frozen_at IS NULL)
         OR
+        -- A live account carries every key it needs to be opened again, and the recovery
+        -- PAIR is deliberately not among them: it answers a different loss and is optional
+        -- (#112). `kek_verifier_hash` is not optional — without it an account that loses
+        -- its last device cannot be recovered at all, which is the state this milestone
+        -- exists to make impossible.
         (state NOT IN ('provisioned', 'tombstone')
             AND auth_secret_hash IS NOT NULL AND account_salt IS NOT NULL
             AND kdf_params IS NOT NULL AND pubkey IS NOT NULL
-            AND enc_privkey IS NOT NULL AND recovery_key IS NOT NULL
-            AND recovery_code_hash IS NOT NULL
+            AND enc_privkey IS NOT NULL AND kek_verifier_hash IS NOT NULL
             AND wrapped_seed IS NOT NULL
             AND invite_token_hash IS NULL AND invite_expires_at IS NULL))
 );
