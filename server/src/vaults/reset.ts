@@ -14,6 +14,7 @@
  * separately: they receive `410 reset` and quarantine rather than delete (#80).
  */
 import type { PoolClient } from 'pg';
+import { thawIfUnderQuota } from '../quota.js';
 import type { Db } from '../db.js';
 
 /**
@@ -126,6 +127,11 @@ export const resetVault = async (db: Db, userId: string, vaultId: string): Promi
 
     const removed = await deleteOwnTree(c, vaultId);
     await recountQuota(c, userId);
+
+    // Space freed is the one thing that can end a freeze (SH-20), and a reset is the largest
+    // amount of it this product can free in one act. Catching the account's shares up is
+    // part of the same transaction (SH-21) — see `thawIfUnderQuota`.
+    await thawIfUnderQuota(c, userId);
 
     // The epoch is what tells every other device this happened, and which of the two
     // opposite reactions is correct: apply the deletions rather than upload the local

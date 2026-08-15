@@ -214,7 +214,8 @@ GET    /vaults/{vault_id}/delta?cursor=<opaque>&limit=500
                    No `by`: nothing records who ended a share, and a column naming an
                    actor nobody acts on is a cost with no use — the audit log (11) is
                    where that belongs if it is ever wanted.
-                   No `account_thawed` yet: thawing does not exist (SH-21 is open), and
+                   No `account_thawed` yet: a thawed member learns from their own journal,
+                   which the catch-up writes into as it delivers (SH-21), and
                    an event for a transition nothing can perform would be a promise
                    again rather than a state
           next_cursor, has_more}

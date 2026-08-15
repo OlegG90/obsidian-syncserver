@@ -142,9 +142,16 @@ so the recovery attempt went to an address nobody had chosen and failed before t
 
 ### Carried over from M3
 
-- [ ] **Thawing with catch-up (SH-21).** Freezing an over-quota account works and is enforced where
-      propagation crosses an account boundary; the way back — releasing the freeze and delivering what was
-      withheld — was specified and never built.
+- [x] **Thawing with catch-up (SH-21).** The freeze lifts when the account is back inside its limit, and
+      the catch-up runs in the same transaction: a walk of another member's copy, delivering what arrived
+      during the gap **and the version rows behind it**, authorship intact. Not the journal — that is a
+      90-day transport buffer, and a freeze has no expiry of its own.
+- [ ] **Something a frozen account can actually delete.** Thawing has a trigger only if usage can fall,
+      and today it can fall two ways: a vault reset, and deleting a whole vault. An ordinary delete is
+      **soft** — the row is the trash entry — so it frees nothing, and there is no purge. SH-20 says
+      "deleting is the only way out"; until the trash can be emptied that sentence is not true, and the
+      exit that recovery-by-deletion promises is a vault reset. The purge belongs with the trash UI and
+      blob GC in M4; naming it here so the gap is not discovered by somebody stuck behind it.
 
 ## M1 — the scope of the first complete release
 
