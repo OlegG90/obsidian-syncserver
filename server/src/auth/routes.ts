@@ -254,4 +254,27 @@ export const registerAuthRoutes = (
     );
     return reply.code(201).send({ device_id: row!.id });
   });
+
+  /**
+   * Retire a device of the caller's own account — what disconnecting does on its way out.
+   *
+   * **Revoked, not deleted.** `versions.author_id` and the audit log point at devices'
+   * accounts and a history that forgets who wrote what is worse than one naming a device
+   * that no longer syncs. Revocation also does the one thing that matters: the refresh token
+   * stops working, so a device that keeps running cannot mint another access token.
+   *
+   * Idempotent, and silent about devices that are not the caller's — a 404 for someone
+   * else's id would confirm it exists.
+   */
+  app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+
+    await db.query(
+      `UPDATE devices SET revoked_at = now(), refresh_token_hash = NULL
+        WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [req.params.deviceId, claims.sub],
+    );
+    return reply.code(204).send();
+  });
 };

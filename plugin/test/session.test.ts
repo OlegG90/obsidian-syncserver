@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { authSecret, createAccount, deriveKek, openAccount } from '../src/crypto/account.js';
+import { authSecret, createAccount, deriveKek, kekVerifier, openAccount } from '../src/crypto/account.js';
 import { randomBytes, toBase64 } from '../src/crypto/bytes.js';
 import { seal } from '../src/crypto/sealed.js';
 import { Session, forTests, type Connection, type Derivation } from '../src/session/index.js';
@@ -24,6 +24,12 @@ import type { Transport, HttpRequest, HttpResponse } from '../src/api/transport.
 /** A fixed seed, so `authSecret(seed)` is a known value the test can assert. */
 const KNOWN_SEED = new Uint8Array(32).fill(0x42);
 const KNOWN_SALT = new Uint8Array(16).fill(0x01);
+/**
+ * The KEK the fake "derived". Held rather than recomputed for the same reason the real one
+ * is: it is what the recovery verifier is made from (#112), and a derivation that returned
+ * an account without one would send an account into the world that cannot be recovered.
+ */
+const KNOWN_KEK = new Uint8Array(32).fill(0x7e);
 
 /** A derivation that counts its calls and returns the fixed seed. */
 const fakeDerivation = (): Derivation & { calls: number } => {
@@ -36,6 +42,7 @@ const fakeDerivation = (): Derivation & { calls: number } => {
         accountSalt: KNOWN_SALT,
         kdfParams: { v: 19, m: 65536, t: 3, p: 1 },
         wrappedSeed: toBase64(new Uint8Array(40).fill(0x99)), // plausible, not real
+        kek: KNOWN_KEK,
         // A created account carries its identity; only `open` does without one.
         pubkey: toBase64(new Uint8Array(32).fill(0x11)),
         encPrivkey: toBase64(new Uint8Array(48).fill(0x22)),
@@ -49,6 +56,7 @@ const fakeDerivation = (): Derivation & { calls: number } => {
         accountSalt,
         kdfParams,
         wrappedSeed,
+        kek: KNOWN_KEK,
       };
     },
   };
@@ -350,5 +358,99 @@ describe('a wrong passphrase says so', () => {
 
     await assert.rejects(s.open('the wrong one'), /does not open this account/);
     assert.equal(s.state, 'locked', 'and nothing half-opened');
+  });
+});
+
+/**
+ * The real derivation, bound here rather than taken from `index.ts`.
+ *
+ * `session.recover` in production has no derivation parameter — that is the structural rule
+ * this file's header describes — so a test that wants the real one assembles it, and the
+ * assembly is visible.
+ */
+const realDerivationForTests: Derivation = {
+  create: (passphrase, params) => createAccount(passphrase, params),
+  open: (passphrase, accountSalt, kdfParams, wrappedSeed) =>
+    openAccount(passphrase, accountSalt, kdfParams, wrappedSeed),
+};
+
+describe('Session.recover — the last device is gone', () => {
+  // What the server would hold for this account: the seed sealed under the real KEK, so the
+  // envelope that comes back is one this passphrase can actually open.
+  const PHRASE = 'correct horse battery staple';
+  const SEED = randomBytes(32);
+  const RSALT = randomBytes(16);
+  const ENVELOPE = seal(deriveKek(PHRASE, RSALT, FAST), SEED);
+
+  const answers = () => ({
+    'GET /auth/kdf': { status: 200, body: { account_salt: toBase64(RSALT), kdf_params: FAST } },
+    'POST /auth/recover': {
+      status: 200,
+      body: {
+        seed_envelope: ENVELOPE,
+        opened_by: 'passphrase',
+        enc_privkey: toBase64(new Uint8Array(48).fill(0x22)),
+        account_salt: toBase64(RSALT),
+        kdf_params: FAST,
+        user_id: 'user-1',
+        device_id: 'dev-recovered',
+      },
+    },
+    'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1' } },
+    'GET /vaults': { status: 200, body: [{ id: '11111111-1111-4111-8111-111111111111', name_enc: '' }] },
+  });
+
+  it('proves the passphrase, opens what comes back, and lands an open session', async () => {
+    // The real derivation, not the fake one: this flow's whole claim is that the same KEK
+    // both proves itself to the server and opens the envelope the server returns, and a
+    // fake that made up either half would assert nothing.
+    const transport = fakeTransport(answers());
+    const s = await Session.recover(
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+      { derivation: realDerivationForTests, transport },
+    );
+
+    assert.equal(s.state, 'open', 'recovered devices are open — the phrase was just typed');
+    assert.equal(s.connection.deviceId, 'dev-recovered', 'the server made the device; nobody approved it');
+    assert.equal(s.connection.wrappedSeed, ENVELOPE, 'stored as it arrived: already wrapped under this phrase');
+    assert.equal(s.connection.vaultId, '11111111-1111-4111-8111-111111111111', 'one vault is chosen silently');
+  });
+
+  it('sends a verifier and never the passphrase', async () => {
+    const transport = fakeTransport(answers());
+    await Session.recover(
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+      { derivation: realDerivationForTests, transport },
+    );
+
+    const call = transport.calls.find((c) => c.url.includes('/auth/recover'))!;
+    const body = JSON.parse(call.body as string);
+    assert.ok(body.kek_verifier, 'a proof goes up');
+    assert.equal(
+      body.kek_verifier,
+      kekVerifier(deriveKek(PHRASE, RSALT, FAST), 'alice', RSALT),
+      'and it is the one the server can check — bound to this login and this salt',
+    );
+    for (const c of transport.calls) {
+      assert.ok(!String(c.body ?? '').includes(PHRASE), `${c.method} ${c.url} carried the passphrase`);
+    }
+  });
+
+  it('refuses a login whose salt does not belong to it, rather than storing a broken record', async () => {
+    // A hostile or confused server answering /auth/kdf with somebody else's salt produces a
+    // KEK that opens nothing. The envelope must fail to open — and the failure must arrive
+    // before anything is written down.
+    const wrongSalt = randomBytes(16);
+    const transport = fakeTransport({
+      ...answers(),
+      'GET /auth/kdf': { status: 200, body: { account_salt: toBase64(wrongSalt), kdf_params: FAST } },
+    });
+
+    await assert.rejects(
+      Session.recover(
+        { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+        { derivation: realDerivationForTests, transport },
+      ),
+    );
   });
 });

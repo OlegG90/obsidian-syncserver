@@ -235,6 +235,29 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Take the account back on a device that holds nothing (docs/07, #112).
+   *
+   * Not a second device joining a first — there is no first left. The passphrase proves
+   * itself to the server, the account's own envelope comes back, and what follows is
+   * ordinary adoption: the vault on the server materialises into whatever is on disk here,
+   * which is the same branch a paired device takes.
+   */
+  async recover(args: { serverUrl: string; login: string; passphrase: string }): Promise<void> {
+    const s = await session.recover(
+      { ...args, deviceName: 'obsidian', devicePlatform: Platform.isMobile ? 'mobile' : 'desktop' },
+      transport,
+    );
+    this.sess = s;
+    this.data.connection = s.connection;
+    // Empty, so adoption runs: this vault may hold nothing, or an old copy of everything,
+    // and only reconciliation can tell which.
+    this.data.state = emptyState();
+    await this.save();
+    this.setPhase({ kind: 'idle' });
+    this.startPush();
+  }
+
+  /**
    * Join an account that already exists, as a second device (docs/07).
    *
    * The counterpart of `connect()`: nothing is generated here, because the account's seed
@@ -609,6 +632,57 @@ export default class SyncServerPlugin extends Plugin {
     void this.stopPush();
     new Notice('SyncServer: locked.');
   }
+
+  /**
+   * Point this connection at a different address (#113).
+   *
+   * An edit of one field, not a reconnection: the account, the seed, the device and every
+   * key belong to the account and the vault, never to a URL. Moving from an IP to a host
+   * name or through a tunnel changes where this device talks, and nothing about what it
+   * says. The session is rebuilt because the client holds the base address, and rebuilding
+   * it **locks** — a running session cannot be pointed elsewhere mid-request, and asking for
+   * the passphrase again is the honest price of that.
+   */
+  async changeServerUrl(serverUrl: string): Promise<void> {
+    const conn = this.data.connection;
+    if (!conn || serverUrl === conn.serverUrl) return;
+
+    await this.stopPush();
+    this.data.connection = { ...conn, serverUrl };
+    await this.save();
+    this.sess = session.create(this.data.connection, transport);
+    this.setPhase({ kind: 'locked' });
+    this.startPush();
+  }
+
+  /**
+   * Leave this server, keeping every file (#113).
+   *
+   * What it ends is *this device's* participation: the local record goes, and the device is
+   * revoked so a copy of it left running cannot mint another token. Nothing is deleted — not
+   * a note here, not a byte on the server — because a disconnect that also destroyed data
+   * would be the one button in this product nobody could undo.
+   *
+   * Revocation is attempted and not insisted on: it needs a live session and a reachable
+   * server, and neither is guaranteed at the moment somebody decides to leave.
+   */
+  async disconnect(): Promise<void> {
+    const conn = this.data.connection;
+    if (!conn) return;
+
+    try {
+      await this.sess?.use(async (h) => h.client.revokeDevice(conn.deviceId));
+    } catch {
+      // Offline, locked, or already revoked. The local half is what disconnecting means.
+    }
+
+    await this.stopPush();
+    this.sess = undefined;
+    delete this.data.connection;
+    delete this.data.state;
+    await this.save();
+    this.setPhase({ kind: 'disconnected' });
+  }
 }
 
 /** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
@@ -722,6 +796,43 @@ class TextPromptModal extends Modal {
   }
 }
 
+/**
+ * A confirmation for the one action here that cannot be undone by pressing it again.
+ *
+ * The consequence goes in the body rather than the title, because "are you sure?" is not
+ * information: what a person needs to decide is what they will need to come back.
+ */
+class ConfirmModal extends Modal {
+  constructor(
+    app: App,
+    private readonly title: string,
+    private readonly consequence: string,
+    private readonly confirmed: () => Promise<void>,
+  ) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.titleEl.setText(this.title);
+    this.contentEl.createEl('p', { text: this.consequence });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton((b) =>
+        b
+          .setButtonText('Disconnect')
+          .setWarning()
+          .onClick(async () => {
+            this.close();
+            await this.confirmed();
+          }),
+      );
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 /** The complete status, on every platform — see `status.ts` for why the status bar is not enough. */
 class StatusModal extends Modal {
   constructor(
@@ -761,7 +872,6 @@ class SyncServerSettings extends PluginSettingTab {
       containerEl.createEl('h3', { text: 'Connected' });
       const list = containerEl.createEl('dl');
       const rows: [string, string][] = [
-        ['Server', conn.serverUrl],
         ['Login', conn.login],
         ['Vault', conn.vaultId],
         ['Device', conn.deviceId],
@@ -773,6 +883,24 @@ class SyncServerSettings extends PluginSettingTab {
       containerEl.createEl('p', {
         text: 'The passphrase is not stored. It is asked for once per session, the first time a sync runs.',
       });
+
+      // Editable, because moving an address is an ordinary thing to do and nothing else in
+      // the record depends on it (#113). The alternative people expect — disconnect, then
+      // connect again — would cost a full bootstrap to undo, since the invitation that made
+      // this account is one-time and spent.
+      let url = conn.serverUrl;
+      new Setting(containerEl)
+        .setName('Server address')
+        .setDesc('An IP, a host name, a tunnel — only where this device talks. Changing it locks the session.')
+        .addText((t) => t.setValue(conn.serverUrl).onChange((v) => (url = v.trim())))
+        .addButton((b) =>
+          b.setButtonText('Save').onClick(async () => {
+            if (!url || url === conn.serverUrl) return;
+            await this.plugin.changeServerUrl(url);
+            new Notice('SyncServer: address changed. Unlock on the next sync.', 8000);
+            this.display();
+          }),
+        );
 
       // A button, because the command palette is not somewhere a person looks for the one
       // thing this plugin does. The ribbon icon syncs too; this is where someone who has
@@ -803,6 +931,7 @@ class SyncServerSettings extends PluginSettingTab {
 
       this.approveSection(containerEl);
       this.shareSection(containerEl);
+      this.disconnectSection(containerEl);
       this.versionSection(containerEl);
       return;
     }
@@ -1010,6 +1139,42 @@ class SyncServerSettings extends PluginSettingTab {
   }
 
   /**
+   * Leaving the server, and saying what it will take to come back (#113).
+   *
+   * Last on the screen, and behind a confirmation, because for an account whose only device
+   * this is, disconnect and recovery are the same door in opposite directions: the way back
+   * is the passphrase, and somebody who does not have it should learn that here rather than
+   * afterwards.
+   */
+  private disconnectSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Disconnect' });
+    containerEl.createEl('p', {
+      text:
+        'Stops this device syncing and forgets the connection. Every file stays — here and ' +
+        'on the server. To connect this vault again you will need the passphrase, or another ' +
+        'device that is still connected.',
+    });
+
+    new Setting(containerEl).addButton((b) =>
+      b
+        .setButtonText('Disconnect')
+        .setWarning()
+        .onClick(() => {
+          new ConfirmModal(
+            this.app,
+            'Disconnect from the server?',
+            'Files are kept, here and on the server. Coming back needs the passphrase or another connected device.',
+            async () => {
+              await this.plugin.disconnect();
+              new Notice('SyncServer: disconnected. Files were left as they are.', 8000);
+              this.display();
+            },
+          ).open();
+        }),
+    );
+  }
+
+  /**
    * On a device with nothing: show a code and wait for the other one to approve.
    *
    * The passphrase is asked for here even though the seed is arriving sealed, because this
@@ -1056,6 +1221,41 @@ class SyncServerSettings extends PluginSettingTab {
           b.setDisabled(false);
         }
       }),
+    );
+
+    // The same three fields, and deliberately a separate button rather than a mode switch:
+    // the two flows differ in what the person still has, not in what they type, and a
+    // radio button asking "is your other device alive?" is a worse question than two labels.
+    containerEl.createEl('h3', { text: 'Recover this account' });
+    containerEl.createEl('p', {
+      text:
+        'When no device is left to pair with. The passphrase proves itself to the server, ' +
+        'which returns the account key it has always held sealed — it cannot read it, and ' +
+        'never sees the passphrase. Everything on the server then syncs down into this vault.',
+    });
+
+    new Setting(containerEl).addButton((b) =>
+      b
+        .setButtonText('Recover')
+        .setWarning()
+        .onClick(async () => {
+          b.setDisabled(true);
+          try {
+            await this.plugin.recover({
+              serverUrl: draft.serverUrl,
+              login: draft.login,
+              passphrase: draft.passphrase,
+            });
+            new Notice('Recovered. Sync to bring the vault down.', 8000);
+            this.display();
+          } catch (e) {
+            // Named on screen, because every failure here is one the person can act on: a
+            // typo in the address, in the login, or in the passphrase.
+            new Notice(`SyncServer: recovery failed — ${e instanceof Error ? e.message : String(e)}`, 12000);
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
     );
   }
 }

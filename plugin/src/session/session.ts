@@ -39,6 +39,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import {
   authSecret,
   deriveKek,
+  kekVerifier,
   unwrapIdentity,
   vaultKey,
   type Account,
@@ -47,7 +48,7 @@ import {
 import type { KdfParams } from '@syncserver/shared';
 import { encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
-import { seal } from '../crypto/sealed.js';
+import { open as openSealed, seal } from '../crypto/sealed.js';
 import { normalisePairingCode } from '../crypto/pairing-code.js';
 import { SyncClient } from '../api/client.js';
 import type { Transport } from '../api/transport.js';
@@ -109,6 +110,17 @@ export interface PairArgs {
   login: string;
   passphrase: string;
   pairingCode: string;
+  /** Only needed when the account holds more than one vault. */
+  vaultId?: string;
+  deviceName?: string;
+  devicePlatform?: string;
+}
+
+/** What `recover()` needs: where, who, and the passphrase — everything the user carries in their head. */
+export interface RecoverArgs {
+  serverUrl: string;
+  login: string;
+  passphrase: string;
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   deviceName?: string;
@@ -398,6 +410,96 @@ export class Session {
     return paired;
   }
 
+
+  /**
+   * Take the account back on a device that holds nothing at all (docs/07, #112).
+   *
+   * The flow `pair()` cannot be, because there is nobody left to approve anything: the last
+   * device is gone, and what remains is the address, the login and the passphrase. It is the
+   * difference between a server that stores a vault and a server that can give it back.
+   *
+   * **The proof goes first and the envelope comes second.** This derives the same KEK it
+   * would derive to unlock, sends only a verifier of it, and receives `wrapped_seed` — which
+   * that KEK then opens. The server never sees the phrase, and hands the envelope to nobody
+   * who cannot already open it.
+   *
+   * Past this point nothing is special: the device logs in, picks a vault and enters
+   * adoption like any other freshly bootstrapped one. The seed envelope is stored exactly as
+   * it arrived, because it is already wrapped under this passphrase — unlike pairing, which
+   * has to re-wrap what it was handed.
+   */
+  static async recover(
+    args: RecoverArgs,
+    deps: { derivation: Derivation; transport: Transport },
+  ): Promise<Session> {
+    const client = new SyncClient(args.serverUrl, deps.transport);
+
+    // Answered before authentication, and answered for unknown logins too — a deterministic
+    // fake (#73). So a wrong login gets this far and fails at the proof, which is exactly
+    // where every other wrong thing fails.
+    const { account_salt, kdf_params } = await client.kdf(args.login);
+    const accountSalt = fromBase64(account_salt);
+    const kek = deriveKek(args.passphrase, accountSalt, kdf_params);
+
+    const recovered = await client.recover({
+      login: args.login,
+      kek_verifier: kekVerifier(kek, args.login, accountSalt),
+      device_name: args.deviceName ?? 'obsidian',
+      device_platform: args.devicePlatform ?? 'unknown',
+    });
+
+    // The AEAD's "invalid tag" would be the only thing separating a wrong passphrase from a
+    // corrupted envelope here, and the person holding a right one cannot act on either.
+    let seed: Uint8Array;
+    try {
+      seed = openSealed(kek, recovered.seed_envelope);
+    } catch {
+      throw new Error(
+        'the server returned this account, but that passphrase does not open it — which should be impossible, ' +
+          'since the same passphrase produced the proof it accepted. Report this rather than retrying.',
+      );
+    }
+
+    const session = await client.login({
+      login: args.login,
+      auth_secret: authSecret(seed),
+      device_id: recovered.device_id,
+    });
+    client.setAccessToken(session.access);
+    client.setRefreshToken(session.refresh);
+
+    // One vault is the ordinary case and choosing it silently is right; several without
+    // being told is a question, not a default — the same rule pairing follows.
+    const vaults = await client.listVaults();
+    const vaultId = args.vaultId ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
+    if (!vaultId) {
+      throw new Error(
+        `this account has ${vaults.length} vaults; name the one to recover into: ${vaults.map((v) => v.id).join(', ')}`,
+      );
+    }
+
+    const conn: Connection = {
+      serverUrl: args.serverUrl,
+      login: args.login,
+      deviceId: recovered.device_id,
+      vaultId,
+      // Stored as it arrived: this envelope is already the one this passphrase opens.
+      wrappedSeed: recovered.seed_envelope,
+      accountSalt: recovered.account_salt,
+      kdfParams: recovered.kdf_params,
+    };
+    const back = new Session(conn, deps);
+    back.seed = seed;
+    back.handle = {
+      client,
+      kv: vaultKey(seed, vaultId),
+      userId: recovered.user_id,
+      encPrivkey: recovered.enc_privkey,
+      openIdentity: () => unwrapIdentity(seed, recovered.enc_privkey),
+    };
+    return back;
+  }
+
   /**
    * Claim an invitation. Generates the account's keys on the device, mints the session's
    * vault, and returns an OPEN session — the caller has just typed the passphrase; asking
@@ -419,8 +521,11 @@ export class Session {
       pubkey: account.pubkey,
       enc_privkey: account.encPrivkey,
       wrapped_seed: account.wrappedSeed,
-      recovery_key: 'BA==',
-      recovery_code_hash: 'f'.repeat(64),
+      // What makes this account recoverable at all (#112). The recovery PAIR is deliberately
+      // not sent: it answers a forgotten passphrase, is not built yet, and null is the honest
+      // way to say an account has none — the placeholder that used to sit here made every
+      // account claim a way back it did not have.
+      kek_verifier: kekVerifier(account.kek, args.login, account.accountSalt),
       initial_vault_id: vaultId,
       initial_vault_name_enc: encryptName(vaultKey(account.seed, vaultId), args.vaultName),
       device_name: args.deviceName ?? 'obsidian',

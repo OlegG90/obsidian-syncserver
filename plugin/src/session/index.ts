@@ -16,9 +16,16 @@
 import { createAccount, openAccount, type Account } from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
 import type { Transport } from '../api/transport.js';
-import { Session, type ConnectArgs, type Connection, type Derivation, type PairArgs } from './session.js';
+import {
+  Session,
+  type ConnectArgs,
+  type Connection,
+  type Derivation,
+  type PairArgs,
+  type RecoverArgs,
+} from './session.js';
 
-export type { Connection, ConnectArgs, Derivation, Handle, PairArgs } from './session.js';
+export type { Connection, ConnectArgs, Derivation, Handle, PairArgs, RecoverArgs } from './session.js';
 export { Session };
 
 const realDerivation: Derivation = {
@@ -35,6 +42,9 @@ export const session = {
   /** A second device joining an account that already exists (docs/07). */
   pair: (args: PairArgs, transport: Transport, poll?: () => Promise<boolean>) =>
     Session.pair(args, { derivation: realDerivation, transport }, poll),
+  /** The last device gone: take the account back with the passphrase alone (docs/07). */
+  recover: (args: RecoverArgs, transport: Transport) =>
+    Session.recover(args, { derivation: realDerivation, transport }),
 };
 
 /** Tests: a factory the caller binds to fakes. The real path above has no such parameter. */
@@ -42,4 +52,5 @@ export const forTests = (deps: { derivation: Derivation; transport: Transport })
   connect: (args: ConnectArgs) => Session.connect(args, deps),
   create: (conn: Connection) => Session.create(conn, deps),
   pair: (args: PairArgs, poll?: () => Promise<boolean>) => Session.pair(args, deps, poll),
+  recover: (args: RecoverArgs) => Session.recover(args, deps),
 });

@@ -272,8 +272,11 @@ export class SyncClient {
     pubkey: string;
     enc_privkey: string;
     wrapped_seed: string;
-    recovery_key: string;
-    recovery_code_hash: string;
+    /** Proof this account can later be recovered from the passphrase alone (#112). */
+    kek_verifier: string;
+    /** The recovery code's envelope and verifier, or neither — never one of the two. */
+    recovery_key?: string;
+    recovery_code_hash?: string;
     initial_vault_id: string;
     initial_vault_name_enc: string;
     device_name?: string;
@@ -295,6 +298,38 @@ export class SyncClient {
     device_id: string;
   }): Promise<{ access: string; refresh: string; user_id: string; enc_privkey: string }> {
     return this.json('POST', '/auth/login', body, { auth: false });
+  }
+
+  /**
+   * Retire this device on the way out of a disconnect. Best effort by nature — the point of
+   * disconnecting is often that this device is about to stop existing.
+   */
+  revokeDevice(deviceId: string): Promise<void> {
+    return this.json('DELETE', `/auth/devices/${deviceId}`, undefined, { expect: [204] });
+  }
+
+  /**
+   * Ask for the account back, holding nothing but a proof (#112).
+   *
+   * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to
+   * authenticate with, which is the shape of the whole problem.
+   */
+  recover(body: {
+    login: string;
+    kek_verifier?: string;
+    recovery_code?: string;
+    device_name?: string;
+    device_platform?: string;
+  }): Promise<{
+    seed_envelope: string;
+    opened_by: 'passphrase' | 'recovery_code';
+    enc_privkey: string;
+    account_salt: string;
+    kdf_params: KdfParams;
+    user_id: string;
+    device_id: string;
+  }> {
+    return this.json('POST', '/auth/recover', body, { auth: false });
   }
 
   refreshAccess(refresh: string): Promise<{ access: string }> {

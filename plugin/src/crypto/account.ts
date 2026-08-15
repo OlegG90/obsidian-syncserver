@@ -82,6 +82,14 @@ export interface OpenedAccount {
   kdfParams: KdfParams;
   /** Base64, as stored on the server. */
   wrappedSeed: string;
+  /**
+   * The key-encryption key itself, kept because it was just computed.
+   *
+   * Argon2id at 64 MiB is the one expensive thing this design does, and the recovery
+   * verifier needs the same value — recomputing it would charge a phone a second full pass
+   * to produce a string it already had the ingredients for.
+   */
+  kek: Uint8Array;
 }
 
 /** A newly created account, which is the one moment the identity is made rather than read. */
@@ -135,14 +143,33 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
   const accountSalt = randomBytes(16);
   const seed = newSeed();
   const identity = newIdentity();
+  const kek = deriveKek(passphrase, accountSalt, params);
   return {
     seed,
     accountSalt,
     kdfParams: params,
-    wrappedSeed: seal(deriveKek(passphrase, accountSalt, params), seed),
+    wrappedSeed: seal(kek, seed),
+    kek,
     pubkey: toBase64(identity.publicKey),
     encPrivkey: wrapIdentity(seed, identity.secretKey),
   };
+};
+
+/**
+ * Proof that whoever holds it can open `wrapped_seed` — without holding the seed (#112).
+ *
+ * This is what lets a device with nothing at all recover the account: the server compares it
+ * against a stored hash and returns the envelope, having learned nothing it did not already
+ * store. It is derived from the **KEK** rather than the seed on purpose, because at recovery
+ * time the seed is precisely what the device does not have.
+ *
+ * Bound to the login and the salt so it cannot be replayed against another account, and so a
+ * server that answered `/auth/kdf` with somebody else's salt gets a verifier that fits
+ * nothing.
+ */
+export const kekVerifier = (kek: Uint8Array, login: string, accountSalt: Uint8Array): string => {
+  const info = new Uint8Array([...utf8('recovery'), ...utf8(login), ...accountSalt]);
+  return toBase64(hkdf(sha256, kek, undefined, info, KEY_BYTES));
 };
 
 /** The other direction: a device that has the passphrase and what the server stores. */
@@ -152,6 +179,7 @@ export const openAccount = (
   kdfParams: KdfParams,
   wrappedSeed: string,
 ): OpenedAccount => {
-  const seed = open(deriveKek(passphrase, accountSalt, kdfParams), wrappedSeed);
-  return { seed, accountSalt, kdfParams, wrappedSeed };
+  const kek = deriveKek(passphrase, accountSalt, kdfParams);
+  const seed = open(kek, wrappedSeed);
+  return { seed, accountSalt, kdfParams, wrappedSeed, kek };
 };
