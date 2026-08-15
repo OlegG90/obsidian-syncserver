@@ -242,10 +242,13 @@ GET    /shares/{id}/recipients/{login}/pubkey  initiator only → {user_id, pubk
                                                 a 404 — the same rule as /auth/kdf; rate-limited
 POST   /shares/{id}/invite {user_id, wrapped_key}
                                                 initiator only; active share only
-GET    /shares            → {joined: [{share_id, vault_id, is_initiator, state}],
+GET    /shares            → {joined: [{share_id, vault_id, is_initiator, state, root_node_id}],
                              invitations: [{share_id, initiator_login, invited_at}]}
                                                 what the account is in and what is waiting for it.
                                                 `is_initiator`, not a role — there are none (SH-10).
+                                                `root_node_id` is the share's root in the CALLER's own
+                                                vault, which is a different node for each member; it is
+                                                what lets a client say which folder this is
                                                 The client shows this as a list the user opens;
                                                 nothing is pushed at them
 GET    /shares/{id}/members

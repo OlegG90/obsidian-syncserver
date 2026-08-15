@@ -208,6 +208,17 @@ export type JoinedShare = {
   vaultId: string | null;
   isInitiator: boolean;
   state: string;
+  /**
+   * The share's root **in this member's own vault**, which is a different node for each of
+   * them: the initiator's own folder, and every participant's separate replica root.
+   *
+   * Reported because a client cannot work it out. It resolves paths through node ids, and
+   * the one thing tying the two vaults together — `share_item_id` — is the server's. Without
+   * it a shared folder is indistinguishable from any other folder on disk, which is exactly
+   * what a two-account walk found: writes reaching another person, with nothing on screen
+   * to say so.
+   */
+  rootNodeId: string | null;
 };
 
 export type PendingInvitation = {
@@ -239,7 +250,9 @@ export const listShares = async (
   // somebody's life, and it is written by the pass, not by the ending.
   const joined = await db.query<JoinedShare>(
     `SELECT s.id AS "shareId", m.vault_id AS "vaultId",
-            (s.initiator_id = m.user_id) AS "isInitiator", s.state::text AS state
+            (s.initiator_id = m.user_id) AS "isInitiator", s.state::text AS state,
+            (SELECT n.id FROM nodes n
+              WHERE n.vault_id = m.vault_id AND n.share_item_id = s.root_item_id) AS "rootNodeId"
        FROM share_members m JOIN shares s ON s.id = m.share_id
       WHERE m.user_id = $1 AND m.joined_at IS NOT NULL AND m.left_at IS NULL
       ORDER BY s.created_at`,

@@ -7,6 +7,20 @@ that tests cite — are in [12 — Sharing scenarios](12-sharing-scenarios.md). 
 from two sides: 12 states the outcome, 05 states the machinery. If they disagree, one of them is a bug —
 fix both.
 
+## Saying that a folder is shared
+
+A shared folder is an ordinary folder that behaves differently: a note dropped into it
+reaches other people, and leaving it is an operation with consequences. Nothing about it
+looks different, and a person deciding where to put a note is not going to open a settings
+screen first — so the client marks it **in the file tree**, where the decision is made.
+
+The mark is the client's alone. The server cannot help: it holds no paths, and the names it
+holds are ciphertext. What it can say is **which node** is the share's root in *this*
+member's vault — a different node for each of them (SH-01, and a participant's replica root
+is their own) — and `GET /shares` reports it. The client resolves that to a path with the
+same tree it resolves everything else with, and remembers it, because the file tree is drawn
+long before anything is unlocked.
+
 ## The model: replication
 
 **Every participant holds their own copy of the shared folder, as ordinary nodes in the vault they accepted

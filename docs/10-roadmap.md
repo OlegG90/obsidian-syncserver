@@ -135,7 +135,7 @@ so the recovery attempt went to an address nobody had chosen and failed before t
 
 ### A shared folder that looks like any other — found by using it
 
-- [ ] **Mark a shared folder as shared where the folder is**, not only in the plugin's settings. After the
+- [x] **Mark a shared folder as shared where the folder is**, not only in the plugin's settings. After the
       two-account walk both sides had a folder that behaved differently from its neighbours — writes reaching
       another person, a departure to perform — with nothing on screen to say so. A participant cannot reason
       about a boundary they cannot see.

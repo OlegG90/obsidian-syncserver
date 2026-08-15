@@ -305,6 +305,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         vault_id: s.vaultId,
         is_initiator: s.isInitiator,
         state: s.state,
+        root_node_id: s.rootNodeId,
       })),
       invitations: invitations.map((i) => ({
         share_id: i.shareId,

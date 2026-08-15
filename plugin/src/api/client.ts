@@ -800,7 +800,14 @@ export class SyncClient {
 
   /** What this account is in, and what is waiting for it. */
   shares(): Promise<{
-    joined: { share_id: string; vault_id: string | null; is_initiator: boolean; state: string }[];
+    joined: {
+      share_id: string;
+      vault_id: string | null;
+      is_initiator: boolean;
+      state: string;
+      /** This member's OWN root for the share — a different node in each participant's vault. */
+      root_node_id: string | null;
+    }[];
     invitations: { share_id: string; initiator_login: string; invited_at: string }[];
   }> {
     return this.json('GET', '/shares');

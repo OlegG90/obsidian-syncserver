@@ -22,6 +22,7 @@ import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
 import { newPairingCode } from './crypto/pairing-code.js';
+import { sharedFolderCss } from './obsidian/shared-marks.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { makeObsidianTransport } from './obsidian/transport.js';
 
@@ -48,6 +49,15 @@ const transport = makeObsidianTransport(requestUrl);
 interface PluginData {
   connection?: Connection;
   state?: VaultState;
+  /**
+   * Which local folder each live share is, keyed by share id.
+   *
+   * Persisted because the file tree is drawn long before anything is unlocked, and resolving
+   * it properly needs the vault key: the server holds no paths, and the names it does hold
+   * are ciphertext. Written when this device shares or joins a folder, and reconciled
+   * against the server whenever the share list is read.
+   */
+  sharedFolders?: Record<string, string>;
   /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
   syncObsidian?: boolean;
 }
@@ -122,6 +132,10 @@ export default class SyncServerPlugin extends Plugin {
     } else {
       this.setPhase({ kind: 'disconnected' });
     }
+
+    // Drawn from what was written down, so a shared folder looks shared from the moment the
+    // tree appears — not only after something is unlocked.
+    this.app.workspace.onLayoutReady(() => this.applySharedMarks());
 
     this.addCommand({
       id: 'sync-now',
@@ -441,18 +455,25 @@ export default class SyncServerPlugin extends Plugin {
         this.withSession(async (h) => {
           const out = await h.client.shares();
 
-          // Which FOLDER each share is, which the server cannot say: it holds no paths and
-          // could not read the names if it did. The client resolves it from its own tree —
-          // the shallowest path carrying that share is its root — because two rows reading
-          // "Shared by you" and a uuid each are two rows nobody can tell apart, and the
-          // buttons beside them are not the same buttons.
+          // Which FOLDER each share is, which the server cannot say in words: it holds no
+          // paths and could not read the names if it did. It CAN say which node, though —
+          // each member's own root — and the client turns that into a path through its own
+          // tree. Two rows reading "Shared by you" and a uuid each are two rows nobody can
+          // tell apart, and the buttons beside them are not the same buttons.
           const engine = await this.engineFor(h);
+          const pathOfNode = new Map([...(await engine.readTree()).entries()].map(([p, n]) => [n.nodeId, p]));
           const rootOf = new Map<string, string>();
-          for (const [path, n] of await engine.readTree()) {
-            if (!n.shareId) continue;
-            const seen = rootOf.get(n.shareId);
-            if (seen === undefined || path.length < seen.length) rootOf.set(n.shareId, path);
+          for (const s of out.joined) {
+            const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
+            if (folder !== undefined) rootOf.set(s.share_id, folder);
           }
+
+          // The screen is the one place that learns the truth about every share at once, so
+          // it is where the persisted map is put right — a folder renamed since it was
+          // shared, or a share ended by somebody else while this device was closed.
+          this.data.sharedFolders = Object.fromEntries(rootOf);
+          await this.save();
+          this.applySharedMarks();
 
           return {
             joined: out.joined.map((s) => {
@@ -496,6 +517,7 @@ export default class SyncServerPlugin extends Plugin {
             folderPath,
             nodes,
           );
+          await this.rememberShared(out.shareId, folderPath);
           return { shareId: out.shareId };
         }),
 
@@ -519,6 +541,7 @@ export default class SyncServerPlugin extends Plugin {
           const chosen = await askFolderName(this.app, freeName(`Shared by ${from?.initiator_login ?? 'someone'}`, siblings));
           if (!chosen) throw new Error('a name is needed for the folder before it can land here');
 
+          const name = freeName(chosen, siblings);
           await acceptInvitation(
             {
               client: h.client,
@@ -528,8 +551,10 @@ export default class SyncServerPlugin extends Plugin {
             },
             shareId,
             opened.root_node_id,
-            freeName(chosen, siblings),
+            name,
           );
+          // The replica's root lands directly under the vault root, so its path is its name.
+          await this.rememberShared(shareId, name);
         }),
 
       decline: (shareId) => this.withSession((h) => h.client.declineShare(shareId)),
@@ -571,7 +596,7 @@ export default class SyncServerPlugin extends Plugin {
             };
           });
 
-          return leaveShare(
+          const out = await leaveShare(
             {
               client: h.client,
               read: (p) => this.vault().read(p),
@@ -584,6 +609,10 @@ export default class SyncServerPlugin extends Plugin {
             scopeId,
             replica,
           );
+          // The folder stays and keeps its name (SH-05); what ends is its being shared, so
+          // the badge is what has to go.
+          await this.forgetShared(shareId);
+          return out;
         }),
 
       members: (shareId) => this.withSession((h) => h.client.shareMembers(shareId)),
@@ -634,6 +663,50 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Show, in the file tree, which folders are shared.
+   *
+   * The whole point is that it renders **without a session**: the tree is drawn at startup,
+   * long before anything is unlocked, and a person deciding where to drop a note is not
+   * going to open the plugin's settings first. So the paths come from what was written down,
+   * not from the server.
+   *
+   * Paths that no longer exist are dropped rather than styled — a folder renamed since it
+   * was shared would otherwise leave a badge on nothing, and the settings screen puts the
+   * map right the next time it is opened.
+   */
+  applySharedMarks(): void {
+    const paths = Object.values(this.data.sharedFolders ?? {}).filter(
+      (p) => this.app.vault.getAbstractFileByPath(p) !== null,
+    );
+
+    const id = 'syncserver-shared-folders';
+    document.getElementById(id)?.remove();
+    const css = sharedFolderCss(paths);
+    if (!css) return;
+
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  /** This device has just shared or joined a folder, and knows which one it is. */
+  private async rememberShared(shareId: string, folderPath: string): Promise<void> {
+    this.data.sharedFolders = { ...this.data.sharedFolders, [shareId]: folderPath };
+    await this.save();
+    this.applySharedMarks();
+  }
+
+  /** The share is over for this device; the folder is not, and keeps everything but the badge. */
+  private async forgetShared(shareId: string): Promise<void> {
+    if (!this.data.sharedFolders) return;
+    const { [shareId]: _gone, ...rest } = this.data.sharedFolders;
+    this.data.sharedFolders = rest;
+    await this.save();
+    this.applySharedMarks();
+  }
+
+  /**
    * Point this connection at a different address (#113).
    *
    * An edit of one field, not a reconnection: the account, the seed, the device and every
@@ -680,7 +753,10 @@ export default class SyncServerPlugin extends Plugin {
     this.sess = undefined;
     delete this.data.connection;
     delete this.data.state;
+    // Nothing is shared with anybody from here any more, whatever the badges said.
+    delete this.data.sharedFolders;
     await this.save();
+    this.applySharedMarks();
     this.setPhase({ kind: 'disconnected' });
   }
 }
