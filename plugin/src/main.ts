@@ -1189,13 +1189,19 @@ class SyncServerSettings extends PluginSettingTab {
         'device receives the account key from one that already has it.',
     });
 
-    const draft = { serverUrl: 'http://127.0.0.1:8087', login: 'admin', passphrase: '' };
+    // Blank, unlike the first-run form below it. There the defaults are real — a fresh
+    // install seeds `admin`/`admin` and usually answers on this machine — but an account
+    // that already exists is by definition on a server somewhere else, and a prefilled
+    // `127.0.0.1` is a wrong answer that looks like a right one. It cost a recovery attempt
+    // that failed with `ERR_CONNECTION_REFUSED` before the passphrase was ever used.
+    const draft = { serverUrl: '', login: '', passphrase: '' };
     new Setting(containerEl)
       .setName('Server URL')
-      .addText((t) => t.setValue(draft.serverUrl).onChange((v) => (draft.serverUrl = v.trim())));
+      .setDesc('Where that account already lives — the same address its other devices use.')
+      .addText((t) => t.setPlaceholder('http://host:8087').onChange((v) => (draft.serverUrl = v.trim())));
     new Setting(containerEl)
       .setName('Login')
-      .addText((t) => t.setValue(draft.login).onChange((v) => (draft.login = v.trim())));
+      .addText((t) => t.setPlaceholder('the account’s login').onChange((v) => (draft.login = v.trim())));
     new Setting(containerEl)
       .setName('Passphrase')
       .setDesc('The account’s own passphrase. It never leaves this device.')
@@ -1212,6 +1218,10 @@ class SyncServerSettings extends PluginSettingTab {
       b.setButtonText('Show pairing code').onClick(async () => {
         b.setDisabled(true);
         try {
+          if (!draft.serverUrl || !draft.login || !draft.passphrase) {
+            new Notice('SyncServer: the address, the login and the passphrase are all needed to pair.', 8000);
+            return;
+          }
           await this.plugin.pairing(shown).join({
             serverUrl: draft.serverUrl,
             login: draft.login,
@@ -1239,6 +1249,12 @@ class SyncServerSettings extends PluginSettingTab {
         .setButtonText('Recover')
         .setWarning()
         .onClick(async () => {
+          // Checked before anything expensive: Argon2id at 64 MiB runs inside `recover`, and
+          // spending a second of a phone's battery to then fail on an empty field is rude.
+          if (!draft.serverUrl || !draft.login || !draft.passphrase) {
+            new Notice('SyncServer: the address, the login and the passphrase are all needed to recover.', 8000);
+            return;
+          }
           b.setDisabled(true);
           try {
             await this.plugin.recover({
@@ -1250,8 +1266,14 @@ class SyncServerSettings extends PluginSettingTab {
             this.display();
           } catch (e) {
             // Named on screen, because every failure here is one the person can act on: a
-            // typo in the address, in the login, or in the passphrase.
-            new Notice(`SyncServer: recovery failed — ${e instanceof Error ? e.message : String(e)}`, 12000);
+            // typo in the address, in the login, or in the passphrase. A transport error
+            // arrives as the browser's own sentence — `net::ERR_CONNECTION_REFUSED` — which
+            // does not say WHERE nothing answered, and the address is the likeliest mistake.
+            const reason = e instanceof Error ? e.message : String(e);
+            const where = /ERR_|network|fetch|refused|timeout/i.test(reason)
+              ? `nothing answered at ${draft.serverUrl || '(no address)'} — ${reason}`
+              : reason;
+            new Notice(`SyncServer: recovery failed — ${where}`, 12000);
           } finally {
             b.setDisabled(false);
           }
