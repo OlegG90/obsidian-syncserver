@@ -1,0 +1,103 @@
+# The suites, run where nobody has to remember to run them.
+#
+# Three jobs rather than one, because they fail for different reasons and the difference is
+# worth seeing at a glance: the checks need no database, the server suite needs one, and the
+# plugin's live suite needs its own — it starts a real server and talks to it over HTTP,
+# which is the only thing that proves client, keys and server agree.
+#
+# **Each database job gets its own PostgreSQL.** They would otherwise share one, and the
+# first to claim the seeded administrator would leave the second answering 503 to everything
+# (AGENTS.md). Two services cost seconds; a shared one costs an afternoon of confusion.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Not a secret: this is a throwaway database inside the job. Set explicitly so the server
+  # does not fall back to the development socket, which does not exist on a runner.
+  PGHOST: localhost
+  PGUSER: postgres
+  PGPASSWORD: postgres
+
+jobs:
+  checks:
+    name: types, versions, compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # One version across five manifests (#111), and a compose file that still says what
+      # docs/13 promises it says.
+      - run: node scripts/check-version.mjs
+      - run: node scripts/check-compose.mjs
+
+  server:
+    name: server + schema
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/syncserver_dev
+      SERVER_SECRET: ci-only-server-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # `createdb`, `dropdb` and `psql`: db-reset.sh applies schema.sql and tests.sql, and
+      # those assertions are most of the rules this project has.
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: npm ci
+      - run: npm run db:reset
+      - run: npm test --workspace @syncserver/server
+
+  plugin:
+    name: plugin against a real server
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # `test:live` resets `syncserver_plugin` and then starts the built server against it,
+      # so this is the database both halves have to name.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/syncserver_plugin
+      SERVER_SECRET: ci-only-server-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: npm ci
+      # Argon2id at 64 MiB runs for real here (#62). It is the one thing a live test may
+      # never fake, so the suite is slow on purpose and the timeout allows for it.
+      - run: npm run test:live
+        timeout-minutes: 20

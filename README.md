@@ -1,5 +1,7 @@
 # SyncServer
 
+[![tests](https://github.com/OlegG90/obsidian-syncserver/actions/workflows/ci.yml/badge.svg)](https://github.com/OlegG90/obsidian-syncserver/actions/workflows/ci.yml)
+
 A self-hosted synchronisation server for [Obsidian](https://obsidian.md) vaults, and the plugin
 that talks to it. Multi-device sync of a user's vaults, plus per-folder sharing with other users
 of the same server — **end-to-end encrypted, with the server holding no key.**
