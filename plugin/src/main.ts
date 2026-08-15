@@ -538,7 +538,9 @@ export default class SyncServerPlugin extends Plugin {
               // A trashed node has no path and needs none: nothing reads it.
               path: pathOfNode.get(n.node_id) ?? name,
               name,
-              address: underShare ? n.sha256 : null,
+              // The server says which bytes still need converting; guessing from the name's
+              // scope was wrong in both directions.
+              address: n.needs_vault_material ? n.sha256 : null,
               deleted: n.deleted,
             };
           });

@@ -776,6 +776,8 @@ export class SyncClient {
       type: string;
       deleted: boolean;
       sha256: string | null;
+      /** The server's answer to "does this still need KV material" — not the client's guess. */
+      needs_vault_material: boolean;
     }[]
   > {
     return this.json('GET', `/shares/${shareId}/replica`);

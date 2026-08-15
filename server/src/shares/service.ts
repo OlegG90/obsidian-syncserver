@@ -1187,6 +1187,16 @@ export type ReplicaNode = {
    * readable only under a key that is about to stop being offered.
    */
   sha256: string | null;
+  /**
+   * Whether this node's bytes still need an envelope and tag under the vault key.
+   *
+   * The server can see this and the client cannot — `blob_keys` and `dedup_index` are its
+   * tables — so it says it, exactly as `preparationGaps` does for the other direction.
+   * Leaving it to the client meant guessing: convert everything and fail on material that
+   * was never there, or skip on a missing source and fail the unmark instead, which the
+   * schema refuses with "cannot be unmarked before blob … has its vault envelope and tag".
+   */
+  needsVaultMaterial: boolean;
 };
 
 /**
@@ -1215,10 +1225,17 @@ export const replicaOf = async (
   if (!member?.vaultId) return undefined;
 
   return db.query<ReplicaNode>(
-    `SELECT id AS "nodeId", encode(name_enc, 'base64') AS "nameEnc", name_key_id AS "nameKeyId",
-            type::text AS type, (deleted_at IS NOT NULL) AS deleted,
-            encode(sha256, 'hex') AS sha256
-       FROM nodes WHERE vault_id = $1 AND share_id = $2 ORDER BY deleted, id`,
+    `SELECT n.id AS "nodeId", encode(n.name_enc, 'base64') AS "nameEnc", n.name_key_id AS "nameKeyId",
+            n.type::text AS type, (n.deleted_at IS NOT NULL) AS deleted,
+            encode(n.sha256, 'hex') AS sha256,
+            (n.sha256 IS NOT NULL
+             AND NOT (EXISTS (SELECT 1 FROM blob_keys k
+                               WHERE k.sha256 = n.sha256 AND k.scope_id = v.vault_key_id)
+                      AND EXISTS (SELECT 1 FROM dedup_index d
+                                   WHERE d.sha256 = n.sha256 AND d.scope_id = v.vault_key_id)))
+              AS "needsVaultMaterial"
+       FROM nodes n JOIN vaults v ON v.id = n.vault_id
+      WHERE n.vault_id = $1 AND n.share_id = $2 ORDER BY deleted, n.id`,
     [member.vaultId, shareId],
   );
 };
