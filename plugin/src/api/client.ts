@@ -296,8 +296,20 @@ export class SyncClient {
     login: string;
     auth_secret: string;
     device_id: string;
-  }): Promise<{ access: string; refresh: string; user_id: string; enc_privkey: string }> {
+  }): Promise<{
+    access: string;
+    refresh: string;
+    user_id: string;
+    enc_privkey: string;
+    /** True for an account that predates recovery: only a client with the phrase can fix it. */
+    needs_kek_verifier?: boolean;
+  }> {
     return this.json('POST', '/auth/login', body, { auth: false });
+  }
+
+  /** File this account's recovery verifier — on a backfill, or after a passphrase change. */
+  setKekVerifier(kekVerifier: string): Promise<void> {
+    return this.json('PUT', '/auth/kek-verifier', { kek_verifier: kekVerifier }, { expect: [204] });
   }
 
   /**

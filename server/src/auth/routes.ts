@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
-import { fakeAccountSalt } from '../crypto.js';
+import { fakeAccountSalt, hashToken } from '../crypto.js';
 import type { Db } from '../db.js';
 import {
   findActiveAccount,
@@ -157,8 +157,10 @@ export const registerAuthRoutes = (
       // it: an invitation is an HPKE envelope sealed to this account's public key, bound to
       // its id (docs/06). Neither half is a secret — `enc_privkey` is worthless without the
       // seed, which is exactly why the server may hold it and hand it back.
-      const identity = await db.one<{ encPrivkey: string }>(
-        `SELECT encode(enc_privkey, 'base64') AS "encPrivkey" FROM users WHERE id = $1`,
+      const identity = await db.one<{ encPrivkey: string; needsKekVerifier: boolean }>(
+        `SELECT encode(enc_privkey, 'base64') AS "encPrivkey",
+                (kek_verifier_hash IS NULL) AS "needsKekVerifier"
+           FROM users WHERE id = $1`,
         [account.id],
       );
 
@@ -167,6 +169,10 @@ export const registerAuthRoutes = (
         refresh: await issueRefreshToken(db, deviceId),
         user_id: account.id,
         enc_privkey: identity!.encPrivkey,
+        // Said rather than assumed, because an account made before recovery existed has no
+        // verifier and cannot produce one itself: only a client holding the passphrase can.
+        // Without this flag such an account would stay unrecoverable forever, silently.
+        needs_kek_verifier: identity!.needsKekVerifier,
       };
     },
   );
@@ -266,6 +272,29 @@ export const registerAuthRoutes = (
    * Idempotent, and silent about devices that are not the caller's — a 404 for someone
    * else's id would confirm it exists.
    */
+  /**
+   * Set this account's recovery verifier — the one thing only a client with the passphrase
+   * can compute (#112).
+   *
+   * Two callers, one shape: an account that predates recovery, backfilling on its first
+   * unlock, and a passphrase change, which must move the verifier with the KEK or leave it
+   * pointing at a phrase nobody uses.
+   *
+   * Authenticated, and that is proof enough: reaching here at all took `auth_secret`, which
+   * comes from the seed, which comes from the envelope this verifier guards.
+   */
+  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+    if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
+
+    await db.query(`UPDATE users SET kek_verifier_hash = $2 WHERE id = $1 AND state = 'active'`, [
+      claims.sub,
+      hashToken(req.body.kek_verifier),
+    ]);
+    return reply.code(204).send();
+  });
+
   app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', async (req, reply) => {
     const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
     if (!claims) return reply.code(401).send({ error: 'unauthenticated' });

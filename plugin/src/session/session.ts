@@ -230,6 +230,21 @@ export class Session {
       encPrivkey: session.enc_privkey,
       openIdentity: () => unwrapIdentity(account.seed, session.enc_privkey),
     };
+
+    // An account made before recovery existed has no verifier, and nothing on the server can
+    // make one: it takes the KEK, which only exists here, and only while the phrase is in
+    // hand — which is now. Left undone, such an account is unrecoverable forever without
+    // anybody being told. Failure is swallowed on purpose: this is a repair, and refusing to
+    // open a vault because a repair could not be filed would be the worse trade.
+    if (session.needs_kek_verifier) {
+      try {
+        await client.setKekVerifier(
+          kekVerifier(account.kek, this.conn.login, fromBase64(this.conn.accountSalt)),
+        );
+      } catch {
+        // Offline, or an older server that has no such endpoint. Tried again next unlock.
+      }
+    }
     return 'open';
   }
 

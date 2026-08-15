@@ -241,6 +241,57 @@ describe('recovery — the account comes back to a device that holds nothing', (
     await solo.close();
   });
 
+  it('lets an account made before recovery existed file a verifier on its first unlock', async () => {
+    // The live server had accounts predating the column, and nothing on the server can make
+    // a verifier for them: it takes the KEK, which exists only on a client holding the
+    // phrase. Without this they would be unrecoverable forever, and silently so.
+    // The state is not expressible under the current schema, and that is the point: a live
+    // account can only be missing a verifier if its database predates the column. So the
+    // test reproduces the migration rather than faking the row — drop the constraint, empty
+    // the column, re-add it NOT VALID, which is exactly what the deployed database carries.
+    const def = await db.one<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+        WHERE conname = 'keys_match_state' AND conrelid = 'users'::regclass`,
+    );
+    await db.query(`ALTER TABLE users DROP CONSTRAINT keys_match_state`);
+    await db.query(`UPDATE users SET kek_verifier_hash = NULL WHERE login = 'admin'`);
+    await db.query(`ALTER TABLE users ADD CONSTRAINT keys_match_state ${def!.def} NOT VALID`);
+
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = 'admin'`);
+    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1 LIMIT 1`, [account!.id]);
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    assert.equal(login.statusCode, 200, login.body);
+    assert.equal(login.json().needs_kek_verifier, true, 'the account says what it is missing');
+
+    // Refused until it is filed, which is the state that made this test necessary.
+    assert.equal((await recover({ login: 'admin', kek_verifier: VERIFIER })).statusCode, 401);
+
+    const filed = await app.inject({
+      method: 'PUT',
+      url: '/auth/kek-verifier',
+      headers: { authorization: `Bearer ${login.json().access}` },
+      payload: { kek_verifier: VERIFIER },
+    });
+    assert.equal(filed.statusCode, 204, filed.body);
+
+    const after = await recover({ login: 'admin', kek_verifier: VERIFIER });
+    assert.equal(after.statusCode, 200, 'and now the account can be taken back');
+    assert.equal(
+      (await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id },
+      })).json().needs_kek_verifier,
+      false,
+      'and stops asking',
+    );
+  });
+
   it('refuses an account that has no recovery code, without saying that is why', async () => {
     // Null is the honest shape for an account with no code (#112), and the refusal for one
     // must be indistinguishable from a wrong code — otherwise it reports on the account.

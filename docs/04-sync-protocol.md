@@ -5,6 +5,13 @@
 ```
 GET  /auth/kdf?login=…    → {account_salt, kdf_params}  before login; never returns a seed envelope
 POST /auth/login          {login, auth_secret}          → access (15 min) + refresh
+                                                    + needs_kek_verifier: an account made before
+                                                    recovery existed has none, and only a client
+                                                    holding the passphrase can produce one
+PUT  /auth/kek-verifier   {kek_verifier}               → 204; authenticated. The backfill above, and
+                                                    where a passphrase change files its new verifier
+DELETE /auth/devices/{id}                              → 204; the caller's own device, revoked not
+                                                    deleted so history keeps naming its authors
 POST /auth/refresh        {refresh}                      → access
 POST /auth/devices        {name, platform}              → device_id
 POST /auth/redeem         {invitation_token, auth_secret, account_salt, kdf_params,

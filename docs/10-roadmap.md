@@ -95,6 +95,10 @@ its cost are #112.
       that half later is a client screen and a comparison, not a new shape.
 - [ ] **Say it at registration.** One line, once: a forgotten passphrase loses every vault, and no
       administrator can help.
+- [ ] **Backfill the accounts that predate all this.** They cannot make a verifier themselves — it
+      takes the `KEK`, which exists only on a client holding the passphrase — so `login` reports that one
+      is missing and the client files it on the next unlock. Without this, every account created before
+      M3.5 stays unrecoverable forever and nothing says so.
 
 **Not in this milestone, deliberately:** generating and storing the **recovery code** itself, which answers
 the other loss — a forgotten passphrase. It stays specified in [06](06-key-model.md) and [07](07-onboarding.md)
