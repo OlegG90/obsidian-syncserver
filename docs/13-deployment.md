@@ -257,7 +257,7 @@ curl -s -X POST "localhost:$PUBLISH_PORT/auth/redeem" -H 'content-type: applicat
   "account_salt": "'"$(openssl rand -base64 16)"'",
   "kdf_params": {"v":19,"m":65536,"t":3,"p":1},
   "pubkey": "AQ==", "enc_privkey": "Ag==", "wrapped_seed": "Aw==",
-  "recovery_key": "BA==", "recovery_code_hash": "'"$(openssl rand -hex 32)"'",
+  "kek_verifier": "'"$(openssl rand -hex 32)"'",
   "initial_vault_id": "'"$(uuidgen)"'",
   "initial_vault_name_enc": "'"$(printf 'test vault' | base64)"'",
   "device_name": "curl", "device_platform": "linux"

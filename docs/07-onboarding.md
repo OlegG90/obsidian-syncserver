@@ -30,12 +30,12 @@ sequenceDiagram
     Plugin->>Plugin: seed = 32 random bytes; wrapped_seed = AEAD(KEK, seed)
     Plugin->>Plugin: initial vault UUID; auth secret and per-vault key = HKDF branches of the seed
     Plugin->>Plugin: X25519 keypair, private key sealed under an account key from the seed
-    Plugin->>Plugin: recovery code, its verifier hash, and the seed sealed under it too
-    Plugin-->>User: show the recovery code ONCE
+    Plugin->>Plugin: kek_verifier = HKDF(KEK, "recovery" ‖ login ‖ salt), so the phrase can be proved later
+    Plugin-->>User: a forgotten passphrase loses every vault — said here, once, plainly
 
     Note over Plugin,DB: 3 — Redeeming the invitation completes the account
     Plugin->>Plugin: derive KV from initial vault UUID; encrypt initial vault name
-    Plugin->>API: POST /auth/redeem with invitation token, auth secret, account salt, KDF parameters, public key, sealed private key, wrapped_seed, recovery key, recovery-code hash, initial vault UUID and name_enc
+    Plugin->>API: POST /auth/redeem with invitation token, auth secret, account salt, KDF parameters, public key, sealed private key, wrapped_seed, kek verifier, initial vault UUID and name_enc
     API->>DB: check the token and its expiry
     API->>DB: fill the key columns, state = active, create the client-identified named vault and its root
     API->>DB: audit_log: account.activate
@@ -75,9 +75,10 @@ sequenceDiagram
 
 Three details the diagram makes concrete:
 
-- **the recovery code is shown once, by the client, at step 2.** The server stores its envelope and a verifier
-  hash, never the code itself, and can never display it again. If the user skips past that screen, a forgotten
-  passphrase loses **every** vault — the recovery envelope wraps the seed, and all vault keys derive from it;
+- **the verifier is made at step 2 and never asked for again until it is needed.** It costs the client
+  nothing — the `KEK` is already in hand — and it is what lets a future device with no `data.json` prove the
+  phrase. Nothing about it is shown to the user; what *is* said, once and plainly, is that a forgotten
+  passphrase loses **every** vault, because the seed exists only inside envelopes that phrase opens;
 - **the client creates the initial vault UUID before encrypting its name.** Redeem receives that UUID and
   client-supplied `name_enc`, so it can derive `KV = HKDF(seed, vault_id)` before producing the label; the
   server then creates the named vault and its root. The root is the one node with no name, so no key material
@@ -94,16 +95,17 @@ It first obtains the seed by one of two explicit bootstrap flows:
    device seals the seed to that public key and relays the opaque envelope through the server. Its one-time
    claim supplies its name and platform, creating and binding the device to the account, and returns both
    the seed envelope and encrypted `enc_privkey`;
-2. **recovery** — the user proves the high-entropy recovery code to a rate-limited endpoint, receives
-   `recovery_key` already sealed under that code plus encrypted `enc_privkey`, and unwraps both locally.
+2. **recovery** — the device derives the `KEK` from the passphrase and the pre-auth `account_salt`, proves it
+   with `kek_verifier` to a rate-limited endpoint, and receives `wrapped_seed` and encrypted `enc_privkey`;
+   it unwraps both with the `KEK` it already holds.
 
 Only then does the device derive `auth_secret`, perform normal login, list vaults and enter adoption for the
-vault it chooses. The server never returns a passphrase-wrapped seed merely for a known login.
+vault it chooses. **The server never returns a seed envelope for a known login alone** — the second path
+turns on proving the phrase that opens it, which is a different claim entirely.
 
 ### Pairing, step by step
 
-Pairing is implemented; recovery is not (see the end of this section). Four calls, and only one of them is
-authenticated — a device with no seed has nothing to authenticate with, which is the shape of the whole
+Four calls, and only one of them is authenticated — a device with no seed has nothing to authenticate with, which is the shape of the whole
 problem.
 
 | | New device | Already authorised device |
@@ -142,10 +144,56 @@ would hold the private key and could open the envelope.
 locally. This is why joining asks for a passphrase even though the seed arrives sealed: without it the
 device could hold the seed but never lock and come back, having nothing to unwrap.
 
-**Recovery is specified above and not built.** Worse than absent: `connect()` writes placeholder
-`recovery_key` and `recovery_code_hash` values, so an account created today *claims* to have a recovery
-path and has none. Until that is fixed, pairing with an already authorised device is the only bootstrap,
-and an account whose every device is lost is lost with them.
+### Recovery, step by step
+
+Pairing answers "I am adding a device". Recovery answers the harder question — **"the only device I had is
+gone"** — and it is the one that decides whether this server is a backup or merely a transport between two
+live machines. A vault the server holds in full and cannot return to the person who wrote it is not stored,
+it is stranded.
+
+The user has three things: the server address, their login, and the passphrase in their head.
+
+| | What happens |
+|---|---|
+| 1 | `GET /auth/kdf?login=…` returns `account_salt` and `kdf_params`. Unknown logins get a deterministic fake, as everywhere (#73) |
+| 2 | the client runs `Argon2id` once — the same pass it would run to unlock — and derives `KEK`, then `kek_verifier = HKDF(KEK, "recovery" ‖ login ‖ salt)` |
+| 3 | `POST /auth/recover` with the login, the verifier, and the new device's name and platform |
+| 4 | the server compares against `kek_verifier_hash`, creates the device as pairing's claim does, and returns `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id` and `device_id` |
+| 5 | the client unwraps the seed with the `KEK` already in hand, stores the connection, logs in normally |
+| 6 | `GET /vaults`, choose one, and **adoption** materialises it — the same branch a second device takes |
+
+**Nothing new is invented after step 4.** Recovery is a door, not a mode: past it the client is an ordinary
+freshly-bootstrapped device, and everything that makes an empty vault fill up already exists. That is why
+this costs a single endpoint rather than a subsystem.
+
+**A wrong passphrase and an unknown login are the same refusal**, and both are counted. The limit is part of
+the design ([06](06-key-model.md)), because this is the one endpoint where guessing pays: attempts back off
+per login and per source, and each is recorded in the audit log.
+
+**What recovery does not do.** It does not survive a forgotten passphrase — nothing does — and it does not
+bring back a vault the user deleted from the server. It brings back the account, and with it every vault the
+server still holds.
+
+## The connection itself: changing it, and ending it
+
+A connection is a record, not a relationship: server address, login, device id, vault id, `wrapped_seed`,
+`account_salt`, `kdf_params`. Two things a person does to it, and they are not the same thing.
+
+**Changing the address does not touch anything else.** The account, the seed, the device and every key are
+bound to the account and the vault, never to a URL, so moving from an address to a host name — or to a
+tunnel, or to a different port — is an edit of one field. It must be presented as exactly that. Offering
+"disconnect, then connect again" in its place would be dishonest twice over: it destroys nothing it needed
+to destroy, and it costs a full bootstrap to undo, because the invitation token that first created the
+account is one-time and gone.
+
+**Disconnecting is deliberate, and it keeps the files.** It clears the local connection record and revokes
+this device on the server, best effort; it deletes nothing in the vault and nothing on the server. What it
+ends is *this device's* participation.
+
+The client says what coming back will cost before it does any of it — pairing from another device, or
+recovery with the passphrase — because for an account whose only device this is, disconnect and recovery are
+the same door in opposite directions. That is why disconnect may not exist before recovery does: without it,
+the button is an exit with no handle on the outside.
 
 ## Adoption
 

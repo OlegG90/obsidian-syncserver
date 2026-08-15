@@ -14,8 +14,9 @@ and client behaviour at once. Split across those documents, the mistakes would s
 | configuration | compose file, environment, TLS | access and startup |
 
 **There are no encryption keys in the backup** — they were never on the server (E2EE always, AC-08). That is both a
-strength and a limit: an administrator cannot recover the data of a user who forgot their passphrase and
-recovery code. Nobody can.
+strength and a limit: an administrator cannot recover the data of a user who forgot their passphrase. Nobody
+can. A user who still remembers it needs no administrator — recovery ([07](07-onboarding.md)) returns the
+account to a device that holds nothing at all.
 
 ## One state, not two copies
 

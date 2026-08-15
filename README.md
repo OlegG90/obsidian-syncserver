@@ -154,6 +154,7 @@ Current release: **0.2.0** — see [Versions](#versions).
 | **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
+| **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect | not started — the milestone that makes this a backup rather than a transport |
 | **M4** — management console, version thinning, blob GC | not started |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
@@ -171,6 +172,12 @@ the rule and were rewritten. The vault walked out of four broken states using no
 own buttons, which is now a rule rather than an anecdote — see `AGENTS.md`.
 
 [`docs/10`](docs/10-roadmap.md) has the acceptance scenarios each milestone is measured against.
+
+**One device is currently one point of failure.** A device with no local state can only join by pairing with
+another that still works, so an account whose only device is lost is lost with it. M3.5 is that gap: the
+server holds every byte and needs a door to hand them back through — the passphrase, proved without ever
+being sent. Its cost is argued in full in [`docs/06`](docs/06-key-model.md#bootstrap-on-a-device-that-has-no-seed),
+because it makes the passphrase a single factor and that should be read before it is relied on.
 
 **Not yet suitable for data you cannot lose.** A schema change still means starting the database
 again (above); backups are documented ([`docs/08`](docs/08-backup-restore.md)) but not

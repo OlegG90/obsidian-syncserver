@@ -33,7 +33,7 @@ deduplicate against each other (AC-09).
 
 | Key | How many | Where from | Who holds it |
 |---|---|---|---|
-| **vault key** `KV` | **one per vault** | `KV = HKDF(seed, vault_id)`; the `seed` is a random account secret **wrapped** under a passphrase-derived KEK (`Argon2id`), with a duplicate wrapped under the recovery code | all of the owner's devices |
+| **vault key** `KV` | **one per vault** | `KV = HKDF(seed, vault_id)`; the `seed` is a random account secret **wrapped** under a passphrase-derived KEK (`Argon2id`) | all of the owner's devices |
 | **X25519 keypair** | one per **account** | generated at registration; the private half encrypted under an account key from the seed | the owner; the public half is public |
 | **share key** `KS` | one per share | random, at creation | the initiator and every participant |
 | **content key** `KC` | one per blob | **random** — never derived from the content, never dependent on a scope | anyone holding at least one envelope for it |
@@ -171,7 +171,7 @@ rotated (#10) — an epoch would name a generation that cannot exist.
 
 ## Vault key derivation
 
-A device derives every vault key from the seed after pairing or recovery bootstrap, so the derivation
+A device derives every vault key from the seed after one of the two bootstraps below, so the derivation
 parameters are part of the protocol, not an implementation detail. **One expensive pass per account, cheap
 branches per vault** (AC-11). The seed is a **stable random secret wrapped under the passphrase**, not derived from it —
 otherwise changing the passphrase would change every key and force a full re-encryption:
@@ -179,8 +179,9 @@ otherwise changing the passphrase would change every key and force a full re-enc
 ```
 KEK          = Argon2id(passphrase, account_salt, m, t, p)   ← key-encryption key
 seed         = 32 random bytes                                ← the account master secret, generated once
-wrapped_seed = AEAD(KEK, seed)                                ← stored on the server; also wrapped under recovery
+wrapped_seed = AEAD(KEK, seed)                                ← stored on the server
 auth_secret  = HKDF(seed, info = "auth")                      ← this is what goes to the server
+kek_verifier = HKDF(KEK,  info = "recovery" ‖ login ‖ salt)   ← proves the phrase without the seed
 KV_vault     = HKDF(seed, info = vault_id)                    ← one per vault, derived on demand
 ```
 
@@ -217,40 +218,89 @@ convenience that eats the property. The token lives in memory for the length of 
 `lock()` clears it together with the seed and the access token, and after a restart the passphrase is the
 only way back in.
 
-`account_salt` and `kdf_params` are returned by the pre-auth `/auth/kdf` response and by successful pairing
-or recovery bootstrap. Nothing in them is secret, but they are not sufficient to obtain a seed.
+`account_salt` and `kdf_params` are returned by the pre-auth `/auth/kdf` response and by either bootstrap.
+Nothing in them is secret, and they are not sufficient to obtain a seed — deriving a `KEK` from them still
+requires the passphrase, which is exactly what recovery makes the caller demonstrate.
 
-### Bootstrap on another device
+### Bootstrap on a device that has no seed
 
-A device without the seed cannot derive `auth_secret`, so ordinary login cannot bootstrap it. It has exactly
-two paths:
+A device without the seed cannot derive `auth_secret`, so ordinary login cannot bootstrap it. It has two
+paths, and they answer two different losses.
 
-1. **Pair an existing device.** The new device makes an ephemeral X25519 keypair and a random pairing secret.
-   An already authorised device scans or enters both, seals the seed to the ephemeral public key, and sends
-   only that opaque envelope through the server. The short-lived `device_pairings` record stores the public
-    key and a hash of the pairing secret; approval binds exactly one account and envelope, and claim is once.
-    Claim also returns the account's encrypted `enc_privkey`, then creates and binds that device to the account.
-2. **Use the recovery code.** The server stores `recovery_code_hash`, never the code. A rate-limited recovery
-    request proves the high-entropy code and receives `recovery_key`, the seed envelope already sealed under
-    it, together with the account's encrypted `enc_privkey`; the client unwraps locally.
+1. **Pair an existing device** — for a device *added* while another still works. The new device makes an
+   ephemeral X25519 keypair and a random pairing secret. An already authorised device scans or enters both,
+   seals the seed to the ephemeral public key, and sends only that opaque envelope through the server. The
+   short-lived `device_pairings` record stores the public key and a hash of the pairing secret; approval
+   binds exactly one account and envelope, and claim is once. Claim also returns the account's encrypted
+   `enc_privkey`, then creates and binds that device to the account.
+2. **Recover with the passphrase** — for a device *replacing* the last one, where there is nobody left to
+   approve anything. The client takes `account_salt` and `kdf_params` from the pre-auth `/auth/kdf`, derives
+   the same `KEK` it would derive to unlock, and sends `kek_verifier` — never the phrase, and never anything
+   the seed could be read out of. Against a stored hash of that verifier the server returns `wrapped_seed`
+   and `enc_privkey`, and creates the device, exactly as claim does. The client unwraps with the `KEK` it
+   already holds.
 
-Neither path exposes a passphrase-wrapped seed merely because someone knows an account login.
+**Recovery hands back the seed envelope, not the seed**, and only against proof that the caller can open it.
+That distinction is the whole design: the server learns nothing it did not already store, and a caller who
+cannot derive the `KEK` gets the same refusal as an unknown login.
+
+#### What this costs, stated plainly
+
+The alternative to path 2 is not a stricter product — it is a vault whose owner cannot get it back. A server
+that holds every byte and cannot return them to the person who wrote them is a transport between two live
+devices, not a backup. So the cost is paid deliberately and named here rather than discovered later.
+
+**What does not change.** A database leak is no worse: the dump already contains `wrapped_seed`, and the
+verifier is derived through the same `Argon2id`, so attacking it costs exactly what attacking the seed
+envelope beside it costs. The server still cannot read a note, a name or a key. The passphrase still never
+reaches it.
+
+**What does change, and it is one sentence.** The passphrase becomes a **single factor**. Before, an attacker
+needed the phrase *and* a device's `data.json`; now the phrase, the login and a route to the server are
+enough. That is the same bargain every passphrase-recoverable E2EE product makes, and it is the reason the
+server-side attempt limit below is part of the design rather than an operational nicety.
+
+**What it does not rescue.** A forgotten passphrase. Nothing can: the seed exists only inside envelopes that
+the phrase opens. This is stated at registration, not left to be discovered.
+
+**The one new exposure.** The client now sends something derived from the phrase, so a hostile server could
+answer `/auth/kdf` with a salt of its choosing and collect a verifier under it. Binding the verifier to the
+login and the salt keeps it from being replayed against another account, and `Argon2id` at 64 MiB keeps each
+candidate expensive — but the exposure is real and belongs on this list.
+
+#### The attempt limit is part of the protocol
+
+`/auth/recover` is the one endpoint where a guess is worth making, so a limit on guesses is a rule and not a
+deployment choice: attempts are counted per login and per source, back off, and are recorded in the audit log.
+The refusal is the same for an unknown login and a wrong phrase (#73), so the limit never becomes an oracle
+of its own.
 
 ## Hashing the four secrets the server does store
 
 The server holds no key, but it does hold a verifier for four things: `users.auth_secret_hash`,
-`users.recovery_code_hash`, `users.invite_token_hash` and `devices.refresh_token_hash`. All four are
+`users.kek_verifier_hash`, `users.invite_token_hash` and `devices.refresh_token_hash`. All four are
 **SHA-256 over the token's UTF-8 bytes, hex-encoded, compared in constant time** — no salt, no pepper, no
 slow KDF (#108). The encoding is part of the contract, not an implementation detail: a token is a string on
 the wire, and "hash the string" is ambiguous until it says which bytes.
 
+`kek_verifier_hash` is the one whose input is **not** high-entropy, and it is stored the same way for a
+different reason. Its input descends from a passphrase, so a fast hash would normally be wrong — but the slow
+KDF has already run: the verifier is `HKDF` of an `Argon2id` output, and a guess costs a full 64 MiB pass
+before it can be tested. Adding a second slow KDF on the server would charge the honest caller twice and the
+attacker nothing extra, since the same dump already carries `wrapped_seed` — an equally expensive target for
+exactly the same guesses.
+
+Its name is chosen the way `auth_secret_hash` was (#67): it verifies knowledge of the **KEK**, not of a
+passphrase, and a column called `passphrase_hash` would sooner or later invite code that sends one.
+
 That is not the usual answer, so here is the reasoning, and the condition it rests on.
 
-**A slow KDF protects low-entropy secrets, and none of these is one.** Argon2 and bcrypt exist to make an
-offline guess expensive after a database leak. `auth_secret = HKDF(seed, "auth")` is 32 random bytes; the
-refresh and invitation tokens are generated by the server; the recovery code is high-entropy by definition.
-Nothing about 128+ bits of CSPRNG output is brute-forceable at any work factor, so the work factor buys
-nothing.
+**A slow KDF protects low-entropy secrets, and only one of these is one.** Argon2 and bcrypt exist to make an
+offline guess expensive after a database leak. `auth_secret = HKDF(seed, "auth")` is 32 random bytes, and the
+refresh and invitation tokens are generated by the server; nothing about 128+ bits of CSPRNG output is
+brute-forceable at any work factor, so the work factor buys nothing. `kek_verifier` is the exception that
+proves the rule rather than breaking it: its entropy is a passphrase's, and the slow KDF that guards it has
+already run on the client.
 
 **And it costs.** `auth_secret_hash` is verified on **every login**, after the client has already spent its
 own Argon2 pass (64 MiB, about a second on a phone) to unwrap the seed. A second slow hash on the server
@@ -437,13 +487,21 @@ all.
 
 ## Loss and recovery
 
-Every `KV` is derived from the seed and a vault id; the server does not know either secret material. **A
-forgotten passphrase without the recovery code or an already paired device is the loss of every vault**, and
-that must be said at registration, not discovered later.
+Every `KV` is derived from the seed and a vault id; the server does not know either secret material. The two
+losses are not the same loss, and only one of them is survivable:
 
-The recovery code is a high-entropy string under which a second copy of the **seed** is wrapped — so it
-restores the seed, and thence every vault key, at once. The user keeps it separately from the password; the
-server keeps only the envelope.
+| lost | what remains | the way back |
+|---|---|---|
+| **every device** — the phrase is remembered | the server holds `wrapped_seed` | recovery: derive the `KEK`, prove it, receive the envelope |
+| **the passphrase** — devices intact or not | envelopes nothing can open | none, and this is said at registration |
+
+**A forgotten passphrase is the loss of every vault.** There is no code, no escrow and no administrator who
+can help: an administrator holds the same envelopes the attacker would, which is the property the whole model
+exists to have. A user who wants insurance against forgetting keeps the phrase where they keep other
+irreplaceable things.
+
+The first row is the one that makes the server worth running. It is why recovery exists, and why its cost is
+argued in full under [Bootstrap](#bootstrap-on-a-device-that-has-no-seed) rather than assumed.
 
 ## Two threats that are easy to conflate
 

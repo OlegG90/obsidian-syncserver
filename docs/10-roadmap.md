@@ -7,6 +7,7 @@
 | **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☑ |
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
+| **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☐ |
 | **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
 | **M5** | WebDAV gateway | ☐ |
 
@@ -41,10 +42,8 @@ instead of the rule. The rules distilled from it are in `AGENTS.md`; the sharpes
 leaving the system in an intermediate state must be recoverable **from that state, using the product's own
 buttons**, which the vault then demonstrated four times without the database being touched.
 
-Two things M3 named are still open, and neither blocks the milestone. **Thawing with the catch-up SH-21
-describes**: freezing exists, the way back does not. And nothing marks a shared folder as shared in the
-file tree — a participant cannot tell one from an ordinary folder without opening the plugin's settings,
-which is a gap in the product rather than in the protocol.
+Two things M3 named are still open, neither blocking the milestone, and both now carried by **M3.5** below:
+thawing with catch-up, and the absence of any sign in the file tree that a folder is shared at all.
 
 **M2 is closed.** Its four pieces: the `.obsidian/` switch with its per-device exceptions
 ([01](01-context.md)), resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with
@@ -59,6 +58,75 @@ seed and therefore no way to log in.
 
 Estimate: M1 is two to three weeks of evenings. Re-estimate M2 and beyond only after M1; until then the
 numbers are guesses.
+
+## M3.5 — getting back in, and getting out
+
+A milestone of its own because what it fixes is not a feature gap but a **claim the product makes and cannot
+keep**. A server that holds every byte of a vault and has no way to return it to the person who wrote it is
+not a backup; it is a transport between two live machines, and the day one machine dies is the day that
+becomes apparent. Everything here was found the same way: by using the thing.
+
+### Recovery — the reason this milestone exists
+
+Today a device with no `data.json` has exactly one way in: pairing, which needs **another working device to
+approve it**. An account whose only device is gone is gone with it, and nothing in the product says so until
+it is too late. Worse, `connect()` writes placeholder recovery values, so an account created today *claims* a
+recovery path it does not have.
+
+The design is settled in [06](06-key-model.md) and walked through in [07](07-onboarding.md); the decision and
+its cost are #112.
+
+- [ ] **Schema.** `users.kek_verifier_hash` replaces `recovery_key` and `recovery_code_hash`; the three-shape
+      `CHECK` on `state` and the key columns moves with it. Removing the two columns is half the point — a
+      column that only ever holds a placeholder is a promise the database is making on nobody's behalf.
+- [ ] **Registration writes a real verifier.** `connect()` already holds the `KEK`; it derives
+      `HKDF(KEK, "recovery" ‖ login ‖ salt)` and sends it with redeem. No placeholders survive this step.
+- [ ] **`POST /auth/recover`.** Anonymous, shaped like pairing's claim: verify, create the device, return
+      `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id`, `device_id`. An unknown login and
+      a wrong phrase get the same refusal (#73).
+- [ ] **An attempt limit that is real.** Per login and per source, backing off, audit-logged. The endpoint is
+      the one place in the product where guessing pays, and the documents already promise a limit here and on
+      `/auth/kdf` that no code currently applies — this closes both.
+- [ ] **"Recover this vault" in the plugin**, beside "Join an existing account": address, login, passphrase.
+      Past it nothing new is invented — the client logs in, lists vaults and enters **adoption**, which has
+      existed since M1.
+- [ ] **Say it at registration.** One line, once: a forgotten passphrase loses every vault, and no
+      administrator can help.
+
+### The scenario that decides it
+
+Run end to end, against a real server, on a machine that keeps nothing:
+
+1. connect a vault, sync it, share a folder — an ordinary, populated account;
+2. **destroy the client entirely**: delete the plugin's `data.json`, then delete the vault folder itself;
+3. on an empty vault, enter the address, the login and the passphrase — nothing else, and no second device
+   anywhere;
+4. every note comes back, with its history, and the shared folder is still shared.
+
+Step 3 is the whole milestone. If it needs anything the user does not carry in their head, it has failed.
+
+### The connection record — found by using it
+
+- [ ] **The server address is editable in place** (#113). Moving from an IP to a host name changes one field;
+      nothing else in the record depends on it. The instinct to "disconnect and reconnect with the new
+      address" must not be catered to, because reconnecting costs a full bootstrap that the one-time
+      invitation token cannot pay for twice.
+- [ ] **Disconnect**, which does not exist at all today: clear the local record, revoke this device, keep
+      every file and everything on the server, and say what coming back will cost **before** doing any of it.
+      It ships after recovery, never before (#113).
+
+### A shared folder that looks like any other — found by using it
+
+- [ ] **Mark a shared folder as shared where the folder is**, not only in the plugin's settings. After the
+      two-account walk both sides had a folder that behaved differently from its neighbours — writes reaching
+      another person, a departure to perform — with nothing on screen to say so. A participant cannot reason
+      about a boundary they cannot see.
+
+### Carried over from M3
+
+- [ ] **Thawing with catch-up (SH-21).** Freezing an over-quota account works and is enforced where
+      propagation crosses an account boundary; the way back — releasing the freeze and delivering what was
+      withheld — was specified and never built.
 
 ## M1 — the scope of the first complete release
 
