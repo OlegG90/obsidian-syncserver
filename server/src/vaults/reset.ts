@@ -14,7 +14,7 @@
  * separately: they receive `410 reset` and quarantine rather than delete (#80).
  */
 import type { PoolClient } from 'pg';
-import { thawIfUnderQuota } from '../quota.js';
+import { thawIfUnderQuota } from '../shares/thaw.js';
 import type { Db } from '../db.js';
 
 /**

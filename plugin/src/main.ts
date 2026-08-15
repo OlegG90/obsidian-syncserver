@@ -187,8 +187,27 @@ export default class SyncServerPlugin extends Plugin {
     }
   }
 
+  /**
+   * The long status, and the account's usage with it.
+   *
+   * Asked for here rather than remembered: it is a fact about the server that changes
+   * without this device doing anything — somebody else writing into a shared folder is
+   * enough to freeze the account — so a kept figure would be a stale one. The modal opens
+   * immediately and gains the line when the answer lands; a status screen that waited for
+   * the network before showing the state of a device would have the priorities backwards.
+   */
   showStatus(): void {
-    new StatusModal(this.app, statusLines(this.phase, this.sess?.connection)).open();
+    const modal = new StatusModal(this.app, statusLines(this.phase, this.sess?.connection));
+    modal.open();
+
+    if (this.sess?.state !== 'open') return;
+    void this.sess
+      .use((h) => h.client.usage())
+      .then((usage) => modal.replace(statusLines(this.phase, this.sess?.connection, usage)))
+      .catch(() => {
+        // Offline, or the token expired between opening and asking. The status is about this
+        // device first, and it is already on screen.
+      });
   }
 
   /**
@@ -950,11 +969,19 @@ class ConfirmModal extends Modal {
 
 /** The complete status, on every platform — see `status.ts` for why the status bar is not enough. */
 class StatusModal extends Modal {
+  private pre: HTMLElement | undefined;
+
   constructor(
     app: App,
-    private readonly lines: string[],
+    private lines: string[],
   ) {
     super(app);
+  }
+
+  /** Rewrite the body: what only the server can answer arrives after the modal is up. */
+  replace(lines: string[]): void {
+    this.lines = lines;
+    this.pre?.setText(lines.join('\n'));
   }
 
   override onOpen(): void {
@@ -963,6 +990,7 @@ class StatusModal extends Modal {
     pre.style.whiteSpace = 'pre-wrap';
     pre.style.userSelect = 'text';
     pre.setText(this.lines.join('\n'));
+    this.pre = pre;
   }
 
   override onClose(): void {

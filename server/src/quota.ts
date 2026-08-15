@@ -16,6 +16,11 @@
  * `Db`, the write paths hold a `PoolClient` inside `db.tx`, and a rule that only one of them
  * can call gets restated by the other.
  *
+ * **Not here: what a thaw sets in motion.** `freezeIfOverQuota` is arithmetic and belongs
+ * with the sum it reads. Its mirror is not, because lifting a freeze obliges the share domain
+ * to catch every replica up (SH-21) — so it lives in `shares/thaw.ts`, and this module stays
+ * something the share domain can import without importing it back.
+ *
  * **Not here: the reference counts themselves.** Binding a blob to a node, releasing it on
  * delete, and recounting the whole account after a reset all write `user_blobs` — but they
  * are three different operations that happen to touch one table, not three spellings of one
@@ -24,7 +29,6 @@
  */
 import type { PoolClient } from 'pg';
 import { oneFrom, type Queryable } from './db.js';
-import { catchUpMember, type CaughtUp } from './shares/catchup.js';
 
 export interface Usage {
   /**
@@ -125,33 +129,4 @@ export const freezeIfOverQuota = async (c: PoolClient, userId: string): Promise<
 
   await c.query(`UPDATE users SET frozen_at = now() WHERE id = $1 AND frozen_at IS NULL`, [userId]);
   return true;
-};
-
-/**
- * Lift the freeze once the account is back inside its limit, and catch its replicas up
- * (SH-20, SH-21).
- *
- * The mirror of the function above, and it has to be one: a freeze that only ever went on
- * is a state with no exit, and "delete something" — the advice SH-20 gives — would be advice
- * that changes nothing.
- *
- * **Thawing is not the end of it.** Propagation skipped this account for the whole freeze, so
- * lifting it leaves every shared folder behind by exactly that interval and nothing will ever
- * mention those writes again. The catch-up runs here, in the same transaction, because a
- * thawed account that is level with nobody is a worse state than a frozen one: it looks
- * current and is not.
- *
- * @returns what each share had to be brought forward by, or `undefined` if nothing thawed.
- */
-export const thawIfUnderQuota = async (c: PoolClient, userId: string): Promise<CaughtUp[] | undefined> => {
-  const row = await read(oneFrom(c), userId, null);
-  if (!row || BigInt(row.used) > BigInt(row.quota)) return undefined;
-
-  const thawed = await c.query(
-    `UPDATE users SET frozen_at = NULL WHERE id = $1 AND frozen_at IS NOT NULL`,
-    [userId],
-  );
-  if (!thawed.rowCount) return undefined;
-
-  return catchUpMember(c, userId);
 };

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { priority, summary } from '../src/engine/report.js';
+import { eventSentence, priority, summary } from '../src/engine/report.js';
 import type { SyncReport } from '../src/engine/engine.js';
 
 const report = (over: Partial<SyncReport>): SyncReport => ({
@@ -23,6 +23,7 @@ const report = (over: Partial<SyncReport>): SyncReport => ({
   quarantined: [],
   vanished: [],
   errors: [],
+  events: [],
   ...over,
 });
 
@@ -77,5 +78,29 @@ describe('summary', () => {
   it('orders failures first and includes matched only when nothing moved', () => {
     const s = summary(report({ matched: [{ path: 'a.md' }], errors: [{ path: 'b.md', message: 'x' }] }));
     assert.deepEqual(s, ['1 failed', '1 already in sync']);
+  });
+});
+
+describe('what an account state says to the person it is true of', () => {
+  it('names what is owed, not what happened', () => {
+    // "Your share ended" is a fact nobody can act on. What a person needs is the thing
+    // still expected of them, and from whom — the pass that returns their copy to their key.
+    const ended = eventSentence({ type: 'share_ended', share_id: 'x', at: '2026-01-01T00:00:00Z' });
+    assert.match(ended, /Leave/, 'the button that finishes it is named');
+    assert.match(ended, /copy stays/i, 'and the fear it raises is answered first');
+  });
+
+  it('says what a freeze stops and what it does not', () => {
+    // Every part of it is the next question: what stopped, what still works, how to end it.
+    const frozen = eventSentence({ type: 'account_frozen', at: '2026-01-01T00:00:00Z' });
+    assert.match(frozen, /frozen/i);
+    assert.match(frozen, /deleting still work/i, 'the way out stays available, and says so (SH-20)');
+  });
+
+  it('says something rather than nothing for a state it does not know', () => {
+    // The server may be newer. Silence would be indistinguishable from nothing being wrong,
+    // which is the one reading that is certainly false.
+    const unknown = eventSentence({ type: 'something_new', at: '2026-01-01T00:00:00Z' } as never);
+    assert.match(unknown, /does not recognise/i);
   });
 });

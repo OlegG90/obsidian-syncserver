@@ -24,6 +24,7 @@ const emptyReport = (over: Partial<SyncReport> = {}): SyncReport => ({
   quarantined: [],
   vanished: [],
   errors: [],
+  events: [],
   ...over,
 });
 

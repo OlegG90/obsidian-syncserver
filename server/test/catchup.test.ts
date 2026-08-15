@@ -14,6 +14,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { catchUpShare } from '../src/shares/catchup.js';
+import { thawIfUnderQuota } from '../src/shares/thaw.js';
 
 const cfg = loadConfig();
 let db: Db;
@@ -249,6 +250,43 @@ describe('catching a thawed replica up (SH-21)', () => {
       { created: again.created, updated: again.updated, deleted: again.deleted, versions: again.versions },
       { created: 0, updated: 0, deleted: 0, versions: 0 },
     );
+  });
+
+  it('lifts the freeze only when the account is back inside its limit, and catches up then', async () => {
+    // The two halves are one act on purpose: a thawed account that is level with nobody
+    // looks current and is not. This is also the test that would have to be written twice if
+    // `quota.ts` still orchestrated it — the accounting module and the share domain were
+    // importing each other, and neither half could be exercised without the other.
+    const share = await sharedFolder();
+    const written = await writeWhileAway(share, `frozen out ${randomUUID()}`);
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [share.away.id]);
+
+    // Still over the limit: nothing lifts, and nothing is delivered.
+    await db.query(`UPDATE users SET quota_bytes = 1 WHERE id = $1`, [share.away.id]);
+    await db.query(
+      `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
+       ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
+      [share.away.id, written.sha256],
+    );
+    assert.equal(await db.tx((c) => thawIfUnderQuota(c, share.away.id)), undefined, 'over quota stays frozen');
+
+    const stillFrozen = await db.one<{ frozen: boolean }>(
+      `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`,
+      [share.away.id],
+    );
+    assert.equal(stillFrozen!.frozen, true);
+
+    // Room again — the limit was raised, which is the other way out of SH-20.
+    await db.query(`UPDATE users SET quota_bytes = 10000000 WHERE id = $1`, [share.away.id]);
+    const caught = await db.tx((c) => thawIfUnderQuota(c, share.away.id));
+    assert.ok(caught, 'the freeze lifts');
+    assert.ok(caught!.some((s) => s.created + s.updated > 0), 'and the gap is delivered in the same breath');
+
+    const after = await db.one<{ frozen: boolean }>(
+      `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`,
+      [share.away.id],
+    );
+    assert.equal(after!.frozen, false);
   });
 
   it('leaves the replica root alone, because each copy named its own (SH-01)', async () => {

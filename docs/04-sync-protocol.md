@@ -209,6 +209,9 @@ GET    /vaults/{vault_id}/delta?cursor=<opaque>&limit=500
                    being told, and nothing needs a cursor or a pruning rule of its own.
                    `share_ended` is offered while the member still owes the finalization
                    pass, and stops when `left_at` records that it ran.
+                   The client reads them on the delta call it already makes to probe its
+                   cursor, and shows each as a sentence after the pass — these are the two
+                   facts nothing else would tell somebody who never opens the settings.
                    The freeze is an account state, not a share one (SH-20), so its event
                    names no share.
                    No `by`: nothing records who ended a share, and a column naming an

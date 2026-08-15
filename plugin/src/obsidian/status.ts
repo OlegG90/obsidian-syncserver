@@ -102,14 +102,56 @@ export const phaseIcon = (phase: SyncPhase): string => {
   }
 };
 
+/**
+ * What the account is using, and whether it has been stopped for using too much.
+ *
+ * A freeze is an account **state**, not a message (docs/02): the server does not ask
+ * anything, it stops accepting what would grow usage and waits. Which means the only way a
+ * person learns of it is a surface that says so — and until this line existed there was
+ * none, in any client, while the server computed and shipped the fact on every delta page
+ * to nobody.
+ */
+export interface AccountUsage {
+  used: number;
+  quota: number;
+  frozen: boolean;
+}
+
+const bytes = (n: number): string => {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
+};
+
 /** The long form: everything the short one had to leave out. */
-export const statusLines = (phase: SyncPhase, connection?: { serverUrl: string; login: string; vaultId: string }): string[] => {
+export const statusLines = (
+  phase: SyncPhase,
+  connection?: { serverUrl: string; login: string; vaultId: string },
+  usage?: AccountUsage,
+): string[] => {
   const lines: string[] = [];
 
   lines.push(connection ? `Server: ${connection.serverUrl}` : 'Server: not connected');
   if (connection) {
     lines.push(`Login: ${connection.login}`);
     lines.push(`Vault: ${connection.vaultId}`);
+  }
+
+  if (usage) {
+    lines.push(`Account: ${bytes(usage.used)} of ${bytes(usage.quota)} used`);
+    if (usage.frozen) {
+      // Said in full, because every part of it is a question somebody would ask next: what
+      // stopped, what still works, and what to do about it (SH-20).
+      lines.push(
+        'FROZEN — over the limit. Nothing new is accepted, here or from anyone sharing with ' +
+          'you; reading and deleting still work, and freeing space lifts it.',
+      );
+    }
   }
 
   switch (phase.kind) {

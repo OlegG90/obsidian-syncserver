@@ -32,6 +32,7 @@
  * *pages* are not applied incrementally — the full walk is the data source, the probe is
  * only the provenance check (incremental application is M2).
  */
+import type { DeltaEvent } from '@syncserver/shared';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
@@ -67,6 +68,20 @@ export interface SyncReport {
    * not hold is moved to `_Reset <date>/`, never erased (#80, docs/07).
    */
   quarantined: { from: string; to: string }[];
+  /**
+   * What the server says is true of this account right now (docs/04).
+   *
+   * **States, not a log**: they are recomputed on every delta and repeat until they stop
+   * being true, so a device that was offline is told again and one that has caught up is not
+   * told at all. The engine does not act on them — an ended share is finalized by a person
+   * pressing Leave, and a freeze is lifted by freeing space — it carries them, because the
+   * pass is the only moment the client and the server speak without being asked to.
+   *
+   * They arrived on every delta for months with nobody reading them, which cost the server a
+   * query per sync and the person the two facts they most needed: that a share they are in
+   * is over, and that their account has stopped accepting anything.
+   */
+  events: DeltaEvent[];
   /**
    * Paths this device had synced that are no longer on disk, and were neither explained by a
    * rename nor pushed as a delete. Reported, not acted on — a rescan that guesses wrong
@@ -220,7 +235,7 @@ export class SyncEngine {
   async sync(): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
-      deleted: [], removed: [], quarantined: [], vanished: [], errors: [],
+      deleted: [], removed: [], quarantined: [], vanished: [], errors: [], events: [],
     };
     const state = await this.store.load();
 
@@ -235,7 +250,9 @@ export class SyncEngine {
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
     // what a missing node means (#70). The pages themselves are re-read through the walk —
     // the probe is the check, not the data.
-    const epoch: RemoteEpoch = state.cursor ? await this.probeEpoch(state.cursor) : 'continuous';
+    const probe = state.cursor ? await this.probeEpoch(state.cursor) : { epoch: 'continuous' as const, events: [] };
+    const epoch: RemoteEpoch = probe.epoch;
+    report.events = probe.events;
 
     const { tree, cursor } = await this.readServerTree(rootNodeId, vaultScopeId);
     const byNodeId = new Map<string, ServerNode>();
@@ -345,11 +362,14 @@ export class SyncEngine {
    * engine it is a policy — resync from an empty cursor, deleting nothing — and a policy
    * belongs on the type, where the next consumer of `VaultWire` can see it.
    */
-  private async probeEpoch(cursor: string): Promise<RemoteEpoch> {
+  private async probeEpoch(cursor: string): Promise<{ epoch: RemoteEpoch; events: DeltaEvent[] }> {
     const res = await this.client.delta(this.vaultId, cursor, 1);
-    if ('rejected' in res) return res.reason;
-    if ('unverifiable' in res) return 'unverifiable';
-    return 'continuous';
+    if ('rejected' in res) return { epoch: res.reason, events: [] };
+    if ('unverifiable' in res) return { epoch: 'unverifiable', events: [] };
+    // The probe asks for one page and reads none of it — except this. The account states
+    // ride on every delta answer by design, so the call that is already being made is where
+    // they are collected; asking again would be a second request for a field this one had.
+    return { epoch: 'continuous', events: res.events };
   }
 
   /**

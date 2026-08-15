@@ -13,6 +13,7 @@
  * Nothing here depends on Obsidian, so the precedence is testable where the UI classes are
  * not (report.test.ts).
  */
+import type { DeltaEvent } from '@syncserver/shared';
 import type { SyncReport } from './engine.js';
 
 /** The one precedence rule, in descending order of what demands attention. */
@@ -49,6 +50,27 @@ export const priority = (report: SyncReport): ReportMood => {
   }
   if (report.matched.length) return 'matched';
   return report.scanned === 0 ? 'empty' : 'up_to_date';
+};
+
+/**
+ * What an account state means to the person it is true of (docs/04).
+ *
+ * The wording carries the consequence, not the name: "your share ended" tells somebody
+ * nothing they can act on, while "the folder is yours to keep, press Leave to finish"
+ * says what is owed and by whom. Both of these states are ones the server will keep
+ * repeating until they stop being true, so the sentence has to survive being read twice.
+ */
+export const eventSentence = (event: DeltaEvent): string => {
+  switch (event.type) {
+    case 'share_ended':
+      return 'A shared folder has ended. Your copy stays — open the plugin settings and press Leave to finish, which returns it to your own key.';
+    case 'account_frozen':
+      return 'Your account is over its limit and is frozen. Nothing new is accepted, from you or from anyone sharing with you; reading and deleting still work, and freeing space lifts it.';
+    default:
+      // A state this build does not know is still worth saying: the server is newer, and
+      // silence would be indistinguishable from nothing being wrong.
+      return 'The server reports a state this version does not recognise. Updating the plugin will name it.';
+  }
 };
 
 /** One nonzero outcome, in precedence order, with the report's items that back it. */

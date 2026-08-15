@@ -17,7 +17,7 @@
  * not (sync.test.ts).
  */
 import type { SyncReport } from './engine/engine.js';
-import { priority, summary } from './engine/report.js';
+import { eventSentence, priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
 
 export interface SyncCoordinatorDeps {
@@ -92,6 +92,10 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     for (const q of report.quarantined.slice(0, 5)) {
       deps.notify(`SyncServer: vault was reset elsewhere — ${q.from} was kept as ${q.to}`, 15000);
     }
+    // Last, and held longest: these are the two things nothing else on any screen would tell
+    // somebody who never opens the settings — that a share they are in is over, and that
+    // their account has stopped accepting anything.
+    for (const e of report.events) deps.notify(`SyncServer: ${eventSentence(e)}`, 20000);
   };
 
   return {
