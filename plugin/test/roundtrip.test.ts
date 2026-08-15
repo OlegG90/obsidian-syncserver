@@ -55,6 +55,20 @@ const entry = path.join(repo, 'server/dist/index.js');
 
 const PORT = Number(process.env['SYNCSERVER_TEST_PORT'] ?? 18087);
 const DB = process.env['SYNCSERVER_TEST_DB'] ?? 'syncserver_plugin';
+
+/**
+ * How the server this test starts reaches its database.
+ *
+ * An inherited `DATABASE_URL` wins, and it has to: the development socket below is how
+ * PostgreSQL authenticates on a developer's machine (peer, no password) and does not exist
+ * anywhere else. CI creates the database over TCP and names it in that variable, and a test
+ * that insisted on the socket answered `ENOENT /var/run/postgresql/.s.PGSQL.5432` — a
+ * sentence about a missing file, for a server that was running the whole time.
+ *
+ * Whoever sets it must name the database `test:live` has just reset; nothing here can check
+ * that, and a mismatch shows up as a first-run vault that is not first-run.
+ */
+const DATABASE_URL = process.env['DATABASE_URL'] ?? `postgres:///${DB}?host=/var/run/postgresql`;
 const STORE = path.join(repo, `server/var/test-plugin-${process.pid}`);
 const base = `http://127.0.0.1:${PORT}`;
 
@@ -115,7 +129,7 @@ before(async () => {
       ...process.env,
       PORT: String(PORT),
       HOST: '127.0.0.1',
-      DATABASE_URL: `postgres:///${DB}?host=/var/run/postgresql`,
+      DATABASE_URL,
       SERVER_SECRET: 'test-only-secret-for-the-plugin-roundtrip',
       BLOB_STORE_PATH: STORE,
       // The collector would otherwise take its first pass while the test runs. Nothing here
