@@ -980,12 +980,17 @@ class SyncServerSettings extends PluginSettingTab {
       }
 
       for (const share of out.joined) {
-        // The folder first, because that is what a person recognises. The id stays, in the
-        // description, for the times a message or a log names one.
-        const label = share.folder ? `“${share.folder}”` : 'a folder not synced here yet';
-        const row = new Setting(list)
-          .setName(share.isInitiator ? `${label} — shared by you` : `${label} — shared with you`)
-          .setDesc(`${share.state} · ${share.shareId}`);
+        // The folder, and what is true of it. No id: a person never needs one, and two rows
+        // identified by uuid are two rows nobody can tell apart — which is exactly what
+        // happened the first time somebody had to choose between them.
+        const label = share.folder ? `“${share.folder}”` : 'A folder not synced here yet';
+        const state =
+          share.state === 'active'
+            ? share.isInitiator
+              ? 'Shared by you.'
+              : 'Shared with you.'
+            : 'This share is over — finish leaving to return the folder to your own key.';
+        const row = new Setting(list).setName(label).setDesc(state);
 
         if (share.isInitiator) {
           let login = '';
