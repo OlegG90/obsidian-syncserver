@@ -7,11 +7,12 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development, version 0.2.0.** Two-way sync works on desktop and on Android against a
+> **Status: in development, version 0.3.0.** Two-way sync works on desktop and on Android against a
 > self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
 > keep both versions. **Folder sharing works too** — two accounts have shared a folder, written into
-> it both ways and left it again, each keeping their copy. It has not yet been used to hold anything
-> anyone would miss. See [Status](#status) for exactly how far it goes.
+> it both ways and left it again, each keeping their copy — and **a vault can be recovered from the
+> passphrase alone**, with no second device to ask. It has not yet been used to hold anything anyone
+> would miss. See [Status](#status) for exactly how far it goes.
 
 ## What it does, and what it deliberately does not
 
@@ -118,7 +119,7 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.2.0"}` and serves
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.3.0"}` and serves
 nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
@@ -145,7 +146,7 @@ both at once.
 
 ## Status
 
-Current release: **0.2.0** — see [Versions](#versions).
+Current release: **0.3.0** — see [Versions](#versions).
 
 | Milestone | |
 |---|---|
@@ -154,7 +155,7 @@ Current release: **0.2.0** — see [Versions](#versions).
 | **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
-| **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect | not started — the milestone that makes this a backup rather than a transport |
+| **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. One item is deliberately left: a frozen account still has nothing it can delete to free space, since the trash keeps its references and nothing purges it |
 | **M4** — management console, version thinning, blob GC | not started |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
@@ -173,11 +174,11 @@ own buttons, which is now a rule rather than an anecdote — see `AGENTS.md`.
 
 [`docs/10`](docs/10-roadmap.md) has the acceptance scenarios each milestone is measured against.
 
-**One device is currently one point of failure.** A device with no local state can only join by pairing with
-another that still works, so an account whose only device is lost is lost with it. M3.5 is that gap: the
-server holds every byte and needs a door to hand them back through — the passphrase, proved without ever
-being sent. Its cost is argued in full in [`docs/06`](docs/06-key-model.md#bootstrap-on-a-device-that-has-no-seed),
-because it makes the passphrase a single factor and that should be read before it is relied on.
+**A device is no longer a single point of failure, and the passphrase now is.** A vault whose every device
+is gone comes back from the address, the login and the passphrase — the client proves it can open the seed
+envelope and the server returns it, having never seen the phrase. That trade is argued in full in
+[`docs/06`](docs/06-key-model.md#bootstrap-on-a-device-that-has-no-seed): it makes the passphrase a single
+factor, and a forgotten one still loses every vault, because the seed exists only inside envelopes it opens.
 
 **Not yet suitable for data you cannot lose.** A schema change still means starting the database
 again (above); backups are documented ([`docs/08`](docs/08-backup-restore.md)) but not
@@ -194,16 +195,21 @@ matrix between them would be a fiction nobody tests.
 **The major number carries the compatibility promise.** Two builds with the same major are meant to
 work together.
 
-**While the major is `0`, the minor carries it instead** — which is what a leading zero means. `0.1`
-and `0.2` are as unrelated as `1.x` and `2.x` will be. The rule collapses to the plain "same major"
-on the day the first `1.0.0` ships, with no code change: the zero test simply stops being true.
+**While the major is `0`, the minor carries it instead** — which is what a leading zero means. `0.1`,
+`0.2` and `0.3` are as unrelated as `1.x` and `2.x` will be. The rule collapses to the plain "same
+major" on the day the first `1.0.0` ships, with no code change: the zero test simply stops being true.
+
+`0.3.0` earns its number the way the rule intends. Registration now requires a recovery verifier and
+the endpoints that hand an account back did not exist before it, so a `0.2` client cannot claim an
+invitation from a `0.3` server, and a `0.2` server has nothing to answer a `0.3` client's recovery
+with. That is the whole point of the number: neither build has to discover this by failing.
 
 The server reports its version from `/health`, and only there — it is the one endpoint open before
 authentication and before an administrator exists, which is exactly when a client needs the answer:
 
 ```bash
 curl -s localhost:8080/health
-# {"status":"ok","bootstrap_pending":false,"version":"0.2.0"}
+# {"status":"ok","bootstrap_pending":false,"version":"0.3.0"}
 ```
 
 The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does
