@@ -52,6 +52,15 @@ export interface PlannedItem {
    * before", and a deleted node is not going to be uploaded.
    */
   deleted?: boolean;
+  /**
+   * Superseded blobs of the same node whose content key must move as well.
+   *
+   * The same argument as `deleted`, applied to time instead of the trash: their plaintext is
+   * not on disk, so they get an **envelope and no tag**. A node is not one blob — every edit
+   * made while the folder was shared left a version keyed only under the scope being left —
+   * and a conversion that moves the head alone leaves a history nobody can open.
+   */
+  history?: readonly string[];
 }
 
 /** Everything after the last separator — the name a node is known by inside its folder. */
@@ -182,19 +191,28 @@ const rekey = async (
     name_hmac: nameHmac(to.key, item.name),
     name_key_id: to.scopeId,
   };
-  if (!item.address) return out;
+  // The head and every superseded version it still owes, in one round trip.
+  const addresses = [...new Set([item.address, ...(item.history ?? [])].filter((a): a is string => !!a))];
+  if (addresses.length === 0) return out;
 
-  const envelopes = await deps.client.blobKeys(deps.vaultId, [item.address]);
-  const source = envelopes.get(item.address)?.find((e) => e.scopeId === from.scopeId);
-  if (!source) {
-    if (onMissingSource === 'skip') return out;
-    throw new Error(`no content key under scope ${from.scopeId} for ${item.name}`);
+  const envelopes = await deps.client.blobKeys(deps.vaultId, addresses);
+  const moved = [];
+  for (const address of addresses) {
+    const source = envelopes.get(address)?.find((e) => e.scopeId === from.scopeId);
+    if (!source) {
+      if (onMissingSource === 'skip') continue;
+      throw new Error(`no content key under scope ${from.scopeId} for ${item.name}`);
+    }
+    const contentKey = unwrapContentKey(from.key, source.wrappedKey);
+    moved.push({ sha256: address, scope_id: to.scopeId, wrapped_key: wrapContentKey(to.key, contentKey) });
   }
+  if (moved.length > 0) out.envelopes = moved;
 
-  const contentKey = unwrapContentKey(from.key, source.wrappedKey);
-  out.envelopes = [{ sha256: item.address, scope_id: to.scopeId, wrapped_key: wrapContentKey(to.key, contentKey) }];
-
-  if (item.deleted) return out;
+  // The tag belongs to the head alone, and only while it is readable from disk — see
+  // `PlannedItem.deleted` and `.history` for why the other blobs neither can have one nor
+  // need one.
+  if (!item.address || item.deleted) return out;
+  if (!moved.some((e) => e.sha256 === item.address)) return out;
 
   // The tag is over the PLAINTEXT, so the file is read. Deduplication is per scope: two
   // participants holding the same file under one share share a blob, while the same file in

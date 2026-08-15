@@ -1887,6 +1887,69 @@ describe('a departure has to account for the trash too', () => {
   });
 });
 
+/** The replica as its owner sees it, in the shape a departure has to answer with. */
+type ReplicaRow = {
+  node_id: string;
+  sha256: string | null;
+  deleted: boolean;
+  needs_vault_material: boolean;
+  history_needing_material: string[];
+};
+
+describe('a departure owes the history, not only the head', () => {
+  it('names every superseded blob, and takes an envelope without a tag for it', async () => {
+    // The live vault refused here, on a blob its owner could not see: one edit ago. Every
+    // write made while the folder was shared minted its content key under KS alone, so the
+    // whole retained history owes a KV envelope — and a listing that reports the head alone
+    // sends a client back with a pass the schema then rejects, naming a blob it never heard
+    // of. What the client CANNOT produce is a tag: the plaintext of a superseded version is
+    // not on disk, and re-downloading every one of them to HMAC a value nothing looks up is
+    // not a price a departure should pay.
+    const { shareId, inside, ks } = await sharedWith('history-leave');
+    const file = await createFile(inside, `hist-${randomUUID()}`, 'first', ks);
+    const superseded = file.sha256;
+    await putFile(file, 'second');
+
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+
+    const listing = await app.inject({ method: 'GET', url: `/shares/${shareId}/replica`, headers: auth() });
+    const rows = listing.json() as ReplicaRow[];
+    const entry = rows.find((n) => n.node_id === file.nodeId);
+    assert.ok(entry, 'the file is in the replica');
+    assert.equal(entry!.sha256, file.sha256, 'the head is named');
+    assert.deepEqual(entry!.history_needing_material, [superseded], 'and so is the version behind it');
+
+    const r = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: auth(),
+      payload: {
+        nodes: rows.map((n) => ({
+          node_id: n.node_id,
+          name_enc: b64(`kv-${n.node_id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.node_id}`)),
+          name_key_id: vaultKeyId,
+          vault_envelopes: [...(n.needs_vault_material ? [n.sha256!] : []), ...n.history_needing_material].map(
+            (hex) => ({ sha256: hex, scope_id: vaultKeyId, wrapped_key: Buffer.alloc(48, 9).toString('base64') }),
+          ),
+          // Only for the head, and only while it is readable — exactly what `rekey` sends.
+          vault_dedup_tags:
+            n.needs_vault_material && !n.deleted
+              ? [{ sha256: n.sha256!, scope_id: vaultKeyId, content_tag: sha(Buffer.from(`tag:${n.sha256}`)) }]
+              : [],
+        })),
+      },
+    });
+    assert.equal(r.statusCode, 204, r.body);
+
+    const openable = await db.query(
+      `SELECT 1 FROM blob_keys WHERE scope_id = $1 AND sha256 IN (decode($2,'hex'), decode($3,'hex'))`,
+      [vaultKeyId, superseded, file.sha256],
+    );
+    assert.equal(openable.length, 2, 'both revisions open under the vault key once the share key is gone');
+  });
+});
+
 describe('what a share is over, and how long it stays visible', () => {
   it('marks the trash as well, because the schema refuses a subtree marked in part', async () => {
     // I tried the opposite first and the schema said no: a node inside a shared folder whose

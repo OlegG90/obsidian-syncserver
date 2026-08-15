@@ -214,6 +214,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         deleted: n.deleted,
         sha256: n.sha256,
         needs_vault_material: n.needsVaultMaterial,
+        history_needing_material: n.history,
       }));
     },
   );

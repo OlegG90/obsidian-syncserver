@@ -173,9 +173,16 @@ AC-Q4).
 | `nodes_private_writes_have_key_material` | a private node's blob carries its `KV` envelope and dedup tag in the same transaction as the reference | #38, #64 |
 | `nodes_active_share_writes_have_key_material` | a write inside an active share carries the `KS` envelope and tag too | #45, SH-28 |
 | `versions_active_share_writes_have_key_material` | so does a version row — history left under one scope alone is history nobody else can open | #45, SH-23 |
-| `shares_activation_has_all_key_material` | `activate` succeeds only when every current **interior** shared node is named under `KS` and every blob reachable from nodes or versions has its `KS` envelope and tag | SH-28 |
+| `shares_activation_has_all_key_material` | `activate` succeeds only when every current **interior** shared node is named under `KS`, every blob reachable from nodes or versions has its `KS` **envelope**, and every live head has its `KS` **tag** | SH-28 |
 | `shares_keys_match_state` | an active share carries a subtree key and the initiator's envelope; the pairing is not enough, both must be present | #39, #50 |
-| `nodes_unmark_requires_finalization_material` | an unmark is allowed only during that member's finalization, after every affected node is named under `KV` and each current/history blob has `KV` envelope and tag material | SH-05, SH-22, SH-29 |
+| `nodes_unmark_requires_finalization_material` | an unmark is allowed only during that member's finalization, after every affected node is named under `KV`, each current/history blob has its `KV` **envelope**, and a live head also has its `KV` **tag** | SH-05, SH-22, SH-29 |
+
+The envelope/tag split is deliberate and holds in both directions. The **envelope** keeps bytes
+openable, and re-wrapping a content key needs no plaintext — so it is owed for every blob a node
+still points at, history included. The **tag** is an HMAC over the plaintext, which exists on disk
+only for a live head; demanding one for history or for the trash would ask a device to download and
+decrypt every superseded version to compute a value nothing will ever look up, since deduplication
+answers "have I uploaded this before".
 
 ### Sharing structure
 

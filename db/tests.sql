@@ -1041,9 +1041,21 @@ SELECT expect_ok($$
 $$, 'the freeze lifts');
 
 -- ---- unmarking drops an added participant's history (SH-22), keeps the initiator's (SH-25)
+--
+-- The superseded revision is a DIFFERENT blob from the head, which is what an edit made
+-- inside a share actually leaves behind, and it carries KS material alone — the only scope
+-- that existed when it was written.
+INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+VALUES (sha256('older'::bytea), 5, 'ab/cd/older', 'xchacha20-poly1305',
+        'ce000000-0000-0000-0000-000000000002');
+INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
+VALUES (sha256('older'::bytea), 'ce000000-0000-0000-0000-0000000000c1', '\xbeef'::bytea);
+INSERT INTO dedup_index (scope_id, content_tag, sha256)
+VALUES ('ce000000-0000-0000-0000-0000000000c1', nh('older-ks-tag'), sha256('older'::bytea));
+
 INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
 VALUES ('bb000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-0000000000b3', 1,
-        sha256('hello'::bytea), 5, '11111111-1111-1111-1111-111111111111');
+        sha256('older'::bytea), 5, '11111111-1111-1111-1111-111111111111');
 
 SELECT expect_fail($$
     UPDATE nodes SET share_id = NULL, share_item_id = NULL,
@@ -1066,13 +1078,38 @@ SELECT expect_fail($$
                      name_key_id = 'bc000000-0000-0000-0000-000000000001'
      WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
        AND id = 'b0000000-0000-0000-0000-0000000000b3'
-$$, '23514', 'vault envelope and tag',
-   'unmarking before the client supplies the KV envelope and dedup tag');
+$$, '23514', 'vault envelope',
+   'unmarking before the client supplies the KV envelope');
 
--- The client has supplied Bob's KV material; the next negative case isolates the
--- independent history rule rather than failing on missing envelope/tag material.
+-- The head alone is not enough. A superseded revision was written under KS and only KS, so
+-- it owes a KV envelope of its own — and asking for the head's is how a live vault got stuck
+-- on a blob its owner could not see, one edit behind the file in front of them.
 INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
 VALUES (sha256('hello'::bytea), 'bc000000-0000-0000-0000-000000000001', '\xbeef'::bytea);
+
+SELECT expect_fail($$
+    UPDATE nodes SET share_id = NULL, share_item_id = NULL,
+                     name_key_id = 'bc000000-0000-0000-0000-000000000001'
+     WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
+       AND id = 'b0000000-0000-0000-0000-0000000000b3'
+$$, '23514', 'vault envelope',
+   'unmarking with the head converted but its history left under the share key');
+
+INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
+VALUES (sha256('older'::bytea), 'bc000000-0000-0000-0000-000000000001', '\xbeef'::bytea);
+
+-- Envelopes complete, tag still missing: the two halves are separate rules, because only
+-- one of them can be produced without the plaintext.
+SELECT expect_fail($$
+    UPDATE nodes SET share_id = NULL, share_item_id = NULL,
+                     name_key_id = 'bc000000-0000-0000-0000-000000000001'
+     WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
+       AND id = 'b0000000-0000-0000-0000-0000000000b3'
+$$, '23514', 'vault dedup tag',
+   'unmarking before the client supplies the KV dedup tag for the live head');
+
+-- A tag for the HEAD only. The superseded revision never gets one: it is not on the leaving
+-- device's disk, and deduplication asks "have I uploaded this before", which it will not.
 INSERT INTO dedup_index (scope_id, content_tag, sha256)
 VALUES ('bc000000-0000-0000-0000-000000000001', nh('bob-leave-tag'), sha256('hello'::bytea));
 

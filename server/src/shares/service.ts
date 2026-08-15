@@ -354,7 +354,11 @@ const preparationGaps = (db: Db, vaultId: string, rootId: string, keyId: string)
        FROM nodes n
       WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
         AND n.deleted_at IS NULL AND n.type = 'file' AND n.sha256 IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
+        AND (NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
+          -- The tag too, and only here: the schema asks for it exactly where the plaintext
+          -- is — a live head. Checking it for history as well would report a gap no client
+          -- could close, since a superseded version is not on anybody's disk.
+          OR NOT EXISTS (SELECT 1 FROM dedup_index d WHERE d.sha256 = n.sha256 AND d.scope_id = $3))
       UNION
      SELECT v.node_id, 'content'
        FROM versions v
@@ -1194,9 +1198,22 @@ export type ReplicaNode = {
    * tables — so it says it, exactly as `preparationGaps` does for the other direction.
    * Leaving it to the client meant guessing: convert everything and fail on material that
    * was never there, or skip on a missing source and fail the unmark instead, which the
-   * schema refuses with "cannot be unmarked before blob … has its vault envelope and tag".
+   * schema refuses with "cannot be unmarked before blob … has its vault envelope".
    */
   needsVaultMaterial: boolean;
+  /**
+   * Superseded blobs of this node that still owe an envelope under the vault key.
+   *
+   * A node is not one blob. Every write made while the folder was shared minted its content
+   * key under `KS` and only `KS` — including writes that arrived from somebody else — so a
+   * departure owes an envelope for the whole retained history, not just the head. Reporting
+   * the head alone left a leaver refused on a version they could not even see: their own
+   * note, one edit ago.
+   *
+   * **Envelopes only.** The tag is an HMAC over the plaintext, and a superseded version is
+   * not on disk; the schema asks for a tag exactly where the plaintext is.
+   */
+  history: string[];
 };
 
 /**
@@ -1230,11 +1247,19 @@ export const replicaOf = async (
             encode(n.sha256, 'hex') AS sha256,
             (n.sha256 IS NOT NULL
              AND NOT (EXISTS (SELECT 1 FROM blob_keys k
-                               WHERE k.sha256 = n.sha256 AND k.scope_id = v.vault_key_id)
-                      AND EXISTS (SELECT 1 FROM dedup_index d
-                                   WHERE d.sha256 = n.sha256 AND d.scope_id = v.vault_key_id)))
-              AS "needsVaultMaterial"
-       FROM nodes n JOIN vaults v ON v.id = n.vault_id
+                               WHERE k.sha256 = n.sha256 AND k.scope_id = vlt.vault_key_id)
+                      AND (n.deleted_at IS NOT NULL
+                           OR EXISTS (SELECT 1 FROM dedup_index d
+                                       WHERE d.sha256 = n.sha256 AND d.scope_id = vlt.vault_key_id))))
+              AS "needsVaultMaterial",
+            COALESCE((SELECT array_agg(DISTINCT encode(ver.sha256, 'hex'))
+                        FROM versions ver
+                       WHERE ver.vault_id = n.vault_id AND ver.node_id = n.id
+                         AND ver.sha256 IS DISTINCT FROM n.sha256
+                         AND NOT EXISTS (SELECT 1 FROM blob_keys k
+                                          WHERE k.sha256 = ver.sha256 AND k.scope_id = vlt.vault_key_id)),
+                     ARRAY[]::text[]) AS history
+       FROM nodes n JOIN vaults vlt ON vlt.id = n.vault_id
       WHERE n.vault_id = $1 AND n.share_id = $2 ORDER BY deleted, n.id`,
     [member.vaultId, shareId],
   );

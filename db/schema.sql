@@ -1333,18 +1333,31 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
+    -- The ENVELOPE is required for every blob the node still points at, history included:
+    -- it is what keeps the bytes openable once the share key stops being shared, and it can
+    -- always be produced, since re-wrapping a content key needs no plaintext.
     SELECT b.sha256 INTO missing_blob
       FROM (SELECT NEW.sha256 AS sha256
             UNION
             SELECT v.sha256 FROM versions v
              WHERE v.vault_id = OLD.vault_id AND v.node_id = OLD.id) b
      WHERE b.sha256 IS NOT NULL
-       AND (NOT EXISTS (SELECT 1 FROM blob_keys bk WHERE bk.sha256 = b.sha256 AND bk.scope_id = vault_key)
-         OR NOT EXISTS (SELECT 1 FROM dedup_index d WHERE d.sha256 = b.sha256 AND d.scope_id = vault_key))
+       AND NOT EXISTS (SELECT 1 FROM blob_keys bk WHERE bk.sha256 = b.sha256 AND bk.scope_id = vault_key)
      LIMIT 1;
     IF missing_blob IS NOT NULL THEN
-        RAISE EXCEPTION 'node % cannot be unmarked before blob % has its vault envelope and tag',
+        RAISE EXCEPTION 'node % cannot be unmarked before blob % has its vault envelope',
             OLD.id, encode(missing_blob, 'hex') USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- The TAG is required only for what the device can still read: it is an HMAC over the
+    -- PLAINTEXT, and only the live current content is on disk. Demanding one for history or
+    -- for the trash would ask a departure to download and decrypt every superseded version
+    -- to compute a value nothing will ever look up — deduplication answers "have I uploaded
+    -- this before", which an old version and a deleted file are not going to do.
+    IF NEW.sha256 IS NOT NULL AND NEW.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM dedup_index d WHERE d.sha256 = NEW.sha256 AND d.scope_id = vault_key) THEN
+        RAISE EXCEPTION 'node % cannot be unmarked before blob % has its vault dedup tag',
+            OLD.id, encode(NEW.sha256, 'hex') USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END;
@@ -1496,34 +1509,38 @@ BEGIN
             NEW.id, missing_node USING ERRCODE = 'check_violation';
     END IF;
 
+    -- The same split leaving uses, and for the same reason: an envelope for every blob the
+    -- subtree points at, a tag only for the live current content whose plaintext is on the
+    -- preparing device. Written as two different rules the two directions would drift, and a
+    -- folder that converts one way and not quite the other is a folder nobody can leave.
+    SELECT b.sha256 INTO missing_blob
+      FROM (SELECT n.sha256, n.share_id, n.share_item_id FROM nodes n
+            UNION ALL
+            SELECT v.sha256, n.share_id, n.share_item_id
+              FROM versions v JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id) b
+     WHERE b.share_id = NEW.id
+       AND b.share_item_id <> NEW.root_item_id
+       AND b.sha256 IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM blob_keys bk
+                        WHERE bk.sha256 = b.sha256 AND bk.scope_id = NEW.subtree_key_id)
+     LIMIT 1;
+    IF missing_blob IS NOT NULL THEN
+        RAISE EXCEPTION 'share % cannot activate: blob % lacks its share envelope',
+            NEW.id, encode(missing_blob, 'hex') USING ERRCODE = 'check_violation';
+    END IF;
+
     SELECT n.sha256 INTO missing_blob
       FROM nodes n
      WHERE n.share_id = NEW.id
        AND n.share_item_id <> NEW.root_item_id
        AND n.sha256 IS NOT NULL
-       AND (NOT EXISTS (SELECT 1 FROM blob_keys bk
-                         WHERE bk.sha256 = n.sha256 AND bk.scope_id = NEW.subtree_key_id)
-            OR NOT EXISTS (SELECT 1 FROM dedup_index d
-                           WHERE d.sha256 = n.sha256 AND d.scope_id = NEW.subtree_key_id))
+       AND n.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM dedup_index d
+                        WHERE d.sha256 = n.sha256 AND d.scope_id = NEW.subtree_key_id)
      LIMIT 1;
     IF missing_blob IS NOT NULL THEN
-        RAISE EXCEPTION 'share % cannot activate: current blob lacks its share envelope or tag', NEW.id
-            USING ERRCODE = 'check_violation';
-    END IF;
-
-    SELECT v.sha256 INTO missing_blob
-      FROM versions v
-      JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id
-     WHERE n.share_id = NEW.id
-       AND n.share_item_id <> NEW.root_item_id
-       AND (NOT EXISTS (SELECT 1 FROM blob_keys bk
-                         WHERE bk.sha256 = v.sha256 AND bk.scope_id = NEW.subtree_key_id)
-            OR NOT EXISTS (SELECT 1 FROM dedup_index d
-                           WHERE d.sha256 = v.sha256 AND d.scope_id = NEW.subtree_key_id))
-     LIMIT 1;
-    IF missing_blob IS NOT NULL THEN
-        RAISE EXCEPTION 'share % cannot activate: version blob lacks its share envelope or tag', NEW.id
-            USING ERRCODE = 'check_violation';
+        RAISE EXCEPTION 'share % cannot activate: blob % lacks its share dedup tag',
+            NEW.id, encode(missing_blob, 'hex') USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END;

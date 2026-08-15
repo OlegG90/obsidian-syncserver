@@ -778,6 +778,8 @@ export class SyncClient {
       sha256: string | null;
       /** The server's answer to "does this still need KV material" — not the client's guess. */
       needs_vault_material: boolean;
+      /** Superseded blobs of the same node that still owe an envelope; no tag is possible. */
+      history_needing_material: string[];
     }[]
   > {
     return this.json('GET', `/shares/${shareId}/replica`);

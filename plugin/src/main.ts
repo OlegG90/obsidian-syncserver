@@ -539,8 +539,11 @@ export default class SyncServerPlugin extends Plugin {
               path: pathOfNode.get(n.node_id) ?? name,
               name,
               // The server says which bytes still need converting; guessing from the name's
-              // scope was wrong in both directions.
+              // scope was wrong in both directions. It names the head and the history
+              // separately because they are owed different things — an envelope each, but a
+              // dedup tag only where there is a plaintext to compute it over.
               address: n.needs_vault_material ? n.sha256 : null,
+              history: n.history_needing_material,
               deleted: n.deleted,
             };
           });
