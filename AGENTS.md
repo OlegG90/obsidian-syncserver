@@ -42,6 +42,12 @@ npm run test:live     # plugin tests against a REAL server it starts itself
 `npm run test:live` resets its own database (`syncserver_plugin`), builds the server and runs
 the plugin suite against it. It is the only thing that proves client, keys and server agree.
 
+Run the plugin suite **only** through it. Started any other way it reaches whatever database is
+already there, and the live tests fail on `bootstrap_pending` — "this test needs a fresh
+database" is that message, not a broken client. Two suites sharing one database is the same
+mistake in another shape: the first to claim the seeded administrator leaves the second
+answering 503 to everything.
+
 ## Development environment
 
 PostgreSQL 18+ and Node 22+ must be on the **same side of the machine**. On Windows that means
