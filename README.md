@@ -9,8 +9,9 @@ its own.
 
 > **Status: in development, version 0.2.0.** Two-way sync works on desktop and on Android against a
 > self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
-> keep both versions. It has not yet been used to hold anything anyone would miss. See
-> [Status](#status) for exactly how far it goes.
+> keep both versions. **Folder sharing works too** — two accounts have shared a folder, written into
+> it both ways and left it again, each keeping their copy. It has not yet been used to hold anything
+> anyone would miss. See [Status](#status) for exactly how far it goes.
 
 ## What it does, and what it deliberately does not
 
@@ -152,7 +153,7 @@ Current release: **0.2.0** — see [Versions](#versions).
 | **M0.5** — the plugin: one-way sync, an empty vault materialised from the server | done |
 | **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
-| **M3** — folder sharing | **server side done**: the whole lifecycle, synchronous fan-out and finalization, 61 tests. The plugin does none of it yet, so it cannot be walked by hand |
+| **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
 | **M4** — management console, version thinning, blob GC | not started |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
@@ -160,6 +161,14 @@ ways, and a real conflict with neither version lost. That pass found **five defe
 green tests had missed**, four of them at the Obsidian edge — which is why the adapters have had test
 seams since, and why [`docs/10`](docs/10-roadmap.md) records what "mobile" had to mean before it could be
 ticked.
+
+M3 ended the same way, and more expensively. Two accounts on two machines shared a folder, wrote into
+it from both sides and left it — and that pass found **eighteen defects that around five hundred green
+tests had no opinion about**. They clustered: the client guessing at tables only the server can see, a
+pass over a subtree that missed the trash and the version history, and refusals that stranded a vault
+in a state its own buttons could not leave. Three tests were found to be asserting the bug rather than
+the rule and were rewritten. The vault walked out of four broken states using nothing but the product's
+own buttons, which is now a rule rather than an anecdote — see `AGENTS.md`.
 
 [`docs/10`](docs/10-roadmap.md) has the acceptance scenarios each milestone is measured against.
 

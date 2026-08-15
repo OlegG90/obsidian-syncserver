@@ -6,7 +6,7 @@
 | **M0.5** | plugin, **one-way** sync: local changes reach the server, delta is only ever applied to an empty vault | ☑ |
 | **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☑ |
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
-| **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☐ |
+| **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
 | **M5** | WebDAV gateway | ☐ |
 
@@ -20,7 +20,7 @@ content is `201` rather than a short circuit (#46), and `HEAD` stays `200` after
 the trash still holds the content. The collector and the schema's 117 assertions ride along; the server's
 own integration suite is run from a development machine, not from the NAS.
 
-**M3's server half is done**, and its client half is not — which is why the box above is still empty. All
+**M3 is closed**, and the box above was ticked by a walk rather than by a suite. All
 twelve endpoints of [04](04-sync-protocol.md)'s table exist: create, prepare, activate, cancel, invite,
 decline, join, the two lists, removal (withdraw or revoke, decided by whether they ever joined), leave and
 finalize-leave. Writes fan out synchronously to every live non-frozen participant **in the same transaction
@@ -33,9 +33,18 @@ propagation is where somebody else's write crosses your boundary, so that is whe
 And a node created inside a shared folder carried no share mark, which the schema refuses — so creating
 anything inside a share was impossible rather than merely untested.
 
-What is left of M3: the plugin. Nothing in the client can create a share, prepare a subtree, accept an
-invitation or finalize a departure, so none of this can be walked by hand yet. Thawing with the catch-up
-SH-21 describes is also still open — freezing exists now, the way back does not.
+The client half followed, and then two accounts on two machines used it: share a folder, invite, accept,
+write from either side, and leave — each keeping their copy, the initiator with the whole history and the
+added participant without it, exactly as SH-05 and SH-22 say. That pass found **eighteen defects that
+around five hundred green tests had no opinion about**, and three tests that were asserting the bug
+instead of the rule. The rules distilled from it are in `AGENTS.md`; the sharpest is that every operation
+leaving the system in an intermediate state must be recoverable **from that state, using the product's own
+buttons**, which the vault then demonstrated four times without the database being touched.
+
+Two things M3 named are still open, and neither blocks the milestone. **Thawing with the catch-up SH-21
+describes**: freezing exists, the way back does not. And nothing marks a shared folder as shared in the
+file tree — a participant cannot tell one from an ordinary folder without opening the plugin's settings,
+which is a gap in the product rather than in the protocol.
 
 **M2 is closed.** Its four pieces: the `.obsidian/` switch with its per-device exceptions
 ([01](01-context.md)), resumable upload ([04](04-sync-protocol.md)) — `PUT`/`GET`/`complete` on parts, with
