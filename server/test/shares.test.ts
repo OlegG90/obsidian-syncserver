@@ -59,6 +59,18 @@ before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
 
+  // Claim the seeded administrator, so this file stands on its own. Until one exists the
+  // API answers 503 to everything but its redemption (#107) — and this suite used to pass
+  // only because another file had happened to run first and claim it.
+  await db.query(
+    `UPDATE users SET state = 'active', role = 'admin', auth_secret_hash = 'h',
+            account_salt = decode('00112233445566778899aabbccddeeff','hex'),
+            kdf_params = '{"v":19,"m":65536,"t":3,"p":1}', pubkey = '\x01', enc_privkey = '\x02',
+            recovery_key = '\x03', recovery_code_hash = 'rh', wrapped_seed = '\x04',
+            invite_token_hash = NULL, invite_expires_at = NULL
+      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
+  );
+
   const initiator = await makeAccount('shares');
   userId = initiator.id;
   access = initiator.access;
@@ -1678,17 +1690,33 @@ describe('finishing a departure that was interrupted', () => {
       `SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2 AND deleted_at IS NULL`,
       [strangerVaultId, shareId],
     );
+    // The material travels with it, because the schema insists: a node may not be unmarked
+    // until its blob has an envelope and a tag under the vault key. That is the rule which
+    // makes "you keep your copy" true rather than a slogan — a file leaving a share has to
+    // stay openable by the person keeping it.
     const keyId = await strangerVaultKey();
+    const withContent = await db.query<{ id: string; sha: string | null }>(
+      `SELECT id, encode(sha256,'hex') AS sha FROM nodes WHERE vault_id = $1 AND share_id = $2`,
+      [strangerVaultId, shareId],
+    );
     const done = await app.inject({
       method: 'POST',
       url: `/shares/${shareId}/finalize-leave`,
       headers: { authorization: `Bearer ${strangerAccess}` },
       payload: {
-        nodes: nodes.map((n) => ({
+        nodes: withContent.map((n) => ({
           node_id: n.id,
           name_enc: b64(`kv-${n.id}`),
           name_hmac: sha(Buffer.from(`kv-${n.id}`)),
           name_key_id: keyId,
+          ...(n.sha
+            ? {
+                vault_envelopes: [
+                  { sha256: n.sha, scope_id: keyId, wrapped_key: Buffer.alloc(48, 7).toString('base64') },
+                ],
+                vault_dedup_tags: [{ sha256: n.sha, scope_id: keyId, content_tag: sha(Buffer.from(`kv:${n.sha}`)) }],
+              }
+            : {}),
         })),
       },
     });
@@ -2007,5 +2035,104 @@ describe('sharing a folder again after the first one is over', () => {
       shareId,
     ]);
     assert.equal(still!.state, 'cancelled', 'the row is still there');
+  });
+});
+
+describe('reading the CONTENT of a folder somebody shared', () => {
+  it('hands a participant the envelope under the share scope', async () => {
+    // The gap that let a participant read a shared folder's NAMES and not one byte of it.
+    // The envelope was there, in the right scope, and the query declined to hand it over.
+    const { shareId, inside, ks } = await sharedWith('content-read');
+    const file = await createFile(inside, `readable-${randomUUID()}`, 'the contents', ks);
+
+    // Their replica references the same blob; the propagation put it there.
+    const theirs = await theirCopyOf(file.nodeId);
+    assert.ok(theirs, 'the file reached their copy');
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}/blob-keys?sha256=${file.sha256}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+
+    const keys = r.json().keys as { sha256: string; scope_id: string }[];
+    assert.ok(
+      keys.some((k) => k.sha256 === file.sha256 && k.scope_id === ks),
+      'the share scope envelope is offered, which is the only one they can open',
+    );
+  });
+
+  it('does not hand it to somebody who is not in the share', async () => {
+    // The rule is membership, not the existence of an envelope.
+    const folder = await createNode('folder', `private-content-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+    const file = await createFile(folder, `not-yours-${randomUUID()}`, 'secret', vaultKeyId);
+    void shareId;
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}/blob-keys?sha256=${file.sha256}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const keys = (r.json().keys ?? []) as { scope_id: string }[];
+    assert.ok(!keys.some((k) => k.scope_id === ks));
+  });
+
+  it('stops offering it once they have left', async () => {
+    // Same condition as the keys a vault is told about: a scope worth reporting is a scope
+    // worth opening, and both stop at `left_at`.
+    const { shareId, inside, ks } = await sharedWith('content-after-leave');
+    const file = await createFile(inside, `gone-${randomUUID()}`, 'bytes', ks);
+
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const nodes = await db.query<{ id: string }>(`SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2`, [
+      strangerVaultId,
+      shareId,
+    ]);
+    // The material travels with it, because the schema insists: a node may not be unmarked
+    // until its blob has an envelope and a tag under the vault key. That is the rule which
+    // makes "you keep your copy" true rather than a slogan — a file leaving a share has to
+    // stay openable by the person keeping it.
+    const keyId = await strangerVaultKey();
+    const withContent = await db.query<{ id: string; sha: string | null }>(
+      `SELECT id, encode(sha256,'hex') AS sha FROM nodes WHERE vault_id = $1 AND share_id = $2`,
+      [strangerVaultId, shareId],
+    );
+    const done = await app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+      payload: {
+        nodes: withContent.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: keyId,
+          ...(n.sha
+            ? {
+                vault_envelopes: [
+                  { sha256: n.sha, scope_id: keyId, wrapped_key: Buffer.alloc(48, 7).toString('base64') },
+                ],
+                vault_dedup_tags: [{ sha256: n.sha, scope_id: keyId, content_tag: sha(Buffer.from(`kv:${n.sha}`)) }],
+              }
+            : {}),
+        })),
+      },
+    });
+    assert.equal(done.statusCode, 204, done.body);
+
+    const r = await app.inject({
+      method: 'GET',
+      url: `/vaults/${strangerVaultId}/blob-keys?sha256=${file.sha256}`,
+      headers: { authorization: `Bearer ${strangerAccess}` },
+    });
+    const keys = (r.json().keys ?? []) as { scope_id: string }[];
+    assert.ok(!keys.some((k) => k.scope_id === ks), 'the share key is no longer theirs to use');
   });
 });

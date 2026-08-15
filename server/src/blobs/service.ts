@@ -37,8 +37,16 @@ export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): P
  * Two conditions, and both are the same rule stated once each way. The caller must hold a
  * **live reference** to the blob — the identical test `GET /blobs` applies (#20), because an
  * envelope is worth exactly as much as the bytes it opens. And the envelope must be in a
- * scope the caller holds, which for now is their own vault's key scope; a share adds more
- * (docs/06), and this query is written so that adding them is a wider `IN`, not a rewrite.
+ * scope the caller holds: their own vault's, **and every share scope they are still in**.
+ *
+ * The second half is the widening this comment used to promise and nobody had done. Without
+ * it a participant could read the NAMES of a shared folder — those travel under `KS`, which
+ * their invitation delivered — and not one byte of its content: the envelope was there, in
+ * the right scope, and the query declined to hand it over. Found the first time somebody
+ * joined a share and synced.
+ *
+ * The membership test matches the one that decides which keys a vault is told about, for
+ * the same reason both must agree: a scope worth reporting is a scope worth opening.
  */
 export const envelopesFor = async (
   db: Db,
@@ -54,7 +62,11 @@ export const envelopesFor = async (
        JOIN vaults v      ON v.id = $2 AND v.user_id = $1
        JOIN user_blobs ub ON ub.sha256 = bk.sha256 AND ub.user_id = $1 AND ub.refs_own > 0
       WHERE bk.sha256 = ANY($3::bytea[])
-        AND bk.scope_id IN (v.vault_key_id)`,
+        AND (bk.scope_id = v.vault_key_id
+             OR bk.scope_id IN (SELECT s.subtree_key_id
+                                  FROM share_members m JOIN shares s ON s.id = m.share_id
+                                 WHERE m.user_id = $1 AND m.vault_id = $2
+                                   AND m.left_at IS NULL AND s.subtree_key_id IS NOT NULL))`,
     [userId, vaultId, addresses],
   );
 

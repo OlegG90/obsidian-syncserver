@@ -992,6 +992,21 @@ export const finalizeLeave = async (
       return { kind: 'finalization_incomplete', missing: missing.slice(0, 20) } as Refusal;
     }
 
+    // The history goes FIRST, and all of it, for an added participant (SH-22). The schema
+    // checks this at the moment a node is unmarked — "an added participant keeps the files
+    // alone" — so deleting afterwards is too late; and deleting only the older revisions is
+    // not enough, because what leaves with the share is the past, not the file. The file
+    // itself survives on the node's own reference, which is what "you keep your copy" means.
+    //
+    // The initiator keeps everything (SH-25): theirs was the folder before the share and
+    // remains so after it.
+    if (userId !== member.initiator) {
+      await c.query(`DELETE FROM versions WHERE vault_id = $1 AND node_id = ANY($2::uuid[])`, [
+        member.vaultId,
+        nodes.map((n) => n.nodeId),
+      ]);
+    }
+
     for (const n of nodes) {
       await writeMaterial(c, { envelopes: n.envelopes ?? [], dedupTags: n.dedupTags ?? [] });
       const res = await c.query(
@@ -1007,18 +1022,7 @@ export const finalizeLeave = async (
     }
 
     if (userId !== member.initiator) {
-      // The past arrived with the share and leaves with it. The head version stays: it is
-      // the file they keep, and removing it would take the content with it.
-      await c.query(
-        `DELETE FROM versions v
-          USING nodes n
-          WHERE n.vault_id = v.vault_id AND n.id = v.node_id
-            AND v.vault_id = $1 AND v.node_id = ANY($2::uuid[])
-            AND v.rev < n.rev`,
-        [member.vaultId, nodes.map((n) => n.nodeId)],
-      );
-
-      // And the claims those versions were holding. Quota counts the ROW rather than the
+      // The claims those versions were holding. Quota counts the ROW rather than the
       // count on it (docs/03), so a blob this account no longer references anywhere must
       // lose its row or the leaver keeps paying for history they no longer have.
       await c.query(
