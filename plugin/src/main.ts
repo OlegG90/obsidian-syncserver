@@ -461,6 +461,14 @@ export default class SyncServerPlugin extends Plugin {
           const tree = await engine.readTree();
           const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
           const opened = await h.client.openVault(this.data.connection!.vaultId);
+
+          // Asked, not invented. The initiator's own label for that folder is under THEIR
+          // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
+          // docs/05 says they do. Offering who shared it is the one fact this side holds.
+          const from = (await h.client.shares()).invitations.find((i) => i.share_id === shareId);
+          const chosen = await askFolderName(this.app, freeName(`Shared by ${from?.initiator_login ?? 'someone'}`, siblings));
+          if (!chosen) throw new Error('a name is needed for the folder before it can land here');
+
           await acceptInvitation(
             {
               client: h.client,
@@ -470,8 +478,7 @@ export default class SyncServerPlugin extends Plugin {
             },
             shareId,
             opened.root_node_id,
-            // At the vault root, beside their own folders, under a name that is free here.
-            freeName('Shared folder', siblings),
+            freeName(chosen, siblings),
           );
         }),
 
@@ -566,6 +573,29 @@ export default class SyncServerPlugin extends Plugin {
 }
 
 /** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
+/**
+ * What to call a folder somebody shared with you.
+ *
+ * It has to be asked, because it cannot be known: the initiator's own label for that folder
+ * is under THEIR vault key (SH-01), so the name they use is unreadable here and always will
+ * be. The design says the joiner names their own copy, and until this existed the client
+ * quietly invented "Shared folder" for everybody — which is not naming it, it is refusing to.
+ *
+ * A suggestion is offered rather than a blank box: the person accepting knows who shared it,
+ * and that is the one fact this side actually holds.
+ */
+const askFolderName = (app: App, suggestion: string): Promise<string | undefined> =>
+  new Promise((resolve) => {
+    new TextPromptModal(
+      app,
+      'Name this shared folder',
+      'It lands among your own folders, so the name is yours to choose. Whatever the person ' +
+        'who shared it calls their copy is encrypted under their key and cannot be read here.',
+      suggestion,
+      resolve,
+    ).open();
+  });
+
 const askPassphrase = (app: App): Promise<string | undefined> =>
   new Promise((resolve) => {
     const modal = new PassphraseModal(app, resolve);
@@ -607,6 +637,48 @@ class PassphraseModal extends Modal {
   override onClose(): void {
     this.contentEl.empty();
     // Dismissed with Escape or the close button rather than answered.
+    if (!this.answered) this.done(undefined);
+  }
+}
+
+/** One line of text, asked for with something already in the box. */
+class TextPromptModal extends Modal {
+  private answered = false;
+
+  constructor(
+    app: App,
+    private readonly title: string,
+    private readonly explanation: string,
+    private readonly initial: string,
+    private readonly done: (value: string | undefined) => void,
+  ) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.titleEl.setText(this.title);
+    this.contentEl.createEl('p', { text: this.explanation });
+
+    const input = this.contentEl.createEl('input', { type: 'text' });
+    input.style.width = '100%';
+    input.value = this.initial;
+    input.focus();
+    input.select();
+
+    const submit = (): void => {
+      this.answered = true;
+      this.done(input.value.trim() || undefined);
+      this.close();
+    };
+
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') submit();
+    });
+    new Setting(this.contentEl).addButton((b) => b.setButtonText('Accept').setCta().onClick(submit));
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
     if (!this.answered) this.done(undefined);
   }
 }
