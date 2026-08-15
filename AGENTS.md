@@ -87,6 +87,35 @@ test-only factory — visible in review, impossible to do by accident.
 **Commits explain the change in prose.** What was wrong, why this is the fix, and what was
 verified — enough that the reasoning survives without the conversation that produced it.
 
+## What a live walk taught that ~500 green tests did not
+
+Two accounts sharing a folder for real found eighteen defects the suite had no opinion about.
+They were not exotic; they clustered, and the clusters are worth stating as rules.
+
+**Every intermediate state must be walkable out of, using the product's own buttons.** Sharing,
+inviting, leaving and revoking each leave the system half-converted for a while. A refusal that
+strands a vault there — because the only way forward needs material an earlier defect never
+wrote — is worse than the defect that caused it. Conversions that cannot proceed skip rather
+than throw, and a departure in particular must always be able to finish.
+
+**The server answers what only the server can see.** `blob_keys`, `dedup_index` and `versions`
+are its tables. Every time the client guessed what they contained it guessed wrong in both
+directions at once — convert everything and it fails on material that was never there, skip and
+the write is refused instead. If a rule lives in the schema, the endpoint reports what that rule
+still wants; the client produces it and does not decide what is owed.
+
+**A node is not one blob, and a listing is not a tree.** History, the trash, and nodes another
+participant created are all part of "the folder" and appear in none of the client's own
+listings. Any pass over a subtree has to ask what the set actually is.
+
+**Say the reason, not the category.** Half the walk was spent narrowing failures that arrived as
+`invalid_write`. The refusal detail now reaches the screen, and the first message that carried
+one identified its defect immediately.
+
+**Content addressing reaches into the tests.** A blob is its bytes, so two tests writing the same
+string share one blob — and material added by either answers the other's question. Fixtures that
+must own their blob generate their content.
+
 ## Working on the schema and its tests
 
 1. **Every new constraint ships with a negative test.** A rule with no test is a comment.
