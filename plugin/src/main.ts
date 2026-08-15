@@ -936,25 +936,33 @@ class SyncServerSettings extends PluginSettingTab {
       return;
     }
 
+    /**
+     * One set of details, three things that can be done with them.
+     *
+     * They were three forms, each with its own copy of the address, the login and the
+     * passphrase — and one of them prefilled with a developer's localhost. Which meant the
+     * fields a person had filled in belonged to a heading two screens up from the button
+     * they then pressed, and a recovery attempt went to an address nobody had chosen.
+     *
+     * The details are the same details in all three cases. Only what happens next differs,
+     * so only that is offered separately.
+     */
     containerEl.createEl('h3', { text: 'Connect this vault' });
     containerEl.createEl('p', {
       text:
-        'Claims an invitation on a SyncServer and generates this account’s keys on this device. ' +
-        'The passphrase cannot be recovered by the server — if it is lost, so is every vault.',
+        'Everything below needs the same three things: where the server is, who you are on ' +
+        'it, and the passphrase. The passphrase never leaves this device, and the server ' +
+        'cannot recover it — lose it and every vault goes with it.',
     });
 
-    const draft = { serverUrl: 'http://127.0.0.1:8087', login: 'admin', token: 'admin', passphrase: '' };
+    const draft = { serverUrl: '', login: '', token: '', passphrase: '' };
 
     new Setting(containerEl)
       .setName('Server URL')
-      .addText((t) => t.setValue(draft.serverUrl).onChange((v) => (draft.serverUrl = v.trim())));
+      .addText((t) => t.setPlaceholder('http://host:8087').onChange((v) => (draft.serverUrl = v.trim())));
     new Setting(containerEl)
       .setName('Login')
-      .addText((t) => t.setValue(draft.login).onChange((v) => (draft.login = v.trim())));
-    new Setting(containerEl)
-      .setName('Invitation token')
-      .setDesc('A fresh installation seeds one for the first administrator: admin.')
-      .addText((t) => t.setValue(draft.token).onChange((v) => (draft.token = v.trim())));
+      .addText((t) => t.setPlaceholder('your login on that server').onChange((v) => (draft.login = v.trim())));
     new Setting(containerEl)
       .setName('Passphrase')
       .addText((t) => {
@@ -962,29 +970,106 @@ class SyncServerSettings extends PluginSettingTab {
         t.onChange((v) => (draft.passphrase = v));
       });
 
-    new Setting(containerEl).addButton((b) =>
-      b
-        .setButtonText('Connect')
-        .setCta()
-        .onClick(async () => {
-          if (!draft.passphrase) {
-            new Notice('SyncServer: a passphrase is required.');
-            return;
-          }
+    /** Shared by all three: the fields are one form, so their check is one function. */
+    const missing = (needsToken = false): string | undefined => {
+      if (!draft.serverUrl) return 'the server address';
+      if (!draft.login) return 'a login';
+      if (!draft.passphrase) return 'the passphrase';
+      if (needsToken && !draft.token) return 'an invitation token';
+      return undefined;
+    };
+
+    /** A transport failure names a category, never an address — and the address is the likeliest mistake. */
+    const explain = (e: unknown): string => {
+      const reason = e instanceof Error ? e.message : String(e);
+      return /ERR_|network|fetch|refused|timeout/i.test(reason)
+        ? `nothing answered at ${draft.serverUrl} — ${reason}`
+        : reason;
+    };
+
+    containerEl.createEl('h3', { text: 'Then one of these' });
+
+    // 1 — a brand-new account, the only case that needs a token.
+    new Setting(containerEl)
+      .setName('Claim an invitation')
+      .setDesc('A new account on this server. Its keys are generated here, from the passphrase above.')
+      .addText((t) =>
+        t.setPlaceholder('invitation token').onChange((v) => (draft.token = v.trim())),
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('Connect')
+          .setCta()
+          .onClick(async () => {
+            const need = missing(true);
+            if (need) return void new Notice(`SyncServer: ${need} is needed to connect.`, 8000);
+            try {
+              b.setDisabled(true);
+              new Notice('SyncServer: deriving keys…');
+              await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase);
+              new Notice('SyncServer: connected.');
+              this.display();
+            } catch (e) {
+              new Notice(`SyncServer: ${explain(e)}`, 12000);
+              b.setDisabled(false);
+            }
+          }),
+      );
+
+    // 2 — an account that exists, and a device of it that still works to approve this one.
+    const shown = containerEl.createEl('div');
+    new Setting(containerEl)
+      .setName('Add this device to an account')
+      .setDesc('Shows a code to type on a device that is already connected. It seals the account key to this one.')
+      .addButton((b) =>
+        b.setButtonText('Show pairing code').onClick(async () => {
+          const need = missing();
+          if (need) return void new Notice(`SyncServer: ${need} is needed to pair.`, 8000);
+          b.setDisabled(true);
           try {
-            b.setDisabled(true);
-            new Notice('SyncServer: deriving keys…');
-            await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase);
-            new Notice('SyncServer: connected.');
-            this.display();
-          } catch (e) {
-            new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+            await this.plugin.pairing(shown).join({
+              serverUrl: draft.serverUrl,
+              login: draft.login,
+              passphrase: draft.passphrase,
+            });
+          } finally {
             b.setDisabled(false);
           }
         }),
-    );
+      );
 
-    this.pairSection(containerEl);
+    // 3 — an account that exists with no device left to ask.
+    new Setting(containerEl)
+      .setName('Recover this account')
+      .setDesc(
+        'When no device is left to pair with. The passphrase proves itself to the server, which returns ' +
+          'the account key it has always held sealed — it cannot read it, and never sees the passphrase.',
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('Recover')
+          .setWarning()
+          .onClick(async () => {
+            const need = missing();
+            if (need) return void new Notice(`SyncServer: ${need} is needed to recover.`, 8000);
+            b.setDisabled(true);
+            try {
+              new Notice('SyncServer: deriving keys…');
+              await this.plugin.recover({
+                serverUrl: draft.serverUrl,
+                login: draft.login,
+                passphrase: draft.passphrase,
+              });
+              new Notice('Recovered. Sync to bring the vault down.', 8000);
+              this.display();
+            } catch (e) {
+              new Notice(`SyncServer: recovery failed — ${explain(e)}`, 12000);
+            } finally {
+              b.setDisabled(false);
+            }
+          }),
+      );
+
     this.versionSection(containerEl);
   }
 
@@ -1170,113 +1255,6 @@ class SyncServerSettings extends PluginSettingTab {
               this.display();
             },
           ).open();
-        }),
-    );
-  }
-
-  /**
-   * On a device with nothing: show a code and wait for the other one to approve.
-   *
-   * The passphrase is asked for here even though the seed is arriving sealed, because this
-   * device must be able to lock and come back: it re-wraps the seed under the passphrase
-   * itself, the server having declined to hand a wrapped one out (docs/06).
-   */
-  private pairSection(containerEl: HTMLElement): void {
-    containerEl.createEl('h3', { text: 'Join an existing account' });
-    containerEl.createEl('p', {
-      text:
-        'For a second device on an account that already exists. Nothing is created — this ' +
-        'device receives the account key from one that already has it.',
-    });
-
-    // Blank, unlike the first-run form below it. There the defaults are real — a fresh
-    // install seeds `admin`/`admin` and usually answers on this machine — but an account
-    // that already exists is by definition on a server somewhere else, and a prefilled
-    // `127.0.0.1` is a wrong answer that looks like a right one. It cost a recovery attempt
-    // that failed with `ERR_CONNECTION_REFUSED` before the passphrase was ever used.
-    const draft = { serverUrl: '', login: '', passphrase: '' };
-    new Setting(containerEl)
-      .setName('Server URL')
-      .setDesc('Where that account already lives — the same address its other devices use.')
-      .addText((t) => t.setPlaceholder('http://host:8087').onChange((v) => (draft.serverUrl = v.trim())));
-    new Setting(containerEl)
-      .setName('Login')
-      .addText((t) => t.setPlaceholder('the account’s login').onChange((v) => (draft.login = v.trim())));
-    new Setting(containerEl)
-      .setName('Passphrase')
-      .setDesc('The account’s own passphrase. It never leaves this device.')
-      .addText((t) => {
-        t.inputEl.type = 'password';
-        t.onChange((v) => (draft.passphrase = v));
-      });
-
-    // Where the flow writes: the code, the line under it, and the cancel. The section
-    // builds the surface; every decision about what appears on it is the coordinator's.
-    const shown = containerEl.createEl('div');
-
-    new Setting(containerEl).addButton((b) =>
-      b.setButtonText('Show pairing code').onClick(async () => {
-        b.setDisabled(true);
-        try {
-          if (!draft.serverUrl || !draft.login || !draft.passphrase) {
-            new Notice('SyncServer: the address, the login and the passphrase are all needed to pair.', 8000);
-            return;
-          }
-          await this.plugin.pairing(shown).join({
-            serverUrl: draft.serverUrl,
-            login: draft.login,
-            passphrase: draft.passphrase,
-          });
-        } finally {
-          b.setDisabled(false);
-        }
-      }),
-    );
-
-    // The same three fields, and deliberately a separate button rather than a mode switch:
-    // the two flows differ in what the person still has, not in what they type, and a
-    // radio button asking "is your other device alive?" is a worse question than two labels.
-    containerEl.createEl('h3', { text: 'Recover this account' });
-    containerEl.createEl('p', {
-      text:
-        'When no device is left to pair with. The passphrase proves itself to the server, ' +
-        'which returns the account key it has always held sealed — it cannot read it, and ' +
-        'never sees the passphrase. Everything on the server then syncs down into this vault.',
-    });
-
-    new Setting(containerEl).addButton((b) =>
-      b
-        .setButtonText('Recover')
-        .setWarning()
-        .onClick(async () => {
-          // Checked before anything expensive: Argon2id at 64 MiB runs inside `recover`, and
-          // spending a second of a phone's battery to then fail on an empty field is rude.
-          if (!draft.serverUrl || !draft.login || !draft.passphrase) {
-            new Notice('SyncServer: the address, the login and the passphrase are all needed to recover.', 8000);
-            return;
-          }
-          b.setDisabled(true);
-          try {
-            await this.plugin.recover({
-              serverUrl: draft.serverUrl,
-              login: draft.login,
-              passphrase: draft.passphrase,
-            });
-            new Notice('Recovered. Sync to bring the vault down.', 8000);
-            this.display();
-          } catch (e) {
-            // Named on screen, because every failure here is one the person can act on: a
-            // typo in the address, in the login, or in the passphrase. A transport error
-            // arrives as the browser's own sentence — `net::ERR_CONNECTION_REFUSED` — which
-            // does not say WHERE nothing answered, and the address is the likeliest mistake.
-            const reason = e instanceof Error ? e.message : String(e);
-            const where = /ERR_|network|fetch|refused|timeout/i.test(reason)
-              ? `nothing answered at ${draft.serverUrl || '(no address)'} — ${reason}`
-              : reason;
-            new Notice(`SyncServer: recovery failed — ${where}`, 12000);
-          } finally {
-            b.setDisabled(false);
-          }
         }),
     );
   }
