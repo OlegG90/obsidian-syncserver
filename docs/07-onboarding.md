@@ -31,7 +31,8 @@ sequenceDiagram
     Plugin->>Plugin: initial vault UUID; auth secret and per-vault key = HKDF branches of the seed
     Plugin->>Plugin: X25519 keypair, private key sealed under an account key from the seed
     Plugin->>Plugin: kek_verifier = HKDF(KEK, "recovery" ‖ login ‖ salt), so the phrase can be proved later
-    Plugin-->>User: a forgotten passphrase loses every vault — said here, once, plainly
+    Plugin->>Plugin: optionally a recovery code, its verifier hash, and the seed sealed under it too
+    Plugin-->>User: a forgotten passphrase loses every vault unless a recovery code was kept
 
     Note over Plugin,DB: 3 — Redeeming the invitation completes the account
     Plugin->>Plugin: derive KV from initial vault UUID; encrypt initial vault name
@@ -78,7 +79,9 @@ Three details the diagram makes concrete:
 - **the verifier is made at step 2 and never asked for again until it is needed.** It costs the client
   nothing — the `KEK` is already in hand — and it is what lets a future device with no `data.json` prove the
   phrase. Nothing about it is shown to the user; what *is* said, once and plainly, is that a forgotten
-  passphrase loses **every** vault, because the seed exists only inside envelopes that phrase opens;
+  passphrase loses **every** vault unless a recovery code was kept, because the seed exists only inside
+  envelopes one of those two things opens. **The recovery code is optional and its columns are null when
+  there is none** — an account without one must say so rather than carry a placeholder;
 - **the client creates the initial vault UUID before encrypting its name.** Redeem receives that UUID and
   client-supplied `name_enc`, so it can derive `KV = HKDF(seed, vault_id)` before producing the label; the
   server then creates the named vault and its root. The root is the one node with no name, so no key material
@@ -158,7 +161,7 @@ The user has three things: the server address, their login, and the passphrase i
 | 1 | `GET /auth/kdf?login=…` returns `account_salt` and `kdf_params`. Unknown logins get a deterministic fake, as everywhere (#73) |
 | 2 | the client runs `Argon2id` once — the same pass it would run to unlock — and derives `KEK`, then `kek_verifier = HKDF(KEK, "recovery" ‖ login ‖ salt)` |
 | 3 | `POST /auth/recover` with the login, the verifier, and the new device's name and platform |
-| 4 | the server compares against `kek_verifier_hash`, creates the device as pairing's claim does, and returns `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id` and `device_id` |
+| 4 | the server compares against `kek_verifier_hash`, creates the device as pairing's claim does, and returns the seed envelope, `enc_privkey`, `account_salt`, `kdf_params`, `user_id` and `device_id` |
 | 5 | the client unwraps the seed with the `KEK` already in hand, stores the connection, logs in normally |
 | 6 | `GET /vaults`, choose one, and **adoption** materialises it — the same branch a second device takes |
 
@@ -170,9 +173,16 @@ this costs a single endpoint rather than a subsystem.
 the design ([06](06-key-model.md)), because this is the one endpoint where guessing pays: attempts back off
 per login and per source, and each is recorded in the audit log.
 
-**What recovery does not do.** It does not survive a forgotten passphrase — nothing does — and it does not
-bring back a vault the user deleted from the server. It brings back the account, and with it every vault the
-server still holds.
+**The recovery code is the same door with a different key.** Where the user has forgotten the phrase but kept
+the code, step 2 disappears and step 3 carries the code instead; the server answers with `recovery_key` — the
+seed wrapped under that code — and everything from step 5 is identical. One endpoint, two proofs, and each
+returns only the envelope its proof opens ([06](06-key-model.md)). That half is specified and **not built**:
+it waits until after M4, and until then an account's recovery columns are **null**, which is the account
+saying honestly that it has no code.
+
+**What recovery does not do.** It does not survive losing both the phrase and the code, and it does not bring
+back a vault the user deleted from the server. It brings back the account, and with it every vault the server
+still holds.
 
 ## The connection itself: changing it, and ending it
 

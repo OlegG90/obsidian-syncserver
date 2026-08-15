@@ -108,15 +108,16 @@ six months later, and how you tell a mistake from a misunderstanding.
 | Vaults | list vaults; create, rename or delete an empty vault; usage broken down into current content and history, per vault and account-wide, with the actions that actually free space. A share replica counts as ordinary content of the vault it lives in — there is no separate share figure ([03](03-data-model.md)) |
 | Devices | list, last seen, **sign out this device**, sign out everywhere |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
-| Security | change passphrase — **in the plugin**, see below |
+| Security | change passphrase, regenerate the recovery code — **in the plugin**, see below |
 | History | retention setting: the length of history is the user's own trade against quota |
 
 **Changing the passphrase never re-encrypts anything.** The account **seed** stays the same, and every
 vault key derives from it (`KV = HKDF(seed, vault_id)`); changing the passphrase only re-wraps the seed
 under a new key-encryption key — new salt and Argon2id parameters, but the **same** `auth_secret =
-HKDF(seed, "auth")`. It does re-derive `kek_verifier`, since that verifier *is* the new key-encryption key's
-witness — the one thing a passphrase change must not leave pointing at the old phrase. This follows the rule
-that runs through the whole design — nothing ever re-encrypts existing content. (For this to hold the seed must be a **stable
+HKDF(seed, "auth")`. The same holds for regenerating the recovery code: a second wrapping of the same seed.
+It does re-derive `kek_verifier`, since that verifier *is* the new key-encryption key's witness — the one
+thing a passphrase change must not leave pointing at the old phrase. This follows the rule that runs through
+the whole design — nothing ever re-encrypts existing content. (For this to hold the seed must be a **stable
 random secret wrapped under the passphrase**, not derived from it — see AC-11.)
 
 **Signing out one device is possible only because each device has its own refresh token.** A single

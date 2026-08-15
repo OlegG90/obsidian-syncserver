@@ -9,8 +9,12 @@ POST /auth/refresh        {refresh}                      → access
 POST /auth/devices        {name, platform}              → device_id
 POST /auth/redeem         {invitation_token, auth_secret, account_salt, kdf_params,
                              pubkey, enc_privkey, wrapped_seed, kek_verifier,
+                             recovery_key?, recovery_code_hash?,
                              initial_vault_id, initial_vault_name_enc}
                                                    → access + refresh + device_id + vault_id
+                                                   the recovery pair is OPTIONAL and null-by-default:
+                                                   an account without a code says so, rather than
+                                                   carrying a placeholder that claims otherwise
 POST /auth/pairings       {device_pubkey, pairing_token_hash} → {pairing_id}   anonymous (#110)
 POST /auth/pairings/approve
                             {pairing_secret, seed_envelope} authenticated existing device only;
@@ -18,13 +22,16 @@ POST /auth/pairings/approve
 POST /auth/pairings/{id}/claim
                              {pairing_secret, name, platform}
                                                     → {seed_envelope, enc_privkey, account_salt, kdf_params, device_id}
-POST /auth/recover        {login, kek_verifier, name, platform}
-                                                    → {wrapped_seed, enc_privkey, account_salt, kdf_params,
+POST /auth/recover        {login, kek_verifier | recovery_code, name, platform}
+                                                    → {seed_envelope, opened_by: "passphrase"|"recovery_code",
+                                                       enc_privkey, account_salt, kdf_params,
                                                        user_id, device_id}
                                                     anonymous; the caller proves it can OPEN the envelope
-                                                    before receiving it. Rate-limited per login and per
-                                                    source, audit-logged, and refuses an unknown login
-                                                    exactly as it refuses a wrong phrase (#73)
+                                                    before receiving it, and receives the envelope that
+                                                    proof unlocks — `wrapped_seed` for the passphrase,
+                                                    `recovery_key` for the code. Rate-limited per login and
+                                                    per source, audit-logged, and refuses an unknown login
+                                                    exactly as it refuses a wrong proof (#73)
 GET  /vaults              → [{id, name_enc}]             the account's vaults; sync targets one of them
 POST /vaults              {id, name_enc}                 → {id, root_node_id}
 PUT  /vaults/{vault_id}   {name_enc}                     → 204; rename
@@ -36,10 +43,10 @@ GET  /usage               → {used, quota, frozen}        account-wide — quot
                                                          and `frozen` is the state that follows from it
 ```
 
-Every secret this section sends — `auth_secret`, the invitation token, the refresh token — is verified
-against a **SHA-256 hex** hash compared in constant time, and every one of them must be at least 128 bits of
-CSPRNG output for that to be sound (#108, [06](06-key-model.md)). `kek_verifier` is stored the same way and
-is the one exception to the entropy floor: the slow KDF that protects it has already run on the client, and
+Every secret this section sends — `auth_secret`, the invitation token, the recovery code, the refresh token
+— is verified against a **SHA-256 hex** hash compared in constant time, and every one of them must be at
+least 128 bits of CSPRNG output for that to be sound (#108, [06](06-key-model.md)). `kek_verifier` is stored
+the same way and is the one exception to the entropy floor: the slow KDF that protects it has already run on the client, and
 the dump that would expose its hash carries `wrapped_seed` beside it — the same guesses, the same cost.
 
 **The refresh token has no expiry and no rotation — a named limitation, with its consequence.** It lives in
@@ -102,11 +109,11 @@ private key restores its account identity for receiving shares.
 
 `/auth/kdf` solves account enumeration, not device bootstrap. A device with no seed has no `auth_secret`, so
 it obtains the seed one of two ways. **Pairing** relays an envelope encrypted to the new device's ephemeral
-public key; the server never receives a plaintext seed. **Recovery** compares `kek_verifier` against its
-stored hash and only then returns the passphrase-wrapped envelope — the caller demonstrates it can open the
-thing it is asking for, which is what separates recovery from handing out seed envelopes by login name.
-The two answer different losses: pairing needs a device that still works, recovery needs the phrase and
-nothing else.
+public key; the server never receives a plaintext seed. **Recovery** compares the proof it was given against
+the matching stored hash and only then returns the envelope that proof opens — the caller demonstrates it can
+open the thing it is asking for, which is what separates recovery from handing out seed envelopes by login
+name. Pairing needs a device that still works; recovery needs only what the user carries — the passphrase, or
+the code they wrote down.
 
 ### Two endpoints take a login, and both answer the same way for one that does not exist
 

@@ -76,11 +76,13 @@ recovery path it does not have.
 The design is settled in [06](06-key-model.md) and walked through in [07](07-onboarding.md); the decision and
 its cost are #112.
 
-- [ ] **Schema.** `users.kek_verifier_hash` replaces `recovery_key` and `recovery_code_hash`; the three-shape
-      `CHECK` on `state` and the key columns moves with it. Removing the two columns is half the point — a
-      column that only ever holds a placeholder is a promise the database is making on nobody's behalf.
-- [ ] **Registration writes a real verifier.** `connect()` already holds the `KEK`; it derives
-      `HKDF(KEK, "recovery" ‖ login ‖ salt)` and sends it with redeem. No placeholders survive this step.
+- [ ] **Schema.** `users.kek_verifier_hash`, **beside** `recovery_key` and `recovery_code_hash` rather than
+      instead of them — the recovery code stays specified, and its fate is decided after M4. The two of them
+      become **nullable**, which the three-shape `CHECK` on `state` and the key columns has to allow.
+- [ ] **No account claims a path it does not have.** `connect()` writes a real `kek_verifier` — it already
+      holds the `KEK` — and **null** where it used to write placeholder recovery values. Null means "no
+      recovery code"; a fixed byte and a random hash nobody holds the preimage of mean "there is a way back"
+      to every check that looks, and nothing at all on the day it is needed.
 - [ ] **`POST /auth/recover`.** Anonymous, shaped like pairing's claim: verify, create the device, return
       `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id`, `device_id`. An unknown login and
       a wrong phrase get the same refusal (#73).
@@ -89,9 +91,15 @@ its cost are #112.
       `/auth/kdf` that no code currently applies — this closes both.
 - [ ] **"Recover this vault" in the plugin**, beside "Join an existing account": address, login, passphrase.
       Past it nothing new is invented — the client logs in, lists vaults and enters **adoption**, which has
-      existed since M1.
+      existed since M1. The endpoint takes the recovery code as its second proof from the start, so building
+      that half later is a client screen and a comparison, not a new shape.
 - [ ] **Say it at registration.** One line, once: a forgotten passphrase loses every vault, and no
       administrator can help.
+
+**Not in this milestone, deliberately:** generating and storing the **recovery code** itself, which answers
+the other loss — a forgotten passphrase. It stays specified in [06](06-key-model.md) and [07](07-onboarding.md)
+with its columns in place, and the decision on whether to build it is taken after M4. What M3.5 owes it is
+only honesty: null rather than a placeholder.
 
 ### The scenario that decides it
 
