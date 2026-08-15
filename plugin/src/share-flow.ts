@@ -92,7 +92,12 @@ const message = (e: unknown): string => {
   if (missing > 0) {
     return `${e.message}: ${missing} file(s) of your copy were not converted. Sync this vault and try again.`;
   }
-  return e.message;
+
+  // The schema's own sentence, when there is one. It is the most specific statement of what
+  // was wrong that exists anywhere — written to be read, naming the node and the rule — and
+  // dropping it left `400 invalid_write` on screen, which says only that something did.
+  const detail = typeof details.detail === 'string' ? details.detail : undefined;
+  return detail ? `${e.message}: ${detail}` : e.message;
 };
 
 export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {

@@ -266,3 +266,21 @@ describe('a refusal that carries work', () => {
     assert.match(h.notices[0]!, /careless/);
   });
 });
+
+describe('a refusal the schema explained', () => {
+  it('shows the schema’s sentence rather than just the code', async () => {
+    // `400 invalid_write` says only that something was wrong. The detail names the node and
+    // the rule, and was written to be read — dropping it left a live vault with a failure
+    // nobody could act on.
+    const h = harness({
+      leave: async () => {
+        throw Object.assign(new Error('400 invalid_write'), {
+          details: { error: 'invalid_write', detail: 'node abc cannot be unmarked before blob def has its vault envelope' },
+        });
+      },
+    });
+    await h.flow.leave('share-1');
+
+    assert.match(h.notices[0]!, /cannot be unmarked before blob def/);
+  });
+});
