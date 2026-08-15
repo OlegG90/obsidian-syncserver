@@ -29,7 +29,6 @@ import { session, type Connection, type Handle, type Session } from './session/i
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { decryptName } from './crypto/scope.js';
-import { unwrapShareKey } from './crypto/share.js';
 import { shareKeysFrom } from './share-keys.js';
 import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
@@ -384,10 +383,20 @@ export default class SyncServerPlugin extends Plugin {
     const opened = await h.client.openVault(this.data.connection!.vaultId);
     const scope = opened.scopes.find((sc) => sc.share_id === shareId);
     if (!scope?.wrapped_key) throw new Error('this device holds no key for that share');
-    if (scope.wrapping !== 'vault') {
-      throw new Error('this share key arrived as an account envelope, which needs the account identity');
-    }
-    return unwrapShareKey(h.kv, scope.wrapped_key);
+
+    // Both wrappings, through the one module that knows how to open either. This used to
+    // refuse an account envelope — written before the account identity existed and left
+    // behind once it did — which meant a PARTICIPANT could never leave: theirs is the
+    // envelope form by definition, since it had to cross to somebody who will never hold
+    // the initiator's seed.
+    const { keys } = shareKeysFrom([scope], {
+      vaultKey: h.kv,
+      openIdentity: () => h.openIdentity(),
+      userId: h.userId,
+    });
+    const key = keys.get(scope.key_id);
+    if (!key) throw new Error('this device cannot open the key for that share');
+    return key;
   }
 
   private async shareScopeIdOf(h: Handle, shareId: string): Promise<string> {
