@@ -90,8 +90,8 @@ export default class SyncServerPlugin extends Plugin {
       sessionState: () => (this.sess ? this.sess.state : 'none'),
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
-      runPass: async () =>
-        this.sess!.use(async (h) => {
+      runPass: async () => {
+        const report = await this.sess!.use(async (h) => {
           const engine = new SyncEngine(
             h.client,
             this.sess!.connection.vaultId,
@@ -102,8 +102,18 @@ export default class SyncServerPlugin extends Plugin {
             this.data.syncObsidian === true,
             await this.openShareKeys(h),
           );
-          return engine.sync();
-        }),
+          const out = await engine.sync();
+          // Asked here because the session is already open and the folder this pass may
+          // have just created is now on disk. A shared folder somebody ACCEPTED does not
+          // exist locally until then, so its badge was filtered out as a path that is not
+          // there and nothing ever came back for it — which the initiator never saw, their
+          // folder having been on disk before they shared it.
+          await this.refreshSharedFolders(h);
+          return out;
+        });
+        this.applySharedMarks();
+        return report;
+      },
       setPhase: (phase) => this.setPhase(phase),
       notify: (message, durationMs) => new Notice(message, durationMs),
     });
@@ -456,24 +466,10 @@ export default class SyncServerPlugin extends Plugin {
           const out = await h.client.shares();
 
           // Which FOLDER each share is, which the server cannot say in words: it holds no
-          // paths and could not read the names if it did. It CAN say which node, though —
-          // each member's own root — and the client turns that into a path through its own
-          // tree. Two rows reading "Shared by you" and a uuid each are two rows nobody can
-          // tell apart, and the buttons beside them are not the same buttons.
-          const engine = await this.engineFor(h);
-          const pathOfNode = new Map([...(await engine.readTree()).entries()].map(([p, n]) => [n.nodeId, p]));
-          const rootOf = new Map<string, string>();
-          for (const s of out.joined) {
-            const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
-            if (folder !== undefined) rootOf.set(s.share_id, folder);
-          }
-
-          // The screen is the one place that learns the truth about every share at once, so
-          // it is where the persisted map is put right — a folder renamed since it was
-          // shared, or a share ended by somebody else while this device was closed.
-          this.data.sharedFolders = Object.fromEntries(rootOf);
-          await this.save();
-          this.applySharedMarks();
+          // paths and could not read the names if it did. Resolved once, here, and stored —
+          // two rows reading "Shared by you" and a uuid each are two rows nobody can tell
+          // apart, and the buttons beside them are not the same buttons.
+          const rootOf = await this.resolveSharedFolders(h, out.joined);
 
           return {
             joined: out.joined.map((s) => {
@@ -660,6 +656,49 @@ export default class SyncServerPlugin extends Plugin {
     this.setPhase({ kind: 'locked' });
     void this.stopPush();
     new Notice('SyncServer: locked.');
+  }
+
+  /**
+   * Turn each share into the path of its folder **in this vault**, and remember the answer.
+   *
+   * The server says which node is the root of the caller's own copy — a different node in
+   * every participant's vault — and the client is the only side that can turn a node into a
+   * path, because it is the only side that can read a name.
+   */
+  private async resolveSharedFolders(
+    h: Handle,
+    joined: readonly { share_id: string; root_node_id: string | null }[],
+  ): Promise<Map<string, string>> {
+    const engine = await this.engineFor(h);
+    const pathOfNode = new Map([...(await engine.readTree()).entries()].map(([p, n]) => [n.nodeId, p]));
+
+    const rootOf = new Map<string, string>();
+    for (const s of joined) {
+      const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
+      if (folder !== undefined) rootOf.set(s.share_id, folder);
+    }
+
+    this.data.sharedFolders = Object.fromEntries(rootOf);
+    await this.save();
+    this.applySharedMarks();
+    return rootOf;
+  }
+
+  /**
+   * Keep the marks true after a sync, without paying for a tree listing every time.
+   *
+   * `GET /shares` is small; resolving paths is not, so the tree is only read when the two
+   * disagree — a share joined on another device, one ended while this one was closed, or a
+   * vault whose map predates this feature entirely, which is how the participant in a live
+   * test ended up with no badge while the initiator had one.
+   */
+  private async refreshSharedFolders(h: Handle): Promise<void> {
+    const { joined } = await h.client.shares();
+    const known = Object.keys(this.data.sharedFolders ?? {}).sort().join(',');
+    const now = joined.map((s) => s.share_id).sort().join(',');
+    if (known === now) return;
+
+    await this.resolveSharedFolders(h, joined);
   }
 
   /**
