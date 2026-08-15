@@ -28,8 +28,8 @@ jobs:
     name: types, versions, compose
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -58,8 +58,8 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/syncserver_dev
       SERVER_SECRET: ci-only-server-secret
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -90,8 +90,8 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/syncserver_plugin
       SERVER_SECRET: ci-only-server-secret
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
