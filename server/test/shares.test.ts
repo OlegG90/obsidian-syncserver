@@ -1954,3 +1954,58 @@ describe('what a share is over, and how long it stays visible', () => {
     assert.ok(!r.json().joined.some((s: { share_id: string }) => s.share_id === shareId));
   });
 });
+
+describe('sharing a folder again after the first one is over', () => {
+  it('is allowed, because a share holds its folder only while it lives (SH-08)', async () => {
+    // A plain UNIQUE kept the slot for ever, so a folder shared once could never be shared
+    // again — while the design says re-sharing starts from scratch. Found by doing exactly
+    // this on a live vault and getting `duplicate key value violates unique constraint`.
+    const folder = await createNode('folder', `reshare-${randomUUID()}`);
+    const first = (await openShare(folder)).json().share_id;
+
+    await app.inject({ method: 'POST', url: `/shares/${first}/leave/begin`, headers: auth() });
+    const nodes = await db.query<{ id: string }>(`SELECT id FROM nodes WHERE vault_id = $1 AND share_id = $2`, [
+      vaultId,
+      first,
+    ]);
+    await app.inject({
+      method: 'POST',
+      url: `/shares/${first}/finalize-leave`,
+      headers: auth(),
+      payload: {
+        nodes: nodes.map((n) => ({
+          node_id: n.id,
+          name_enc: b64(`kv-${n.id}`),
+          name_hmac: sha(Buffer.from(`kv-${n.id}`)),
+          name_key_id: vaultKeyId,
+        })),
+      },
+    });
+
+    const again = await openShare(folder);
+    assert.equal(again.statusCode, 201, again.body);
+    assert.notEqual(again.json().share_id, first, 'a new share, with no reference to the old one');
+  });
+
+  it('still refuses a second LIVE share over the same folder', async () => {
+    const folder = await createNode('folder', `two-live-${randomUUID()}`);
+    assert.equal((await openShare(folder)).statusCode, 201);
+
+    const again = await openShare(folder);
+    assert.equal(again.statusCode, 400, again.body);
+    assert.match(again.json().detail, /already part of share/);
+  });
+
+  it('keeps the finished share on record, because participants keep their copies', async () => {
+    // Terminal rows are not swept: an offline device still has to learn the share ended, and
+    // the history of who wrote what does not stop being true.
+    const folder = await createNode('folder', `record-${randomUUID()}`);
+    const shareId = (await openShare(folder)).json().share_id;
+    await app.inject({ method: 'POST', url: `/shares/${shareId}/leave/begin`, headers: auth() });
+
+    const still = await db.one<{ state: string }>(`SELECT state::text AS state FROM shares WHERE id = $1`, [
+      shareId,
+    ]);
+    assert.equal(still!.state, 'cancelled', 'the row is still there');
+  });
+});

@@ -828,14 +828,29 @@ CREATE TABLE shares (
         AND (subtree_key_id IS NULL) = (subtree_key_scope_kind IS NULL)),
     CONSTRAINT terminal_state_carries_a_time CHECK ((state IN ('cancelled', 'ended')) = (terminal_at IS NOT NULL)),
 
-    -- One share per folder; the folder must belong to the initiator's vault.
-    UNIQUE (initiator_vault_id, subtree_node_id),
+    -- One LIVE share per folder — see the partial index below, which is where that rule
+    -- lives. It cannot be a table constraint: a plain UNIQUE would hold a folder's slot for
+    -- ever, and re-sharing is not merely allowed but specified (SH-08).
     FOREIGN KEY (initiator_id, initiator_vault_id) REFERENCES vaults (user_id, id),
     FOREIGN KEY (initiator_vault_id, subtree_node_id) REFERENCES nodes (vault_id, id),
     FOREIGN KEY (subtree_key_id, subtree_key_scope_kind) REFERENCES key_scopes (id, kind)
 );
 
 CREATE INDEX shares_initiator ON shares (initiator_id);
+
+-- One share per folder **at a time**, not for ever.
+--
+-- A plain UNIQUE kept the slot after the share was over, so a folder that had once been
+-- shared could never be shared again — while SH-08 says re-sharing starts from scratch, a
+-- new share with no reference of any kind to the old one. Found by sharing a folder,
+-- leaving, and trying again: `duplicate key value violates unique constraint`, on a share
+-- everybody had already left.
+--
+-- Terminal rows stay, and must: participants keep their copies and their history, and an
+-- offline device still has to learn the share ended.
+CREATE UNIQUE INDEX shares_one_live_per_folder
+    ON shares (initiator_vault_id, subtree_node_id)
+    WHERE state IN ('preparing', 'active');
 
 -- The other half of the circular reference. RESTRICT: CASCADE would delete participants'
 -- files when a share ends (the one thing the design promises never to do, SH-05); SET
