@@ -26,6 +26,14 @@ export interface ShareRow {
   shareId: string;
   isInitiator: boolean;
   state: string;
+  /**
+   * The folder this share is, as a path in THIS vault.
+   *
+   * Absent when the client cannot resolve it — a share whose replica it has not synced yet.
+   * The server can never supply it: it holds no paths, and could not read the names if it
+   * did.
+   */
+  folder?: string;
 }
 
 /** An invitation waiting for an answer. */

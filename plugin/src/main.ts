@@ -417,12 +417,30 @@ export default class SyncServerPlugin extends Plugin {
       list: () =>
         this.withSession(async (h) => {
           const out = await h.client.shares();
+
+          // Which FOLDER each share is, which the server cannot say: it holds no paths and
+          // could not read the names if it did. The client resolves it from its own tree —
+          // the shallowest path carrying that share is its root — because two rows reading
+          // "Shared by you" and a uuid each are two rows nobody can tell apart, and the
+          // buttons beside them are not the same buttons.
+          const engine = await this.engineFor(h);
+          const rootOf = new Map<string, string>();
+          for (const [path, n] of await engine.readTree()) {
+            if (!n.shareId) continue;
+            const seen = rootOf.get(n.shareId);
+            if (seen === undefined || path.length < seen.length) rootOf.set(n.shareId, path);
+          }
+
           return {
-            joined: out.joined.map((s) => ({
-              shareId: s.share_id,
-              isInitiator: s.is_initiator,
-              state: s.state,
-            })),
+            joined: out.joined.map((s) => {
+              const folder = rootOf.get(s.share_id);
+              return {
+                shareId: s.share_id,
+                isInitiator: s.is_initiator,
+                state: s.state,
+                ...(folder === undefined ? {} : { folder }),
+              };
+            }),
             invitations: out.invitations.map((i) => ({
               shareId: i.share_id,
               initiatorLogin: i.initiator_login,
@@ -502,6 +520,12 @@ export default class SyncServerPlugin extends Plugin {
           // Asked of the server rather than assembled from the tree: the set that must be
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
+          // Where each node actually LIVES, which the replica listing cannot say: the server
+          // has no paths at all. The dedup tag is over a file's plaintext, so leaving reads
+          // it from disk — and a bare name is not a path. `Baby.md` was looked for at the
+          // vault root while it sat inside the shared folder.
+          const pathOfNode = new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
+
           const replica = (await h.client.shareReplica(shareId)).map((n) => {
             // A node can carry the mark without ever having been converted — the trash of a
             // folder shared later, for one. Its name is under `KV` already, and there is no
@@ -511,7 +535,8 @@ export default class SyncServerPlugin extends Plugin {
             const name = n.name_enc ? decryptName(underShare ? key : h.kv, n.name_enc) : n.node_id;
             return {
               nodeId: n.node_id,
-              path: name,
+              // A trashed node has no path and needs none: nothing reads it.
+              path: pathOfNode.get(n.node_id) ?? name,
               name,
               address: underShare ? n.sha256 : null,
               deleted: n.deleted,
@@ -955,8 +980,11 @@ class SyncServerSettings extends PluginSettingTab {
       }
 
       for (const share of out.joined) {
+        // The folder first, because that is what a person recognises. The id stays, in the
+        // description, for the times a message or a log names one.
+        const label = share.folder ? `“${share.folder}”` : 'a folder not synced here yet';
         const row = new Setting(list)
-          .setName(share.isInitiator ? 'Shared by you' : 'Shared with you')
+          .setName(share.isInitiator ? `${label} — shared by you` : `${label} — shared with you`)
           .setDesc(`${share.state} · ${share.shareId}`);
 
         if (share.isInitiator) {
