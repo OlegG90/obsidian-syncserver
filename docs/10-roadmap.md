@@ -76,26 +76,26 @@ recovery path it does not have.
 The design is settled in [06](06-key-model.md) and walked through in [07](07-onboarding.md); the decision and
 its cost are #112.
 
-- [ ] **Schema.** `users.kek_verifier_hash`, **beside** `recovery_key` and `recovery_code_hash` rather than
+- [x] **Schema.** `users.kek_verifier_hash`, **beside** `recovery_key` and `recovery_code_hash` rather than
       instead of them — the recovery code stays specified, and its fate is decided after M4. The two of them
       become **nullable**, which the three-shape `CHECK` on `state` and the key columns has to allow.
-- [ ] **No account claims a path it does not have.** `connect()` writes a real `kek_verifier` — it already
+- [x] **No account claims a path it does not have.** `connect()` writes a real `kek_verifier` — it already
       holds the `KEK` — and **null** where it used to write placeholder recovery values. Null means "no
       recovery code"; a fixed byte and a random hash nobody holds the preimage of mean "there is a way back"
       to every check that looks, and nothing at all on the day it is needed.
-- [ ] **`POST /auth/recover`.** Anonymous, shaped like pairing's claim: verify, create the device, return
+- [x] **`POST /auth/recover`.** Anonymous, shaped like pairing's claim: verify, create the device, return
       `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id`, `device_id`. An unknown login and
       a wrong phrase get the same refusal (#73).
-- [ ] **An attempt limit that is real.** Per login and per source, backing off, audit-logged. The endpoint is
+- [x] **An attempt limit that is real.** Per login and per source, backing off, audit-logged. The endpoint is
       the one place in the product where guessing pays, and the documents already promise a limit here and on
       `/auth/kdf` that no code currently applies — this closes both.
-- [ ] **"Recover this vault" in the plugin**, beside "Join an existing account": address, login, passphrase.
+- [x] **"Recover this vault" in the plugin**, beside "Join an existing account": address, login, passphrase.
       Past it nothing new is invented — the client logs in, lists vaults and enters **adoption**, which has
       existed since M1. The endpoint takes the recovery code as its second proof from the start, so building
       that half later is a client screen and a comparison, not a new shape.
-- [ ] **Say it at registration.** One line, once: a forgotten passphrase loses every vault, and no
+- [x] **Say it at registration.** One line, once: a forgotten passphrase loses every vault, and no
       administrator can help.
-- [ ] **Backfill the accounts that predate all this.** They cannot make a verifier themselves — it
+- [x] **Backfill the accounts that predate all this.** They cannot make a verifier themselves — it
       takes the `KEK`, which exists only on a client holding the passphrase — so `login` reports that one
       is missing and the client files it on the next unlock. Without this, every account created before
       M3.5 stays unrecoverable forever and nothing says so.
@@ -117,13 +117,19 @@ Run end to end, against a real server, on a machine that keeps nothing:
 
 Step 3 is the whole milestone. If it needs anything the user does not carry in their head, it has failed.
 
+**Walked, and it holds.** A third vault with no plugin state recovered an account from the address, the
+login and the passphrase alone — no second device, nobody approving anything — and the server's audit log
+records the one event that has no other witness. What the walk found was not in the protocol: three
+onboarding forms asking for the same three details, one of them prefilled with a developer's `127.0.0.1`,
+so the recovery attempt went to an address nobody had chosen and failed before the passphrase was used.
+
 ### The connection record — found by using it
 
-- [ ] **The server address is editable in place** (#113). Moving from an IP to a host name changes one field;
+- [x] **The server address is editable in place** (#113). Moving from an IP to a host name changes one field;
       nothing else in the record depends on it. The instinct to "disconnect and reconnect with the new
       address" must not be catered to, because reconnecting costs a full bootstrap that the one-time
       invitation token cannot pay for twice.
-- [ ] **Disconnect**, which does not exist at all today: clear the local record, revoke this device, keep
+- [x] **Disconnect**, which does not exist at all today: clear the local record, revoke this device, keep
       every file and everything on the server, and say what coming back will cost **before** doing any of it.
       It ships after recovery, never before (#113).
 
