@@ -664,6 +664,67 @@ describe('accepting an invitation', () => {
     assert.ok(!lists.json().invitations.some((s: { share_id: string }) => s.share_id === shareId));
   });
 
+  it('does not charge the joiner for bytes they already hold', async () => {
+    // Content is stored once and `user_blobs` is a claim on it, not a copy — so a folder of
+    // files this account already has costs nothing to join (#46).
+    //
+    // Asserted with **no room to spare**, and that is the whole point of the test. The
+    // accounting asks one question of every distinct blob in the subtree at once, and a
+    // version of it that matched nothing would still let an ordinary join through: it would
+    // merely over-count, and a roomy quota hides over-counting completely. A quota set to
+    // exactly what they use is the only condition that tells the two apart.
+    const { shareId, inside, ks } = await invitedShare('held');
+    const body = `both-copies-${randomUUID()}`;
+    const bytes = Buffer.from(body);
+    await createFile(inside, `note-${randomUUID()}`, body, ks);
+
+    // The same bytes in the joiner's own vault. A blob is its content, so both sides address
+    // it identically — which is what "already held" means here.
+    const theirKey = await strangerVaultKey();
+    const hex = sha(bytes);
+    const theirAuth = { authorization: `Bearer ${w.strangerAccess}` };
+    const uploaded = await w.app.inject({
+      method: 'POST',
+      url: '/blobs',
+      query: { sha256: hex, size: String(bytes.length), key_id: theirKey },
+      headers: { ...theirAuth, 'content-type': 'application/octet-stream' },
+      payload: bytes,
+    });
+    assert.equal(uploaded.statusCode, 201, uploaded.body);
+
+    const theirName = `mine-${randomUUID()}`;
+    const created = await w.app.inject({
+      method: 'POST',
+      url: `/vaults/${w.strangerVaultId}/nodes`,
+      headers: theirAuth,
+      payload: {
+        parent_id: await strangerRoot(), type: 'file', sha256: hex, size: bytes.length,
+        mtime: new Date().toISOString(),
+        name_enc: b64(theirName), name_hmac: sha(Buffer.from(theirName)), name_key_id: theirKey,
+        ...materialFor(hex, theirKey),
+      },
+    });
+    assert.equal(created.statusCode, 201, created.body);
+
+    const before = await w.db.one<{ used: string; quota: string }>(
+      `SELECT COALESCE(SUM(b.size), 0)::text AS used, u.quota_bytes::text AS quota
+         FROM users u
+         LEFT JOIN user_blobs ub ON ub.user_id = u.id
+         LEFT JOIN blobs b ON b.sha256 = ub.sha256
+        WHERE u.id = $1 GROUP BY u.id`,
+      [w.strangerId],
+    );
+    await w.db.query(`UPDATE users SET quota_bytes = $2 WHERE id = $1`, [w.strangerId, before!.used]);
+    try {
+      const joined = await join(shareId);
+      assert.equal(joined.statusCode, 201, joined.body);
+    } finally {
+      // Restored, because the world is shared with every test after this one and a quota
+      // left at the brim would refuse them for a reason that has nothing to do with them.
+      await w.db.query(`UPDATE users SET quota_bytes = $2 WHERE id = $1`, [w.strangerId, before!.quota]);
+    }
+  });
+
   it('is redeemed once: a second acceptance finds nothing outstanding', async () => {
     const { shareId } = await invitedShare('once');
     assert.equal((await join(shareId)).statusCode, 201);

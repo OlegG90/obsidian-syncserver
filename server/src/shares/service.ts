@@ -666,13 +666,23 @@ export const joinShare = async (
     for (const n of source.rows) {
       if (n.sha256 && n.size !== null) sizes.set(n.sha256, BigInt(n.size));
     }
+    // One question, one trip: which of these the account already holds. A row is a claim,
+    // not a copy, so `user_blobs` saying yes is what "free" means — the same predicate the
+    // growth accounting uses, not the `refs_own > 0` a READ is gated by.
+    const hashes = [...sizes.keys()];
+    const heldRows = hashes.length
+      ? await c.query<{ sha256: string }>(
+          `SELECT encode(b.sha256, 'hex') AS sha256
+             FROM unnest($2::text[]) AS t(hex)
+             JOIN user_blobs b ON b.sha256 = decode(t.hex, 'hex')
+            WHERE b.user_id = $1`,
+          [userId, hashes],
+        )
+      : { rows: [] };
+    const held = new Set(heldRows.rows.map((r) => r.sha256));
     let growth = 0n;
     for (const [sha, size] of sizes) {
-      const held = await c.query(`SELECT 1 FROM user_blobs WHERE user_id = $1 AND sha256 = decode($2,'hex')`, [
-        userId,
-        sha,
-      ]);
-      if (held.rowCount === 0) growth += size;
+      if (!held.has(sha)) growth += size;
     }
 
     const room = await headroom(oneFrom(c), userId);
