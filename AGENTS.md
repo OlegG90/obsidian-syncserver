@@ -82,6 +82,12 @@ the reason rather than assuming, because more than one condition can share a sta
 broken over one that pins the current shape of the code. When a test and the design disagree,
 find out which is wrong before changing either.
 
+**A suite is split by scenario, never by module.** Following the source's file layout would
+make the tests assert the implementation by arrangement even where each one asserts behaviour.
+Fixtures shared by several suites live in `test/support/`, and each suite builds its **own**
+world from them — its own app, accounts and vaults — because whoever claims the seeded
+administrator first would otherwise leave the others answering 503 to everything.
+
 **A test that talks to a live server never fakes the key derivation.** The plugin's session
 module takes a derivation seam (`Session.forTests`) so unit tests can run fast and
 deterministically — but `roundtrip.test.ts` is the only place that proves client, keys and
