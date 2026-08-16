@@ -428,3 +428,27 @@ describe('a vault of another account is not addressable', () => {
     assert.equal(r.statusCode, 404);
   });
 });
+
+describe('a file write names its bytes and their size', () => {
+  it('refuses content without a size, rather than letting the schema say it', async () => {
+    // `versions.size` is NOT NULL, so this used to reach PostgreSQL and come back as a 500
+    // for a request the caller could have been told how to fix.
+    const r = await app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes`,
+      headers: auth(),
+      payload: {
+        parent_id: rootId,
+        type: 'file',
+        sha256: 'a'.repeat(64),
+        mtime: new Date().toISOString(),
+        name_enc: Buffer.from('sizeless.md').toString('base64'),
+        name_hmac: 'b'.repeat(64),
+        name_key_id: vaultKeyId,
+      },
+    });
+
+    assert.equal(r.statusCode, 400, r.body);
+    assert.equal(r.json().error, 'content_required');
+  });
+});

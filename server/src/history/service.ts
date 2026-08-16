@@ -7,6 +7,7 @@
  * That one decision is why "the trash" is a query rather than a place.
  */
 import type { PoolClient } from 'pg';
+import { claimBlob, recordVersion } from '../holdings.js';
 import type { RestoreResult } from '@syncserver/shared';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
@@ -158,18 +159,20 @@ export const restoreNode = async (
       [input.vaultId, rev, input.nodeId]);
 
     if (n.type !== 'folder') {
-      await c.query(
-        `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [input.vaultId, input.nodeId, rev, sha, size, userId],
-      );
+      // The author is the person restoring, not whoever wrote the version being restored:
+      // this revision is a new act, and the old one keeps its own row and its own name.
+      await recordVersion(c, {
+        vaultId: input.vaultId,
+        nodeId: input.nodeId,
+        rev,
+        sha256: sha.toString('hex'),
+        size,
+        authorId: userId,
+      });
       // The blob was held by the version rows all along, so this claim is not new bytes —
       // but it is a new reference, and it changes in the same transaction as the reference
       // that caused it (invariant 8).
-      await c.query(
-        `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, $2, 1)
-         ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-        [userId, sha],
-      );
+      await claimBlob(c, userId, sha.toString('hex'));
     }
 
     return { rev, lifted };

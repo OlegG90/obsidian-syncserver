@@ -11,6 +11,7 @@
  * visible unit; a trigger would scatter the same fact across rows nobody reads together.
  */
 import type { PoolClient } from 'pg';
+import { recordVersion } from '../holdings.js';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
@@ -155,11 +156,18 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
     );
 
     if (input.sha256) {
-      await c.query(
-        `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-         VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
-        [input.vaultId, nodeId, rev, input.sha256, input.size, owner],
-      );
+      // The route refuses content without a size, so this is a defect on this side rather
+      // than a bad request — and it says so loudly instead of skipping the version row,
+      // which would leave a node pointing at bytes with no history and no claim.
+      if (input.size === undefined) throw new Error('a node with content must have a size');
+      await recordVersion(c, {
+        vaultId: input.vaultId,
+        nodeId,
+        rev,
+        sha256: input.sha256,
+        size: input.size,
+        authorId: owner,
+      });
       await bindBlob(c, owner, input.sha256);
     }
 
@@ -226,11 +234,14 @@ export const putContent = async (
       `INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`,
       [input.vaultId, rev, input.nodeId],
     );
-    await c.query(
-      `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-       VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
-      [input.vaultId, input.nodeId, rev, input.sha256, input.size, owner],
-    );
+    await recordVersion(c, {
+      vaultId: input.vaultId,
+      nodeId: input.nodeId,
+      rev,
+      sha256: input.sha256,
+      size: input.size,
+      authorId: owner,
+    });
 
     await bindBlob(c, owner, input.sha256);
     // The previous content keeps its claim through the version row that still names it;

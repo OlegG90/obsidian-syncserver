@@ -62,7 +62,11 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
       return reply.code(404).send({ error: 'not_found' });
     }
     const b = req.body;
-    if (b.type === 'file' && !b.sha256) return reply.code(400).send({ error: 'content_required' });
+    // Both, or the write is not a write: `versions.size` is NOT NULL, so content without a
+    // size reached the schema as a 500 for a request the caller could have been told about.
+    if (b.type === 'file' && (!b.sha256 || b.size === undefined)) {
+      return reply.code(400).send({ error: 'content_required' });
+    }
 
     const out = await createNode(db, {
       vaultId: req.params.vaultId,

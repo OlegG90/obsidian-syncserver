@@ -21,6 +21,7 @@
  * (SH-03) — so each recipient takes a `user_blobs` claim of their own.
  */
 import type { PoolClient } from 'pg';
+import { claimBlob, recordVersion } from '../holdings.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
@@ -71,15 +72,6 @@ const counterpart = async (
   return res.rows[0];
 };
 
-/** A recipient's claim on content that just arrived in their copy. */
-const claimBlob = async (c: PoolClient, userId: string, sha256Hex: string): Promise<void> => {
-  await c.query(
-    `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
-     ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-    [userId, sha256Hex],
-  );
-};
-
 /** Record the change in the recipient's own journal, so their devices see it as a change. */
 const journal = (c: PoolClient, vaultId: string, rev: number, nodeId: string, op: string, prevParent?: string) =>
   c.query(
@@ -108,14 +100,14 @@ export const propagatePut = async (
       [t.vaultId, node.id, item.sha256, item.size, item.mtime, rev],
     );
     await journal(c, t.vaultId, rev, node.id, 'put');
-    // The ORIGINAL writer, not the recipient (SH-19): this is somebody else's work
-    // arriving, and attributing it to whoever received it rewrites authorship on every
-    // propagation.
-    await c.query(
-      `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-       VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
-      [t.vaultId, node.id, rev, item.sha256, item.size, item.authorId],
-    );
+    await recordVersion(c, {
+      vaultId: t.vaultId,
+      nodeId: node.id,
+      rev,
+      sha256: item.sha256,
+      size: item.size,
+      authorId: item.authorId,
+    });
     await claimBlob(c, t.userId, item.sha256);
     await freezeIfOverQuota(c, t.userId);
   }
@@ -169,12 +161,17 @@ export const propagateCreate = async (
     const nodeId = created.rows[0]!.id;
     await journal(c, t.vaultId, rev, nodeId, 'put');
 
-    if (item.sha256) {
-      await c.query(
-        `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-         VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
-        [t.vaultId, nodeId, rev, item.sha256, item.size, item.authorId],
-      );
+    // Both or neither: a node with content has a size, and the pair travels together. Read
+    // as one condition so the type says what the data already guarantees.
+    if (item.sha256 !== null && item.size !== null) {
+      await recordVersion(c, {
+        vaultId: t.vaultId,
+        nodeId,
+        rev,
+        sha256: item.sha256,
+        size: item.size,
+        authorId: item.authorId,
+      });
       await claimBlob(c, t.userId, item.sha256);
       await freezeIfOverQuota(c, t.userId);
     }

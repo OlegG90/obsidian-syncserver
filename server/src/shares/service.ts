@@ -36,6 +36,7 @@ import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
 import { fakeRecipient } from '../crypto.js';
+import { claimBlob, recordVersion } from '../holdings.js';
 import { headroom } from '../quota.js';
 import { preparationGaps } from './owed.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
@@ -763,29 +764,32 @@ export const joinShare = async (
         // received it would rewrite authorship on every join.
         for (let i = 0; i < pastRevs.length; i++) {
           const v = past.rows[i]!;
-          await c.query(
-            `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id, at)
-             VALUES ($1, $2, $3, decode($4,'hex'), $5, $6, $7)`,
-            [input.vaultId, newId, pastRevs[i], v.sha256, v.size, v.authorId, v.at],
-          );
-          await c.query(
-            `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
-             ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-            [userId, v.sha256],
-          );
+          await recordVersion(c, {
+            vaultId: input.vaultId,
+            nodeId: newId,
+            rev: pastRevs[i]!,
+            sha256: v.sha256,
+            size: Number(v.size),
+            authorId: v.authorId,
+            // The original moment, because a past that all happened at the instant of
+            // joining is not a past (SH-23).
+            at: v.at,
+          });
+          await claimBlob(c, userId, v.sha256);
         }
 
         const head = past.rows[past.rows.length - 1];
-        await c.query(
-          `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-           VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)`,
-          [input.vaultId, newId, rev, n.sha256, n.size, head?.authorId ?? userId],
-        );
-        await c.query(
-          `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
-           ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-          [userId, n.sha256],
-        );
+        await recordVersion(c, {
+          vaultId: input.vaultId,
+          nodeId: newId,
+          rev,
+          sha256: n.sha256,
+          // `size` arrives as text, because a bigint that crossed a JSON boundary would
+          // round: the query casts it and this casts it back.
+          size: Number(n.size),
+          authorId: head?.authorId ?? userId,
+        });
+        await claimBlob(c, userId, n.sha256);
       }
     }
 

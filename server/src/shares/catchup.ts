@@ -25,6 +25,7 @@
  * (SH-01), so its name is not the source's to hand over.
  */
 import type { PoolClient } from 'pg';
+import { claimBlob, recordVersion } from '../holdings.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
@@ -149,13 +150,7 @@ export const catchUpShare = async (
   );
   const rootItemId = rootItem.rows[0]?.rootItemId;
 
-  const claim = async (sha256: string): Promise<void> => {
-    await c.query(
-      `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
-       ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-      [member.userId, sha256],
-    );
-  };
+  const claim = (sha256: string): Promise<void> => claimBlob(c, member.userId, sha256);
 
   const journal = (rev: number, nodeId: string, op: string): Promise<unknown> =>
     c.query(
@@ -262,13 +257,18 @@ export const catchUpShare = async (
   for (const v of missing.rows) {
     const nodeId = byItem.get(v.shareItemId);
     if (!nodeId || !itemOf.has(nodeId)) continue;
-    const inserted = await c.query(
-      `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
-       VALUES ($1, $2, $3, decode($4,'hex'), $5, $6)
-       ON CONFLICT (vault_id, node_id, rev) DO NOTHING`,
-      [member.vaultId, nodeId, Number(v.rev), v.sha256, v.size, v.authorId],
-    );
-    if (inserted.rowCount) done.versions++;
+    // Absorbing a collision, which only this pass may do: it walks a whole replica and may
+    // meet versions an earlier pass already delivered.
+    const { written } = await recordVersion(c, {
+      vaultId: member.vaultId,
+      nodeId,
+      rev: Number(v.rev),
+      sha256: v.sha256,
+      size: v.size,
+      authorId: v.authorId,
+      ifAbsent: true,
+    });
+    if (written) done.versions++;
   }
 
   // Catching up is content arriving, so it can put the account straight back over the line —
