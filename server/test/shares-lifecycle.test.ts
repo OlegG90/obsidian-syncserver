@@ -211,6 +211,73 @@ describe('activation, the one completeness check the schema cannot make', () => 
     assert.deepEqual(r.json().gaps, [{ nodeId: inside, missing: 'name' }]);
   });
 
+  it('asks for a name only from nodes somebody will read — never from the trash', async () => {
+    // A node can carry the share mark without ever having been prepared: the deleted
+    // contents of a folder shared afterwards. Joining copies live nodes only, so nobody
+    // will ever read that name, and demanding it be re-keyed would ask the client for work
+    // on a node its own listings do not show — the shape of failure that stopped a
+    // departure once already.
+    //
+    // Its BYTES are a different question and still owed: history arrives with the folder,
+    // and a superseded blob is reachable whether or not its node is in the trash.
+    const folder = await createNode('folder', `trash-${randomUUID()}`);
+    const doomed = await createFile(folder, `gone-${randomUUID()}`, `trashed-${randomUUID()}`, w.vaultKeyId);
+    const at = await w.db.one<{ rev: string }>(
+      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [w.vaultId, doomed.nodeId],
+    );
+    const removed = await w.app.inject({
+      method: 'DELETE',
+      url: `/vaults/${w.vaultId}/nodes/${doomed.nodeId}`,
+      headers: { ...auth(), 'if-match': at!.rev },
+    });
+    assert.equal(removed.statusCode, 200, removed.body);
+
+    const shareId = (await openShare(folder)).json().share_id;
+    const r = await w.app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(r.statusCode, 409, r.body);
+
+    const gaps = r.json().gaps as { nodeId: string; missing: string }[];
+    assert.ok(
+      gaps.some((g) => g.nodeId === doomed.nodeId && g.missing === 'content'),
+      'the bytes behind a trashed node are still owed an envelope',
+    );
+    assert.ok(
+      !gaps.some((g) => g.nodeId === doomed.nodeId && g.missing === 'name'),
+      'but its name is not, because nobody it is being shared with will ever see it',
+    );
+  });
+
+  it('counts an envelope without its dedup tag as unprepared', async () => {
+    // Two pieces of material, and a client that produced one of them is not finished. The
+    // tag is asked for exactly where the plaintext is — a live head — so a file that opens
+    // but cannot be recognised as a duplicate is a hole, not a nuance.
+    const folder = await createNode('folder', `tagless-${randomUUID()}`);
+    const file = await createFile(folder, `note-${randomUUID()}`, `tagless-${randomUUID()}`, w.vaultKeyId);
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+
+    const named = {
+      node_id: file.nodeId,
+      name_enc: b64('note'),
+      name_hmac: sha(Buffer.from('note')),
+      name_key_id: ks,
+    };
+    // The envelope alone, which is what a client that forgot half the material sends.
+    assert.equal(
+      (await prepare(shareId, [{ ...named, blob_envelopes: materialFor(file.sha256, ks).blob_envelopes }])).statusCode,
+      204,
+    );
+    const short = await w.app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(short.statusCode, 409, 'the envelope on its own does not finish the job');
+    assert.deepEqual(short.json().gaps, [{ nodeId: file.nodeId, missing: 'content' }]);
+
+    // And the tag closes it.
+    assert.equal((await prepare(shareId, [{ ...named, ...materialFor(file.sha256, ks) }])).statusCode, 204);
+    const ok = await w.app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(ok.statusCode, 200, ok.body);
+  });
+
   it('accepts once the interior name is re-keyed to the share key', async () => {
     const folder = await createNode('folder', `prepared-${randomUUID()}`);
     const inside = await createNode('folder', `interior-${randomUUID()}`, folder);

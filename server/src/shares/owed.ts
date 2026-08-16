@@ -39,32 +39,40 @@ import type { PreparationGap } from '@syncserver/shared';
  *   reachable, since joining delivers a file's retained history and not only its head
  *   (SH-15, SH-23). A head that opens beside a history that does not is the subtler hole,
  *   and the one a check written against current nodes alone would miss.
+ *
+ * **A projection of `owedUnder`, not a second query.** This used to be a `UNION` of three
+ * `SELECT`s that reimplemented, over `ancestry` instead of the share mark, the same rule the
+ * listing answers — which made four SQL forms of one rule in one file, under a header
+ * warning that asking twice would drift. What is left here is the reading of it: which of the
+ * facts already returned counts as a gap, and how many to name before the message stops
+ * being useful.
+ *
+ * It costs the full listing where it used to cost twenty rows. That is the same listing
+ * `GET /shares/:id/preparation` hands the client for this very screen, so activation is not
+ * the expensive half of anything it takes part in.
  */
-export const preparationGaps = (db: Db, vaultId: string, rootId: string, keyId: string): Promise<PreparationGap[]> =>
-  db.query<PreparationGap>(
-    `SELECT n.id AS "nodeId", 'name' AS missing
-       FROM nodes n
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND n.deleted_at IS NULL AND n.name_key_id IS DISTINCT FROM $3
-      UNION
-     SELECT n.id, 'content'
-       FROM nodes n
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND n.deleted_at IS NULL AND n.type = 'file' AND n.sha256 IS NOT NULL
-        AND (NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
-          -- The tag too, and only here: the schema asks for it exactly where the plaintext
-          -- is — a live head. Checking it for history as well would report a gap no client
-          -- could close, since a superseded version is not on anybody's disk.
-          OR NOT EXISTS (SELECT 1 FROM dedup_index d WHERE d.sha256 = n.sha256 AND d.scope_id = $3))
-      UNION
-     SELECT v.node_id, 'content'
-       FROM versions v
-       JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = v.sha256 AND k.scope_id = $3)
-      LIMIT 20`,
-    [vaultId, rootId, keyId],
-  );
+const GAPS_NAMED = 20;
+
+export const preparationGaps = async (
+  db: Db,
+  vaultId: string,
+  shareId: string,
+  keyId: string,
+  rootItemId: string,
+): Promise<PreparationGap[]> => {
+  const gaps: PreparationGap[] = [];
+  for (const n of await interiorOwed(db, vaultId, shareId, keyId, rootItemId)) {
+    // The trash is not converted and never was: a node can carry the mark without having
+    // been prepared — the deleted contents of a folder shared afterwards — and its name
+    // stays under `KV` because nobody will ever read it. Joining copies live nodes only.
+    if (!n.deleted && n.nameKeyId !== keyId) gaps.push({ nodeId: n.nodeId, missing: 'name' });
+    // The head and the history are owed different things, and either one missing is the
+    // same answer to the caller: this node is not ready.
+    if (n.needsMaterial || n.history.length > 0) gaps.push({ nodeId: n.nodeId, missing: 'content' });
+    if (gaps.length >= GAPS_NAMED) break;
+  }
+  return gaps.slice(0, GAPS_NAMED);
+};
 
 /** One node the departing client must convert, as only it can. */
 export type ReplicaNode = {
@@ -211,6 +219,21 @@ export const preparationOwed = async (
   );
   if (!share) return undefined;
 
-  const rows = await owedUnder(db, share.vaultId, shareId, share.keyId);
-  return rows.filter((n) => n.shareItemId !== share.rootItemId);
+  return interiorOwed(db, share.vaultId, shareId, share.keyId, share.rootItemId);
 };
+
+/**
+ * The share's interior, which is what both halves of preparation are about.
+ *
+ * The listing the client works from and the check that lets it stop are the same set seen
+ * twice — one as a work list, one as a verdict. Sharing the step that drops the root is what
+ * keeps them from disagreeing about which nodes the question was even asked of.
+ */
+const interiorOwed = async (
+  db: Db,
+  vaultId: string,
+  shareId: string,
+  scopeId: string,
+  rootItemId: string,
+): Promise<OwedNode[]> =>
+  (await owedUnder(db, vaultId, shareId, scopeId)).filter((n) => n.shareItemId !== rootItemId);

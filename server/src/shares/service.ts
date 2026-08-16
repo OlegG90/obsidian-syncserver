@@ -353,16 +353,16 @@ export const activateShare = async (
   userId: string,
   shareId: string,
 ): Promise<{ state: string } | Refusal> => {
-  const share = await db.one<{ vaultId: string; nodeId: string; keyId: string; state: string }>(
-    `SELECT initiator_vault_id AS "vaultId", subtree_node_id AS "nodeId",
-            subtree_key_id AS "keyId", state::text AS state
+  const share = await db.one<{ vaultId: string; keyId: string; rootItemId: string; state: string }>(
+    `SELECT initiator_vault_id AS "vaultId", subtree_key_id AS "keyId",
+            root_item_id AS "rootItemId", state::text AS state
        FROM shares WHERE id = $1 AND initiator_id = $2`,
     [shareId, userId],
   );
   if (!share) return { kind: 'not_found' };
   if (share.state !== 'preparing') return { kind: 'share_not_preparing', state: share.state };
 
-  const gaps = await preparationGaps(db, share.vaultId, share.nodeId, share.keyId);
+  const gaps = await preparationGaps(db, share.vaultId, shareId, share.keyId, share.rootItemId);
   if (gaps.length > 0) return { kind: 'share_not_prepared', gaps };
 
   await db.query(`UPDATE shares SET state = 'active' WHERE id = $1`, [shareId]);
