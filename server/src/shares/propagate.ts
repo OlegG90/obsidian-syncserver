@@ -22,6 +22,7 @@
  */
 import type { PoolClient } from 'pg';
 import { claimBlob, recordVersion } from '../holdings.js';
+import { counterpartOf, createCounterpart, journalEntry } from './replica.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
@@ -57,29 +58,6 @@ export const fanoutTargets = async (c: PoolClient, shareId: string, exceptVaultI
   return res.rows;
 };
 
-/** The node carrying this share item in that vault, or nothing if the replica lacks it. */
-const counterpart = async (
-  c: PoolClient,
-  vaultId: string,
-  shareItemId: string,
-): Promise<{ id: string; ancestry: string[] } | undefined> => {
-  const res = await c.query<{ id: string; ancestry: string[] }>(
-    `SELECT id, ancestry FROM nodes
-      WHERE vault_id = $1 AND share_item_id = $2 AND deleted_at IS NULL
-        FOR UPDATE`,
-    [vaultId, shareItemId],
-  );
-  return res.rows[0];
-};
-
-/** Record the change in the recipient's own journal, so their devices see it as a change. */
-const journal = (c: PoolClient, vaultId: string, rev: number, nodeId: string, op: string, prevParent?: string) =>
-  c.query(
-    `INSERT INTO journal (vault_id, rev, node_id, prev_parent_id, op, node_rev)
-     VALUES ($1, $2, $3, $4, $5::journal_op, $2)`,
-    [vaultId, rev, nodeId, prevParent ?? null, op],
-  );
-
 /** New content for an item that exists in every replica. */
 export const propagatePut = async (
   c: PoolClient,
@@ -87,7 +65,7 @@ export const propagatePut = async (
   item: { shareItemId: string; sha256: string; size: number; mtime: string; authorId: string },
 ): Promise<void> => {
   for (const t of targets) {
-    const node = await counterpart(c, t.vaultId, item.shareItemId);
+    const node = await counterpartOf(c, t.vaultId, item.shareItemId);
     // A replica that does not hold the item is not an error to fail the write over: it can
     // only mean the item was created while this member was frozen, and their catch-up is
     // what repairs it. Failing here would let one lagging copy block everybody's writes.
@@ -99,7 +77,7 @@ export const propagatePut = async (
         WHERE vault_id = $1 AND id = $2`,
       [t.vaultId, node.id, item.sha256, item.size, item.mtime, rev],
     );
-    await journal(c, t.vaultId, rev, node.id, 'put');
+    await journalEntry(c, t.vaultId, rev, node.id, 'put');
     await recordVersion(c, {
       vaultId: t.vaultId,
       nodeId: node.id,
@@ -132,34 +110,11 @@ export const propagateCreate = async (
   },
 ): Promise<void> => {
   for (const t of targets) {
-    const parent = await counterpart(c, t.vaultId, item.parentShareItemId);
+    const parent = await counterpartOf(c, t.vaultId, item.parentShareItemId);
     if (!parent) continue;
 
-    const rev = await nextRev(c, t.vaultId);
-    const created = await c.query<{ id: string }>(
-      `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
-                          sha256, size, mtime, rev, ancestry, share_id, share_item_id)
-       VALUES ($1, $2, decode($3,'base64'), decode($4,'hex'), $5, $6::node_type,
-               CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11, $12, $13)
-    RETURNING id`,
-      [
-        t.vaultId,
-        parent.id,
-        item.nameEnc,
-        item.nameHmac,
-        item.nameKeyId,
-        item.type,
-        item.sha256,
-        item.size,
-        item.mtime,
-        rev,
-        [...parent.ancestry, parent.id],
-        item.shareId,
-        item.shareItemId,
-      ],
-    );
-    const nodeId = created.rows[0]!.id;
-    await journal(c, t.vaultId, rev, nodeId, 'put');
+    const { node, rev } = await createCounterpart(c, { vaultId: t.vaultId, shareId: item.shareId, parent }, item);
+    const nodeId = node.id;
 
     // Both or neither: a node with content has a size, and the pair travels together. Read
     // as one condition so the type says what the data already guarantees.
@@ -181,7 +136,7 @@ export const propagateCreate = async (
 /** A deletion, which is a soft delete in every replica exactly as in the original. */
 export const propagateDelete = async (c: PoolClient, targets: Target[], shareItemId: string): Promise<void> => {
   for (const t of targets) {
-    const node = await counterpart(c, t.vaultId, shareItemId);
+    const node = await counterpartOf(c, t.vaultId, shareItemId);
     if (!node) continue;
 
     const rev = await nextRev(c, t.vaultId);
@@ -190,7 +145,7 @@ export const propagateDelete = async (c: PoolClient, targets: Target[], shareIte
       node.id,
       rev,
     ]);
-    await journal(c, t.vaultId, rev, node.id, 'del');
+    await journalEntry(c, t.vaultId, rev, node.id, 'del');
   }
 };
 
@@ -205,8 +160,8 @@ export const propagateMove = async (
   item: { shareItemId: string; parentShareItemId: string; nameEnc: string; nameHmac: string; nameKeyId: string },
 ): Promise<void> => {
   for (const t of targets) {
-    const node = await counterpart(c, t.vaultId, item.shareItemId);
-    const parent = await counterpart(c, t.vaultId, item.parentShareItemId);
+    const node = await counterpartOf(c, t.vaultId, item.shareItemId);
+    const parent = await counterpartOf(c, t.vaultId, item.parentShareItemId);
     if (!node || !parent) continue;
 
     const rev = await nextRev(c, t.vaultId);
@@ -231,6 +186,6 @@ export const propagateMove = async (
         WHERE vault_id = $1 AND ancestry @> ARRAY[$2::uuid]`,
       [t.vaultId, node.id, ancestry],
     );
-    await journal(c, t.vaultId, rev, node.id, 'move', prevParent.rows[0]?.parentId ?? undefined);
+    await journalEntry(c, t.vaultId, rev, node.id, 'move', prevParent.rows[0]?.parentId ?? undefined);
   }
 };

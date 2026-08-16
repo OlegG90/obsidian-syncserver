@@ -26,6 +26,7 @@
  */
 import type { PoolClient } from 'pg';
 import { claimBlob, recordVersion } from '../holdings.js';
+import { counterpartOf, createCounterpart, journalEntry, type Counterpart } from './replica.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
@@ -152,12 +153,8 @@ export const catchUpShare = async (
 
   const claim = (sha256: string): Promise<void> => claimBlob(c, member.userId, sha256);
 
-  const journal = (rev: number, nodeId: string, op: string): Promise<unknown> =>
-    c.query(
-      `INSERT INTO journal (vault_id, rev, node_id, prev_parent_id, op, node_rev)
-       VALUES ($1, $2, $3, NULL, $4::journal_op, $2)`,
-      [member.vaultId, rev, nodeId, op],
-    );
+  const journal = (rev: number, nodeId: string, op: 'put' | 'del'): Promise<unknown> =>
+    journalEntry(c, member.vaultId, rev, nodeId, op);
 
   for (const node of theirs) {
     if (node.shareItemId === rootItemId) continue;
@@ -168,43 +165,25 @@ export const catchUpShare = async (
     if (!here) {
       if (node.deleted) continue; // created and deleted inside the gap: nothing to deliver
       const parent = node.parentShareItemId === null ? undefined : mine.get(node.parentShareItemId);
-      const parentHere =
+      // The replica root is not in the index — it is skipped as each member's own (SH-01) —
+      // so it is asked for directly, with the same question everything else is found by.
+      const parentHere: Counterpart | undefined =
         node.parentShareItemId === rootItemId
-          ? await c.query<{ id: string; ancestry: string[] }>(
-              `SELECT id, ancestry FROM nodes WHERE vault_id = $1 AND share_item_id = $2`,
-              [member.vaultId, rootItemId],
-            ).then((r) => r.rows[0])
+          ? await counterpartOf(c, member.vaultId, rootItemId!)
           : parent;
       // A parent that is not here yet cannot happen — the source is walked parents first —
       // but a parent deleted in the meantime can, and its children go with it.
       if (!parentHere) continue;
 
-      const rev = await nextRev(c, member.vaultId);
-      const created = await c.query<{ id: string }>(
-        `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
-                            sha256, size, mtime, rev, ancestry, share_id, share_item_id)
-         VALUES ($1, $2, decode($3,'base64'), decode($4,'hex'), $5, $6::node_type,
-                 CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11, $12, $13)
-      RETURNING id`,
-        [
-          member.vaultId,
-          parentHere.id,
-          node.nameEnc,
-          node.nameHmac,
-          node.nameKeyId,
-          node.type,
-          node.sha256,
-          node.size,
-          node.mtime,
-          rev,
-          [...parentHere.ancestry, parentHere.id],
-          shareId,
-          node.shareItemId,
-        ],
+      // The same write propagation makes, for a different reason: it delivers an event,
+      // this delivers a gap. The version rows are NOT written here — the history phase below
+      // brings the whole interval, and the head would otherwise be recorded twice.
+      const { node: written } = await createCounterpart(
+        c,
+        { vaultId: member.vaultId, shareId, parent: parentHere },
+        node,
       );
-      const id = created.rows[0]!.id;
-      mine.set(node.shareItemId, { id, ancestry: [...parentHere.ancestry, parentHere.id], sha256: node.sha256, deleted: false });
-      await journal(rev, id, 'put');
+      mine.set(node.shareItemId, { ...written, sha256: node.sha256, deleted: false });
       if (node.sha256) await claim(node.sha256);
       done.created++;
       continue;

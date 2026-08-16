@@ -37,6 +37,7 @@ import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
 import { fakeRecipient } from '../crypto.js';
 import { claimBlob, dropUnreferenced, recordVersion } from '../holdings.js';
+import { createCounterpart } from './replica.js';
 import { headroom } from '../quota.js';
 import { preparationGaps } from './owed.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
@@ -723,40 +724,50 @@ export const joinShare = async (
       const pastRevs: number[] = [];
       for (let i = 0; i < past.rows.length - 1; i++) pastRevs.push(await nextRev(c, input.vaultId));
 
-      const rev = await nextRev(c, input.vaultId);
-      const created = await c.query<{ id: string }>(
-        `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type,
-                            sha256, size, mtime, rev, ancestry, share_id, share_item_id)
-         VALUES ($1, $2, decode($3,'base64'), decode($4,'hex'), $5, $6,
-                 CASE WHEN $7::text IS NULL THEN NULL ELSE decode($7,'hex') END, $8, $9, $10, $11, $12, $13)
-      RETURNING id`,
-        [
-          input.vaultId,
-          newParent,
-          isRoot ? input.nameEnc : n.nameEnc,
-          isRoot ? input.nameHmac : n.nameHmac,
-          isRoot ? input.nameKeyId : n.nameKeyId,
-          n.type,
-          n.sha256,
-          n.size,
-          n.mtime,
-          rev,
-          ancestry,
+      // Only a vault's own root is nameless, and a share can never be rooted at one — so a
+      // node without a name here means the subtree query reached outside the share. Refused
+      // rather than cast away, beside the parent check above it, because the alternative is
+      // an insert the schema rejects with a sentence about `name_enc`.
+      const nameEnc = isRoot ? input.nameEnc : n.nameEnc;
+      const nameHmac = isRoot ? input.nameHmac : n.nameHmac;
+      const nameKeyId = isRoot ? input.nameKeyId : n.nameKeyId;
+      if (nameEnc === null || nameHmac === null || nameKeyId === null) {
+        return { kind: 'invalid_write', detail: `node ${n.id} inside a share has no name` } as Refusal;
+      }
+
+      // The same write propagation and the catch-up make: create the corresponding node under
+      // a parent that is already here, and journal it. The revision it takes is the NEXT one,
+      // which is why the history above reserved its own first — the head must be the highest.
+      //
+      // The root is the one node whose name is not copied: it lands among the joiner's own
+      // folders and is theirs to call whatever they like (SH-01).
+      const { node: createdNode, rev } = await createCounterpart(
+        c,
+        {
+          vaultId: input.vaultId,
           shareId,
-          n.shareItemId,
-        ],
+          // `ancestry` is the chain this walk already built, and `createCounterpart` derives
+          // the child's from it — the parent of the replica root is an ordinary folder of the
+          // joiner's vault rather than a share node, which is why it is passed rather than
+          // looked up.
+          parent: { id: newParent, ancestry: ancestry.slice(0, -1) },
+        },
+        {
+          shareItemId: n.shareItemId,
+          type: n.type,
+          nameEnc,
+          nameHmac,
+          nameKeyId,
+          sha256: n.sha256,
+          size: n.size === null ? null : Number(n.size),
+          mtime: n.mtime,
+        },
       );
 
-      const newId = created.rows[0]!.id;
+      const newId = createdNode.id;
       mapped.set(n.id, newId);
       ancestryOf.set(n.id, ancestry);
       if (isRoot) rootNodeId = newId;
-
-      await c.query(`INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`, [
-        input.vaultId,
-        rev,
-        newId,
-      ]);
 
       if (n.sha256) {
         // Every version row records the ORIGINAL writer, not the joiner (SH-19): this
