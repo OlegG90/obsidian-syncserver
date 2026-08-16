@@ -134,11 +134,23 @@ export const replicaOf = async (
   if (!member?.vaultId) return undefined;
 
   const rows = await owedUnder(db, member.vaultId, shareId, member.vaultKeyId);
-  return rows.map(({ needsMaterial, ...rest }) => ({ ...rest, needsVaultMaterial: needsMaterial }));
+  return rows.map(({ needsMaterial, shareItemId: _, ...rest }) => ({
+    ...rest,
+    needsVaultMaterial: needsMaterial,
+  }));
 };
 
-/** One marked node, and what it still owes under some scope. */
-type OwedNode = Omit<ReplicaNode, 'needsVaultMaterial'> & { needsMaterial: boolean };
+/**
+ * One marked node, and what it still owes under some scope.
+ *
+ * `shareItemId` is here for the one caller that has to recognise the root, and travels no
+ * further: a departure converts the whole replica and has no use for it.
+ */
+type OwedNode = Omit<ReplicaNode, 'needsVaultMaterial'> & {
+  needsMaterial: boolean;
+  /** The share's own identity for this node — the same value in every participant's vault. */
+  shareItemId: string;
+};
 
 /**
  * Every marked node of a vault, and what each still owes under one scope key.
@@ -155,7 +167,7 @@ const owedUnder = (db: Db, vaultId: string, shareId: string, scopeId: string): P
   db.query<OwedNode>(
     `SELECT n.id AS "nodeId", encode(n.name_enc, 'base64') AS "nameEnc", n.name_key_id AS "nameKeyId",
             n.type::text AS type, (n.deleted_at IS NOT NULL) AS deleted,
-            encode(n.sha256, 'hex') AS sha256,
+            encode(n.sha256, 'hex') AS sha256, n.share_item_id AS "shareItemId",
             (n.sha256 IS NOT NULL
              AND NOT (EXISTS (SELECT 1 FROM blob_keys k
                                WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
@@ -184,6 +196,8 @@ const owedUnder = (db: Db, vaultId: string, shareId: string, scopeId: string): P
  * client keeps would show, since its own tree holds only the head of each file.
  *
  * The root is excluded here as everywhere (SH-01): its name and content stay the initiator's.
+ * Recognised by the share's own identity for it, which the listing already carries — asking
+ * the database which node that is cost a round-trip to learn something already in hand.
  */
 export const preparationOwed = async (
   db: Db,
@@ -198,9 +212,5 @@ export const preparationOwed = async (
   if (!share) return undefined;
 
   const rows = await owedUnder(db, share.vaultId, shareId, share.keyId);
-  const root = await db.one<{ id: string }>(
-    `SELECT id FROM nodes WHERE vault_id = $1 AND share_item_id = $2`,
-    [share.vaultId, share.rootItemId],
-  );
-  return rows.filter((n) => n.nodeId !== root?.id);
+  return rows.filter((n) => n.shareItemId !== share.rootItemId);
 };
