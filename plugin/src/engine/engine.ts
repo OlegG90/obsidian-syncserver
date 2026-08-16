@@ -42,6 +42,7 @@ import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
 import { folderMoves, renameSourceFor, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
+import { vaultScopeIdOf } from '../share-keys.js';
 
 export interface SyncReport {
   /**
@@ -248,8 +249,7 @@ export class SyncEngine {
     };
     const state = await this.store.load();
 
-    const vaultScopeId = this.opened.scopes.find((s) => s.scope === 'vault')?.key_id;
-    if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
+    const vaultScopeId = vaultScopeIdOf(this.opened.scopes);
     const rootNodeId = this.opened.root_node_id;
     const shareScopes = new Map(
       this.opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const),
@@ -396,8 +396,7 @@ export class SyncEngine {
    * rebuild the paths" would be a second thing to get wrong about scopes.
    */
   async readTree(): Promise<Map<string, ServerNode>> {
-    const vaultScopeId = this.opened.scopes.find((s) => s.scope === 'vault')?.key_id;
-    if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
+    const vaultScopeId = vaultScopeIdOf(this.opened.scopes);
     const { tree } = await this.readServerTree(this.opened.root_node_id, vaultScopeId);
     return tree;
   }

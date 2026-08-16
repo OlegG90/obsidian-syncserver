@@ -413,6 +413,72 @@ describe('making the wrapped keys usable', () => {
   });
 });
 
+describe('finding which scope is whose', () => {
+  const setup = () => ({
+    account: createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 }),
+    vaultKey: newShareKey(),
+    userId: 'user-1',
+  });
+
+  it('answers the key and its scope id together, from one lookup', async () => {
+    // They were two `find` expressions a line apart, and every caller needed both: the key
+    // opens the names, the id says which names it opens.
+    const { shareKeyFor } = await import('../src/share-keys.js');
+    const { account, vaultKey, userId } = setup();
+    const ks = newShareKey();
+
+    const found = shareKeyFor(
+      [
+        { scope: 'vault', key_id: 'vault-scope' },
+        { scope: 'share', key_id: 'other', share_id: 'share-2', wrapped_key: wrapShareKey(vaultKey, newShareKey()), wrapping: 'vault' },
+        { scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: wrapShareKey(vaultKey, ks), wrapping: 'vault' },
+      ],
+      'share-1',
+      { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId },
+    );
+
+    assert.equal(found.keyId, SHARE_SCOPE, 'the scope of the share that was asked for');
+    assert.deepEqual(found.key, ks, 'and the key of the same one');
+  });
+
+  it('refuses loudly for a share this device holds no key for', async () => {
+    // The opposite of `shareKeysFrom`, deliberately: that one is asked about every scope a
+    // vault reports and must not fail a sync over one bad envelope. This is asked about a
+    // share somebody just pressed a button on, where silence means failing later, elsewhere.
+    const { shareKeyFor } = await import('../src/share-keys.js');
+    const { account, vaultKey, userId } = setup();
+    const deps = { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId };
+
+    assert.throws(
+      () => shareKeyFor([{ scope: 'vault', key_id: 'vault-scope' }], 'share-1', deps),
+      /holds no key for that share/,
+    );
+    assert.throws(
+      () =>
+        shareKeyFor(
+          [{ scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: 'AAAA', wrapping: 'vault' }],
+          'share-1',
+          deps,
+        ),
+      /cannot open the key for that share/,
+      'holding the envelope and being unable to open it is a different sentence',
+    );
+  });
+
+  it('names the vault’s own scope, and says so when there is none', async () => {
+    const { vaultScopeIdOf } = await import('../src/share-keys.js');
+    assert.equal(
+      vaultScopeIdOf([
+        { scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: 'x', wrapping: 'vault' },
+        { scope: 'vault', key_id: 'vault-scope' },
+      ]),
+      'vault-scope',
+    );
+    // A vault always has one, so its absence is a broken answer rather than a case to handle.
+    assert.throws(() => vaultScopeIdOf([]), /no key scope of its own/);
+  });
+});
+
 describe('placing a replica in a vault that knows nothing about it', () => {
   it('keeps the wanted name when it is free', async () => {
     const { freeName } = await import('../src/sharing.js');

@@ -38,6 +38,20 @@ export interface ShareKeyDeps {
 }
 
 /**
+ * The vault's own scope, which everything outside a share is named under.
+ *
+ * A vault always has one — it is `KV`'s label, minted with the vault itself — so its absence
+ * is a broken answer from the server rather than a case a caller can handle. Throwing here is
+ * what lets the question be one expression at each of its five call sites: it had been written
+ * out three times, in two files, down to the same sentence in the same `throw`.
+ */
+export const vaultScopeIdOf = (scopes: readonly Scope[]): string => {
+  const id = scopes.find((s) => s.scope === 'vault')?.key_id;
+  if (!id) throw new Error('the vault reports no key scope of its own');
+  return id;
+};
+
+/**
  * The share keys among these scopes, by scope id.
  *
  * **A scope that cannot be opened is dropped, not thrown.** One unreadable share must not
@@ -82,6 +96,41 @@ export const shareKeysFrom = (
   }
 
   return { keys, unopenable };
+};
+
+/**
+ * One share's key and the scope it is labelled with — the pair, because they are one lookup.
+ *
+ * Every caller that needs `KS` needs its scope id too: the key opens the names, and the id
+ * is what says which names it opens. Asked separately they were two `find` expressions over
+ * the same array, run one line apart, and the second could quietly answer about a different
+ * scope than the first if the shape of a scope ever changed.
+ *
+ * **A missing key here throws**, unlike `shareKeysFrom`, and the difference is the question.
+ * That one is asked about every scope a vault reports, where one bad envelope must not stop
+ * the other shares from syncing. This one is asked about a share the person just pressed a
+ * button on, and silence would leave the operation to fail further in, about something else.
+ *
+ * Fetched rather than remembered: the wrapped form is the server's to hold and this device's
+ * to open, and caching it would mean deciding when a cache is stale about a key that can
+ * stop existing the moment somebody else ends the share.
+ */
+export const shareKeyFor = (
+  scopes: readonly Scope[],
+  shareId: string,
+  deps: ShareKeyDeps,
+): { keyId: string; key: Uint8Array } => {
+  const scope = scopes.find((s) => s.share_id === shareId);
+  if (!scope?.wrapped_key) throw new Error('this device holds no key for that share');
+
+  // Both wrappings, through the one function that knows how to open either. This used to
+  // refuse an account envelope — written before the account identity existed and left behind
+  // once it did — which meant a PARTICIPANT could never leave: theirs is the envelope form
+  // by definition, since it had to cross to somebody who will never hold the initiator's seed.
+  const { keys } = shareKeysFrom([scope], deps);
+  const key = keys.get(scope.key_id);
+  if (!key) throw new Error('this device cannot open the key for that share');
+  return { keyId: scope.key_id, key };
 };
 
 /** An X25519 public key, which is what an HPKE envelope carries in front of its ciphertext. */

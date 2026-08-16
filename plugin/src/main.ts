@@ -33,7 +33,7 @@ import type { OpenedVault } from '@syncserver/shared';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { decryptName } from './crypto/scope.js';
-import { shareKeysFrom } from './share-keys.js';
+import { shareKeyFor, shareKeysFrom, vaultScopeIdOf, type ShareKeyDeps } from './share-keys.js';
 import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
@@ -473,53 +473,21 @@ export default class SyncServerPlugin extends Plugin {
    * the one place it matters — meeting a name under a key it does not hold.
    */
   private openShareKeys(h: Handle, opened: OpenedVault): Map<string, Uint8Array> | undefined {
-    const { keys, unopenable } = shareKeysFrom(opened.scopes, {
-      vaultKey: h.kv,
-      openIdentity: () => h.openIdentity(),
-      userId: h.userId,
-    });
+    const { keys, unopenable } = shareKeysFrom(opened.scopes, this.keyDeps(h));
     if (unopenable.length > 0) {
       new Notice(`SyncServer: ${unopenable.length} shared folder(s) could not be opened on this device.`, 10000);
     }
     return keys.size > 0 ? keys : undefined;
   }
 
-  private vaultScopeId(opened: OpenedVault): string {
-    const id = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
-    if (!id) throw new Error('the vault reports no key scope of its own');
-    return id;
-  }
-
   /**
-   * `KS` for a share, from what the server reports when the vault is opened.
+   * What opening a wrapped share key takes, from the session that holds it.
    *
-   * Fetched rather than remembered: the wrapped form is the server's to hold and this
-   * device's to open, and caching it would mean deciding when a cache is stale about a key
-   * that can stop existing when somebody else ends the share.
+   * `openIdentity` stays a function all the way down, so the seed never leaves the session
+   * to satisfy a share that may not even need the account form.
    */
-  private shareKeyOf(h: Handle, opened: OpenedVault, shareId: string): Uint8Array {
-    const scope = opened.scopes.find((sc) => sc.share_id === shareId);
-    if (!scope?.wrapped_key) throw new Error('this device holds no key for that share');
-
-    // Both wrappings, through the one module that knows how to open either. This used to
-    // refuse an account envelope — written before the account identity existed and left
-    // behind once it did — which meant a PARTICIPANT could never leave: theirs is the
-    // envelope form by definition, since it had to cross to somebody who will never hold
-    // the initiator's seed.
-    const { keys } = shareKeysFrom([scope], {
-      vaultKey: h.kv,
-      openIdentity: () => h.openIdentity(),
-      userId: h.userId,
-    });
-    const key = keys.get(scope.key_id);
-    if (!key) throw new Error('this device cannot open the key for that share');
-    return key;
-  }
-
-  private shareScopeIdOf(opened: OpenedVault, shareId: string): string {
-    const scope = opened.scopes.find((sc) => sc.share_id === shareId);
-    if (!scope) throw new Error('this device holds no key for that share');
-    return scope.key_id;
+  private keyDeps(h: Handle): ShareKeyDeps {
+    return { vaultKey: h.kv, openIdentity: () => h.openIdentity(), userId: h.userId };
   }
 
   /**
@@ -571,14 +539,13 @@ export default class SyncServerPlugin extends Plugin {
             address: n.address,
             nameKeyId: n.nameKeyId ?? '',
           }));
-          const vaultScopeId = this.vaultScopeId(opened);
           const out = await shareFolder(
             {
               client: h.client,
               read: (p) => this.vault().read(p),
               vaultId: this.data.connection!.vaultId,
               vaultKey: h.kv,
-              vaultScopeId,
+              vaultScopeId: vaultScopeIdOf(opened.scopes),
               newScopeId: () => crypto.randomUUID(),
             },
             folderPath,
@@ -590,7 +557,7 @@ export default class SyncServerPlugin extends Plugin {
 
       invite: (shareId, login) =>
         this.withSession(async (h) => {
-          const key = this.shareKeyOf(h, await this.openVault(h), shareId);
+          const key = shareKeyFor((await this.openVault(h)).scopes, shareId, this.keyDeps(h)).key;
           await inviteTo({ client: h.client }, shareId, login, key);
         }),
 
@@ -614,7 +581,7 @@ export default class SyncServerPlugin extends Plugin {
               client: h.client,
               vaultId: this.data.connection!.vaultId,
               vaultKey: h.kv,
-              vaultScopeId: this.vaultScopeId(opened),
+              vaultScopeId: vaultScopeIdOf(opened.scopes),
             },
             shareId,
             opened.root_node_id,
@@ -629,8 +596,7 @@ export default class SyncServerPlugin extends Plugin {
       leave: (shareId) =>
         this.withSession(async (h) => {
           const opened = await this.openVault(h);
-          const key = this.shareKeyOf(h, opened, shareId);
-          const scopeId = this.shareScopeIdOf(opened, shareId);
+          const { key, keyId: scopeId } = shareKeyFor(opened.scopes, shareId, this.keyDeps(h));
           // Asked of the server rather than assembled from the tree: the set that must be
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
@@ -668,7 +634,7 @@ export default class SyncServerPlugin extends Plugin {
               read: (p) => this.vault().read(p),
               vaultId: this.data.connection!.vaultId,
               vaultKey: h.kv,
-              vaultScopeId: this.vaultScopeId(opened),
+              vaultScopeId: vaultScopeIdOf(opened.scopes),
             },
             shareId,
             key,
