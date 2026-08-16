@@ -21,6 +21,24 @@ is their own) — and `GET /shares` reports it. The client resolves that to a pa
 same tree it resolves everything else with, and remembers it, because the file tree is drawn
 long before anything is unlocked.
 
+## Who is in it, and taking somebody out
+
+The member list is shown to **everybody in the share**, not only its initiator. "Who can read
+this folder" is the question a shared folder raises, and a participant who cannot answer it is
+being asked to trust a list they never see.
+
+Removing is the initiator's, and it is one call whose meaning depends on the other person's
+state: an invitation that was never answered is **withdrawn**, and somebody who joined is
+**revoked**. The server decides which and says so, because the client cannot — and the two
+outcomes are different sentences. A withdrawal took back something nobody received. A revoke
+leaves a person holding a copy they keep (SH-05) and a finalization pass they owe; it is not a
+punishment and must not read like one. Revoking the last participant ends the share for
+everybody (SH-07), which is a third thing again, and the one the initiator most needs told —
+they now owe that pass themselves.
+
+Somebody already finalizing cannot be removed: they are on their way out, and the departure
+they are running is the same one a revoke would ask for.
+
 ## The model: replication
 
 **Every participant holds their own copy of the shared folder, as ordinary nodes in the vault they accepted

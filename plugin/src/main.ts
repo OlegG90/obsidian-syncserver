@@ -641,6 +641,10 @@ export default class SyncServerPlugin extends Plugin {
 
       members: (shareId) => this.withSession((h) => h.client.shareMembers(shareId)),
 
+      // The initiator's half of a departure, which the server has had all along and no
+      // button reached: withdrawing an invitation, and revoking somebody who joined.
+      remove: (shareId, userId) => this.withSession((h) => h.client.removeMember(shareId, userId)),
+
       // A folder the server knows is one this device has already synced; its node id is
       // what a share is rooted at.
       isSynced: (folderPath) =>
@@ -1372,6 +1376,40 @@ class SyncServerSettings extends PluginSettingTab {
         // Leaving is everybody's, the initiator included — for them it ends the share, and
         // the coordinator says which happened rather than guessing here.
         row.addButton((b) => b.setButtonText('Leave').setWarning().onClick(() => void flow.leave(share.shareId)));
+
+        // Who is in it, under the row it belongs to. Shown for everybody and not only the
+        // initiator: "who can read this folder" is the question a shared folder raises, and
+        // a participant who cannot answer it is being asked to trust a list they never see.
+        const people = list.createEl('div');
+        people.style.margin = '0 0 1em 1em';
+        void flow.members(share.shareId).then((members) => {
+          if (!members) return;
+          for (const m of members) {
+            // Three states, and they are not decoration: an invitation has been sent and not
+            // answered, a member holds a copy, and somebody finalizing is on their way out
+            // and cannot be removed again.
+            const state = m.finalizing
+              ? 'leaving — their copy is being converted back'
+              : m.joined_at
+                ? m.is_initiator
+                  ? 'shared this folder'
+                  : 'holds a copy'
+                : 'invited, no answer yet';
+
+            const who = new Setting(people).setName(m.login).setDesc(state);
+
+            // Only the initiator may remove, and never themselves: their way out is Leave,
+            // which ends the share, and offering both would be offering the same act twice
+            // under two names.
+            if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
+            who.addButton((b) =>
+              b
+                .setButtonText(m.joined_at ? 'Revoke' : 'Withdraw')
+                .setWarning()
+                .onClick(() => void flow.remove(share.shareId, m.user_id, m.login)),
+            );
+          }
+        });
       }
     });
   }

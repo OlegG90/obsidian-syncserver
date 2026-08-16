@@ -54,6 +54,11 @@ export interface ShareFlowDeps {
   /** Leave; `ended` is true when this departure closed the share for everybody. */
   leave(shareId: string): Promise<{ ended: boolean }>;
   members(shareId: string): Promise<ShareMember[]>;
+  /**
+   * Withdraw an invitation, or revoke a participant. Which of the two it is belongs to the
+   * server — it depends on whether they ever joined — so this asks and is told.
+   */
+  remove(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked'; ended?: boolean }>;
   /** True when this device has already synced that folder, so the server knows it. */
   isSynced(folderPath: string): boolean;
   notify(message: string, durationMs?: number): void;
@@ -69,6 +74,7 @@ export interface ShareFlow {
   decline(shareId: string): Promise<void>;
   leave(shareId: string): Promise<void>;
   members(shareId: string): Promise<ShareMember[] | undefined>;
+  remove(shareId: string, userId: string, login: string): Promise<void>;
 }
 
 /**
@@ -206,5 +212,24 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
     },
 
     members: (shareId) => once('reading the members', () => deps.members(shareId)),
+
+    async remove(shareId, userId, login) {
+      const out = await once('removing', () => deps.remove(shareId, userId));
+      if (!out) return;
+
+      // Three different things happened, and one word for all of them would be wrong twice.
+      // Withdrawing takes back something nobody accepted; revoking leaves a person holding a
+      // copy they still have to convert, which is not a punishment and should not read like
+      // one; and revoking the last participant ends the share for everybody (SH-07).
+      deps.notify(
+        out.ended
+          ? `SyncServer: ${login} was removed, and that ended the share. Your copy is yours — finish leaving to return it to your own key.`
+          : out.outcome === 'withdrawn'
+            ? `SyncServer: the invitation to ${login} was withdrawn. Nothing had been sent to them.`
+            : `SyncServer: ${login} no longer receives this folder. They keep the copy they already have (SH-05).`,
+        12000,
+      );
+      deps.done();
+    },
   };
 };

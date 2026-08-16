@@ -30,6 +30,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     decline: async () => undefined,
     leave: async () => ({ ended: false }),
     members: async () => [],
+    remove: async () => ({ outcome: 'revoked' as const }),
     isSynced: () => true,
     notify: (m) => notices.push(m),
     done: () => {
@@ -282,5 +283,54 @@ describe('a refusal the schema explained', () => {
     await h.flow.leave('share-1');
 
     assert.match(h.notices[0]!, /cannot be unmarked before blob def/);
+  });
+});
+
+describe('taking somebody out of a share', () => {
+  it('says an invitation was withdrawn, and that nothing had reached them', async () => {
+    // Withdrawing and revoking are one call — the server decides which by whether they ever
+    // joined — and one sentence for both would be wrong in whichever case it did not fit.
+    const h = harness({ remove: async () => ({ outcome: 'withdrawn' }) });
+
+    await h.flow.remove('share-1', 'user-9', 'bob');
+
+    assert.match(h.notices.join(' '), /withdrawn/i);
+    assert.match(h.notices.join(' '), /Nothing had been sent/i);
+    assert.equal(h.rebuilt(), 1, 'and the screen showing the old list is rebuilt');
+  });
+
+  it('says a revoked participant keeps the copy they already have', async () => {
+    // SH-05 is the promise replication exists to make, and the moment somebody is most
+    // likely to fear otherwise is the moment they are removed.
+    const h = harness({ remove: async () => ({ outcome: 'revoked' }) });
+
+    await h.flow.remove('share-1', 'user-9', 'bob');
+
+    assert.match(h.notices.join(' '), /keep the copy/i);
+  });
+
+  it('says when removing the last participant ended the share', async () => {
+    // SH-07: the share is over for everybody, including the initiator who pressed it, and
+    // they now owe the same finalization pass as anyone else. "bob was removed" would be
+    // true and would hide the part that changed for them.
+    const h = harness({ remove: async () => ({ outcome: 'revoked', ended: true }) });
+
+    await h.flow.remove('share-1', 'user-9', 'bob');
+
+    assert.match(h.notices.join(' '), /ended the share/i);
+    assert.match(h.notices.join(' '), /finish leaving/i);
+  });
+
+  it('reports a refusal rather than throwing it at the screen', async () => {
+    const h = harness({
+      remove: async () => {
+        throw new Error('409 member_not_removable');
+      },
+    });
+
+    await h.flow.remove('share-1', 'user-9', 'bob');
+
+    assert.match(h.notices.join(' '), /removing failed/i);
+    assert.equal(h.rebuilt(), 0, 'nothing changed, so nothing is redrawn');
   });
 });

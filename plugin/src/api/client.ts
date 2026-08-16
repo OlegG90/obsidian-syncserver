@@ -829,8 +829,15 @@ export class SyncClient {
     return this.json('POST', `/shares/${shareId}/decline`, undefined, { expect: [204] });
   }
 
-  /** Withdraw an invitation, or revoke a participant — the server decides which by their state. */
-  removeMember(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked' }> {
+  /**
+   * Withdraw an invitation, or revoke a participant — the server decides which by their
+   * state, and says which it was.
+   *
+   * `ended` travels with a revoke: removing the last participant closes the share for
+   * everybody (SH-07), and a caller that could not tell those apart would say "removed" for
+   * something that ended the folder's sharing entirely.
+   */
+  removeMember(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked'; ended?: boolean }> {
     return this.json('DELETE', `/shares/${shareId}/members/${userId}`);
   }
 
