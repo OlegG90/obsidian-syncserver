@@ -129,7 +129,7 @@ The web client does **not** perform key operations. Changing a passphrase requir
 re-wrap it) in the browser — that is, the same cryptographic code that already exists in the plugin,
 duplicated into a second environment before the first one is even written.
 
-So for M4 the console shows the security section and hands the operation to the plugin ("open Obsidian to
+So for M5 the console shows the security section and hands the operation to the plugin ("open Obsidian to
 change your passphrase"). The split is worth revisiting only when a browser-only client becomes a goal in
 itself.
 

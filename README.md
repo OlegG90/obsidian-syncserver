@@ -158,7 +158,9 @@ Current release: **0.3.0** — see [Versions](#versions).
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
 | **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. One item is deliberately left: a frozen account still has nothing it can delete to free space, since the trash keeps its references and nothing purges it |
-| **M4** — management console, version thinning, blob GC | not started |
+| **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | not started — the schema has carried these tables since M0 and almost none of them has code, which is why a frozen account currently has no way to give space back |
+| **M5** — management console (both zones) and backup operations | not started |
+| **M6** — WebDAV gateway | not started |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
 ways, and a real conflict with neither version lost. That pass found **five defects a hundred and fifty

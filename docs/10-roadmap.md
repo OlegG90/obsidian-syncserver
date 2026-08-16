@@ -8,8 +8,9 @@
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☐ |
-| **M4** | management console (both zones, audit log, backup operations), history and trash UI, version thinning and blob GC — see [11](11-management-console.md) | ☐ |
-| **M5** | WebDAV gateway | ☐ |
+| **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☐ |
+| **M5** | management console (both zones) and backup operations — see [11](11-management-console.md) and [08](08-backup-restore.md) | ☐ |
+| **M6** | WebDAV gateway | ☐ |
 
 E2EE is not a milestone: it is day one, in every milestone above (AC-08).
 
@@ -150,11 +151,90 @@ so the recovery attempt went to an address nobody had chosen and failed before t
       and today it can fall two ways: a vault reset, and deleting a whole vault. An ordinary delete is
       **soft** — the row is the trash entry — so it frees nothing, and there is no purge. SH-20 says
       "deleting is the only way out"; until the trash can be emptied that sentence is not true, and the
-      exit that recovery-by-deletion promises is a vault reset. The purge belongs with the trash UI and
-      blob GC in M4; naming it here so the gap is not discovered by somebody stuck behind it.
-      When it is written, the statement that lowers a claim belongs in `holdings.ts`, beside the two
-      that raise one — a per-blob decrement lived unreachable in `nodes/service.ts` until then, which
-      read as evidence that releasing was already wired.
+      exit that recovery-by-deletion promises is a vault reset. It is **the first item of M4** and the
+      reason that milestone leads with the purge; naming it here so the gap is not discovered by somebody
+      stuck behind it. This box is what keeps M3.5 open, and it closes there rather than here.
+
+## M4 — space, and the history already on disk
+
+Everything that was written down and never collected. The schema has carried this milestone's tables and
+columns since M0 — `audit_log` with its append-only triggers, `blobs.gc_marked_at` with its index, the
+`disabled`/`deleting`/`tombstone` states, the trigger that refuses to remove the last administrator — and
+almost none of it has a line of code. A column nothing writes is a promise nothing keeps, and the one being
+broken here is the only one a user can feel: **the product has no way to give space back.**
+
+It is separated from the console (M5) because they are different products that happen to share a document.
+This one is a collector, a purge and an API; that one is a web client. Building them as one milestone would
+mean the space problem waits for a front end.
+
+### The trash can be emptied, and a claim can go down
+
+- [ ] **A purge, so SH-20 stops being a sentence with nothing behind it.** Deleting is soft — the row *is*
+      the trash entry — so today it frees nothing, and a frozen account's only exit is a vault reset. The
+      statement that **lowers** a claim belongs in `holdings.ts`, beside the two that raise one; a per-blob
+      decrement lived unreachable in `nodes/service.ts` for months, which read as evidence that releasing
+      was already wired. This is the item M3.5 is still open on, and the reason it is first here.
+- [ ] **Emptying is a write like any other**, so it obeys what writes obey: inside a share it propagates
+      (SH-10 gave every participant their own row, and every one of them their own decision), and a frozen
+      account may still do it — a freeze that blocked the only way out is a deadlock.
+
+### The nightly mark and sweep
+
+[03](03-data-model.md) specifies seven steps; `collector.ts` implements the TTL sweeps and says so in its
+own header. The rest is this milestone, and its traps are already written down — they become tests, not
+comments:
+
+- [ ] **Thinning by the retention ladder**, which needs the column it has never had: [11](11-management-console.md)
+      offers the user a retention setting and the schema holds nothing to set. The policy itself
+      (all under 7 days, one a day to 30, one a week to a year, and the live head always) is in [03](03-data-model.md).
+- [ ] **Node rows removed bottom-up**, ordered by ancestry length descending, because `parent_id` is
+      `ON DELETE RESTRICT` — an orphaned branch is worse than a failed delete.
+- [ ] **`user_blobs` recomputed from scratch** and reconciled against the accumulated counters. A live
+      counter drifts under concurrent writes, and an error towards zero is data loss.
+- [ ] **Mark, quarantine, and look again.** A blob's only reference may be a live `refs_pending` row, and a
+      blob bound on day three must not be swept on day seven. Both halves are the rule, not an optimisation.
+- [ ] **`blob_keys` is never collected on its own.** Tidying up the envelopes of a dissolved share would cut
+      detached ex-members off from folders that are now their own.
+
+### The administrative API, and the trail it leaves
+
+The console is M5; the surface underneath it is here, because account deletion and quota changes are server
+behaviour that a web client merely calls.
+
+- [ ] **An administrator role that the routes actually check.** There is no `requireAdmin` today.
+- [ ] **Users, invitations, quotas, storage.** List with state, quota, usage and last seen; invite, disable,
+      enable, re-quota. Lowering a quota below usage deletes nothing — the account freezes (SH-20) — and the
+      API says which accounts a change would freeze **before** it is applied.
+- [ ] **Every administrative act is audited.** `audit_log` exists, is append-only by trigger, and is written
+      from exactly two places in `auth/service.ts`. An action on somebody else's account that leaves no
+      record is the one kind this table was built to refuse.
+- [ ] **Deletion is a state, not a button** (#55): dissolve the shares the account initiated, wait for each
+      participant to finalize their copy (SH-29), reassign authorship to the **tombstone**, then remove the
+      vaults. `versions.author_id` is `NOT NULL` with `ON DELETE RESTRICT`, so authorship must go somewhere
+      — and the reserved row it goes to is described by the schema and seeded by nobody. Disable and delete
+      are different operations and must not share a control.
+
+### History and the trash, where the notes are
+
+- [ ] **The trash and the version list in the plugin.** The server surface has existed since M0 — the
+      versions of a node, the trash of a vault, and restore as a new write with an old hash — and no screen
+      has ever called it. Restoring into a taken name is `409` with the blocking node id, and stays that
+      way: a file silently named "Note (1).md" is a file the user cannot account for.
+- [ ] **Usage the user can act on**, broken into current content and history. A number without the action
+      that lowers it is the same dead end this milestone exists to close.
+
+### The scenario that decides it
+
+An account is frozen at its limit. Without touching the console, without a vault reset, and without
+deleting a vault:
+
+1. empty the trash from the plugin;
+2. the next collector pass frees the blobs nothing references any more;
+3. usage falls below the limit, the account thaws, and the catch-up SH-21 already runs delivers what
+   arrived while it was frozen.
+
+If any step needs an administrator, the milestone has failed: the person who ran out of space is the person
+who must be able to make space.
 
 ## M1 — the scope of the first complete release
 
