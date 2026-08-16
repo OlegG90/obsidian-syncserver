@@ -373,13 +373,26 @@ export default class SyncServerPlugin extends Plugin {
    * arriving partway through a sequence that has already changed the server.
    */
   private async withSession<T>(fn: (h: Handle) => Promise<T>): Promise<T> {
+    return (await this.unlocked()).use(fn);
+  }
+
+  /**
+   * The session, open — asking for the passphrase once if it is not.
+   *
+   * Separate from `withSession` because one caller does not want a handle: approving a
+   * pairing needs the seed and takes the session's own method, which borrows a handle
+   * itself. Wrapping that in a borrow of its own would nest two for no reason.
+   */
+  private async unlocked(): Promise<Session> {
     if (!this.sess) throw new Error('this vault is not connected');
     if (this.sess.state === 'locked') {
       const passphrase = await askPassphrase(this.app);
       if (!passphrase) throw new Error('the passphrase is needed to open this account');
       if ((await this.sess.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
+      // The screen still said "locked", which stopped being true a line ago.
+      this.setPhase({ kind: 'idle' });
     }
-    return this.sess.use(fn);
+    return this.sess;
   }
 
   /** The vault adapter, built the same way the sync pass builds it. */
@@ -658,16 +671,14 @@ export default class SyncServerPlugin extends Plugin {
   /**
    * Approve another device's pairing from here. Needs the seed, so it needs an open
    * session — the passphrase is asked for exactly as a sync would ask.
+   *
+   * Through `withSession` like everything else. Its own copy of that sequence had drifted in
+   * the way a copy does: it never checked whether the unlock succeeded, so a wrong
+   * passphrase fell through to the approval and failed there instead — with a sentence about
+   * pairing, for a mistake about a passphrase.
    */
   async approvePairing(code: string): Promise<void> {
-    if (!this.sess) throw new Error('this vault is not connected');
-    if (this.sess.state === 'locked') {
-      const passphrase = await askPassphrase(this.app);
-      if (!passphrase) throw new Error('a passphrase is required to approve a device');
-      await this.sess.open(passphrase);
-      this.setPhase({ kind: 'idle' });
-    }
-    await this.sess.approvePairing(code);
+    await (await this.unlocked()).approvePairing(code);
   }
 
   /**

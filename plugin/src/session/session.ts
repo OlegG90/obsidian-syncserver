@@ -138,6 +138,29 @@ export interface ConnectArgs {
   devicePlatform?: string;
 }
 
+/**
+ * What a device holds once it can read a vault: the client, the vault key, and the account
+ * identity in both forms.
+ *
+ * Built in one place because it was built in four — after pairing, after recovery, after
+ * claiming an invitation, and after every unlock — and a field added to one of them is a
+ * field three others silently do without. `openIdentity` in particular closes over the seed,
+ * which is the one thing this module exists to keep from travelling.
+ */
+const handleFor = (
+  client: SyncClient,
+  seed: Uint8Array,
+  vaultId: string,
+  userId: string,
+  encPrivkey: string,
+): Handle => ({
+  client,
+  kv: vaultKey(seed, vaultId),
+  userId,
+  encPrivkey,
+  openIdentity: () => unwrapIdentity(seed, encPrivkey),
+});
+
 export class Session {
   private readonly derivation: Derivation;
   private readonly transport: Transport;
@@ -177,6 +200,44 @@ export class Session {
   refreshAccessToken(): Promise<boolean> {
     if (!this.handle) return Promise.resolve(false);
     return this.handle.client.refreshToken();
+  }
+
+  /**
+   * Which vault this device is for, when the account may hold several (AC-10).
+   *
+   * One is the ordinary case and choosing it silently is right; several without being told
+   * is a question, not a default — and the question is the caller's, since only they know
+   * what this device is being set up to do. `purpose` is in the message because "name the
+   * one to sync" and "name the one to recover into" are asked at different moments, and a
+   * person reading it is in the middle of one of them.
+   */
+  private static async chooseVault(client: SyncClient, wanted: string | undefined, purpose: string): Promise<string> {
+    const vaults = await client.listVaults();
+    const vaultId = wanted ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
+    if (vaultId) return vaultId;
+    throw new Error(
+      `this account has ${vaults.length} vaults; name the one to ${purpose}: ${vaults.map((v) => v.id).join(', ')}`,
+    );
+  }
+
+  /**
+   * The last step of every bootstrap: an open session, holding what it needs and nothing more.
+   *
+   * The three ways in differ entirely at the front — a pairing envelope, a recovery proof, a
+   * fresh account — and were identical from here on, written out three times. Written three
+   * times they drift, and the drift is not visible: a session that forgets to keep its seed
+   * still works until the first lock, and one whose handle lacks a field fails only where
+   * that field is read.
+   */
+  private static finishBootstrap(
+    conn: Connection,
+    deps: { derivation: Derivation; transport: Transport },
+    parts: { client: SyncClient; seed: Uint8Array; userId: string; encPrivkey: string },
+  ): Session {
+    const session = new Session(conn, deps);
+    session.seed = parts.seed;
+    session.handle = handleFor(parts.client, parts.seed, conn.vaultId, parts.userId, parts.encPrivkey);
+    return session;
   }
 
   /**
@@ -223,13 +284,7 @@ export class Session {
     });
     client.setAccessToken(session.access);
     client.setRefreshToken(session.refresh);
-    this.handle = {
-      client,
-      kv: vaultKey(account.seed, this.conn.vaultId),
-      userId: session.user_id,
-      encPrivkey: session.enc_privkey,
-      openIdentity: () => unwrapIdentity(account.seed, session.enc_privkey),
-    };
+    this.handle = handleFor(client, account.seed, this.conn.vaultId, session.user_id, session.enc_privkey);
 
     // An account made before recovery existed has no verifier, and nothing on the server can
     // make one: it takes the KEK, which only exists here, and only while the phrase is in
@@ -393,36 +448,21 @@ export class Session {
     client.setAccessToken(session.access);
     client.setRefreshToken(session.refresh);
 
-    // Which vault: the account may hold several, and only the caller knows which this
-    // device is for. One is the ordinary case and choosing it silently is right; more than
-    // one without being told is a question, not a default.
-    const vaults = await client.listVaults();
-    const vaultId = args.vaultId ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
-    if (!vaultId) {
-      throw new Error(
-        `this account has ${vaults.length} vaults; name the one to sync: ${vaults.map((v) => v.id).join(', ')}`,
-      );
-    }
+    const vaultId = await Session.chooseVault(client, args.vaultId, 'sync');
 
-    const conn: Connection = {
-      serverUrl: args.serverUrl,
-      login: args.login,
-      deviceId: claimed.device_id,
-      vaultId,
-      wrappedSeed: seal(kek, seed),
-      accountSalt: claimed.account_salt,
-      kdfParams: claimed.kdf_params,
-    };
-    const paired = new Session(conn, deps);
-    paired.seed = seed;
-    paired.handle = {
-      client,
-      kv: vaultKey(seed, vaultId),
-      userId: claimed.user_id,
-      encPrivkey: claimed.enc_privkey,
-      openIdentity: () => unwrapIdentity(seed, claimed.enc_privkey),
-    };
-    return paired;
+    return Session.finishBootstrap(
+      {
+        serverUrl: args.serverUrl,
+        login: args.login,
+        deviceId: claimed.device_id,
+        vaultId,
+        wrappedSeed: seal(kek, seed),
+        accountSalt: claimed.account_salt,
+        kdfParams: claimed.kdf_params,
+      },
+      deps,
+      { client, seed, userId: claimed.user_id, encPrivkey: claimed.enc_privkey },
+    );
   }
 
 
@@ -483,36 +523,22 @@ export class Session {
     client.setAccessToken(session.access);
     client.setRefreshToken(session.refresh);
 
-    // One vault is the ordinary case and choosing it silently is right; several without
-    // being told is a question, not a default — the same rule pairing follows.
-    const vaults = await client.listVaults();
-    const vaultId = args.vaultId ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
-    if (!vaultId) {
-      throw new Error(
-        `this account has ${vaults.length} vaults; name the one to recover into: ${vaults.map((v) => v.id).join(', ')}`,
-      );
-    }
+    const vaultId = await Session.chooseVault(client, args.vaultId, 'recover into');
 
-    const conn: Connection = {
-      serverUrl: args.serverUrl,
-      login: args.login,
-      deviceId: recovered.device_id,
-      vaultId,
-      // Stored as it arrived: this envelope is already the one this passphrase opens.
-      wrappedSeed: recovered.seed_envelope,
-      accountSalt: recovered.account_salt,
-      kdfParams: recovered.kdf_params,
-    };
-    const back = new Session(conn, deps);
-    back.seed = seed;
-    back.handle = {
-      client,
-      kv: vaultKey(seed, vaultId),
-      userId: recovered.user_id,
-      encPrivkey: recovered.enc_privkey,
-      openIdentity: () => unwrapIdentity(seed, recovered.enc_privkey),
-    };
-    return back;
+    return Session.finishBootstrap(
+      {
+        serverUrl: args.serverUrl,
+        login: args.login,
+        deviceId: recovered.device_id,
+        vaultId,
+        // Stored as it arrived: this envelope is already the one this passphrase opens.
+        wrappedSeed: recovered.seed_envelope,
+        accountSalt: recovered.account_salt,
+        kdfParams: recovered.kdf_params,
+      },
+      deps,
+      { client, seed, userId: recovered.user_id, encPrivkey: recovered.enc_privkey },
+    );
   }
 
   /**
@@ -549,27 +575,27 @@ export class Session {
     client.setAccessToken(out.access);
     client.setRefreshToken(out.refresh);
 
-    const conn: Connection = {
-      serverUrl: args.serverUrl,
-      login: args.login,
-      deviceId: out.device_id,
-      vaultId: out.vault_id,
-      wrappedSeed: account.wrappedSeed,
-      accountSalt: toBase64(account.accountSalt),
-      kdfParams: account.kdfParams,
-    };
-    const session = new Session(conn, deps);
-    session.seed = account.seed;
-    session.handle = {
-      client,
-      kv: vaultKey(account.seed, out.vault_id),
-      userId: out.user_id,
-      // This device MADE the identity, so it holds both halves already; the wrapped form is
-      // carried anyway so every handle looks the same to whoever borrows one.
-      encPrivkey: account.encPrivkey,
-      openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey),
-    };
-    return session;
+    // No vault to choose: this flow just made the only one there is.
+    return Session.finishBootstrap(
+      {
+        serverUrl: args.serverUrl,
+        login: args.login,
+        deviceId: out.device_id,
+        vaultId: out.vault_id,
+        wrappedSeed: account.wrappedSeed,
+        accountSalt: toBase64(account.accountSalt),
+        kdfParams: account.kdfParams,
+      },
+      deps,
+      {
+        client,
+        seed: account.seed,
+        userId: out.user_id,
+        // This device MADE the identity, so it holds both halves already; the wrapped form
+        // is carried anyway so every handle looks the same to whoever borrows one.
+        encPrivkey: account.encPrivkey,
+      },
+    );
   }
 
   /** A session from a persisted record. Locked: the seed was never written down. */
