@@ -95,18 +95,7 @@ export default class SyncServerPlugin extends Plugin {
       runPass: async () => {
         const report = await this.sess!.use(async (h) => {
           const opened = await this.openVault(h);
-          const engine = new SyncEngine(
-            h.client,
-            this.sess!.connection.vaultId,
-            opened,
-            h.kv,
-            new ObsidianVaultAdapter(this.app.vault),
-            this.stateStore(),
-            deviceLabel(),
-            this.data.syncObsidian === true,
-            this.openShareKeys(h, opened),
-          );
-          const out = await engine.sync();
+          const out = await this.engineFor(h, opened).sync();
           // Asked here because the session is already open and the folder this pass may
           // have just created is now on disk. A shared folder somebody ACCEPTED does not
           // exist locally until then, so its badge was filtered out as a path that is not
@@ -422,13 +411,21 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * An engine for reading only — the tree, which is where node ids come from.
+   * The engine, built the one way there is to build it.
+   *
+   * Nine arguments assembled twice is nine chances for the two to differ, and they already
+   * did: one call built its own `ObsidianVaultAdapter` where the other went through
+   * `vault()`, and a tenth dependency would have had to be remembered in both places. So a
+   * sync uses this too, and there is exactly one signature to keep true.
    *
    * **With the share keys**, and that is not optional: reading the tree means decrypting
    * every name, and the interior of any share this vault is in is named under `KS`. An
    * engine built without them fails on the first such name — which is exactly what happened
    * on the first live share, one press after preparation had re-keyed two nodes. Every
-   * caller here is a sharing operation, so every one of them meets those names.
+   * sharing operation here meets those names, and so does a pass.
+   *
+   * The vault id is read from the same field `openVault` reads, so the engine is built for
+   * the vault whose scopes it was handed.
    */
   private engineFor(h: Handle, opened: OpenedVault): SyncEngine {
     return new SyncEngine(
@@ -447,6 +444,19 @@ export default class SyncServerPlugin extends Plugin {
   /** The vault, opened once for an operation and passed to everything the operation needs. */
   private openVault(h: Handle): Promise<OpenedVault> {
     return h.client.openVault(this.data.connection!.vaultId);
+  }
+
+  /**
+   * Where each node of this vault lives, by node id.
+   *
+   * The engine reads the tree the other way round — paths are what a sync compares — and
+   * both callers here start from a node id the server named: the root of a shared folder,
+   * and every node a departure has to convert. Turning the map around is one expression,
+   * which is exactly why it was written twice.
+   */
+  private async pathsByNode(h: Handle, opened: OpenedVault): Promise<Map<string, string>> {
+    const tree = await this.engineFor(h, opened).readTree();
+    return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
   }
 
   /**
@@ -619,8 +629,6 @@ export default class SyncServerPlugin extends Plugin {
       leave: (shareId) =>
         this.withSession(async (h) => {
           const opened = await this.openVault(h);
-          const engine = this.engineFor(h, opened);
-          const tree = await engine.readTree();
           const key = this.shareKeyOf(h, opened, shareId);
           const scopeId = this.shareScopeIdOf(opened, shareId);
           // Asked of the server rather than assembled from the tree: the set that must be
@@ -630,7 +638,7 @@ export default class SyncServerPlugin extends Plugin {
           // has no paths at all. The dedup tag is over a file's plaintext, so leaving reads
           // it from disk — and a bare name is not a path. `Baby.md` was looked for at the
           // vault root while it sat inside the shared folder.
-          const pathOfNode = new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
+          const pathOfNode = await this.pathsByNode(h, opened);
 
           const replica = (await h.client.shareReplica(shareId)).map((n) => {
             // A node can carry the mark without ever having been converted — the trash of a
@@ -734,8 +742,7 @@ export default class SyncServerPlugin extends Plugin {
     opened: OpenedVault,
     joined: readonly { share_id: string; root_node_id: string | null }[],
   ): Promise<Map<string, string>> {
-    const engine = this.engineFor(h, opened);
-    const pathOfNode = new Map([...(await engine.readTree()).entries()].map(([p, n]) => [n.nodeId, p]));
+    const pathOfNode = await this.pathsByNode(h, opened);
 
     const rootOf = new Map<string, string>();
     for (const s of joined) {
