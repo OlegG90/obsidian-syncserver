@@ -159,7 +159,7 @@ Current release: **0.3.0** — see [Versions](#versions).
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
 | **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. One item is deliberately left: a frozen account still has nothing it can delete to free space, since the trash keeps its references and nothing purges it |
 | **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | not started — the schema has carried these tables since M0 and almost none of them has code, which is why a frozen account currently has no way to give space back |
-| **M5** — management console (both zones) and backup operations | not started |
+| **M5** — the operator's milestone: management console (both zones), backup operations, and an image pulled from a registry instead of built on the server | not started |
 | **M6** — WebDAV gateway | not started |
 | **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | not started — specified since M3.5, with its columns in the schema and null meaning honestly "this account has no code" |
 

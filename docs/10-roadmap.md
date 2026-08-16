@@ -9,7 +9,7 @@
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☐ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☐ |
-| **M5** | management console (both zones) and backup operations — see [11](11-management-console.md) and [08](08-backup-restore.md) | ☐ |
+| **M5** | **the operator's milestone**: the management console (both zones), backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
 | **M6** | WebDAV gateway | ☐ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
 
@@ -235,6 +235,47 @@ deleting a vault:
 
 If any step needs an administrator, the milestone has failed: the person who ran out of space is the person
 who must be able to make space.
+
+## M5 — the operator's milestone
+
+Everything the person running the server does that is not synchronising a note. Two halves are
+specified elsewhere and are not restated here: the console is [11](11-management-console.md), and backup
+operations are [08](08-backup-restore.md) plus the `backup_runs` table that has held their constraints
+since M0 and is written by nothing.
+
+The third half is specified nowhere, because it has never been a feature — it has been a procedure in
+[13](13-deployment.md).
+
+### The image is pulled, not built on the server
+
+Today `docker compose build` runs **on the target**, which is why the deployment copies an archive of the
+source at all. That has three costs, and only one of them is convenience:
+
+- **the platform trap is permanent.** [13](13-deployment.md) opens with it and the `Dockerfile` repeats
+  it: an image built on an ARM machine dies on an x86-64 server with an exec format error that explains
+  nothing. Building on the target is the current answer, and it is an answer that costs a build;
+- **the build happens on the weakest machine involved**, using its memory and its disk;
+- **the source has to be there to build from**, so a server that only ever runs the thing holds the
+  whole build context.
+
+- [ ] **Publish the image from CI to a registry**, on a version tag rather than on every push to `main`
+      — one image per released version, matching the single version across five manifests (#111), and
+      tagged by commit as well so a running container can be traced to a build. The runners are x86-64,
+      which is the platform the trap is about.
+- [ ] **`docker compose pull` replaces `docker compose build`** in the procedure, with the image
+      pinned to a version. `latest` is not used: a server updated a few times a year must be able to
+      say what it is running, and to go back.
+- [ ] **`pack.sh` shrinks to what compose actually reads** — the compose file, `.env` and
+      `db/schema.sql`, which the database container mounts to initialise itself. The copy does not
+      disappear, and the roadmap should not pretend it does; it stops being a copy of the source.
+- [ ] **The registry choice is a public one**, so no credential lives on the server. The image holds a
+      built server and its dependencies — the same code the repository already publishes — and no
+      secret: `.env` is excluded from the build context, and neither `POSTGRES_PASSWORD` nor
+      `SERVER_SECRET` has a default to leak.
+
+**Not a private registry, unless something changes.** A private image needs a token stored on the server
+to pull it, which is a credential added to a machine in exchange for hiding source that is already public.
+If the repository ever stops being public, this decision comes back with it.
 
 ## M7 — the recovery code
 

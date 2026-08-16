@@ -44,6 +44,10 @@ business in a server image.
 > **Not "build here, copy the image".** Even with Docker on the preparing machine, a
 > cross-platform image needs `--platform linux/amd64` and a `docker save`/`load` round trip.
 > Building where it runs avoids the question.
+>
+> The third answer — **publish the image from CI and pull it** — removes the question instead of
+> avoiding it, since the runners are the platform the trap is about. That is [M5](10-roadmap.md), and
+> until then this page describes the procedure as it is rather than as it will be.
 
 ### What the deployment is
 
