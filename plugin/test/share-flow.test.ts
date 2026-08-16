@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { ApiError } from '../src/api/client.js';
 import { openShareFlow, type ShareFlowDeps } from '../src/share-flow.js';
 
 const harness = (over: Partial<ShareFlowDeps> = {}) => {
@@ -215,16 +216,22 @@ describe('reading the lists', () => {
 });
 
 describe('a refusal that carries work', () => {
-  /** An ApiError-shaped failure: the message, plus the fields the server sent with it. */
-  const refusal = (message: string, details: Record<string, unknown>) =>
-    Object.assign(new Error(message), { details });
+  /**
+   * The refusal as it actually arrives: a status, a code, and the body the server sent.
+   *
+   * It used to be `Object.assign(new Error(message), { details })` — a duck that satisfied a
+   * reader which accepted any object with a bag of fields on it. That reader is gone, and
+   * with it the possibility of a test passing against a shape the client never meets.
+   */
+  const refusal = (status: number, code: string, details: Record<string, unknown>) =>
+    new ApiError(status, code, JSON.stringify({ error: code, ...details }));
 
   it('says how much is not ready, and what to do about it', async () => {
     // The server computes the gap list precisely so the client need not re-scan a subtree
     // to find what it already knows. Shown as `409 share_not_prepared`, that reaches nobody.
     const h = harness({
       share: async () => {
-        throw refusal('409 share_not_prepared', { gaps: [{ nodeId: 'a' }, { nodeId: 'b' }] });
+        throw refusal(409, 'share_not_prepared', { gaps: [{ nodeId: 'a' }, { nodeId: 'b' }] });
       },
     });
     await h.flow.share('Team');
@@ -236,7 +243,7 @@ describe('a refusal that carries work', () => {
   it('says how much of a departure was missed', async () => {
     const h = harness({
       leave: async () => {
-        throw refusal('409 finalization_incomplete', { missing: ['n1', 'n2', 'n3'] });
+        throw refusal(409, 'finalization_incomplete', { missing: ['n1', 'n2', 'n3'] });
       },
     });
     await h.flow.leave('share-1');
@@ -248,7 +255,7 @@ describe('a refusal that carries work', () => {
     // Most do not, and inventing a count for them would be noise.
     const h = harness({
       share: async () => {
-        throw refusal('409 already_shared', {});
+        throw refusal(409, 'already_shared', {});
       },
     });
     await h.flow.share('Team');
@@ -275,9 +282,14 @@ describe('a refusal the schema explained', () => {
     // nobody could act on.
     const h = harness({
       leave: async () => {
-        throw Object.assign(new Error('400 invalid_write'), {
-          details: { error: 'invalid_write', detail: 'node abc cannot be unmarked before blob def has its vault envelope' },
-        });
+        throw new ApiError(
+          400,
+          'invalid_write',
+          JSON.stringify({
+            error: 'invalid_write',
+            detail: 'node abc cannot be unmarked before blob def has its vault envelope',
+          }),
+        );
       },
     });
     await h.flow.leave('share-1');
@@ -332,5 +344,21 @@ describe('taking somebody out of a share', () => {
 
     assert.match(h.notices.join(' '), /removing failed/i);
     assert.equal(h.rebuilt(), 0, 'nothing changed, so nothing is redrawn');
+  });
+});
+
+describe('reading a refusal by the code that decides what it holds', () => {
+  it('answers only for the code the refusal actually is', async () => {
+    // The typing is the point: `carries('share_not_prepared')` yields `gaps`, and asking a
+    // different pair does not compile. What is left to assert at runtime is that a refusal
+    // does not answer for a code it is not.
+    const refused = new ApiError(
+      409,
+      'share_not_prepared',
+      JSON.stringify({ error: 'share_not_prepared', gaps: [{ nodeId: 'n1', missing: 'name' }] }),
+    );
+
+    assert.equal(refused.carries('share_not_prepared')?.gaps.length, 1);
+    assert.equal(refused.carries('invalid_write'), undefined);
   });
 });

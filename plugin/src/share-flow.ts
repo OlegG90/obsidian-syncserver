@@ -19,7 +19,7 @@
  * - **what every outcome says**, including the one that is not a failure: leaving may end
  *   the share for everybody, and "you left" would be the wrong sentence for it.
  */
-import type { ShareMember } from './api/client.js';
+import { ApiError, type ShareMember } from './api/client.js';
 
 /** A share as the person sees it in the list. */
 export interface ShareRow {
@@ -87,14 +87,14 @@ export interface ShareFlow {
  */
 const message = (e: unknown): string => {
   if (!(e instanceof Error)) return String(e);
+  if (!(e instanceof ApiError)) return e.message;
 
-  const details = (e as { details?: Record<string, unknown> }).details ?? {};
-  const gaps = Array.isArray(details.gaps) ? details.gaps.length : 0;
-  const missing = Array.isArray(details.missing) ? details.missing.length : 0;
-
+  const gaps = e.carries('share_not_prepared')?.gaps.length ?? 0;
   if (gaps > 0) {
     return `${e.message}: ${gaps} item(s) in the folder are not ready to be shared. Sync this vault and try again.`;
   }
+
+  const missing = e.carries('finalization_incomplete')?.missing.length ?? 0;
   if (missing > 0) {
     return `${e.message}: ${missing} file(s) of your copy were not converted. Sync this vault and try again.`;
   }
@@ -102,7 +102,7 @@ const message = (e: unknown): string => {
   // The schema's own sentence, when there is one. It is the most specific statement of what
   // was wrong that exists anywhere — written to be read, naming the node and the rule — and
   // dropping it left `400 invalid_write` on screen, which says only that something did.
-  const detail = typeof details.detail === 'string' ? details.detail : undefined;
+  const detail = e.carries('invalid_write')?.detail;
   return detail ? `${e.message}: ${detail}` : e.message;
 };
 

@@ -20,11 +20,8 @@ import type { Db } from '../db.js';
  * open — and they would find out later, file by file, with no way to tell a missing
  * envelope from a corrupt one.
  */
-export type PreparationGap = {
-  nodeId: string;
-  /** `name` — still under `KV`; `content` — no `KS` envelope for bytes it references. */
-  missing: string;
-};
+export type { PreparationGap } from '@syncserver/shared';
+import type { PreparationGap } from '@syncserver/shared';
 
 /**
  * What is not yet prepared under `KS`, for the interior of a share.

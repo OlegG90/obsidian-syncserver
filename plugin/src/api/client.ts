@@ -23,6 +23,7 @@ import type {
   OpenedVault,
   Scope,
   RefusalCode,
+  RefusalDetails,
   RestoreResult,
   WriteConflict,
 } from '@syncserver/shared';
@@ -89,6 +90,18 @@ export class ApiError extends Error {
   ) {
     super(`${status} ${code}`);
     this.details = parseDetails(body);
+  }
+
+  /**
+   * The fields this refusal carries, if it is the one being asked about.
+   *
+   * Typed by the code, which is the only thing that decides what the body holds (`shared/`,
+   * `RefusalDetails`). Asking for the wrong pair does not compile, and a field renamed on the
+   * server stops compiling here rather than quietly reading `undefined` — which is how a work
+   * list the server computed becomes a screen that says nothing.
+   */
+  carries<K extends keyof RefusalDetails>(code: K): RefusalDetails[K] | undefined {
+    return this.code === code ? (this.details as RefusalDetails[K]) : undefined;
   }
 }
 

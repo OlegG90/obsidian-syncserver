@@ -78,6 +78,52 @@ export type RefusalCode =
   | 'initiator_cannot_be_removed'
   | 'finalization_incomplete';
 
+/**
+ * One item of preparation's work list: a node that is not ready to be shared, and why.
+ *
+ * Here rather than in the server because the client reads it — the whole reason the server
+ * computes a list instead of answering "not prepared" is that the other side is the one who
+ * can fix it.
+ *
+ * A type alias rather than an interface, and not by taste: the server reads it straight out
+ * of `db.query<T>`, whose `Row` constraint an interface cannot satisfy — it has no implicit
+ * index signature.
+ */
+export type PreparationGap = {
+  nodeId: string;
+  /** `name` — still under `KV`; `content` — no `KS` envelope for bytes it references. */
+  missing: string;
+};
+
+/**
+ * What each refusal carries **besides** its code.
+ *
+ * The codes have been a shared union with a compile-time guard since M2; the fields beside
+ * them were not, and the asymmetry mattered more than it looked. Several refusals exist
+ * precisely to hand back a work list the server went to trouble to compute — which nodes are
+ * unprepared, which the finalization pass missed, what the schema actually objected to — and
+ * on the client those arrived as `unknown` and were read by hand.
+ *
+ * A field renamed on one side then compiles on both, and deletes the only sentence a person
+ * sees. That is not hypothetical: `detail` reaching the screen is what turned `400
+ * invalid_write` into a message naming the node and the rule, and it is a string read out of
+ * an untyped object.
+ *
+ * Codes absent from this map carry nothing but the code.
+ */
+export interface RefusalDetails {
+  invalid_write: { detail: string };
+  base_mismatch: { sha256?: string; rev?: number };
+  rev_mismatch: { rev?: number };
+  name_taken: { blocked_by: string };
+  rate_limited: { retry_after: number };
+  parts_missing: { have: number[] };
+  share_not_active: { state: string };
+  share_not_preparing: { state: string };
+  share_not_prepared: { gaps: PreparationGap[] };
+  finalization_incomplete: { missing: string[] };
+}
+
 /** Why a write was refused with 409. The server emits all four; the client resolves three as a conflict. */
 export type WriteConflict = Extract<RefusalCode, 'base_mismatch' | 'rev_mismatch' | 'share_boundary' | 'name_taken'>;
 
