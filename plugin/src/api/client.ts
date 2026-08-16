@@ -20,6 +20,7 @@ import type {
   KdfParams,
   Material,
   NodeType,
+  OpenedVault,
   Scope,
   RefusalCode,
   RestoreResult,
@@ -411,11 +412,7 @@ export class SyncClient {
   }
 
   /** Where a client starts syncing: the root, the head, and the key scope per scope (docs/06). */
-  openVault(vaultId: string): Promise<{
-    root_node_id: string;
-    head_rev: number;
-    scopes: Scope[];
-  }> {
+  openVault(vaultId: string): Promise<OpenedVault> {
     return this.json('GET', `/vaults/${vaultId}`);
   }
 

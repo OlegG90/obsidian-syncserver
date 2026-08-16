@@ -20,12 +20,14 @@ import type { Change, Delta, Material, NodeType, Scope } from '@syncserver/share
 import type { CursorRejected, Envelope, PutConflict, CursorUnverifiable } from '../api/client.js';
 
 export interface VaultWire {
-  /** Where a client starts: the root, the head, and the key scope per scope (docs/06). */
-  openVault(vaultId: string): Promise<{
-    root_node_id: string;
-    head_rev: number;
-    scopes: Scope[];
-  }>;
+  /**
+   * No `openVault` here, deliberately.
+   *
+   * The engine is **given** the opened vault it works on, because opening one is a decision
+   * about an operation and not about a pass: a leave opens it once and hands the same value
+   * to the tree walk, the share key and the scope lookup. Leaving the call on this seam
+   * invited exactly what it produced — every helper opening its own.
+   */
 
   /** The whole tree as it stands, with the cursor it was taken at. */
   listNodes(vaultId: string, under?: string): Promise<{ nodes: Change[]; snapshot: string }>;

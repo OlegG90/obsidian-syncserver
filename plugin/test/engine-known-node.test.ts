@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { OpenedVault } from '@syncserver/shared';
 import { describe, it } from 'node:test';
 
 import type { VaultWire } from '../src/engine/wire.js';
@@ -29,6 +30,18 @@ class InitialStateStore implements StateStore {
   }
 }
 
+/**
+ * The vault as the engine is now given it, rather than as it used to ask for it.
+ *
+ * The seam lost `openVault` when the caller took over opening: one value per
+ * operation, passed to everything that operation needs (docs/06).
+ */
+const opened: OpenedVault = {
+  root_node_id: rootNodeId,
+  head_rev: 2,
+  scopes: [{ scope: 'vault', key_id: scopeId }],
+};
+
 class FakeSyncClient implements VaultWire {
   putContentCalls = 0;
 
@@ -48,10 +61,6 @@ class FakeSyncClient implements VaultWire {
 
   get address(): string {
     return this.remoteAddress;
-  }
-
-  async openVault(_vaultId: string): Promise<{ root_node_id: string; head_rev: number; scopes: { scope: string; key_id: string }[] }> {
-    return { root_node_id: rootNodeId, head_rev: 2, scopes: [{ scope: 'vault', key_id: scopeId }] };
   }
 
   async listNodes(_vaultId: string): Promise<{
@@ -189,7 +198,7 @@ const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText
   });
   // No cast: the fake implements the seam the engine declares, so the type checker is
   // proving the double matches rather than being told to stop looking.
-  const engine = new SyncEngine(client, vaultId, kv, vault, store);
+  const engine = new SyncEngine(client, vaultId, opened, kv, vault, store);
   return { client, engine, path, vault };
 };
 

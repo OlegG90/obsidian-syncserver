@@ -442,6 +442,31 @@ describe('the engine, device A pushes and device B pulls', () => {
   let ownVaultId: string;
   let kv2: Uint8Array;
 
+  /**
+   * The engine as its caller now builds it: the vault is opened here and handed over.
+   *
+   * `openVault` left the engine's seam when the plugin started opening once per operation —
+   * a leave was making five of those calls and a pass two, every one describing the same
+   * instant. A live test is a caller like any other, so it opens too.
+   */
+  const engineOn = async (
+    wire: typeof client,
+    vault: FakeVault,
+    store: MemoryStateStore,
+    label?: string,
+    syncObsidian?: boolean,
+  ): Promise<SyncEngine> =>
+    new SyncEngine(
+      wire,
+      ownVaultId,
+      await client.openVault(ownVaultId),
+      kv2,
+      vault,
+      store,
+      label,
+      syncObsidian,
+    );
+
   it('two engines share one account but separate vaults', async () => {
     // Same account (AC-11 allows several vaults), each vault with its own derived key.
     ownVaultId = randomUuid();
@@ -455,7 +480,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(name, docsFile);
 
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore());
+    const engineA = await engineOn(client, a, new MemoryStateStore());
     const report = await engineA.sync();
 
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
@@ -467,7 +492,7 @@ describe('the engine, device A pushes and device B pulls', () => {
   it('device B, an empty vault, materialises it through the delta', async () => {
     const b = new FakeVault();
 
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore());
+    const engineB = await engineOn(client, b, new MemoryStateStore());
     const report = await engineB.sync();
 
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
@@ -489,7 +514,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const v = new FakeVault();
     v.seed(editPath, 'first revision');
     const store = new MemoryStateStore();
-    const engine = new SyncEngine(client, ownVaultId, kv2, v, store);
+    const engine = await engineOn(client, v, store);
 
     const first = await engine.sync();
     assert.equal(first.errors.length, 0, JSON.stringify(first.errors));
@@ -507,7 +532,7 @@ describe('the engine, device A pushes and device B pulls', () => {
   it('adoption: a fresh device meets a path the server already has — same content binds, nothing moves', async () => {
     const b = new FakeVault();
     b.seed(name, docsFile); // byte-identical to what device A pushed
-    const report = await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore()).sync();
+    const report = await (await engineOn(client, b, new MemoryStateStore())).sync();
 
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.equal(report.conflicts.length, 0, 'identical content is not a conflict');
@@ -530,7 +555,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const edited = '# Документ\n\nВідредаговано на пристрої B.\n';
     b.seed(name, edited);
 
-    const report = await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore()).sync();
+    const report = await (await engineOn(client, b, new MemoryStateStore())).sync();
 
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.equal(report.conflicts.length, 1);
@@ -557,7 +582,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const v = new FakeVault();
     v.seed(before, body);
     const store = new MemoryStateStore();
-    const engine = new SyncEngine(client, ownVaultId, kv2, v, store, 'laptop');
+    const engine = await engineOn(client, v, store, 'laptop');
 
     const first = await engine.sync();
     assert.equal(first.errors.length, 0, JSON.stringify(first.errors));
@@ -592,7 +617,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const v = new FakeVault();
     v.seed('Small/one.md', tiny);
     const store = new MemoryStateStore();
-    const engine = new SyncEngine(client, ownVaultId, kv2, v, store, 'laptop');
+    const engine = await engineOn(client, v, store, 'laptop');
     assert.equal((await engine.sync()).errors.length, 0);
 
     await v.delete('Small/one.md');
@@ -615,13 +640,13 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(conflictPath, 'the shared starting point');
     const storeA = new MemoryStateStore();
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    const engineA = await engineOn(client, a, storeA, 'laptop');
     assert.equal((await engineA.sync()).errors.length, 0);
 
     const b = new FakeVault();
     b.seed(conflictPath, 'the shared starting point');
     const storeB = new MemoryStateStore();
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    const engineB = await engineOn(client, b, storeB, 'phone');
     const adopted = await engineB.sync();
     assert.equal(adopted.errors.length, 0, JSON.stringify(adopted.errors));
     assert.ok(adopted.matched.some((m) => m.path === conflictPath), 'B adopted it without moving bytes');
@@ -659,7 +684,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const copyPath = 'Devices/copy-of-the-document.md';
     const b = new FakeVault();
     b.seed(copyPath, docsFile); // same bytes as `name`, never uploaded under this path before
-    const report = await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore()).sync();
+    const report = await (await engineOn(client, b, new MemoryStateStore())).sync();
 
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.equal(report.pushed.length, 1, 'a node WAS created — dedup binds, it does not skip the file');
@@ -679,12 +704,12 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(path, 'this file will be deleted');
     const storeA = new MemoryStateStore();
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    const engineA = await engineOn(client, a, storeA, 'laptop');
     assert.equal((await engineA.sync()).errors.length, 0);
 
     const b = new FakeVault();
     const storeB = new MemoryStateStore();
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    const engineB = await engineOn(client, b, storeB, 'phone');
     assert.equal((await engineB.sync()).errors.length, 0);
     assert.equal(b.contents(path), 'this file will be deleted', 'B has the file before the delete');
 
@@ -711,14 +736,14 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(note, 'a note');
     a.seed(config, '{"theme":"obsidian"}');
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop', true);
+    const engineA = await engineOn(client, a, new MemoryStateStore(), 'laptop', true);
     const reportA = await engineA.sync();
     assert.equal(reportA.errors.length, 0, JSON.stringify(reportA.errors));
     assert.ok(reportA.pushed.some((p) => p.path === config), 'A pushed .obsidian with the switch on');
 
     // Device B has the switch OFF: it gets the note but never the configuration.
     const b = new FakeVault();
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone', false);
+    const engineB = await engineOn(client, b, new MemoryStateStore(), 'phone', false);
     const reportB = await engineB.sync();
     assert.equal(reportB.errors.length, 0, JSON.stringify(reportB.errors));
     assert.equal(b.contents(note), 'a note', 'the note is pulled');
@@ -726,7 +751,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     assert.ok(!reportB.pulled.some((p) => p.path.startsWith('.obsidian/')));
 
     // Flip B's switch ON: the configuration now comes down, as an ordinary pull.
-    const engineB2 = new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone', true);
+    const engineB2 = await engineOn(client, b, new MemoryStateStore(), 'phone', true);
     const reportB2 = await engineB2.sync();
     assert.equal(reportB2.errors.length, 0, JSON.stringify(reportB2.errors));
     assert.equal(b.contents(config), '{"theme":"obsidian"}', 'the configuration arrives once the switch is on');
@@ -740,7 +765,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(`${before}/one.md`, body);
     a.seed(`${before}/two.md`, body + '\nsecond');
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    const engineA = await engineOn(client, a, new MemoryStateStore(), 'laptop');
     const first = await engineA.sync();
     assert.equal(first.errors.length, 0, JSON.stringify(first.errors));
 
@@ -762,7 +787,7 @@ describe('the engine, device A pushes and device B pulls', () => {
 
     // A second device materialises the vault and sees the new folder, not the old one.
     const b = new FakeVault();
-    await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone').sync();
+    await (await engineOn(client, b, new MemoryStateStore(), 'phone')).sync();
     assert.equal(b.contents(`${after}/one.md`), body);
     assert.equal(b.contents(`${before}/one.md`), undefined, 'no file under the old folder');
   });
@@ -775,12 +800,12 @@ describe('the engine, device A pushes and device B pulls', () => {
     const a = new FakeVault();
     a.seed(before, body);
     const storeA = new MemoryStateStore();
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, storeA, 'laptop');
+    const engineA = await engineOn(client, a, storeA, 'laptop');
     assert.equal((await engineA.sync()).errors.length, 0);
 
     const b = new FakeVault();
     const storeB = new MemoryStateStore();
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    const engineB = await engineOn(client, b, storeB, 'phone');
     assert.equal((await engineB.sync()).errors.length, 0);
     assert.equal(b.contents(before), body, 'B has the file at the old path');
 
@@ -829,12 +854,12 @@ describe('the engine, device A pushes and device B pulls', () => {
     });
 
     const store = new MemoryStateStore();
-    const engine = new SyncEngine(flaky, ownVaultId, kv2, a, store, 'laptop');
+    const engine = await engineOn(flaky, a, store, 'laptop');
     const first = await engine.sync();
     assert.equal(first.errors.length, 1, 'the interrupted write is reported');
 
     // The retry — a fresh engine over the same vault, the same store — succeeds cleanly.
-    const retry = await new SyncEngine(client, ownVaultId, kv2, a, store, 'laptop').sync();
+    const retry = await (await engineOn(client, a, store, 'laptop')).sync();
     assert.equal(retry.errors.length, 0, JSON.stringify(retry.errors));
     assert.ok(retry.pushed.some((p) => p.path === path));
 
@@ -851,7 +876,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const path = 'Devices/trashable.md';
     const a = new FakeVault();
     a.seed(path, 'to be deleted and returned');
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    const engineA = await engineOn(client, a, new MemoryStateStore(), 'laptop');
     assert.equal((await engineA.sync()).errors.length, 0);
 
     // Delete it, and the node is soft-deleted into the trash.
@@ -884,7 +909,7 @@ describe('the engine, device A pushes and device B pulls', () => {
 
     // A second device pulls the restored file.
     const b = new FakeVault();
-    await new SyncEngine(client, ownVaultId, kv2, b, new MemoryStateStore(), 'phone').sync();
+    await (await engineOn(client, b, new MemoryStateStore(), 'phone')).sync();
     assert.equal(b.contents(path), 'to be deleted and returned');
   });
 
@@ -898,13 +923,13 @@ describe('the engine, device A pushes and device B pulls', () => {
     // A wins: pushes the shared file.
     const a = new FakeVault();
     a.seed(path, 'the winning content');
-    const engineA = new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop');
+    const engineA = await engineOn(client, a, new MemoryStateStore(), 'laptop');
     assert.equal((await engineA.sync()).errors.length, 0);
 
     // B pulls it and has an extra local-only file.
     const b = new FakeVault();
     const storeB = new MemoryStateStore();
-    const engineB = new SyncEngine(client, ownVaultId, kv2, b, storeB, 'phone');
+    const engineB = await engineOn(client, b, storeB, 'phone');
     assert.equal((await engineB.sync()).errors.length, 0);
     assert.equal(b.contents(path), 'the winning content');
     b.seed(extraPath, 'my unsynced work');
@@ -913,7 +938,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const reset = await client.resetVault(ownVaultId);
     assert.ok(reset.reset_epoch >= 1, 'the reset epoch moved');
     const storeA2 = new MemoryStateStore();
-    const engineA2 = new SyncEngine(client, ownVaultId, kv2, a, storeA2, 'laptop');
+    const engineA2 = await engineOn(client, a, storeA2, 'laptop');
     assert.equal((await engineA2.sync()).errors.length, 0);
 
     // B syncs: its cursor predates the reset, so the probe answers 410 reset.
@@ -946,7 +971,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     const path = 'Devices/pushed-notify.md';
     const a = new FakeVault();
     a.seed(path, 'wake up');
-    const report = await new SyncEngine(client, ownVaultId, kv2, a, new MemoryStateStore(), 'laptop').sync();
+    const report = await (await engineOn(client, a, new MemoryStateStore(), 'laptop')).sync();
     assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
     assert.ok(report.pushed.some((p) => p.path === path));
 

@@ -136,6 +136,21 @@ export type DeltaEvent =
   | { type: 'share_ended'; share_id: string; at: string }
   | { type: 'account_frozen'; at: string };
 
+/**
+ * A vault as it stands when a client opens it: where its tree starts, how far it has got,
+ * and which key scopes this caller may read (docs/06).
+ *
+ * One value per operation, not per question. Every part of it is a fact about the same
+ * instant, and the client used to ask for it again for each half it needed — the vault scope
+ * for one call, a share's key for the next — which is five requests for one leave and two
+ * for every sync, each answering the same thing.
+ */
+export interface OpenedVault {
+  root_node_id: string;
+  head_rev: number;
+  scopes: Scope[];
+}
+
 /** The delta response: the changes since the cursor, and the cursor to carry next (#24). */
 export interface Delta {
   changes: Change[];

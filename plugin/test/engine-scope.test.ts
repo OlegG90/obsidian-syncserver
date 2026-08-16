@@ -8,6 +8,7 @@
  * injected share key opens it, and a scope with no key is a defect, refused with a reason.
  */
 import assert from 'node:assert/strict';
+import type { OpenedVault } from '@syncserver/shared';
 import { describe, it } from 'node:test';
 import type { Change, Delta } from '@syncserver/shared';
 import { sealBlob } from '../src/crypto/blob.js';
@@ -24,6 +25,18 @@ const rootNodeId = 'root';
 const vaultScopeId = 'scope-vault';
 const shareScopeId = 'scope-share';
 
+/**
+ * The vault as the engine is now given it, rather than as it used to ask for it.
+ *
+ * The seam lost `openVault` when the caller took over opening: one value per
+ * operation, passed to everything that operation needs (docs/06).
+ */
+const opened: OpenedVault = {
+  root_node_id: rootNodeId,
+  head_rev: 1,
+  scopes: [{ scope: 'vault', key_id: vaultScopeId }],
+};
+
 /** A wire holding one file, named and enveloped under a caller-chosen scope. */
 class FakeWire implements VaultWire {
   private readonly sealed: { sha256: string; bytes: Uint8Array; contentKey: Uint8Array };
@@ -38,10 +51,6 @@ class FakeWire implements VaultWire {
     this.sealed = sealBlob(utf8(content));
     this.wrapped = wrapContentKey(scopeKey, this.sealed.contentKey);
     this.envelopeScopeId = nameKeyId ?? vaultScopeId;
-  }
-
-  async openVault(): Promise<{ root_node_id: string; head_rev: number; scopes: { scope: string; key_id: string }[] }> {
-    return { root_node_id: rootNodeId, head_rev: 1, scopes: [{ scope: 'vault', key_id: vaultScopeId }] };
   }
 
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
@@ -103,6 +112,7 @@ describe('the engine opens a node under the scope it is named in', () => {
     const engine = new SyncEngine(
       new FakeWire(shareKey, shareScopeId, 'the shared note'),
       vaultId,
+      opened,
       vaultKey,
       new FakeVault(),
       new MemoryStateStore(),
@@ -122,6 +132,7 @@ describe('the engine opens a node under the scope it is named in', () => {
     const engine = new SyncEngine(
       new FakeWire(randomBytes(32), shareScopeId, 'the shared note'),
       vaultId,
+      opened,
       vaultKey,
       new FakeVault(),
       new MemoryStateStore(),
@@ -136,6 +147,7 @@ describe('the engine opens a node under the scope it is named in', () => {
     const engine = new SyncEngine(
       new FakeWire(vaultKey, null, 'an ordinary note'),
       vaultId,
+      opened,
       vaultKey,
       new FakeVault(),
       new MemoryStateStore(),

@@ -6,6 +6,7 @@
  * freezes `.obsidian/` in place rather than deleting it.
  */
 import assert from 'node:assert/strict';
+import type { OpenedVault } from '@syncserver/shared';
 import { describe, it } from 'node:test';
 
 import type { CursorRejected, Envelope, CursorUnverifiable } from '../src/api/client.js';
@@ -61,6 +62,18 @@ describe('isSyncable and the .obsidian/ switch', () => {
   });
 });
 
+/**
+ * The vault as the engine is now given it, rather than as it used to ask for it.
+ *
+ * The seam lost `openVault` when the caller took over opening: one value per
+ * operation, passed to everything that operation needs (docs/06).
+ */
+const opened: OpenedVault = {
+  root_node_id: rootNodeId,
+  head_rev: 5,
+  scopes: [{ scope: 'vault', key_id: scopeId }],
+};
+
 /** A minimal wire: serves the given server files (sealed once) and records pushes. */
 class OneFileWire implements VaultWire {
   created = 0;
@@ -71,10 +84,6 @@ class OneFileWire implements VaultWire {
     private readonly deltaAnswer: Delta | CursorRejected | CursorUnverifiable,
   ) {
     for (const f of server) this.sealed.set(f.path, sealBlob(utf8(f.text)));
-  }
-
-  async openVault(): Promise<{ root_node_id: string; head_rev: number; scopes: { scope: string; key_id: string }[] }> {
-    return { root_node_id: rootNodeId, head_rev: 5, scopes: [{ scope: 'vault', key_id: scopeId }] };
   }
 
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
@@ -157,7 +166,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
       continuous,
     );
     const vault = new FakeVault();
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store({ nodes: {} }));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store({ nodes: {} }));
 
     const report = await engine.sync();
 
@@ -172,7 +181,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
     const vault = new FakeVault();
     vault.seed('Notes/a.md', 'a note');
     vault.seed('.obsidian/appearance.json', '{}');
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store({ nodes: {} }));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store({ nodes: {} }));
 
     const report = await engine.sync();
 
@@ -201,7 +210,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
       continuous,
     );
     const vault = new FakeVault();
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
 
     const report = await engine.sync();
 

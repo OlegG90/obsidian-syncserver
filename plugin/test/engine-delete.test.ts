@@ -8,6 +8,7 @@
  * answer the cursor probe gets.
  */
 import assert from 'node:assert/strict';
+import type { OpenedVault } from '@syncserver/shared';
 import { describe, it } from 'node:test';
 
 import type { CursorRejected, Envelope, CursorUnverifiable } from '../src/api/client.js';
@@ -101,6 +102,18 @@ const nodeListFor = (files: FileSpec[]): { nodes: Change[]; sealed: Map<string, 
   return { nodes, sealed };
 };
 
+/**
+ * The vault as the engine is now given it, rather than as it used to ask for it.
+ *
+ * The seam lost `openVault` when the caller took over opening: one value per
+ * operation, passed to everything that operation needs (docs/06).
+ */
+const opened: OpenedVault = {
+  root_node_id: rootNodeId,
+  head_rev: 9,
+  scopes: [{ scope: 'vault', key_id: scopeId }],
+};
+
 class FakeWire implements VaultWire {
   deleted: { nodeId: string; ifMatchRev: number }[] = [];
   created: string[] = [];
@@ -113,10 +126,6 @@ class FakeWire implements VaultWire {
     /** What the cursor probe answers. */
     public deltaAnswer: Delta | CursorRejected | CursorUnverifiable,
   ) {}
-
-  async openVault(): Promise<{ root_node_id: string; head_rev: number; scopes: { scope: string; key_id: string }[] }> {
-    return { root_node_id: rootNodeId, head_rev: 9, scopes: [{ scope: 'vault', key_id: scopeId }] };
-  }
 
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
     const nodes: Change[] = [
@@ -232,7 +241,7 @@ describe('delete propagation', () => {
     const { sealed } = nodeListFor([spec]);
     const wire = new FakeWire([spec], sealed, continuous);
     const vault = new FakeVault(); // the file is NOT on disk — the user deleted it
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'was here', sealed.get('gone.md')!.sha256)));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'was here', sealed.get('gone.md')!.sha256)));
 
     const report = await engine.sync();
 
@@ -247,7 +256,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), continuous);
     const vault = new FakeVault();
     vault.seed('there.md', 'server copy');
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'server copy', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'server copy', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -262,7 +271,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), restore);
     const vault = new FakeVault();
     vault.seed('keep.md', 'only copy');
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'only copy', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'only copy', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -281,7 +290,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), unverifiable);
     const vault = new FakeVault();
     vault.seed('unverified.md', 'the only copy');
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'the only copy', 'addr-gone')));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'the only copy', 'addr-gone')));
 
     const report = await engine.sync();
 
@@ -296,7 +305,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), ttl);
     const vault = new FakeVault();
     vault.seed('old.md', 'gone remotely');
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'gone remotely', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'gone remotely', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -309,7 +318,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), continuous);
     const vault = new FakeVault();
     vault.seed('edited.md', 'my newer edit'); // localChanged: plainHash differs from state
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(knownState(spec, 'synced version', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'synced version', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -331,7 +340,7 @@ describe('remote rename', () => {
       cursor: 'cursor-old',
       nodes: { 'old.md': { nodeId: 'node-6', rev: 6, plainHash: toHex(sha256(utf8('the body'))), address: sealed.get('new.md')!.sha256 } },
     };
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -363,7 +372,7 @@ describe('remote rename', () => {
         'Old/two.md': { nodeId: 'node-b', rev: 3, plainHash: toHex(sha256(utf8('content two'))), address: sealed.get('Old/two.md')!.sha256 },
       },
     };
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -396,7 +405,7 @@ describe('resync after a reset', () => {
         'mine.md': { nodeId: 'node-8', rev: 1, plainHash: toHex(sha256(utf8('my private note'))), address: 'some-old-address' },
       },
     };
-    const engine = new SyncEngine(wire, vaultId, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -427,7 +436,7 @@ describe('resync after a reset', () => {
       },
     };
     const store = new Store(state);
-    const engine = new SyncEngine(wire, vaultId, kv, vault, store);
+    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, store);
 
     const first = await engine.sync();
     const quarantinePath = first.quarantined.find((x) => x.from === 'mine.md')!.to;

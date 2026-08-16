@@ -27,6 +27,7 @@ import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/
 import { makeObsidianTransport } from './obsidian/transport.js';
 
 import { session, type Connection, type Handle, type Session } from './session/index.js';
+import type { OpenedVault } from '@syncserver/shared';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { decryptName } from './crypto/scope.js';
@@ -92,15 +93,17 @@ export default class SyncServerPlugin extends Plugin {
       askPassphrase: () => askPassphrase(this.app),
       runPass: async () => {
         const report = await this.sess!.use(async (h) => {
+          const opened = await this.openVault(h);
           const engine = new SyncEngine(
             h.client,
             this.sess!.connection.vaultId,
+            opened,
             h.kv,
             new ObsidianVaultAdapter(this.app.vault),
             this.stateStore(),
             deviceLabel(),
             this.data.syncObsidian === true,
-            await this.openShareKeys(h),
+            this.openShareKeys(h, opened),
           );
           const out = await engine.sync();
           // Asked here because the session is already open and the folder this pass may
@@ -108,7 +111,7 @@ export default class SyncServerPlugin extends Plugin {
           // exist locally until then, so its badge was filtered out as a path that is not
           // there and nothing ever came back for it — which the initiator never saw, their
           // folder having been on disk before they shared it.
-          await this.refreshSharedFolders(h);
+          await this.refreshSharedFolders(h, opened);
           return out;
         });
         this.applySharedMarks();
@@ -393,33 +396,39 @@ export default class SyncServerPlugin extends Plugin {
    * on the first live share, one press after preparation had re-keyed two nodes. Every
    * caller here is a sharing operation, so every one of them meets those names.
    */
-  private async engineFor(h: Handle): Promise<SyncEngine> {
+  private engineFor(h: Handle, opened: OpenedVault): SyncEngine {
     return new SyncEngine(
       h.client,
       this.data.connection!.vaultId,
+      opened,
       h.kv,
       this.vault(),
       this.stateStore(),
       deviceLabel(),
       this.data.syncObsidian === true,
-      await this.openShareKeys(h),
+      this.openShareKeys(h, opened),
     );
   }
 
+  /** The vault, opened once for an operation and passed to everything the operation needs. */
+  private openVault(h: Handle): Promise<OpenedVault> {
+    return h.client.openVault(this.data.connection!.vaultId);
+  }
+
   /**
-   * The share keys this device can open, read fresh each pass.
+   * The share keys this device can open, from the vault this operation opened.
    *
-   * Not cached: a share can be ended by somebody else between two syncs, and a key kept
-   * from before would be offered for a scope nothing is named under any more. The server
-   * reports exactly the live ones when the vault is opened, which makes "what can I read"
-   * one question with one answer rather than a cache to invalidate.
+   * Not cached across operations: a share can be ended by somebody else between two syncs,
+   * and a key kept from before would be offered for a scope nothing is named under any more.
+   * Within one operation the opposite holds — the scopes cannot change under it — which is
+   * why the value is opened once and passed, rather than asked for by each helper that
+   * wants a piece of it.
    *
    * A scope this device cannot open is dropped and said out loud rather than thrown: one
    * unreadable share must not stop the vault from syncing, and the engine still refuses at
    * the one place it matters — meeting a name under a key it does not hold.
    */
-  private async openShareKeys(h: Handle): Promise<Map<string, Uint8Array> | undefined> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId);
+  private openShareKeys(h: Handle, opened: OpenedVault): Map<string, Uint8Array> | undefined {
     const { keys, unopenable } = shareKeysFrom(opened.scopes, {
       vaultKey: h.kv,
       openIdentity: () => h.openIdentity(),
@@ -431,8 +440,7 @@ export default class SyncServerPlugin extends Plugin {
     return keys.size > 0 ? keys : undefined;
   }
 
-  private async vaultScopeId(h: Handle): Promise<string> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId);
+  private vaultScopeId(opened: OpenedVault): string {
     const id = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
     if (!id) throw new Error('the vault reports no key scope of its own');
     return id;
@@ -445,8 +453,7 @@ export default class SyncServerPlugin extends Plugin {
    * device's to open, and caching it would mean deciding when a cache is stale about a key
    * that can stop existing when somebody else ends the share.
    */
-  private async shareKeyOf(h: Handle, shareId: string): Promise<Uint8Array> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId);
+  private shareKeyOf(h: Handle, opened: OpenedVault, shareId: string): Uint8Array {
     const scope = opened.scopes.find((sc) => sc.share_id === shareId);
     if (!scope?.wrapped_key) throw new Error('this device holds no key for that share');
 
@@ -465,8 +472,7 @@ export default class SyncServerPlugin extends Plugin {
     return key;
   }
 
-  private async shareScopeIdOf(h: Handle, shareId: string): Promise<string> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId);
+  private shareScopeIdOf(opened: OpenedVault, shareId: string): string {
     const scope = opened.scopes.find((sc) => sc.share_id === shareId);
     if (!scope) throw new Error('this device holds no key for that share');
     return scope.key_id;
@@ -482,13 +488,14 @@ export default class SyncServerPlugin extends Plugin {
     return openShareFlow({
       list: () =>
         this.withSession(async (h) => {
+          const opened = await this.openVault(h);
           const out = await h.client.shares();
 
           // Which FOLDER each share is, which the server cannot say in words: it holds no
           // paths and could not read the names if it did. Resolved once, here, and stored —
           // two rows reading "Shared by you" and a uuid each are two rows nobody can tell
           // apart, and the buttons beside them are not the same buttons.
-          const rootOf = await this.resolveSharedFolders(h, out.joined);
+          const rootOf = await this.resolveSharedFolders(h, opened, out.joined);
 
           return {
             joined: out.joined.map((s) => {
@@ -511,7 +518,8 @@ export default class SyncServerPlugin extends Plugin {
         this.withSession(async (h) => {
           // The tree comes from the engine, which is the one place that turns encrypted
           // names back into paths — and a share is rooted at a node id.
-          const engine = await this.engineFor(h);
+          const opened = await this.openVault(h);
+          const engine = this.engineFor(h, opened);
           const tree = await engine.readTree();
           const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({
             path,
@@ -519,7 +527,7 @@ export default class SyncServerPlugin extends Plugin {
             address: n.address,
             nameKeyId: n.nameKeyId ?? '',
           }));
-          const vaultScopeId = await this.vaultScopeId(h);
+          const vaultScopeId = this.vaultScopeId(opened);
           const out = await shareFolder(
             {
               client: h.client,
@@ -538,16 +546,16 @@ export default class SyncServerPlugin extends Plugin {
 
       invite: (shareId, login) =>
         this.withSession(async (h) => {
-          const key = await this.shareKeyOf(h, shareId);
+          const key = this.shareKeyOf(h, await this.openVault(h), shareId);
           await inviteTo({ client: h.client }, shareId, login, key);
         }),
 
       accept: (shareId) =>
         this.withSession(async (h) => {
-          const engine = await this.engineFor(h);
+          const opened = await this.openVault(h);
+          const engine = this.engineFor(h, opened);
           const tree = await engine.readTree();
           const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
-          const opened = await h.client.openVault(this.data.connection!.vaultId);
 
           // Asked, not invented. The initiator's own label for that folder is under THEIR
           // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
@@ -562,7 +570,7 @@ export default class SyncServerPlugin extends Plugin {
               client: h.client,
               vaultId: this.data.connection!.vaultId,
               vaultKey: h.kv,
-              vaultScopeId: await this.vaultScopeId(h),
+              vaultScopeId: this.vaultScopeId(opened),
             },
             shareId,
             opened.root_node_id,
@@ -576,10 +584,11 @@ export default class SyncServerPlugin extends Plugin {
 
       leave: (shareId) =>
         this.withSession(async (h) => {
-          const engine = await this.engineFor(h);
+          const opened = await this.openVault(h);
+          const engine = this.engineFor(h, opened);
           const tree = await engine.readTree();
-          const key = await this.shareKeyOf(h, shareId);
-          const scopeId = await this.shareScopeIdOf(h, shareId);
+          const key = this.shareKeyOf(h, opened, shareId);
+          const scopeId = this.shareScopeIdOf(opened, shareId);
           // Asked of the server rather than assembled from the tree: the set that must be
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
@@ -617,7 +626,7 @@ export default class SyncServerPlugin extends Plugin {
               read: (p) => this.vault().read(p),
               vaultId: this.data.connection!.vaultId,
               vaultKey: h.kv,
-              vaultScopeId: await this.vaultScopeId(h),
+              vaultScopeId: this.vaultScopeId(opened),
             },
             shareId,
             key,
@@ -686,9 +695,10 @@ export default class SyncServerPlugin extends Plugin {
    */
   private async resolveSharedFolders(
     h: Handle,
+    opened: OpenedVault,
     joined: readonly { share_id: string; root_node_id: string | null }[],
   ): Promise<Map<string, string>> {
-    const engine = await this.engineFor(h);
+    const engine = this.engineFor(h, opened);
     const pathOfNode = new Map([...(await engine.readTree()).entries()].map(([p, n]) => [n.nodeId, p]));
 
     const rootOf = new Map<string, string>();
@@ -711,13 +721,13 @@ export default class SyncServerPlugin extends Plugin {
    * vault whose map predates this feature entirely, which is how the participant in a live
    * test ended up with no badge while the initiator had one.
    */
-  private async refreshSharedFolders(h: Handle): Promise<void> {
+  private async refreshSharedFolders(h: Handle, opened: OpenedVault): Promise<void> {
     const { joined } = await h.client.shares();
     const known = Object.keys(this.data.sharedFolders ?? {}).sort().join(',');
     const now = joined.map((s) => s.share_id).sort().join(',');
     if (known === now) return;
 
-    await this.resolveSharedFolders(h, joined);
+    await this.resolveSharedFolders(h, opened, joined);
   }
 
   /**

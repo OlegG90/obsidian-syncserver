@@ -32,7 +32,7 @@
  * *pages* are not applied incrementally — the full walk is the data source, the probe is
  * only the provenance check (incremental application is M2).
  */
-import type { DeltaEvent } from '@syncserver/shared';
+import type { DeltaEvent, OpenedVault } from '@syncserver/shared';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
@@ -191,6 +191,15 @@ export class SyncEngine {
   constructor(
     private readonly client: VaultWire,
     private readonly vaultId: string,
+    /**
+     * The vault as it stood when this operation began (docs/06).
+     *
+     * Handed in rather than fetched, and that is the point: `sync` needed it and `readTree`
+     * needed it, so a pass asked twice and a single share operation asked five times — every
+     * answer describing the same instant. A value the caller opens once is also what lets
+     * this class stop knowing how a vault is opened at all.
+     */
+    private readonly opened: OpenedVault,
     /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
     private readonly vaultKey: Uint8Array,
     private readonly vault: VaultAdapter,
@@ -239,12 +248,11 @@ export class SyncEngine {
     };
     const state = await this.store.load();
 
-    const opened = await this.client.openVault(this.vaultId);
-    const vaultScopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
+    const vaultScopeId = this.opened.scopes.find((s) => s.scope === 'vault')?.key_id;
     if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
-    const rootNodeId = opened.root_node_id;
+    const rootNodeId = this.opened.root_node_id;
     const shareScopes = new Map(
-      opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const),
+      this.opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const),
     );
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
@@ -388,10 +396,9 @@ export class SyncEngine {
    * rebuild the paths" would be a second thing to get wrong about scopes.
    */
   async readTree(): Promise<Map<string, ServerNode>> {
-    const opened = await this.client.openVault(this.vaultId);
-    const vaultScopeId = opened.scopes.find((s) => s.scope === 'vault')?.key_id;
+    const vaultScopeId = this.opened.scopes.find((s) => s.scope === 'vault')?.key_id;
     if (!vaultScopeId) throw new Error('the vault reports no key scope of its own');
-    const { tree } = await this.readServerTree(opened.root_node_id, vaultScopeId);
+    const { tree } = await this.readServerTree(this.opened.root_node_id, vaultScopeId);
     return tree;
   }
 
