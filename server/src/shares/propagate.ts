@@ -22,7 +22,8 @@
  */
 import type { PoolClient } from 'pg';
 import { claimBlob, recordVersion } from '../holdings.js';
-import { counterpartOf, createCounterpart, journalEntry } from './replica.js';
+import { counterpartOf, createCounterpart } from './replica.js';
+import { journalEntry } from '../revision.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 

@@ -16,7 +16,7 @@
  * other's names.
  */
 import type { PoolClient } from 'pg';
-import { nextRev } from '../revision.js';
+import { journalEntry, nextRev } from '../revision.js';
 
 /** A node of a replica, as the two operations here need to know it. */
 export interface Counterpart {
@@ -45,27 +45,6 @@ export const counterpartOf = async (
   );
   return res.rows[0];
 };
-
-/**
- * Record the change in that vault's own journal, so its devices see it as a change.
- *
- * `prev_parent_id` belongs to a move and to nothing else: it is how a client learns where the
- * node came from. The other operations leave it null, which is not an omission — there is no
- * previous parent when a node is created, written or deleted in place.
- */
-export const journalEntry = (
-  c: PoolClient,
-  vaultId: string,
-  rev: number,
-  nodeId: string,
-  op: 'put' | 'del' | 'move',
-  prevParent?: string,
-): Promise<unknown> =>
-  c.query(
-    `INSERT INTO journal (vault_id, rev, node_id, prev_parent_id, op, node_rev)
-     VALUES ($1, $2, $3, $4, $5::journal_op, $2)`,
-    [vaultId, rev, nodeId, prevParent ?? null, op],
-  );
 
 /** One node of the source, in the spelling both operations already speak. */
 export interface ReplicaItem {

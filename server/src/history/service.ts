@@ -13,7 +13,7 @@ import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
 import { txGuarded, type Refusal } from '../refusal.js';
-import { nextRev } from '../revision.js';
+import { journalEntry, nextRev } from '../revision.js';
 
 /** The schema's own refusals, returned rather than thrown — see `nodes/service.ts`. */
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
@@ -141,8 +141,7 @@ export const restoreNode = async (
       const rev = await nextRev(c, input.vaultId);
       await c.query(`UPDATE nodes SET deleted_at = NULL, rev = $3 WHERE vault_id = $1 AND id = $2`,
         [input.vaultId, a.id, rev]);
-      await c.query(`INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`,
-        [input.vaultId, rev, a.id]);
+      await journalEntry(c, input.vaultId, rev, a.id, 'put');
       lifted.push(a.id);
     }
 
@@ -155,8 +154,7 @@ export const restoreNode = async (
         WHERE vault_id = $1 AND id = $2`,
       [input.vaultId, input.nodeId, n.type === 'folder' ? null : sha, n.type === 'folder' ? null : size, rev],
     );
-    await c.query(`INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`,
-      [input.vaultId, rev, input.nodeId]);
+    await journalEntry(c, input.vaultId, rev, input.nodeId, 'put');
 
     if (n.type !== 'folder') {
       // The author is the person restoring, not whoever wrote the version being restored:

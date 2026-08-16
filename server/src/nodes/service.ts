@@ -25,7 +25,7 @@ import {
   propagateMove,
   propagatePut,
 } from '../shares/propagate.js';
-import { nextRev } from '../revision.js';
+import { journalEntry, nextRev } from '../revision.js';
 
 /**
  * Which of these content tags the vault's own key scope already knows, and what address
@@ -118,10 +118,7 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
     );
     const nodeId = node.rows[0]!.id;
 
-    await c.query(
-      `INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`,
-      [input.vaultId, rev, nodeId],
-    );
+    await journalEntry(c, input.vaultId, rev, nodeId, 'put');
 
     if (input.sha256) {
       // The route refuses content without a size, so this is a defect on this side rather
@@ -198,10 +195,7 @@ export const putContent = async (
         WHERE vault_id = $1 AND id = $2`,
       [input.vaultId, input.nodeId, input.sha256, input.size, input.mtime, rev],
     );
-    await c.query(
-      `INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'put', $2)`,
-      [input.vaultId, rev, input.nodeId],
-    );
+    await journalEntry(c, input.vaultId, rev, input.nodeId, 'put');
     await recordVersion(c, {
       vaultId: input.vaultId,
       nodeId: input.nodeId,
@@ -259,10 +253,7 @@ export const deleteNode = async (
       `UPDATE nodes SET deleted_at = now(), rev = $3 WHERE vault_id = $1 AND id = $2`,
       [input.vaultId, input.nodeId, rev],
     );
-    await c.query(
-      `INSERT INTO journal (vault_id, rev, node_id, op, node_rev) VALUES ($1, $2, $3, 'del', $2)`,
-      [input.vaultId, rev, input.nodeId],
-    );
+    await journalEntry(c, input.vaultId, rev, input.nodeId, 'del');
 
     if (row.shareId && row.shareItemId) {
       await propagateDelete(c, await fanoutTargets(c, row.shareId, input.vaultId), row.shareItemId);
@@ -333,11 +324,7 @@ export const moveNode = async (
       [input.vaultId, input.nodeId, newAncestry],
     );
 
-    await c.query(
-      `INSERT INTO journal (vault_id, rev, node_id, prev_parent_id, op, node_rev)
-       VALUES ($1, $2, $3, $4, 'move', $2)`,
-      [input.vaultId, rev, input.nodeId, row.parentId],
-    );
+    await journalEntry(c, input.vaultId, rev, input.nodeId, 'move', row.parentId);
 
     if (row.shareId && row.shareItemId && dest.rows[0]!.shareItemId) {
       await propagateMove(c, await fanoutTargets(c, row.shareId, input.vaultId), {
