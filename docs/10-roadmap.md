@@ -11,6 +11,7 @@
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☐ |
 | **M5** | management console (both zones) and backup operations — see [11](11-management-console.md) and [08](08-backup-restore.md) | ☐ |
 | **M6** | WebDAV gateway | ☐ |
+| **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
 
 E2EE is not a milestone: it is day one, in every milestone above (AC-08).
 
@@ -78,7 +79,7 @@ The design is settled in [06](06-key-model.md) and walked through in [07](07-onb
 its cost are #112.
 
 - [x] **Schema.** `users.kek_verifier_hash`, **beside** `recovery_key` and `recovery_code_hash` rather than
-      instead of them — the recovery code stays specified, and its fate is decided after M4. The two of them
+      instead of them — the recovery code stays specified, and is now M7. The two of them
       become **nullable**, which the three-shape `CHECK` on `state` and the key columns has to allow.
 - [x] **No account claims a path it does not have.** `connect()` writes a real `kek_verifier` — it already
       holds the `KEK` — and **null** where it used to write placeholder recovery values. Null means "no
@@ -103,8 +104,7 @@ its cost are #112.
 
 **Not in this milestone, deliberately:** generating and storing the **recovery code** itself, which answers
 the other loss — a forgotten passphrase. It stays specified in [06](06-key-model.md) and [07](07-onboarding.md)
-with its columns in place, and the decision on whether to build it is taken after M4. What M3.5 owes it is
-only honesty: null rather than a placeholder.
+with its columns in place, and is M7. What M3.5 owes it is only honesty: null rather than a placeholder.
 
 ### The scenario that decides it
 
@@ -235,6 +235,48 @@ deleting a vault:
 
 If any step needs an administrator, the milestone has failed: the person who ran out of space is the person
 who must be able to make space.
+
+## M7 — the recovery code
+
+The last row of the loss table in [06](06-key-model.md): every other way of losing access already has an
+answer, and a **forgotten passphrase** has none. It is placed after M6 rather than earlier because the loss
+it answers is the only one the user can prevent on their own, and because the mechanism is small enough that
+its position in the queue costs nothing to change — the endpoint was built to take a second proof from the
+day it was written.
+
+Mechanically it is a second wrapping of the **same seed**: nothing is re-encrypted, and `recovery_key` sits
+beside `wrapped_seed` exactly as `enc_privkey` sits beside both. The columns and their paired `CHECK` have
+been in the schema since M3.5.
+
+- [ ] **Generate, show once, store the hash.** A high-entropy code produced on the client, `recovery_key =
+      seal(code, seed)` and `recovery_code_hash` sent up. The code itself never reaches the server, and is
+      shown exactly once — there is no second viewing, because a code the server could show again would be
+      a code the server could use.
+- [ ] **The second proof at `/auth/recover`.** The endpoint's shape does not change: one endpoint, two
+      proofs, each returning only the envelope its own proof opens. The same generic refusal (#73) and the
+      same attempt limit cover it, so a code cannot be used to distinguish an account from a stranger either.
+- [ ] **Regenerate**, which is another wrapping of the same seed and therefore cheap — and which
+      **invalidates the previous code**, since the whole risk of this feature is a slip of paper from three
+      years ago that still opens the account.
+- [ ] **A screen that says what it is for**, because the value of this depends entirely on where the user
+      puts it.
+
+**Offered, never forced.** It is an action in the settings and not a step of registration. A code demanded
+during sign-up lands in the same password manager as the passphrase, where it is a second key to the same
+door: all of the cost, none of the protection. It pays only when it lives in a different medium — printed
+and in a drawer, in a safe, with a family member — and that is a choice the product can explain and must not
+make on somebody's behalf.
+
+**It survives a passphrase change** by construction, since the seed does not change: what a new passphrase
+re-derives is `wrapped_seed` and `kek_verifier`, and neither is what a code opens. That is a convenience and
+a hazard in one sentence, which is why regeneration exists beside it.
+
+### The scenario that decides it
+
+The passphrase is gone — not the devices, the *passphrase*, which no backup anywhere holds. With the code
+alone, on a machine with nothing on it, the account and every vault the server still holds come back. And
+with neither the code nor the phrase, nothing does: there is no escrow and no administrator in either path,
+which is the same sentence M3.5 already had to say out loud.
 
 ## M1 — the scope of the first complete release
 

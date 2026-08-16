@@ -108,7 +108,7 @@ six months later, and how you tell a mistake from a misunderstanding.
 | Vaults | list vaults; create, rename or delete an empty vault; usage broken down into current content and history, per vault and account-wide, with the actions that actually free space. A share replica counts as ordinary content of the vault it lives in — there is no separate share figure ([03](03-data-model.md)) |
 | Devices | list, last seen, **sign out this device**, sign out everywhere |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
-| Security | change passphrase, regenerate the recovery code — **in the plugin**, see below |
+| Security | change passphrase, regenerate the recovery code — **in the plugin**, see below. The console arrives in M5 and the recovery code itself in [M7](10-roadmap.md), so until then this section offers the passphrase alone rather than a control for something that does not exist |
 | History | retention setting: the length of history is the user's own trade against quota |
 
 **Changing the passphrase never re-encrypts anything.** The account **seed** stays the same, and every

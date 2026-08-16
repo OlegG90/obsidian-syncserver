@@ -257,8 +257,8 @@ caller who can produce neither proof gets the same refusal as an unknown login.
 | the passphrase | the recovery code, if one was kept |
 
 Only the first is implemented ([10](10-roadmap.md), M3.5). The recovery code is specified here, has its
-columns in the schema, and is deliberately left unbuilt until after M4 — with one condition attached below,
-because a half-present mechanism must not claim to be a whole one.
+columns in the schema, and is **M7** — with one condition holding until then, because a half-present
+mechanism must not claim to be a whole one.
 
 #### What this costs, stated plainly
 

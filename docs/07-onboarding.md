@@ -177,7 +177,7 @@ per login and per source, and each is recorded in the audit log.
 the code, step 2 disappears and step 3 carries the code instead; the server answers with `recovery_key` — the
 seed wrapped under that code — and everything from step 5 is identical. One endpoint, two proofs, and each
 returns only the envelope its proof opens ([06](06-key-model.md)). That half is specified and **not built**:
-it waits until after M4, and until then an account's recovery columns are **null**, which is the account
+it is [M7](10-roadmap.md), and until then an account's recovery columns are **null**, which is the account
 saying honestly that it has no code.
 
 **What recovery does not do.** It does not survive losing both the phrase and the code, and it does not bring

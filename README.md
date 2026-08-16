@@ -161,6 +161,7 @@ Current release: **0.3.0** — see [Versions](#versions).
 | **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | not started — the schema has carried these tables since M0 and almost none of them has code, which is why a frozen account currently has no way to give space back |
 | **M5** — management console (both zones) and backup operations | not started |
 | **M6** — WebDAV gateway | not started |
+| **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | not started — specified since M3.5, with its columns in the schema and null meaning honestly "this account has no code" |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
 ways, and a real conflict with neither version lost. That pass found **five defects a hundred and fifty
