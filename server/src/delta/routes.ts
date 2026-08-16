@@ -2,7 +2,7 @@ import type { CursorFaultBody, CursorPayload, Scope } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
-import { deltaEventsFor, shareScopesFor } from '../shares/service.js';
+import { deltaEventsFor, shareScopesFor } from '../shares/surface.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { decodeCursor, encodeCursor } from './cursor.js';

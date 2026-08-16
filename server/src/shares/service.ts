@@ -1,13 +1,24 @@
 /**
- * A share, from its creation to the point somebody can be invited into it.
+ * A share's whole lifecycle: created, prepared, activated, joined, left, finished with.
  *
  * **Replication, not mounting** (docs/05): every participant ends up holding their own
  * copy, so leaving a share leaves you with your files. Nothing here moves or re-parents
  * anything the initiator already had.
  *
- * This module owns the part of the lifecycle that exists before anyone else is involved —
- * create, cancel, and the two lists a client reads. Invitation, preparation, activation,
- * joining and finalization are their own steps and are not here.
+ * The header used to claim that invitation, preparation, activation, joining and
+ * finalization "are their own steps and are not here" while every one of them was — written
+ * when it was true and left alone as the file grew, so a reader looking for `joinShare` was
+ * told to look elsewhere. They are all here, and they belong together: each is a transition
+ * of one state machine, and the schema enforces the order between them.
+ *
+ * **What is NOT here, and why.** Two questions that other files ask, cut out because of who
+ * asks them rather than because of size:
+ *
+ * - `surface.ts` — the key scopes a vault reports and the account states a delta carries.
+ *   Both are read by a different route family, and answering them used to mean importing
+ *   this entire state machine to compute two lists;
+ * - `owed.ts` — which blobs still lack material under a scope, asked in both directions by
+ *   preparation and by departure. One query, two callers here and one in the routes.
  *
  * **What the server never does.** It does not derive `KS`, encrypt a name, or seal an
  * envelope. `wrapped_key_initiator` and the scope id arrive opaque and are stored opaque
@@ -26,6 +37,7 @@ import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
 import { fakeRecipient } from '../crypto.js';
 import { headroom } from '../quota.js';
+import { preparationGaps } from './owed.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
 
@@ -325,62 +337,6 @@ export const listMembers = async (db: Db, userId: string, shareId: string): Prom
   );
 };
 
-/**
- * The material a participant would need and does not have yet.
- *
- * Activation is the server's one real check, and it exists because everything after it
- * assumes the answer. A share activated with a hole hands somebody a folder they cannot
- * open — and they would find out later, file by file, with no way to tell a missing
- * envelope from a corrupt one.
- */
-export type PreparationGap = {
-  nodeId: string;
-  /** `name` — still under `KV`; `content` — no `KS` envelope for bytes it references. */
-  missing: string;
-};
-
-/**
- * What is not yet prepared under `KS`, for the interior of a share.
- *
- * **Interior, not the root.** The share's own folder keeps its `KV` label for the life of
- * the share and after (SH-01, SH-25): it sits beside private siblings, and a participant
- * who cannot read `KV` never needs to read it — they name their own copy's root when they
- * join. Every node *below* it is different, because a participant may create and rename
- * there, so those names must be under `KS`.
- *
- * Two ways to be unprepared, and both matter:
- *
- * - a **name** still under the vault key, which a participant could not decrypt;
- * - **content** with no `KS` envelope — for the live file and for every version still
- *   reachable, since joining delivers a file's retained history and not only its head
- *   (SH-15, SH-23). A head that opens beside a history that does not is the subtler hole,
- *   and the one a check written against current nodes alone would miss.
- */
-const preparationGaps = (db: Db, vaultId: string, rootId: string, keyId: string): Promise<PreparationGap[]> =>
-  db.query<PreparationGap>(
-    `SELECT n.id AS "nodeId", 'name' AS missing
-       FROM nodes n
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND n.deleted_at IS NULL AND n.name_key_id IS DISTINCT FROM $3
-      UNION
-     SELECT n.id, 'content'
-       FROM nodes n
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND n.deleted_at IS NULL AND n.type = 'file' AND n.sha256 IS NOT NULL
-        AND (NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
-          -- The tag too, and only here: the schema asks for it exactly where the plaintext
-          -- is — a live head. Checking it for history as well would report a gap no client
-          -- could close, since a superseded version is not on anybody's disk.
-          OR NOT EXISTS (SELECT 1 FROM dedup_index d WHERE d.sha256 = n.sha256 AND d.scope_id = $3))
-      UNION
-     SELECT v.node_id, 'content'
-       FROM versions v
-       JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id
-      WHERE n.vault_id = $1 AND n.ancestry @> ARRAY[$2]::uuid[]
-        AND NOT EXISTS (SELECT 1 FROM blob_keys k WHERE k.sha256 = v.sha256 AND k.scope_id = $3)
-      LIMIT 20`,
-    [vaultId, rootId, keyId],
-  );
 
 /**
  * Verify preparation and open the share for invitations.
@@ -1062,92 +1018,6 @@ export const finalizeLeave = async (
   });
 };
 
-/** A key scope this vault's nodes may be named under, and how the caller opens it. */
-export type ShareScope = {
-  shareId: string;
-  keyId: string;
-  wrappedKey: string;
-  /**
-   * `vault` — wrapped under `KV`, which is how the initiator keeps their own copy;
-   * `account` — an HPKE envelope to the account's public key, which is how a participant
-   * received theirs. The client cannot guess: the two are opened with different keys.
-   */
-  wrapping: 'vault' | 'account';
-};
-
-/**
- * The share keys this caller needs to read this vault.
- *
- * Without these a client that restarts can see shared nodes and cannot name them: the
- * interior of a share is under `KS`, and `KS` reaches a device only in a wrapped form the
- * server stores but cannot open. It is returned when a vault is opened rather than through
- * an endpoint of its own because that is the moment the answer is needed — a sync that
- * begins without it fails on the first shared name.
- *
- * Both directions of ownership in one query, and they are genuinely different rows: the
- * initiator's copy lives on `shares`, a participant's on their membership.
- *
- * **The condition is `left_at IS NULL`, not the share's state**, and the difference is a
- * deadlock. An ended share still has a replica named under `KS` until its owner runs the
- * finalization pass — and that pass needs the very key being asked for here. Withholding it
- * because the share is over locks the vault out of BOTH: it cannot read the names, so it
- * cannot sync, and it cannot convert them back, so it never will. Found by ending a live
- * share and watching the vault stop syncing.
- *
- * The key stops being offered when `left_at` records that the pass ran, which is the same
- * moment the `share_ended` event stops being raised — one condition, two places that must
- * agree about when a share is finished with somebody.
- */
-export const shareScopesFor = (db: Db, userId: string, vaultId: string): Promise<ShareScope[]> =>
-  db.query<ShareScope>(
-    `SELECT s.id AS "shareId", s.subtree_key_id AS "keyId",
-            encode(s.wrapped_key_initiator, 'base64') AS "wrappedKey", 'vault' AS wrapping
-       FROM shares s
-       JOIN share_members m ON m.share_id = s.id AND m.user_id = s.initiator_id
-      WHERE s.initiator_id = $1 AND s.initiator_vault_id = $2
-        AND m.left_at IS NULL
-        AND s.subtree_key_id IS NOT NULL
-      UNION ALL
-     SELECT s.id, s.subtree_key_id, encode(m.wrapped_key, 'base64'), 'account'
-       FROM share_members m JOIN shares s ON s.id = m.share_id
-      WHERE m.user_id = $1 AND m.vault_id = $2 AND m.user_id <> s.initiator_id
-        AND m.joined_at IS NOT NULL AND m.left_at IS NULL
-        AND m.wrapped_key IS NOT NULL AND s.subtree_key_id IS NOT NULL`,
-    [userId, vaultId],
-  );
-
-/**
- * The states this caller must be shown, recomputed rather than remembered.
- *
- * Both are true-now questions, so they are asked on every delta: a client that missed one
- * is told again, and one that has caught up stops being told. That is the same shape
- * docs/02 gives everything else — the server holds states, the client renders them, and
- * nothing waits for an answer. An event log would need a cursor of its own and a rule for
- * pruning it, to say something the current row already says.
- *
- * `share_ended` is offered while the member still holds a replica to finalize: it is the
- * only prompt that the pass is owed, and it stops when `left_at` records that it ran.
- *
- * The freeze names no share, because being over quota is an account state (SH-20).
- */
-export const deltaEventsFor = async (db: Db, userId: string, vaultId: string): Promise<DeltaEvent[]> => {
-  const rows = await db.query<{ kind: string; shareId: string | null; at: string }>(
-    `SELECT 'share_ended' AS kind, s.id AS "shareId", s.terminal_at AS at
-       FROM share_members m JOIN shares s ON s.id = m.share_id
-      WHERE m.user_id = $1 AND m.vault_id = $2
-        AND s.state = 'ended' AND m.left_at IS NULL AND s.terminal_at IS NOT NULL
-      UNION ALL
-     SELECT 'account_frozen', NULL, u.frozen_at
-       FROM users u WHERE u.id = $1 AND u.frozen_at IS NOT NULL`,
-    [userId, vaultId],
-  );
-
-  return rows.map((r) =>
-    r.kind === 'share_ended'
-      ? ({ type: 'share_ended', share_id: r.shareId!, at: r.at } as const)
-      : ({ type: 'account_frozen', at: r.at } as const),
-  );
-};
 
 /**
  * The public key a share key must be sealed to, for a login the initiator names.
@@ -1186,143 +1056,4 @@ export const recipientPubkey = async (
 
   const fake = fakeRecipient(serverSecret, login);
   return { userId: fake.userId, pubkey: fake.pubkey.toString('base64') };
-};
-
-/** One node the departing client must convert, as only it can. */
-export type ReplicaNode = {
-  nodeId: string;
-  nameEnc: string | null;
-  nameKeyId: string | null;
-  type: string;
-  deleted: boolean;
-  /**
-   * The ciphertext address, for a file.
-   *
-   * Needed because leaving re-wraps the content key under `KV`, and for somebody who
-   * JOINED the share there is no other envelope: the blob's `KV` envelope belongs to the
-   * initiator's vault key, which this account never had. Without it their files stay
-   * readable only under a key that is about to stop being offered.
-   */
-  sha256: string | null;
-  /**
-   * Whether this node's bytes still need an envelope and tag under the vault key.
-   *
-   * The server can see this and the client cannot — `blob_keys` and `dedup_index` are its
-   * tables — so it says it, exactly as `preparationGaps` does for the other direction.
-   * Leaving it to the client meant guessing: convert everything and fail on material that
-   * was never there, or skip on a missing source and fail the unmark instead, which the
-   * schema refuses with "cannot be unmarked before blob … has its vault envelope".
-   */
-  needsVaultMaterial: boolean;
-  /**
-   * Superseded blobs of this node that still owe an envelope under the vault key.
-   *
-   * A node is not one blob. Every write made while the folder was shared minted its content
-   * key under `KS` and only `KS` — including writes that arrived from somebody else — so a
-   * departure owes an envelope for the whole retained history, not just the head. Reporting
-   * the head alone left a leaver refused on a version they could not even see: their own
-   * note, one edit ago.
-   *
-   * **Envelopes only.** The tag is an HMAC over the plaintext, and a superseded version is
-   * not on disk; the schema asks for a tag exactly where the plaintext is.
-   */
-  history: string[];
-};
-
-/**
- * Everything in this vault still carrying the share — the set finalization must cover.
- *
- * A purpose-built listing rather than the trash, because they answer different questions.
- * The trash offers *what can be brought back*, so it shows only nodes that still have
- * versions and never shows folders at all; this offers *what must be converted*, which
- * includes both. Asking the first question in place of the second left a client unable to
- * finish — and unable to discover why, since the nodes blocking it were invisible to every
- * listing it had.
- *
- * The names come with it because the client has to re-encrypt them under `KV`, and for a
- * node it deleted long ago the only copy of the name is here.
- */
-export const replicaOf = async (
-  db: Db,
-  userId: string,
-  shareId: string,
-): Promise<ReplicaNode[] | undefined> => {
-  const member = await db.one<{ vaultId: string; vaultKeyId: string }>(
-    `SELECT m.vault_id AS "vaultId", v.vault_key_id AS "vaultKeyId"
-       FROM share_members m JOIN vaults v ON v.id = m.vault_id
-      WHERE m.share_id = $1 AND m.user_id = $2 AND m.left_at IS NULL`,
-    [shareId, userId],
-  );
-  if (!member?.vaultId) return undefined;
-
-  const rows = await owedUnder(db, member.vaultId, shareId, member.vaultKeyId);
-  return rows.map(({ needsMaterial, ...rest }) => ({ ...rest, needsVaultMaterial: needsMaterial }));
-};
-
-/** One marked node, and what it still owes under some scope. */
-type OwedNode = Omit<ReplicaNode, 'needsVaultMaterial'> & { needsMaterial: boolean };
-
-/**
- * Every marked node of a vault, and what each still owes under one scope key.
- *
- * **One query for both directions.** Preparing a share moves the interior from `KV` to `KS`
- * and leaving moves it back; the question each side has to answer is identical — which blobs
- * lack material under the scope being moved TO — and only the scope differs. Asked twice they
- * would drift, and the drift is invisible until somebody cannot leave a folder they shared.
- *
- * The names come with it because a node the client cannot see locally — one it deleted long
- * ago — has its only readable name here.
- */
-const owedUnder = (db: Db, vaultId: string, shareId: string, scopeId: string): Promise<OwedNode[]> =>
-  db.query<OwedNode>(
-    `SELECT n.id AS "nodeId", encode(n.name_enc, 'base64') AS "nameEnc", n.name_key_id AS "nameKeyId",
-            n.type::text AS type, (n.deleted_at IS NOT NULL) AS deleted,
-            encode(n.sha256, 'hex') AS sha256,
-            (n.sha256 IS NOT NULL
-             AND NOT (EXISTS (SELECT 1 FROM blob_keys k
-                               WHERE k.sha256 = n.sha256 AND k.scope_id = $3)
-                      AND (n.deleted_at IS NOT NULL
-                           OR EXISTS (SELECT 1 FROM dedup_index d
-                                       WHERE d.sha256 = n.sha256 AND d.scope_id = $3))))
-              AS "needsMaterial",
-            COALESCE((SELECT array_agg(DISTINCT encode(ver.sha256, 'hex'))
-                        FROM versions ver
-                       WHERE ver.vault_id = n.vault_id AND ver.node_id = n.id
-                         AND ver.sha256 IS DISTINCT FROM n.sha256
-                         AND NOT EXISTS (SELECT 1 FROM blob_keys k
-                                          WHERE k.sha256 = ver.sha256 AND k.scope_id = $3)),
-                     ARRAY[]::text[]) AS history
-       FROM nodes n
-      WHERE n.vault_id = $1 AND n.share_id = $2 ORDER BY deleted, n.id`,
-    [vaultId, shareId, scopeId],
-  );
-
-/**
- * What preparation still owes under `KS`, for a share being built.
- *
- * The mirror of `replicaOf`, and needed for the same reason: a node is not one blob. A folder
- * whose files were edited before it was shared carries versions keyed under `KV` alone, and
- * activation refuses until every one of them has a `KS` envelope — a set no listing the
- * client keeps would show, since its own tree holds only the head of each file.
- *
- * The root is excluded here as everywhere (SH-01): its name and content stay the initiator's.
- */
-export const preparationOwed = async (
-  db: Db,
-  userId: string,
-  shareId: string,
-): Promise<OwedNode[] | undefined> => {
-  const share = await db.one<{ vaultId: string; keyId: string; rootItemId: string }>(
-    `SELECT initiator_vault_id AS "vaultId", subtree_key_id AS "keyId", root_item_id AS "rootItemId"
-       FROM shares WHERE id = $1 AND initiator_id = $2 AND state = 'preparing'`,
-    [shareId, userId],
-  );
-  if (!share) return undefined;
-
-  const rows = await owedUnder(db, share.vaultId, shareId, share.keyId);
-  const root = await db.one<{ id: string }>(
-    `SELECT id FROM nodes WHERE vault_id = $1 AND share_item_id = $2`,
-    [share.vaultId, share.rootItemId],
-  );
-  return rows.filter((n) => n.nodeId !== root?.id);
 };
