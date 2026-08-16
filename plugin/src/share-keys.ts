@@ -11,20 +11,17 @@
  * key, because it had to cross to somebody who will never hold this account's seed. They
  * are opened with different keys, which is why the server says which is which rather than
  * leaving a client to try both and read a failure as the answer.
+ *
+ * The scope shape comes from `shared/`, where the wire's vocabulary lives. This module had
+ * its own copy with `wrapping` widened to `string`, which is the drift that package exists
+ * to prevent: a widened field accepts a value the server can never send, and the `switch`
+ * that reads it stops being exhaustive without anything saying so.
  */
+import type { Scope } from '@syncserver/shared';
 import { fromBase64 } from './crypto/bytes.js';
 import { openFrom } from './crypto/hpke.js';
 import { unwrapShareKey } from './crypto/share.js';
 import { shareEnvelopeAad } from './sharing.js';
-
-/** One scope as `GET /vaults/{id}` reports it. */
-export interface ReportedScope {
-  scope: string;
-  key_id: string;
-  share_id?: string;
-  wrapped_key?: string;
-  wrapping?: string;
-}
 
 export interface ShareKeyDeps {
   /** `KV` for the vault being opened — what the initiator's own copy is wrapped under. */
@@ -52,7 +49,7 @@ export interface ShareKeyDeps {
  * @returns the openable ones, and the scope ids of any that were not.
  */
 export const shareKeysFrom = (
-  scopes: readonly ReportedScope[],
+  scopes: readonly Scope[],
   deps: ShareKeyDeps,
 ): { keys: Map<string, Uint8Array>; unopenable: string[] } => {
   const keys = new Map<string, Uint8Array>();
