@@ -241,6 +241,55 @@ describe('Session.create + open', () => {
   });
 });
 
+describe('an account that predates recovery repairs itself on login', () => {
+  // The server can say `needs_kek_verifier` and can do nothing about it: making one takes the
+  // KEK, which exists only on a device holding the passphrase (#112). Every entrance has it
+  // by the time it logs in, so every entrance files it — the repair used to be on the unlock
+  // path alone, which left such an account unrecoverable until somebody happened to unlock on
+  // the one device that still had it.
+  const needsRepair = () => ({
+    ...okAnswers(),
+    'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1', needs_kek_verifier: true } },
+    'PUT /auth/kek-verifier': { status: 204, body: {} },
+  });
+
+  it('files the verifier the KEK produces, bound to this login and salt', async () => {
+    const transport = fakeTransport(needsRepair());
+    const { create } = forTests({ derivation: fakeDerivation(), transport });
+
+    assert.equal(await create(conn()).open('correct horse battery staple'), 'open');
+
+    const call = transport.calls.find((c) => c.url.includes('/auth/kek-verifier'))!;
+    assert.ok(call, 'the repair went out');
+    assert.equal(
+      JSON.parse(call.body as string).kek_verifier,
+      kekVerifier(KNOWN_KEK, 'alice', KNOWN_SALT),
+      'the one the server can check — not a placeholder, and not the KEK itself',
+    );
+  });
+
+  it('says nothing when the account already has one', async () => {
+    const transport = fakeTransport(okAnswers());
+    const { create } = forTests({ derivation: fakeDerivation(), transport });
+
+    await create(conn()).open('correct horse battery staple');
+    assert.ok(!transport.calls.some((c) => c.url.includes('/auth/kek-verifier')), 'no repair, no request');
+  });
+
+  it('opens the vault even when the repair cannot be filed', async () => {
+    // Offline, or a server too old to have the endpoint. Refusing to open a vault because a
+    // repair could not be filed would be the worse trade; it is tried again next login.
+    const transport = fakeTransport({
+      ...okAnswers(),
+      'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1', needs_kek_verifier: true } },
+      'PUT /auth/kek-verifier': { status: 500, body: { error: 'nope' } },
+    });
+    const { create } = forTests({ derivation: fakeDerivation(), transport });
+
+    assert.equal(await create(conn()).open('correct horse battery staple'), 'open');
+  });
+});
+
 describe('Session.use and lock — the busy guard', () => {
   it('lock() returns busy while a use() is in flight', async () => {
     const derivation = fakeDerivation();
@@ -434,6 +483,28 @@ describe('Session.recover — the last device is gone', () => {
     for (const c of transport.calls) {
       assert.ok(!String(c.body ?? '').includes(PHRASE), `${c.method} ${c.url} carried the passphrase`);
     }
+  });
+
+  it('files a verifier here too, when the server says one is missing', async () => {
+    // The widening the shared login step made possible. Recovery normally authenticates WITH
+    // the verifier, so this is a no-op in practice — but the entrance no longer decides that
+    // for itself, which is the point: one act, and no path that quietly skips half of it.
+    const transport = fakeTransport({
+      ...answers(),
+      'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1', needs_kek_verifier: true } },
+      'PUT /auth/kek-verifier': { status: 204, body: {} },
+    });
+    await Session.recover(
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+      { derivation: realDerivationForTests, transport },
+    );
+
+    const call = transport.calls.find((c) => c.url.includes('/auth/kek-verifier'))!;
+    assert.ok(call, 'the repair went out from a recovery too');
+    assert.equal(
+      JSON.parse(call.body as string).kek_verifier,
+      kekVerifier(deriveKek(PHRASE, RSALT, FAST), 'alice', RSALT),
+    );
   });
 
   it('refuses a login whose salt does not belong to it, rather than storing a broken record', async () => {

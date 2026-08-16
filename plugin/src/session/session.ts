@@ -161,6 +161,54 @@ const handleFor = (
   openIdentity: () => unwrapIdentity(seed, encPrivkey),
 });
 
+/** What proves who is logging in, and what would repair an account that cannot be recovered. */
+interface LoginIdentity {
+  login: string;
+  deviceId: string;
+  /** The account seed, which `auth_secret = HKDF(seed, "auth")` is derived from. */
+  seed: Uint8Array;
+  /** `KEK = Argon2id(passphrase, salt)` — only ever here, and only while the phrase is in hand. */
+  kek: Uint8Array;
+  accountSalt: Uint8Array;
+}
+
+/**
+ * Log in, hold both tokens on the client, and repair the account if it needs it.
+ *
+ * Three entrances reach this — unlocking, pairing, recovering — and each wrote the same five
+ * lines: log in, set the access token, set the refresh token. Written three times they drift,
+ * and this pair had already begun to: the repair below existed on the unlock path alone.
+ *
+ * **The repair.** An account made before recovery existed (#112) has no `kek_verifier`, and
+ * nothing on the server can make one — it takes the KEK, which exists only on a device
+ * holding the passphrase, and only while it is held. Left undone, such an account is
+ * unrecoverable forever with nobody told. Every entrance here has the KEK in hand by the time
+ * it logs in, so every one of them can file it; doing it on only one meant an old account
+ * stayed unrecoverable until somebody happened to unlock on the original device.
+ *
+ * Failure is swallowed on purpose. This is a repair, and refusing to open a vault because a
+ * repair could not be filed would be the worse trade — offline, or a server too old to have
+ * the endpoint, and it is tried again on the next login either way.
+ */
+const loginAndHold = async (client: SyncClient, who: LoginIdentity) => {
+  const session = await client.login({
+    login: who.login,
+    auth_secret: authSecret(who.seed),
+    device_id: who.deviceId,
+  });
+  client.setAccessToken(session.access);
+  client.setRefreshToken(session.refresh);
+
+  if (session.needs_kek_verifier) {
+    try {
+      await client.setKekVerifier(kekVerifier(who.kek, who.login, who.accountSalt));
+    } catch {
+      // Offline, or an older server that has no such endpoint. Tried again next login.
+    }
+  }
+  return session;
+};
+
 export class Session {
   private readonly derivation: Derivation;
   private readonly transport: Transport;
@@ -277,29 +325,14 @@ export class Session {
     this.seed = account.seed;
 
     const client = new SyncClient(this.conn.serverUrl, this.transport);
-    const session = await client.login({
+    const session = await loginAndHold(client, {
       login: this.conn.login,
-      auth_secret: authSecret(account.seed),
-      device_id: this.conn.deviceId,
+      deviceId: this.conn.deviceId,
+      seed: account.seed,
+      kek: account.kek,
+      accountSalt: fromBase64(this.conn.accountSalt),
     });
-    client.setAccessToken(session.access);
-    client.setRefreshToken(session.refresh);
     this.handle = handleFor(client, account.seed, this.conn.vaultId, session.user_id, session.enc_privkey);
-
-    // An account made before recovery existed has no verifier, and nothing on the server can
-    // make one: it takes the KEK, which only exists here, and only while the phrase is in
-    // hand — which is now. Left undone, such an account is unrecoverable forever without
-    // anybody being told. Failure is swallowed on purpose: this is a repair, and refusing to
-    // open a vault because a repair could not be filed would be the worse trade.
-    if (session.needs_kek_verifier) {
-      try {
-        await client.setKekVerifier(
-          kekVerifier(account.kek, this.conn.login, fromBase64(this.conn.accountSalt)),
-        );
-      } catch {
-        // Offline, or an older server that has no such endpoint. Tried again next unlock.
-      }
-    }
     return 'open';
   }
 
@@ -440,13 +473,13 @@ export class Session {
     const accountSalt = fromBase64(claimed.account_salt);
     const kek = deriveKek(args.passphrase, accountSalt, claimed.kdf_params);
 
-    const session = await client.login({
+    await loginAndHold(client, {
       login: args.login,
-      auth_secret: authSecret(seed),
-      device_id: claimed.device_id,
+      deviceId: claimed.device_id,
+      seed,
+      kek,
+      accountSalt,
     });
-    client.setAccessToken(session.access);
-    client.setRefreshToken(session.refresh);
 
     const vaultId = await Session.chooseVault(client, args.vaultId, 'sync');
 
@@ -515,13 +548,16 @@ export class Session {
       );
     }
 
-    const session = await client.login({
+    // The verifier is what the server just authenticated this call with, so the repair inside
+    // is a no-op here by construction — which is the honest shape of "every login files it",
+    // rather than a fourth caller deciding it knows better.
+    await loginAndHold(client, {
       login: args.login,
-      auth_secret: authSecret(seed),
-      device_id: recovered.device_id,
+      deviceId: recovered.device_id,
+      seed,
+      kek,
+      accountSalt,
     });
-    client.setAccessToken(session.access);
-    client.setRefreshToken(session.refresh);
 
     const vaultId = await Session.chooseVault(client, args.vaultId, 'recover into');
 
