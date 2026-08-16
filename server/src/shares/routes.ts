@@ -29,6 +29,50 @@ import { preparationOwed, replicaOf } from './owed.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** A node's name as any conversion sends it: re-encrypted under the scope it is moving to. */
+interface WireName {
+  node_id: string;
+  name_enc: string;
+  name_hmac: string;
+  name_key_id: string;
+}
+
+/** The key material that travels with it, in the wire's spelling. */
+type WireEnvelope = { sha256: string; scope_id: string; wrapped_key: string };
+type WireTag = { sha256: string; scope_id: string; content_tag: string };
+
+/**
+ * Which of a converted node's fields is malformed, or nothing.
+ *
+ * Both conversions check the same four, because a conversion is the same act in both
+ * directions — only the scope it moves to differs.
+ */
+const badName = (n: WireName | undefined): string | undefined => {
+  if (!UUID.test(n?.node_id ?? '')) return 'bad_node_id';
+  if (!UUID.test(n?.name_key_id ?? '')) return 'bad_name_key_id';
+  if (!n?.name_enc || !n.name_hmac) return 'name_required';
+  return undefined;
+};
+
+/**
+ * One converted node, in the spelling the service speaks.
+ *
+ * Preparing a share moves a subtree from `KV` to `KS`; leaving moves it back. They are one
+ * operation run in two directions (`sharing.ts` says so on the client side, where a single
+ * `rekey` serves both), and the payloads differ only in what the fields are **called**:
+ * `blob_envelopes` going in, `vault_envelopes` coming out. That naming is deliberate — it
+ * makes a body meant for one endpoint fail at the other rather than half-apply — but it is
+ * the only difference, and translating it twice invited the two to drift.
+ */
+const converted = (n: WireName, envelopes: WireEnvelope[] = [], tags: WireTag[] = []) => ({
+  nodeId: n.node_id,
+  nameEnc: n.name_enc,
+  nameHmac: n.name_hmac,
+  nameKeyId: n.name_key_id,
+  envelopes: envelopes.map((e) => ({ sha256: e.sha256, scopeId: e.scope_id, wrappedKey: e.wrapped_key })),
+  dedupTags: tags.map((t) => ({ sha256: t.sha256, scopeId: t.scope_id, contentTag: t.content_tag })),
+});
+
 export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
   /**
    * Who to seal the share key to. Answers an unknown login with a deterministic fake rather
@@ -97,31 +141,15 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length === 0) return reply.code(400).send({ error: 'items_required' });
     for (const i of items) {
-      if (!UUID.test(i?.node_id ?? '')) return reply.code(400).send({ error: 'bad_node_id' });
-      if (!UUID.test(i?.name_key_id ?? '')) return reply.code(400).send({ error: 'bad_name_key_id' });
-      if (!i.name_enc || !i.name_hmac) return reply.code(400).send({ error: 'name_required' });
+      const bad = badName(i);
+      if (bad) return reply.code(400).send({ error: bad });
     }
 
     const refusal = await prepareShare(
       db,
       req.caller!.userId,
       req.params.shareId,
-      items.map((i) => ({
-        nodeId: i.node_id,
-        nameEnc: i.name_enc,
-        nameHmac: i.name_hmac,
-        nameKeyId: i.name_key_id,
-        envelopes: (i.blob_envelopes ?? []).map((e) => ({
-          sha256: e.sha256,
-          scopeId: e.scope_id,
-          wrappedKey: e.wrapped_key,
-        })),
-        dedupTags: (i.dedup_tags ?? []).map((t) => ({
-          sha256: t.sha256,
-          scopeId: t.scope_id,
-          contentTag: t.content_tag,
-        })),
-      })),
+      items.map((i) => converted(i, i.blob_envelopes, i.dedup_tags)),
     );
     if (!refusal) return reply.code(204).send();
     return refuse(reply, refusal);
@@ -266,31 +294,15 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {
-      if (!UUID.test(n?.node_id ?? '')) return reply.code(400).send({ error: 'bad_node_id' });
-      if (!UUID.test(n?.name_key_id ?? '')) return reply.code(400).send({ error: 'bad_name_key_id' });
-      if (!n.name_enc || !n.name_hmac) return reply.code(400).send({ error: 'name_required' });
+      const bad = badName(n);
+      if (bad) return reply.code(400).send({ error: bad });
     }
 
     const refusal = await finalizeLeave(
       db,
       req.caller!.userId,
       req.params.shareId,
-      nodes.map((n) => ({
-        nodeId: n.node_id,
-        nameEnc: n.name_enc,
-        nameHmac: n.name_hmac,
-        nameKeyId: n.name_key_id,
-        envelopes: (n.vault_envelopes ?? []).map((e) => ({
-          sha256: e.sha256,
-          scopeId: e.scope_id,
-          wrappedKey: e.wrapped_key,
-        })),
-        dedupTags: (n.vault_dedup_tags ?? []).map((t) => ({
-          sha256: t.sha256,
-          scopeId: t.scope_id,
-          contentTag: t.content_tag,
-        })),
-      })),
+      nodes.map((n) => converted(n, n.vault_envelopes, n.vault_dedup_tags)),
     );
     if (!refusal) return reply.code(204).send();
     return refuse(reply, refusal);
