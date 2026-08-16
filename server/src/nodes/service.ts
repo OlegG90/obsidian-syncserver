@@ -11,7 +11,7 @@
  * visible unit; a trigger would scatter the same fact across rows nobody reads together.
  */
 import type { PoolClient } from 'pg';
-import { recordVersion } from '../holdings.js';
+import { bindBlob, recordVersion } from '../holdings.js';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
@@ -63,38 +63,6 @@ export const dedupLookup = async (
   );
 
 const fail = (kind: Refusal['kind']): Refusal => ({ kind }) as Refusal;
-
-/**
- * Binding a blob to a node moves the account's claim from pending to owned, in the same
- * transaction as the reference that caused it (invariant 8). There is no lazy half of the
- * accounting: a counter reconciled later is a counter that is wrong in between.
- */
-const bindBlob = async (c: PoolClient, userId: string, sha256Hex: string): Promise<void> => {
-  await c.query(
-    `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
-     ON CONFLICT (user_id, sha256) DO UPDATE
-        SET refs_own = user_blobs.refs_own + 1,
-            refs_pending = GREATEST(user_blobs.refs_pending - 1, 0),
-            pending_since = CASE WHEN GREATEST(user_blobs.refs_pending - 1, 0) = 0 THEN NULL
-                                 ELSE user_blobs.pending_since END`,
-    [userId, sha256Hex],
-  );
-};
-
-const releaseBlob = async (c: PoolClient, userId: string, sha256Hex: string): Promise<void> => {
-  // The row must not survive at zero — `row_must_be_referenced` forbids it, and a row that
-  // claimed nothing would still be counted by the quota sum.
-  await c.query(
-    `UPDATE user_blobs SET refs_own = GREATEST(refs_own - 1, 0)
-      WHERE user_id = $1 AND sha256 = decode($2,'hex')`,
-    [userId, sha256Hex],
-  );
-  await c.query(
-    `DELETE FROM user_blobs WHERE user_id = $1 AND sha256 = decode($2,'hex')
-       AND refs_own = 0 AND refs_pending = 0`,
-    [userId, sha256Hex],
-  );
-};
 
 export interface CreateInput {
   vaultId: string;

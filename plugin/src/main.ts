@@ -47,6 +47,15 @@ import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
  */
 const transport = makeObsidianTransport(requestUrl);
 
+/**
+ * The stylesheet that marks shared folders in the file tree.
+ *
+ * Named as a constant because two places need it: the one that writes it, and the teardown
+ * that takes it away. It lives in `document.head` rather than anywhere Obsidian owns, which
+ * is exactly why unloading has to say so.
+ */
+const SHARED_MARKS_STYLE = 'syncserver-shared-folders';
+
 interface PluginData {
   connection?: Connection;
   state?: VaultState;
@@ -167,6 +176,26 @@ export default class SyncServerPlugin extends Plugin {
       name: 'Forget the passphrase until next unlock',
       callback: () => this.lock(),
     });
+  }
+
+  /**
+   * Everything `onload` switched on that Obsidian does not switch off.
+   *
+   * The base class undoes what it was told about — a ribbon icon, a status bar item, a
+   * command, a settings tab. It knows nothing about a WebSocket this plugin opened or a
+   * `<style>` it put in `document.head`, and both outlive an unload without this: the socket
+   * keeps reconnecting on its own backoff, and shared folders keep their badges in a vault
+   * that has stopped syncing.
+   *
+   * **This runs on every update**, not only when somebody disables the plugin — which is how
+   * a second copy of the same listener ends up in the same window.
+   *
+   * The rule the next addition has to keep: anything switched on outside `register*` is
+   * switched off here, in the same order it went on.
+   */
+  override async onunload(): Promise<void> {
+    await this.stopPush();
+    document.getElementById(SHARED_MARKS_STYLE)?.remove();
   }
 
   async save(): Promise<void> {
@@ -762,13 +791,12 @@ export default class SyncServerPlugin extends Plugin {
       (p) => this.app.vault.getAbstractFileByPath(p) !== null,
     );
 
-    const id = 'syncserver-shared-folders';
-    document.getElementById(id)?.remove();
+    document.getElementById(SHARED_MARKS_STYLE)?.remove();
     const css = sharedFolderCss(paths);
     if (!css) return;
 
     const style = document.createElement('style');
-    style.id = id;
+    style.id = SHARED_MARKS_STYLE;
     style.textContent = css;
     document.head.appendChild(style);
   }

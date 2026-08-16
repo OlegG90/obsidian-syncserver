@@ -36,7 +36,7 @@ import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';
 import { fakeRecipient } from '../crypto.js';
-import { claimBlob, recordVersion } from '../holdings.js';
+import { claimBlob, dropUnreferenced, recordVersion } from '../holdings.js';
 import { headroom } from '../quota.js';
 import { preparationGaps } from './owed.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
@@ -998,21 +998,9 @@ export const finalizeLeave = async (
       }
     }
 
-    if (userId !== member.initiator) {
-      // The claims those versions were holding. Quota counts the ROW rather than the
-      // count on it (docs/03), so a blob this account no longer references anywhere must
-      // lose its row or the leaver keeps paying for history they no longer have.
-      await c.query(
-        `DELETE FROM user_blobs ub
-          WHERE ub.user_id = $1
-            AND NOT EXISTS (SELECT 1 FROM nodes n JOIN vaults va ON va.id = n.vault_id
-                             WHERE va.user_id = $1 AND n.sha256 = ub.sha256 AND n.deleted_at IS NULL)
-            AND NOT EXISTS (SELECT 1 FROM versions v JOIN vaults va ON va.id = v.vault_id
-                             WHERE va.user_id = $1 AND v.sha256 = ub.sha256)
-            AND ub.refs_pending = 0`,
-        [userId],
-      );
-    }
+    // The claims those versions were holding: a departing participant keeps the files and
+    // loses the history (SH-22), so what nothing of theirs points at any more stops counting.
+    if (userId !== member.initiator) await dropUnreferenced(c, userId);
 
     await c.query(`UPDATE share_members SET left_at = now() WHERE share_id = $1 AND user_id = $2`, [
       shareId,

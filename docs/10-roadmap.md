@@ -152,6 +152,9 @@ so the recovery attempt went to an address nobody had chosen and failed before t
       "deleting is the only way out"; until the trash can be emptied that sentence is not true, and the
       exit that recovery-by-deletion promises is a vault reset. The purge belongs with the trash UI and
       blob GC in M4; naming it here so the gap is not discovered by somebody stuck behind it.
+      When it is written, the statement that lowers a claim belongs in `holdings.ts`, beside the two
+      that raise one — a per-blob decrement lived unreachable in `nodes/service.ts` until then, which
+      read as evidence that releasing was already wired.
 
 ## M1 — the scope of the first complete release
 
