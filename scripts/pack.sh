@@ -37,6 +37,11 @@ files=(
   shared/tsconfig.json
   server/package.json
   server/tsconfig.json
+  # The console is built INTO the image and served by the server process (docs/11), so its
+  # source travels with the server's rather than being a separate deployable.
+  console/package.json
+  console/tsconfig.json
+  console/esbuild.mjs
   # npm ci installs the whole workspace, so every member's manifest must be present even
   # though the plugin's source is not built here.
   plugin/package.json
@@ -55,7 +60,7 @@ done
 # nothing on screen said so. run-smoke.sh verifies this before it does anything.
 trap 'rm -f VERSION MANIFEST.sha256' EXIT
 printf '%s\n' "$stamp" > VERSION
-sha256sum "${files[@]}" $(find shared/src server/src -type f) VERSION > MANIFEST.sha256
+sha256sum "${files[@]}" $(find shared/src server/src console/src -type f) VERSION > MANIFEST.sha256
 
 # Sources: the two packages that are compiled. The plugin's source is deliberately absent —
 # it is a different program with a different build, and it has no business in a server image.
@@ -63,7 +68,7 @@ tar czf "$archive" \
   --exclude='*.tsbuildinfo' \
   --exclude='node_modules' \
   --exclude='dist' \
-  "${files[@]}" shared/src server/src VERSION MANIFEST.sha256
+  "${files[@]}" shared/src server/src console/src VERSION MANIFEST.sha256
 
 echo "$archive"
 echo "  $(tar tzf "$archive" | wc -l) files, $(du -h "$archive" | cut -f1), build $stamp"

@@ -6,6 +6,7 @@ data
 var
 docs
 plugin/src
+# console/src is NOT excluded: the image builds it and the server serves it.
 **/*.test.ts
 .env
 .env.*

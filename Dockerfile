@@ -16,6 +16,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
+COPY console/package.json console/
 COPY plugin/package.json plugin/
 RUN npm ci
 
@@ -23,6 +24,12 @@ COPY tsconfig.base.json ./
 COPY shared/ shared/
 COPY server/ server/
 RUN npm run build -w @syncserver/server
+
+# The console is part of this image because the server serves it from its own process
+# (docs/11: one deployment, one session). Built here rather than shipped as a second
+# artefact: one thing to deploy, one version, and no way for the two to disagree.
+COPY console/ console/
+RUN npm run build -w @syncserver/console
 
 # The runtime tree is installed separately rather than pruned out of the build one: a
 # prune leaves whatever the build happened not to touch, an install brings exactly what
@@ -32,6 +39,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
+COPY console/package.json console/
 COPY plugin/package.json plugin/
 RUN npm ci --omit=dev
 # npm workspaces HOIST: with no dev dependencies to force a conflict, everything lands in
@@ -53,6 +61,8 @@ COPY --from=deps  /app/node_modules      node_modules
 COPY --from=deps  /app/server/node_modules server/node_modules
 COPY --from=build /app/server/dist        server/dist
 COPY --from=build /app/shared/dist        shared/dist
+# `server/src/console.ts` reads this at boot, relative to server/dist.
+COPY --from=build /app/console/dist       console/dist
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY package.json ./
