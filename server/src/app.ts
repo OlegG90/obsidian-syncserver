@@ -15,6 +15,7 @@ import { registerPairingRoutes } from './pairing/routes.js';
 import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes } from './console.js';
+import { backupInProgress } from './backup.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, rearmBootstrapInvitation, registerBootstrapGuard } from './bootstrap.js';
@@ -81,6 +82,19 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerShareRoutes(app, db, cfg);
   registerAdminRoutes(app, db);
   await registerConsoleRoutes(app);
+
+  // The refusal window (#114). One hook rather than a check in every write path: what the
+  // window turns away is *new* requests, and this is the one place all of them pass. It is
+  // deliberately not a freeze — a request already inside a handler goes on to commit, which
+  // is exactly why a backup dumps the database before it copies the blobs.
+  app.addHook('onRequest', async (req, reply) => {
+    if (!backupInProgress()) return;
+    if (req.method === 'GET' || req.method === 'HEAD') return;
+    return reply.code(503).send({
+      error: 'backup_in_progress',
+      message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',
+    });
+  });
   registerDeltaRoutes(app, db, cfg);
 
   if (events) registerEventsRoutes(app, events);

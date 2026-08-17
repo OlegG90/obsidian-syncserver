@@ -301,10 +301,10 @@ The third half is specified nowhere, because it has never been a feature — it 
       lives in the runtime image, and its **major version must match the server's** or the first real
       backup fails on a production database: pinned explicitly, and checked at startup rather than
       discovered.
-- [ ] **Database first, blobs second** (#114). Not interchangeable here: the window refuses new writes and
+- [x] **Database first, blobs second** (#114). Not interchangeable here: the window refuses new writes and
       does not reach the ones in flight, so blobs-first can copy a blob store that is missing a file the
       dump references — a restore that completes, looks whole, and cannot open a note.
-- [ ] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
+- [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
       refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
 - [ ] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
       periodic restore rehearsal, and whatever runs it nightly. Written once.
