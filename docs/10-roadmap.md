@@ -213,11 +213,12 @@ behaviour that a web client merely calls.
 - [x] **Every administrative act is audited.** `audit_log` exists, is append-only by trigger, and is written
       from exactly two places in `auth/service.ts`. An action on somebody else's account that leaves no
       record is the one kind this table was built to refuse.
-- [ ] **Deletion is a state, not a button** (#55): dissolve the shares the account initiated, wait for each
+- [x] **Deletion is a state, not a button** (#55): dissolve the shares the account initiated, wait for each
       participant to finalize their copy (SH-29), reassign authorship to the **tombstone**, then remove the
       vaults. `versions.author_id` is `NOT NULL` with `ON DELETE RESTRICT`, so authorship must go somewhere
-      — and the reserved row it goes to is described by the schema and seeded by nobody. Disable and delete
-      are different operations and must not share a control.
+      before the account naming it can be removed — which is why the tombstone is seeded by `schema.sql`
+      rather than minted by the procedure that needs it. Disable and delete are different operations and
+      must not share a control.
 
 ### History and the trash, where the notes are
 

@@ -19,7 +19,7 @@
  * Needs the development database: `npm run db:reset` first.
  */
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
@@ -319,5 +319,136 @@ describe('what the operator can see', () => {
     const entries = r.json().entries as { action: string; targetLogin: string | null }[];
     assert.ok(entries.length > 0, 'the quota change above is in here');
     assert.ok(entries.every((e) => e.action.includes('.')), 'a verb with its subject, for somebody scanning');
+  });
+});
+
+describe('deleting an account, which is a procedure', () => {
+  /** A vault with one file, so the account has a tree to be taken apart. */
+  const vaultWithAFile = async (owner: string, token: string) => {
+    const vaultId = randomUUID();
+    const created = await app.inject({
+      method: 'POST', url: '/vaults', headers: { authorization: `Bearer ${token}` },
+      payload: { id: vaultId, name_enc: Buffer.from('theirs').toString('base64') },
+    });
+    assert.equal(created.statusCode, 201, created.body);
+    const rootId = created.json().root_node_id as string;
+    const keyId = (await db.one<{ id: string }>(
+      `SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [vaultId]))!.id;
+
+    const body = Buffer.from(`content-${randomUUID()}`);
+    const hex = createHash('sha256').update(body).digest('hex');
+    const up = await app.inject({
+      method: 'POST', url: '/blobs',
+      query: { sha256: hex, size: String(body.length), key_id: keyId },
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      payload: body,
+    });
+    assert.equal(up.statusCode, 201, up.body);
+    const node = await app.inject({
+      method: 'POST', url: `/vaults/${vaultId}/nodes`, headers: { authorization: `Bearer ${token}` },
+      payload: {
+        parent_id: rootId, type: 'file', sha256: hex, size: body.length,
+        mtime: new Date().toISOString(),
+        name_enc: Buffer.from('note.md').toString('base64'),
+        name_hmac: createHash('sha256').update(Buffer.from('note.md')).digest('hex'),
+        name_key_id: keyId,
+        blob_envelopes: [{ sha256: hex, scope_id: keyId, wrapped_key: Buffer.alloc(48, 9).toString('base64') }],
+        dedup_tags: [{ sha256: hex, scope_id: keyId,
+                       content_tag: createHash('sha256').update(Buffer.from(`t:${hex}`)).digest('hex') }],
+      },
+    });
+    assert.equal(node.statusCode, 201, node.body);
+    return { vaultId, nodeId: node.json().node_id as string, owner };
+  };
+
+  it('takes the account, its vaults and its tree, in one procedure', async () => {
+    const doomed = await makeAccount(`doomed-${randomUUID()}`, 'user');
+    const { vaultId } = await vaultWithAFile(doomed.id, doomed.token);
+
+    const r = await app.inject({
+      method: 'POST', url: `/admin/accounts/${doomed.id}/deletion`, headers: asAdmin(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().finished, true, 'nobody else held a copy, so there was nothing to wait for');
+
+    assert.equal(await db.one(`SELECT 1 AS x FROM users WHERE id = $1`, [doomed.id]), undefined);
+    assert.equal(await db.one(`SELECT 1 AS x FROM vaults WHERE id = $1`, [vaultId]), undefined,
+      'the vaults go with it, which they could not have done while they held nodes');
+  });
+
+  it('moves authorship to the tombstone rather than erasing it', async () => {
+    // A share participant routinely writes into somebody else's history (SH-19), so a
+    // CASCADE would delete another person's record of their own file. "Written by an account
+    // that is gone" is a different fact from "written by nobody", and the version row keeps
+    // saying the first.
+    const author = await makeAccount(`author-${randomUUID()}`, 'user');
+    const keeper = await makeAccount(`keeper-${randomUUID()}`, 'user');
+    const theirs = await vaultWithAFile(keeper.id, keeper.token);
+
+    // The doomed account is named as the author of a version in somebody else's vault.
+    await db.query(`UPDATE versions SET author_id = $1 WHERE vault_id = $2`, [author.id, theirs.vaultId]);
+
+    const r = await app.inject({
+      method: 'POST', url: `/admin/accounts/${author.id}/deletion`, headers: asAdmin(),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().finished, true);
+
+    const version = await db.one<{ author: string }>(
+      `SELECT author_id AS author FROM versions WHERE vault_id = $1 LIMIT 1`, [theirs.vaultId]);
+    assert.equal(version!.author, '00000000-0000-0000-0000-000000000000', 'the tombstone, not null and not gone');
+    const surviving = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM versions WHERE vault_id = $1`, [theirs.vaultId]);
+    assert.equal(surviving!.n, '1', 'and the other account still has its history');
+  });
+
+  it('refuses to delete an unclaimed invitation, and the tombstone', async () => {
+    const invited = await app.inject({
+      method: 'POST', url: '/admin/invitations', headers: asAdmin(),
+      payload: { login: `never-${randomUUID()}`, quota_bytes: '1048576' },
+    });
+    const id = invited.json().user_id as string;
+
+    const r = await app.inject({ method: 'POST', url: `/admin/accounts/${id}/deletion`, headers: asAdmin() });
+    assert.equal(r.statusCode, 400, r.body);
+    assert.match(r.json().detail, /revoked, not deleted/);
+
+    const t = await app.inject({
+      method: 'POST', url: '/admin/accounts/00000000-0000-0000-0000-000000000000/deletion', headers: asAdmin(),
+    });
+    assert.equal(t.statusCode, 400, t.body);
+    assert.match(t.json().detail, /permanent/);
+  });
+
+  it('records both ends of the procedure', async () => {
+    const doomed = await makeAccount(`logged-${randomUUID()}`, 'user');
+    await app.inject({ method: 'POST', url: `/admin/accounts/${doomed.id}/deletion`, headers: asAdmin() });
+
+    const entries = await db.query<{ action: string }>(
+      `SELECT action FROM audit_log WHERE target_user_id = $1 ORDER BY id`, [doomed.id]);
+    const actions = entries.map((e) => e.action);
+    assert.ok(actions.includes('account.delete.begin'), `expected a begin: ${actions.join(', ')}`);
+    assert.ok(actions.includes('account.delete.finish'), `expected a finish: ${actions.join(', ')}`);
+    // The row outlives the account it names, which is why it carries no foreign key (#93).
+    assert.equal(await db.one(`SELECT 1 AS x FROM users WHERE id = $1`, [doomed.id]), undefined);
+  });
+
+  it('will not delete the last administrator', async () => {
+    const r = await app.inject({ method: 'POST', url: `/admin/accounts/${adminId}/deletion`, headers: asAdmin() });
+    assert.ok(r.statusCode >= 400 && r.statusCode < 500, `expected a refusal, got ${r.statusCode}: ${r.body}`);
+    const still = await db.one<{ state: string }>(`SELECT state::text AS state FROM users WHERE id = $1`, [adminId]);
+    assert.equal(still!.state, 'active');
+  });
+
+  it('reports progress without moving it', async () => {
+    const doomed = await makeAccount(`watched-${randomUUID()}`, 'user');
+    const before = await app.inject({
+      method: 'GET', url: `/admin/accounts/${doomed.id}/deletion`, headers: asAdmin(),
+    });
+    assert.equal(before.statusCode, 200, before.body);
+    assert.equal(before.json().state, 'active', 'looking is not starting');
+
+    const still = await db.one<{ state: string }>(`SELECT state::text AS state FROM users WHERE id = $1`, [doomed.id]);
+    assert.equal(still!.state, 'active');
   });
 });

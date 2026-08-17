@@ -849,7 +849,14 @@ export const joinShare = async (
  * @param leaving the member going, whether by their own act or the initiator's.
  * @returns whether this closed the share for everybody.
  */
-const departMember = async (
+/**
+ * One member's departure, and whether it ends the share.
+ *
+ * Exported because deleting an account has to dissolve every share it is in (#55), and the
+ * question "who is left, and does this end it" must have one answer: a second
+ * implementation of it would decide differently the first time the rule moved.
+ */
+export const departMember = async (
   c: PoolClient,
   shareId: string,
   leaving: string,

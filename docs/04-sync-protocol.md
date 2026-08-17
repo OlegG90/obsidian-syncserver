@@ -330,6 +330,8 @@ POST   /admin/invitations/{user_id}/reissue     → {token}   the previous one s
 DELETE /admin/invitations/{user_id}             → 204       the row IS the invitation
 POST   /admin/accounts/{user_id}/enabled {enabled} → 204    sessions revoked, data untouched
 PUT    /admin/accounts/{user_id}/quota {quota_bytes} → {used_bytes, freezes}
+POST   /admin/accounts/{user_id}/deletion       → {state, awaiting, finished}  advances it
+GET    /admin/accounts/{user_id}/deletion       → {state, awaiting, finished}  only looks
 ```
 
 Quota is account-wide, so it lives at `GET /usage` (above), not per vault. Blobs are account-global storage

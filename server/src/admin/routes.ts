@@ -10,6 +10,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
+import { deleteAccount, deletionProgress } from './deletion.js';
 import { requireAdmin } from './guard.js';
 import {
   invite,
@@ -95,6 +96,21 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db): void => {
       return reply.code(204).send();
     },
   );
+
+  // A procedure, not a button (#55). POST advances it as far as it can go and says what is
+  // outstanding; GET only looks, because a poll that moved the state would make watching a
+  // deletion indistinguishable from driving one.
+  app.post<{ Params: { userId: string } }>('/admin/accounts/:userId/deletion', admin, async (req, reply) => {
+    const out = await deleteAccount(db, req.admin!, req.params.userId);
+    if ('kind' in out) return refuse(reply, out);
+    return { state: out.state, awaiting: out.awaiting, finished: out.finished };
+  });
+
+  app.get<{ Params: { userId: string } }>('/admin/accounts/:userId/deletion', admin, async (req, reply) => {
+    const out = await deletionProgress(db, req.params.userId);
+    if ('kind' in out) return refuse(reply, out);
+    return { state: out.state, awaiting: out.awaiting, finished: out.finished };
+  });
 
   app.put<{ Params: { userId: string }; Body: { quota_bytes: string } }>(
     '/admin/accounts/:userId/quota',
