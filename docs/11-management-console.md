@@ -1,22 +1,31 @@
 # 11 — Management console
 
-One web client with **two zones**: server administration, visible only to an administrator, and a
-self-service profile every user sees. One deployment, one session, two sets of rights — a separate admin
-application would be an extra moving part for a family-sized server.
+One web client, served by the server itself, for **administration and nothing else**. It is where accounts
+are invited, quotas are changed, backups are run and the audit log is read — all of it about *other
+people's* accounts, which is what makes it a separate surface at all.
 
-## The line between the zones
+## Two kinds of account, and neither can be the other (#115)
 
-| | Administration | Profile |
+| | console account | vault account |
 |---|---|---|
-| Who | the server owner | every user |
-| About whom | **other people's** accounts | their own |
-| Blast radius of a mistake | everyone | one person |
-| Explicitly cannot | **browse another user's vault** | — |
+| what it is for | administering the server | holding notes |
+| how it authenticates | a password, slow-hashed on the server | the passphrase, never sent — `auth_secret` from the seed |
+| key material | **none at all** | all of it, born on the device |
+| can it sync | no — there is no seed to derive a vault key from | yes |
+| can it be invited into a share | no — there is no public key to seal one to | yes |
+| can it read the console | yes | no |
 
-The last row is **cryptographic**, not a policy. With E2EE always on (AC-08) the server holds only
-ciphertext, so browsing someone else's vault is not merely disallowed — it is impossible, the admin has no
-key. Vault browsing exists in the profile zone, for your own vaults, decrypted by your own client, and
-nowhere else.
+**"An administrator cannot browse another user's vault" is now a fact about the row rather than a promise
+about behaviour.** With E2EE always on (AC-08) the server holds only ciphertext, and a console account
+holds no key to open it with — so this is not a permission somebody could grant later, it is an absence.
+
+It is also the only shape in which a browser can sign in at all. `auth_secret` is derived from the account
+seed; a browser neither holds a seed nor should be given one, and deriving it there would mean Argon2id and
+the whole key hierarchy in a second environment — which is exactly what this document refuses further down.
+
+**The profile zone lives in the plugin.** Vaults, devices, shares, retention and the security section are
+all about the user's own data, and the plugin already holds the session and the keys; a browser would have
+had to obtain both to show any of it. That is why there is one zone here and not two.
 
 ## What the administrator cannot do, and the console must say so
 
@@ -45,10 +54,15 @@ there. `vault_key_id` is a server-side scope identifier for a later vault, not a
 administrator cannot produce the account's cryptographic material.
 
 **The first administrator is the exception that proves it.** They cannot be invited — there is nobody to
-issue it — so `schema.sql` seeds their invitation instead (#107), token `admin`, and the server answers
-nothing but its redemption until it is used ([04](04-sync-protocol.md)). Redeeming it is the replacement:
-the operator's keys are born on their device exactly as everyone else's are, and the seeded row becomes
-their account. The console shows the bootstrap notice in place of a login form while that is pending.
+issue it — so `schema.sql` seeds a console account **with no password at all** (#107), and the server
+answers nothing but the setting of one until it is set. Setting it is what creates it, so there is no state
+in which a default works; a seeded password that had to be changed would still work if nobody changed it.
+The console shows that one form in place of a login while it is pending, which is the whole of a fresh
+server's interface.
+
+The operator's own **vault** account is a separate thing they invite for themselves afterwards, exactly as
+they would invite anybody. Administering a server and keeping notes on it are different jobs, and this is
+where that stops being a figure of speech.
 
 So registration is an invitation, and the account is born in two steps:
 
@@ -101,15 +115,18 @@ be edited answers no question worth asking.
 This is not compliance theatre on a home server. It is how you answer "why does this account hold 200 GB"
 six months later, and how you tell a mistake from a misunderstanding.
 
-## Profile zone
+## What the user sees, and where
+
+Not here. Each of these is about the user's own data and needs the keys to render, so each belongs in the
+plugin — which is the only place that has them:
 
 | Section | Contents |
 |---|---|
-| Vaults | list vaults; create, rename or delete an empty vault; usage broken down into current content and history, per vault and account-wide, with the actions that actually free space. A share replica counts as ordinary content of the vault it lives in — there is no separate share figure ([03](03-data-model.md)) |
+| Vaults | list; rename or delete an empty one; usage split into current content and history. **Creating** one mints a vault key from the seed (#86, AC-11), so it could never have been done from a browser. A share replica counts as ordinary content of the vault it lives in ([03](03-data-model.md)) |
 | Devices | list, last seen, **sign out this device**, sign out everywhere |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
-| Security | change passphrase, regenerate the recovery code — **in the plugin**, see below. The console arrives in M5 and the recovery code itself in [M7](10-roadmap.md), so until then this section offers the passphrase alone rather than a control for something that does not exist |
-| History | retention setting — `users.history_days`, the outer bound of the ladder in [03](03-data-model.md). The rungs are fixed; how far back they reach is the user's own trade against quota |
+| Security | change passphrase, and regenerate the recovery code once [M7](10-roadmap.md) builds one |
+| History | retention — `users.history_days`, the outer bound of the ladder in [03](03-data-model.md). The rungs are fixed; how far back they reach is the user's own trade against quota |
 
 **Changing the passphrase never re-encrypts anything.** The account **seed** stays the same, and every
 vault key derives from it (`KV = HKDF(seed, vault_id)`); changing the passphrase only re-wraps the seed

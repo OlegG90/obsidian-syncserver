@@ -9,7 +9,7 @@
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
-| **M5** | **the operator's milestone**: the management console (both zones), backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
+| **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
 | **M6** | WebDAV gateway | ☐ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
 
@@ -282,9 +282,17 @@ The third half is specified nowhere, because it has never been a feature — it 
       point of the guard is that a server with no administrator does nothing else.
 - [ ] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
       list: a halt that also refuses the endpoint used to confirm the restore is a halt nobody can leave.
-- [ ] **A vault is still created by the plugin, never here** (#86, AC-11): making one mints a vault key
-      from the seed, and the console holds no key. [11](11-management-console.md) offers "create" in the
-      profile zone and is wrong to; it lists and reports, and creating stays where the keys are.
+- [ ] **The first administrator sets a password rather than redeeming an invitation** (#107, #115). The
+      seeded row is a console account with none, the console's only screen until one exists is the setting
+      of it, and setting it is what creates it — so no default ever works. A fresh server therefore needs
+      no Obsidian to become usable, which is what made "the console shows a notice" a dead end before.
+- [ ] **A console account is administered, not synced** (#115): it holds no key material, so it cannot be
+      invited into a share and cannot open a vault. Inviting one must refuse in a sentence rather than on
+      a null `pubkey`, and `role` stops being a column crossed with a keyed account — an administrator IS
+      a console account.
+- [ ] **The password gets a slow hash on the server** (#108, #115), which nothing else here needs: every
+      other verifier is at least 128 bits of CSPRNG and a person's password is not. `@noble/hashes` is
+      already in the tree.
 
 ### Backup, as the thing that runs it
 

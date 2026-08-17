@@ -79,7 +79,7 @@ each one holds is written down. [`docs/02`](docs/02-architecture.md) is the shor
 | 08 | [Backup and restore](docs/08-backup-restore.md) | backup order, restore epoch, client behaviour afterwards |
 | 09 | [Decision index](docs/09-decisions.md) | `#N`, `AC-N`, `SH-N` → the rule the id names |
 | 10 | [Roadmap](docs/10-roadmap.md) | milestones and the acceptance scenarios for the first release |
-| 11 | [Management console](docs/11-management-console.md) | the two zones, account lifecycle, audit, backup operations |
+| 11 | [Management console](docs/11-management-console.md) | the two kinds of account, administration, audit, backup operations |
 | 12 | [Sharing scenarios](docs/12-sharing-scenarios.md) | the conditions 05 implements — one situation, one outcome, permanent ids |
 | 13 | [Deployment and quick start](docs/13-deployment.md) | building the image, running it on a home server, claiming the first administrator |
 
@@ -159,7 +159,7 @@ Current release: **0.4.0** — see [Versions](#versions).
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
 | **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. Its last open item, a frozen account with nothing it could delete to free space, is closed by M4's purge |
 | **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | done — walked by a person: a vault at 210% of its limit emptied its trash, the claim went with the row, and the collector unlinked the freed bytes. That pass found **six defects 302 green tests had no opinion about**, the quietest being a login the client stored without the server ever confirming it |
-| **M5** — the operator's milestone: management console (both zones), backup operations, and an image pulled from a registry instead of built on the server | not started |
+| **M5** — the operator's milestone: management console, backup operations, and an image pulled from a registry instead of built on the server | not started |
 | **M6** — WebDAV gateway | not started |
 | **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | not started — specified since M3.5, with its columns in the schema and null meaning honestly "this account has no code" |
 
