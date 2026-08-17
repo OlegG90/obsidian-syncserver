@@ -68,7 +68,12 @@ before(async () => {
                          invite_token_hash = encode(sha256(convert_to('admin','UTF8')),'hex'),
                          invite_expires_at = now() + interval '7 days'
                    WHERE id = '00000000-0000-0000-0000-000000000001'`);
-  await db.query(`DELETE FROM users WHERE state = 'active'`);
+  // Demoted, not deleted. What "first run" means is that no ACTIVE ADMINISTRATOR exists
+  // (#107) — not that the table is empty — and deleting an active account is a procedure
+  // rather than a statement (#55), so a teardown that tried it was asking the schema to
+  // break its own rule on behalf of a fixture. Other suites' accounts are left alone.
+  await db.query(`UPDATE users SET role = 'user'
+                   WHERE state = 'active' AND id <> '00000000-0000-0000-0000-000000000001'`);
   app = await buildApp(db, cfg);
 });
 

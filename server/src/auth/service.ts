@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { KdfParams } from '@syncserver/shared';
 import { hashToken, newToken, tokenMatches } from '../crypto.js';
+import { record } from '../admin/audit.js';
 import type { Db } from '../db.js';
 
 export interface RedeemInput {
@@ -126,11 +127,13 @@ export const redeemInvitation = async (db: Db, input: RedeemInput) => {
       [row.id, input.deviceName, input.devicePlatform, hashToken(refresh)],
     );
 
-    await c.query(
-      `INSERT INTO audit_log (actor_user_id, actor_login, action, target_user_id, target_login)
-       VALUES ($1, $2, 'account.activate', $1, $2)`,
-      [row.id, row.login],
-    );
+    // Through the one statement, like every other record: this is an account acting on
+    // itself, which is the only kind the log holds that no administrator caused.
+    await record(c, {
+      actor: { id: row.id, login: row.login },
+      action: 'account.activate',
+      target: { id: row.id, login: row.login },
+    });
 
     return {
       userId: row.id,
@@ -258,11 +261,12 @@ export const recoverAccount = async (
 
     // The account recovering itself is both actor and target. Recorded because a recovery is
     // the one event that gives a new device everything without anyone approving it.
-    await c.query(
-      `INSERT INTO audit_log (actor_user_id, actor_login, action, target_user_id, target_login, details)
-       VALUES ($1, $2, 'account.recover', $1, $2, $3::jsonb)`,
-      [user.id, user.login, JSON.stringify({ opened_by: opened.by, device: input.platform })],
-    );
+    await record(c, {
+      actor: { id: user.id, login: user.login },
+      action: 'account.recover',
+      target: { id: user.id, login: user.login },
+      details: { opened_by: opened.by, device: input.platform },
+    });
 
     return {
       seedEnvelope: opened.envelope,

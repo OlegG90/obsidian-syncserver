@@ -206,11 +206,11 @@ comments:
 The console is M5; the surface underneath it is here, because account deletion and quota changes are server
 behaviour that a web client merely calls.
 
-- [ ] **An administrator role that the routes actually check.** There is no `requireAdmin` today.
-- [ ] **Users, invitations, quotas, storage.** List with state, quota, usage and last seen; invite, disable,
+- [x] **An administrator role that the routes actually check.** There is no `requireAdmin` today.
+- [x] **Users, invitations, quotas, storage.** List with state, quota, usage and last seen; invite, disable,
       enable, re-quota. Lowering a quota below usage deletes nothing — the account freezes (SH-20) — and the
       API says which accounts a change would freeze **before** it is applied.
-- [ ] **Every administrative act is audited.** `audit_log` exists, is append-only by trigger, and is written
+- [x] **Every administrative act is audited.** `audit_log` exists, is append-only by trigger, and is written
       from exactly two places in `auth/service.ts`. An action on somebody else's account that leaves no
       record is the one kind this table was built to refuse.
 - [ ] **Deletion is a state, not a button** (#55): dissolve the shares the account initiated, wait for each

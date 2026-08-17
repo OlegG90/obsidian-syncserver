@@ -82,6 +82,14 @@ the reason rather than assuming, because more than one condition can share a sta
 broken over one that pins the current shape of the code. When a test and the design disagree,
 find out which is wrong before changing either.
 
+**One scenario is global, and it runs first.** "No administrator exists yet" is the server's
+first-run state (#107), and claiming the seeded administrator is **irreversible**: the last
+active one cannot be demoted or disabled (#88), and deleting an account is a procedure rather
+than a statement (#55). So `auth.test.ts` must meet a database no other suite has claimed —
+which alphabetical order is what actually delivers, since the runner takes files in the order
+the glob gives them. A new suite that needs an administrator therefore sorts **after** it, and
+says so in its own header; that is why the operator's suite is `operator.test.ts`.
+
 **A suite is split by scenario, never by module.** Following the source's file layout would
 make the tests assert the implementation by arrangement even where each one asserts behaviour.
 Fixtures shared by several suites live in `test/support/`, and each suite builds its **own**

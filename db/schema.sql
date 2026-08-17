@@ -1810,7 +1810,18 @@ $$;
 CREATE TRIGGER audit_log_no_delete
     BEFORE DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION reject_delete();
 
--- Account-owned records exist and change only while their owner is active.
+-- Account-owned records are WRITTEN only while their owner is active — which is not the
+-- same as "exist only", and the difference is two states the design requires.
+--
+-- `disabled` means sessions revoked and writes refused, with the data untouched (docs/11);
+-- an account whose rows had to be removed before it could be switched off would make
+-- disabling a destructive act and the reversible half of #55 impossible. `deleting` is the
+-- procedure itself running, and it has to be able to act on what it is dismantling.
+--
+-- So: INSERT and UPDATE need an active owner (or the deletion procedure). DELETE does not,
+-- because removal is not the account writing — the collector tidies a disabled account's
+-- expired trash like anybody else's, and blocking it would stall the whole nightly pass on
+-- one switched-off user.
 CREATE FUNCTION owned_rows_require_active_user() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -1824,8 +1835,9 @@ BEGIN
         owner_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.user_id ELSE NEW.user_id END;
     END IF;
     SELECT state INTO owner_state FROM users WHERE id = owner_id;
-    IF owner_state IS DISTINCT FROM 'active' THEN
-        RAISE EXCEPTION 'only active users may own or write vaults, devices, and nodes'
+    IF TG_OP <> 'DELETE' AND owner_state IS DISTINCT FROM 'active'
+       AND owner_state IS DISTINCT FROM 'deleting' THEN
+        RAISE EXCEPTION 'only an active account may write vaults, devices, and nodes'
             USING ERRCODE = 'restrict_violation';
     END IF;
     IF TG_TABLE_NAME = 'devices' THEN
@@ -1852,10 +1864,20 @@ CREATE TRIGGER nodes_owner_is_active
     BEFORE INSERT OR UPDATE OR DELETE ON nodes
     FOR EACH ROW EXECUTE FUNCTION owned_rows_require_active_user();
 
+-- Two states must own NOTHING, and they are the two that are not an account in trouble but
+-- an account that is not there: `provisioned` is an unclaimed invitation, and the tombstone
+-- holds no keys, no login and no data by construction (#55).
+--
+-- `disabled` and `deleting` are deliberately absent from that list. Disabling keeps every
+-- byte (docs/11) and deletion is a procedure that runs *while* the account still owns what
+-- it is dismantling — dissolve the shares, wait for each participant to finalize (SH-29),
+-- reassign authorship to the tombstone, and only then remove the vaults. A rule that
+-- demanded emptiness first would have made both of those unreachable for exactly the
+-- accounts they exist for.
 CREATE FUNCTION users_cannot_become_inactive_owners() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.state = 'active' AND NEW.state <> 'active'
+    IF OLD.state = 'active' AND NEW.state IN ('provisioned', 'tombstone')
        AND (EXISTS (SELECT 1 FROM vaults WHERE user_id = OLD.id)
          OR EXISTS (SELECT 1 FROM devices WHERE user_id = OLD.id)) THEN
         RAISE EXCEPTION 'user % cannot become % while owning vaults, devices, or nodes', OLD.id, NEW.state

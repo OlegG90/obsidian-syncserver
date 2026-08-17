@@ -296,10 +296,31 @@ SELECT expect_fail($$
 $$, '23514', 'exactly one linked root',
    'linking a vault to a non-root node');
 
+-- Disabling keeps every byte (docs/11): sessions go, writes stop, the data stays. An
+-- account that had to be emptied before it could be switched off would make disabling a
+-- destructive act, and the reversible half of #55 would not exist.
+SELECT expect_ok($$
+    DO $inner$ BEGIN
+        UPDATE users SET state = 'disabled' WHERE login = 'alice';
+        UPDATE users SET state = 'active'   WHERE login = 'alice';
+    END $inner$
+$$, 'an account that owns a vault can be switched off and back on');
+
+-- The two states that must own nothing are the two that are not an account at all.
 SELECT expect_fail($$
-    UPDATE users SET state = 'disabled' WHERE login = 'alice'
+    UPDATE users SET state = 'tombstone' WHERE login = 'alice'
 $$, '23001', 'while owning vaults, devices, or nodes',
-   'disabling an account that owns a vault');
+   'the tombstone cannot be an account that still holds data');
+
+-- And a disabled account may not write, which is what "switched off" means.
+SELECT expect_fail($$
+    DO $inner$ BEGIN
+        UPDATE users SET state = 'disabled' WHERE login = 'alice';
+        INSERT INTO devices (user_id, name, platform)
+        VALUES ((SELECT id FROM users WHERE login = 'alice'), 'sneaky', 'linux');
+    END $inner$
+$$, '23001', 'only an active account may write',
+   'a disabled account cannot add a device');
 
 INSERT INTO key_scopes (id, kind)
 VALUES ('ac000000-0000-0000-0000-000000000008', 'vault');

@@ -94,6 +94,13 @@ void _everyKindIsDeclared;
 
 /** PostgreSQL's `check_violation` — a CHECK constraint or a trigger's `RAISE`. */
 const CHECK_VIOLATION = '23514';
+/**
+ * `restrict_violation`, which in this schema means one thing only: a trigger that chose to
+ * refuse, in a sentence written to be read. PostgreSQL does not raise it on its own — a
+ * `RESTRICT` foreign key gives `foreign_key_violation` (23503) — so every 23001 reaching
+ * here was authored deliberately by `db/schema.sql`.
+ */
+const RESTRICT_VIOLATION = '23001';
 
 /**
  * A schema refusal, turned into one the caller can act on.
@@ -109,13 +116,16 @@ const CHECK_VIOLATION = '23514';
  * authorised for the vault it names — a second, vaguer sentence composed here would only
  * make the reader guess which of several conditions failed.
  *
- * **Only `check_violation` is translated.** A unique violation, a foreign key or a
- * serialization failure mean something else and often mean a defect on this side; mapping
- * them all to `400` would file the server's own bugs under the caller's name.
+ * **Two codes are translated, and they are the two the schema authors itself.**
+ * `check_violation` is a `CHECK` or a trigger raising one; `restrict_violation` is a trigger
+ * that chose to refuse — the last administrator, a share root that cannot be deleted, a
+ * frozen account. Both carry a sentence naming what to do instead. A unique violation, a
+ * foreign key or a serialization failure mean something else and often mean a defect on this
+ * side, so mapping those to `400` would file the server's own bugs under the caller's name.
  */
 export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
   const code = (e as { code?: unknown } | null)?.code;
-  if (code !== CHECK_VIOLATION) return undefined;
+  if (code !== CHECK_VIOLATION && code !== RESTRICT_VIOLATION) return undefined;
   const detail = (e as { message?: unknown }).message;
   return { kind: 'invalid_write', detail: typeof detail === 'string' ? detail : 'the write violates a schema rule' };
 };

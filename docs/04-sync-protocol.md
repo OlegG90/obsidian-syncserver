@@ -320,6 +320,16 @@ POST   /vaults/{vault_id}/restore {node_id, rev}  → a new put with an old hash
 DELETE /vaults/{vault_id}/trash                 → {purged, thawed}   discard it all, for good
 DELETE /vaults/{vault_id}/trash/{node_id}       → {purged, thawed}   discard one subtree
 WS     /events                          → {vault_id, head_rev}   across the account's synced vaults
+
+administration — every route acts on somebody else's account, and every one leaves an audit row
+GET    /admin/accounts                          → state, role, quota, usage, last seen
+GET    /admin/storage                           → stored vs charged bytes, blobs, quarantined
+GET    /admin/audit?target=&limit=              → the log, newest first
+POST   /admin/invitations {login, quota_bytes}  → {user_id, token}  the token is shown once
+POST   /admin/invitations/{user_id}/reissue     → {token}   the previous one stops working
+DELETE /admin/invitations/{user_id}             → 204       the row IS the invitation
+POST   /admin/accounts/{user_id}/enabled {enabled} → 204    sessions revoked, data untouched
+PUT    /admin/accounts/{user_id}/quota {quota_bytes} → {used_bytes, freezes}
 ```
 
 Quota is account-wide, so it lives at `GET /usage` (above), not per vault. Blobs are account-global storage
