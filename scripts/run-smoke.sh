@@ -4,7 +4,7 @@
 #     ./scripts/run-smoke.sh
 #
 # It brings the server up if it is down, obtains a token whichever way the installation
-# allows, and walks M0. Run it ON the server — smoke.sh reads /proc for a UUID and talks to
+# allows, and walks M0 and M4. Run it ON the server — smoke.sh reads /proc for a UUID and talks to
 # 127.0.0.1, so neither works from a Windows share.
 #
 # The token is the part that kept going wrong by hand. A fresh installation hands one out at
@@ -120,7 +120,7 @@ probe="$(curl -s -o /dev/null -w '%{http_code}' "$base/vaults" -H "authorization
 server is actually running with? A rebuild that regenerated SERVER_SECRET would do this."
 printf '  token accepted\n'
 
-say "walking M0"
+say "walking M0 and M4"
 printf '  vault %s on %s\n' "$vault" "$base"
 # No RESET. The walk makes its own content and its own filename each time, so it does not
 # collide with what an earlier run left; destroying the vault to make a test repeatable was

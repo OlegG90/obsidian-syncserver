@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Walk M0 end to end against a running server:
+# Walk M0 and M4 end to end against a running server:
 #
 #     ./scripts/smoke.sh http://127.0.0.1:8087
+#
+# The redemption below carries `kek_verifier` and **no recovery pair**, which is what a real
+# client sends since M3.5 (#112): the verifier is what makes an account recoverable at all and
+# is required, while null recovery columns are the honest way to say "this account has no
+# recovery code". This script sent the opposite — a placeholder pair and no verifier — and had
+# therefore been unable to claim an administrator since that milestone shipped, which nothing
+# noticed because it only ever runs against a real deployment.
 #
 # Claims the seeded administrator if nobody has, then exercises the account surface, a
 # blob, all three node verbs the roadmap names for M0 — create, put, delete — and the
@@ -69,8 +76,7 @@ elif printf '%s' "$health" | grep -q '"bootstrap_pending":true'; then
       "account_salt": "'"$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)"'",
       "kdf_params": {"v":19,"m":65536,"t":3,"p":1},
       "pubkey": "AQ==", "enc_privkey": "Ag==", "wrapped_seed": "Aw==",
-      "recovery_key": "BA==",
-      "recovery_code_hash": "'"$(hex32)"'",
+      "kek_verifier": "'"$(hex32)"'",
       "initial_vault_id": "'"$vault"'",
       "initial_vault_name_enc": "'"$(printf 'test vault' | base64)"'",
       "device_name": "smoke", "device_platform": "linux"
@@ -251,7 +257,74 @@ printf '%s' "$delta" | grep -q '"op":"del"' \
     || fail "the delta does not report the deletion; a client would never learn about it"
 printf '  usage: %s\n' "$(curl -fsS "$base/usage" -H "$hdr")"
 
+step "empty the trash (M4)"
+# The whole of M4's server half in three requests. A soft delete frees nothing — the row IS
+# the trash entry and its versions still hold the blob, which the 200 above just showed — so
+# this is the only call in the product that lowers what an account is using.
+before="$(curl -fsS "$base/usage" -H "$hdr" | number used)"
+
+purged="$(curl -fsS -X DELETE "$base/vaults/$vault/trash/$node_id" -H "$hdr")" \
+    || fail "discarding the trashed node was refused"
+printf '  DELETE /trash/{node} → %s\n' "$purged"
+printf '%s' "$purged" | grep -q '"purged":[1-9]' \
+    || fail "nothing was discarded: $purged"
+
+curl -fsS "$base/vaults/$vault/trash" -H "$hdr" | grep -q "$node_id" \
+    && fail "the node is still in the trash after being discarded" \
+    || printf '  and it is out of the trash listing\n'
+
+# 404 now, where it was 200 before: the account holds no live reference, so the address is
+# no longer a capability for it (#20). The BYTES are still on disk — the collector holds a
+# blob in quarantine before unlinking it, because losing a last reference is exactly when an
+# upload of the same content is most likely to be in flight.
+code="$(curl -s -o /dev/null -w '%{http_code}' -I "$base/blobs/$sha2" -H "$hdr")"
+[ "$code" = "404" ] \
+    && printf '  HEAD /blobs → 404 after the purge, correct: the claim went with the row\n' \
+    || fail "HEAD /blobs answered $code after the trash was emptied; expected 404"
+
+after="$(curl -fsS "$base/usage" -H "$hdr" | number used)"
+[ -n "$before" ] && [ -n "$after" ] && [ "$after" -lt "$before" ] \
+    && printf '  usage fell from %s to %s — the one thing nothing else here does\n' "$before" "$after" \
+    || fail "usage did not fall: $before → $after"
+
+step "the operator's surface (M4)"
+# Skipped rather than failed when the token is not an administrator's: ACCESS= may name an
+# ordinary account, and refusing to finish the walk over that would answer a question nobody
+# asked.
+admin_code="$(curl -s -o /dev/null -w '%{http_code}' "$base/admin/accounts" -H "$hdr")"
+if [ "$admin_code" = "403" ]; then
+    printf '  skipped: this token is not an administrator (pass an admin ACCESS= to walk it)\n'
+else
+    [ "$admin_code" = "200" ] || fail "GET /admin/accounts answered $admin_code"
+    printf '  accounts listed, with what each holds\n'
+    printf '  storage: %s\n' "$(curl -fsS "$base/admin/storage" -H "$hdr")"
+
+    # An invitation, then withdrawn again: the row IS the invitation, so this leaves the
+    # installation exactly as it found it.
+    login="smoke-$(uuid | cut -c1-8)"
+    invited="$(curl -fsS -X POST "$base/admin/invitations" -H "$hdr" -H 'content-type: application/json' \
+        -d "{\"login\":\"$login\",\"quota_bytes\":\"1048576\"}")" \
+        || fail "creating an invitation was refused"
+    invited_id="$(printf '%s' "$invited" | field user_id)"
+    printf '%s' "$invited" | grep -q '"token":' \
+        && printf '  invitation created; its token is in that response and nowhere else\n' \
+        || fail "the invitation carried no token: $invited"
+
+    curl -fsS -X DELETE "$base/admin/invitations/$invited_id" -H "$hdr" >/dev/null \
+        || fail "revoking the invitation was refused"
+    printf '  and revoked again — the row is the invitation, so nothing was left behind\n'
+
+    # The record outlives the row it names, which is why the log carries no foreign key (#93).
+    curl -fsS "$base/admin/audit?target=$invited_id" -H "$hdr" | grep -q 'account.invite' \
+        && printf '  both acts are in the audit log, for an account that no longer exists\n' \
+        || fail "the audit log does not record the invitation"
+fi
+
 # Nothing here has to be cleaned up for the next run: its content and its filename will be
-# different ones. What accumulates is a trashed node per run, which is what RESET=1 clears
-# when it starts to bother somebody.
-printf '\nM0 walked end to end on this server: create, put, delete, and the delta for each.\n\n'
+# different ones, and the trash it creates is emptied above rather than left to accumulate —
+# which is most of what RESET=1 used to be for.
+printf '\nM0 and M4 walked on this server: create, put, delete and the delta for each,\n'
+printf 'the trash emptied with its claim released, and the operator surface with its log.\n'
+printf '\nWhat this cannot walk is the plugin half of M4 — the trash screen, and a frozen\n'
+printf 'account emptying it from inside Obsidian. That is the scenario docs/10 names, and\n'
+printf 'it needs a person and an editor.\n\n'
