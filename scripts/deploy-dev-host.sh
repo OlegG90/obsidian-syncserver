@@ -77,6 +77,13 @@ else
     {
         printf 'POSTGRES_PASSWORD=%s\n' "$(secret)"
         printf 'SERVER_SECRET=%s\n' "$(secret)"
+        # The uid:gid the container runs as, taken from the user running this script —
+        # because that is the user creating and owning the data directories below.
+        # `.env.example` carries a plausible pair and cannot carry a correct one: on a NAS
+        # the administrator is rarely 1000:1000, and the mismatch does not surface at boot.
+        # It surfaces on the first upload as `EACCES … mkdir '/data/blobs/6e'`, which reads
+        # like a fault in the server. Found exactly that way, on exactly that message.
+        printf 'RUN_AS=%s:%s\n' "$(id -u)" "$(id -g)"
         printf 'DB_DIR=%s\n' "$root/db"
         printf 'BLOB_DIR=%s\n' "$root/blobs"
         printf 'PUBLISH_PORT=%s\n' "$port"
