@@ -73,31 +73,47 @@ export interface HistoryFlow {
 }
 
 export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
-  /** One operation at a time. Discarding is irreversible; a queue of them is not a feature. */
-  let busy = false;
-  const once = async <T>(what: string, run: () => Promise<T>): Promise<T | undefined> => {
-    if (busy) {
-      // A fixed sentence rather than one assembled from `what`. The label has to read after
-      // "could not …", and a phrase that fits there ("discard it") does not fit after
-      // "still …" — a message built to fill two frames ends up wrong in one of them.
-      deps.notify('SyncServer: another trash operation is still running.');
-      return undefined;
-    }
-    busy = true;
+  /**
+   * A failure becomes a sentence rather than an exception nobody catches.
+   *
+   * **Reads are not gated**, and that distinction cost a live walk. The screen asks for the
+   * usage and the trash at the same moment — neither waits for the other, because both fill
+   * in parts of one page — and a guard that covered every call let whichever arrived second
+   * fail with "something else is running". The result read as a broken trash while the
+   * server had answered both correctly.
+   */
+  const attempt = async <T>(what: string, run: () => Promise<T>): Promise<T | undefined> => {
     try {
       return await run();
     } catch (e) {
       deps.notify(`SyncServer: could not ${what} — ${reason(e)}`, 10000);
       return undefined;
+    }
+  };
+
+  /**
+   * One irreversible act at a time, which is what the guard was always for: discarding
+   * cannot be undone, and a second press partway through a list is how somebody discards
+   * what they meant to restore. Listing twice costs a round-trip and nothing else.
+   */
+  let busy = false;
+  const once = async <T>(what: string, run: () => Promise<T>): Promise<T | undefined> => {
+    if (busy) {
+      deps.notify('SyncServer: another trash operation is still running.');
+      return undefined;
+    }
+    busy = true;
+    try {
+      return await attempt(what, run);
     } finally {
       busy = false;
     }
   };
 
   return {
-    trash: () => once('read the trash', () => deps.trash()),
+    trash: () => attempt('read the trash', () => deps.trash()),
 
-    versions: (nodeId) => once('read the history', () => deps.versions(nodeId)),
+    versions: (nodeId) => attempt('read the history', () => deps.versions(nodeId)),
 
     restore: async (nodeId, rev) => {
       const out = await once('restore', async () => {
@@ -142,7 +158,7 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
       deps.done();
     },
 
-    usage: () => once('read the usage', () => deps.usage()),
+    usage: () => attempt('read the usage', () => deps.usage()),
   };
 };
 

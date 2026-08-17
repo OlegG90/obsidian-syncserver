@@ -454,11 +454,17 @@ export class SyncServerSettings extends PluginSettingTab {
     void flow.usage().then((u) => {
       if (!u) return;
       const pct = u.quota > 0 ? Math.round((u.used / u.quota) * 100) : 0;
+      // Marked on being OVER the limit, not on being frozen. They are not the same state and
+      // the difference cost a live walk: the freeze flag is raised where somebody else's
+      // write crosses your boundary, so an account syncing on its own can sit at 210% with
+      // `frozen` false for ever. A number that says 210% and looks like every other line
+      // tells a person nothing is wrong.
+      const over = u.used > u.quota;
       usage.setText(
         `Using ${mib(u.used)} of ${mib(u.quota)} (${pct}%)` +
-          (u.frozen ? ' — over the limit. Discarding from the trash is what frees space.' : ''),
+          (over ? ' — over the limit. Discarding from the trash is what frees space.' : ''),
       );
-      if (u.frozen) usage.style.color = 'var(--text-error)';
+      if (over) usage.style.color = 'var(--text-error)';
     });
 
     void flow.trash().then((rows) => {

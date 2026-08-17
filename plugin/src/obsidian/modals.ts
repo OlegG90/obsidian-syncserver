@@ -129,6 +129,16 @@ export class TextPromptModal extends Modal {
  * information: what a person needs to decide is what they will need to come back.
  */
 export class ConfirmModal extends Modal {
+  /**
+   * Set the instant the button is pressed, **before** `close()` runs.
+   *
+   * An `onClose` handler cannot otherwise tell a confirmation from a dismissal: the button
+   * closes the dialogue first and does its work second, so anything that marked consent
+   * inside that work marked it too late. A live walk found this as "the dialogue appears, I
+   * agree, and nothing happens" — a yes arriving after the close had already been read as a no.
+   */
+  accepted = false;
+
   constructor(
     app: App,
     private readonly title: string,
@@ -154,6 +164,7 @@ export class ConfirmModal extends Modal {
           .setButtonText(this.verb)
           .setWarning()
           .onClick(async () => {
+            this.accepted = true;
             this.close();
             await this.confirmed();
           }),
@@ -174,21 +185,14 @@ export class ConfirmModal extends Modal {
  */
 export const askConfirmation = (app: App, question: string, verb = 'Discard'): Promise<boolean> =>
   new Promise((resolve) => {
-    let answered = false;
-    const modal = new ConfirmModal(
-      app,
-      'This cannot be undone',
-      question,
-      async () => {
-        answered = true;
-        resolve(true);
-      },
-      verb,
-    );
+    const modal = new ConfirmModal(app, 'This cannot be undone', question, async () => undefined, verb);
     const close = modal.onClose.bind(modal);
+    // One place that settles it, on the way out, reading what the button recorded on the way
+    // in. Resolving from the button instead means racing its own `close()`, which is the
+    // shape that turned a yes into a no.
     modal.onClose = (): void => {
       close();
-      if (!answered) resolve(false);
+      resolve(modal.accepted);
     };
     modal.open();
   });

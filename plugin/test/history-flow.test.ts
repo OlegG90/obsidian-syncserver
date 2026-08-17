@@ -111,3 +111,43 @@ describe('what a refusal says', () => {
     assert.match(said.join(' '), /Discard something first/);
   });
 });
+
+describe('the screen asks for several things at once', () => {
+  it('lets the usage and the trash arrive together', async () => {
+    // Found by a live walk, not by anything above. The settings section issues both without
+    // awaiting either — they fill in different parts of one page — and a guard that covered
+    // every call let whichever arrived second fail with "something else is running". What a
+    // person saw was a broken trash beside a working usage line, while the server had
+    // answered both correctly.
+    const { deps: d, said } = deps({
+      trash: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return rows;
+      },
+    });
+    const flow = openHistoryFlow(d);
+    const [trash, usage] = await Promise.all([flow.trash(), flow.usage()]);
+
+    assert.ok(trash, `the trash came back empty-handed: ${said.join(' | ')}`);
+    assert.ok(usage, 'and so did the usage');
+    assert.deepEqual(said, [], 'neither of them had to apologise for the other');
+  });
+
+  it('still refuses a second discard while one is running', async () => {
+    // The guard is about irreversible acts, and it has to keep being about them.
+    let peak = 0;
+    let running = 0;
+    const { deps: d, said } = deps({
+      discard: async () => {
+        peak = Math.max(peak, ++running);
+        await new Promise((r) => setTimeout(r, 20));
+        running--;
+        return { purged: 1, thawed: false };
+      },
+    });
+    const flow = openHistoryFlow(d);
+    await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
+    assert.equal(peak, 1);
+    assert.ok(said.some((s) => /still running/.test(s)));
+  });
+});
