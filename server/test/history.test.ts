@@ -240,3 +240,122 @@ describe('restore', () => {
     assert.equal(r.json().error, 'frozen');
   });
 });
+
+describe('emptying the trash — the only way usage goes down', () => {
+  const usageOf = async () => {
+    const row = await db.one<{ used: string }>(
+      `SELECT COALESCE(SUM(b.size), 0)::text AS used
+         FROM user_blobs ub JOIN blobs b ON b.sha256 = ub.sha256
+        WHERE ub.user_id = $1`,
+      [userId],
+    );
+    return BigInt(row!.used);
+  };
+
+  const purge = (nodeId?: string) =>
+    app.inject({
+      method: 'DELETE',
+      url: nodeId ? `/vaults/${vaultId}/trash/${nodeId}` : `/vaults/${vaultId}/trash`,
+      headers: auth(),
+    });
+
+  it('discards the node, its versions and the claim on its bytes', async () => {
+    const file = await createNode(`discarded-${randomUUID()}.md`, rootId);
+    const before = await usageOf();
+    await del(file.node_id, file.rev);
+
+    // Deleting is soft, so nothing has been freed yet — which is the whole reason this
+    // endpoint exists.
+    assert.equal(await usageOf(), before, 'a soft delete frees nothing');
+
+    const r = await purge(file.node_id);
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().purged, 1);
+
+    const left = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, file.node_id]);
+    assert.equal(left!.n, '0', 'the row is gone, not merely flagged again');
+    const versions = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM versions WHERE vault_id = $1 AND node_id = $2`, [vaultId, file.node_id]);
+    assert.equal(versions!.n, '0', 'and its history went with it, by cascade');
+    assert.ok(await usageOf() < before, 'usage falls, which nothing else in this product does');
+  });
+
+  it('lets a frozen account free space and come back — SH-20, made true', async () => {
+    // The scenario M4 exists for. Deleting has to stay available to a frozen account: it is
+    // the only way out, so a freeze that blocked it would be a deadlock.
+    const file = await createNode(`way-out-${randomUUID()}.md`, rootId);
+    await del(file.node_id, file.rev);
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [userId]);
+
+    const r = await purge(file.node_id);
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().thawed, true, 'the freeze lifts in the same transaction that freed the space');
+
+    const still = await db.one<{ frozen: string | null }>(
+      `SELECT frozen_at AS frozen FROM users WHERE id = $1`, [userId]);
+    assert.equal(still!.frozen, null);
+  });
+
+  it('takes a folder and everything under it, deepest first', async () => {
+    // `parent_id` is ON DELETE RESTRICT, so a parent removed before its children errors out.
+    const folder = await createNode(`box-${randomUUID()}`, rootId, 'folder');
+    const inner = await createNode(`inner-${randomUUID()}`, folder.node_id, 'folder');
+    const leaf = await createNode(`leaf-${randomUUID()}.md`, inner.node_id);
+
+    await del(leaf.node_id, leaf.rev);
+    const innerRev = await db.one<{ rev: string }>(
+      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, inner.node_id]);
+    await del(inner.node_id, Number(innerRev!.rev));
+    const folderRev = await db.one<{ rev: string }>(
+      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, folder.node_id]);
+    await del(folder.node_id, Number(folderRev!.rev));
+
+    const r = await purge(folder.node_id);
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().purged, 3, 'the folder, the folder inside it, and the file');
+  });
+
+  it('refuses a trashed folder that still holds something alive', async () => {
+    // Deleting a folder does not delete what is in it, so a purge that removed the folder
+    // would orphan a live file — which the foreign key refuses, in a sentence about a
+    // constraint the caller cannot see. This says the thing itself.
+    const folder = await createNode(`half-${randomUUID()}`, rootId, 'folder');
+    await createNode(`alive-${randomUUID()}.md`, folder.node_id);
+    const rev = await db.one<{ rev: string }>(
+      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, folder.node_id]);
+    await del(folder.node_id, Number(rev!.rev));
+
+    const r = await purge(folder.node_id);
+    assert.equal(r.statusCode, 400, r.body);
+    assert.match(r.json().detail, /not deleted/);
+  });
+
+  it('refuses a node that is not in the trash at all', async () => {
+    const file = await createNode(`alive-${randomUUID()}.md`, rootId);
+    const r = await purge(file.node_id);
+    assert.equal(r.statusCode, 400, r.body);
+    assert.match(r.json().detail, /not in the trash/);
+  });
+
+  it('empties the whole trash, and skips what it may not take', async () => {
+    const doomed = await createNode(`sweep-${randomUUID()}.md`, rootId);
+    await del(doomed.node_id, doomed.rev);
+    const keeper = await createNode(`keeper-${randomUUID()}`, rootId, 'folder');
+    await createNode(`still-here-${randomUUID()}.md`, keeper.node_id);
+    const rev = await db.one<{ rev: string }>(
+      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, keeper.node_id]);
+    await del(keeper.node_id, Number(rev!.rev));
+
+    const r = await purge();
+    assert.equal(r.statusCode, 200, r.body);
+    assert.ok(r.json().purged >= 1);
+
+    const gone = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, doomed.node_id]);
+    assert.equal(gone!.n, '0');
+    const kept = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, keeper.node_id]);
+    assert.equal(kept!.n, '1', 'a folder holding something alive is left where it is, not failed over');
+  });
+});

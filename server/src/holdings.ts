@@ -85,18 +85,19 @@ export const dropUnreferenced = async (c: PoolClient, userId: string): Promise<v
 };
 
 /**
- * **There is no per-blob release here, and that is the honest state of it.**
+ * **The release is `dropUnreferenced`, and there is still no per-blob decrement.**
  *
- * Nothing in this product hard-deletes a node that holds content: a delete is soft, and the
- * row *is* the trash entry (docs/03). So the only paths that lower usage are a departure
- * (above), a vault reset, which recounts from scratch, and deleting an empty vault. A
- * per-blob decrement existed in `nodes/service.ts` for months with no caller — correct SQL,
- * unreachable, and reading like evidence that releasing was wired when it was not.
+ * That question stood open while nothing could hard-delete a node holding content: a delete
+ * was soft, the row *was* the trash entry (docs/03), and the only paths that lowered usage
+ * were a departure, a vault reset and deleting an empty vault. Emptying the trash is the
+ * fourth, and it turned out to need no new statement — it needed a caller. `purgeTrash`
+ * removes the rows and asks the question above, which is the right one to ask: the same
+ * content may be held by another vault of the same account, and a per-blob decrement would
+ * have to know that before it could be correct.
  *
- * It is removed rather than kept, for the same reason the placeholder recovery values were:
- * code that claims a capability nobody can reach is worse than its absence, because it stops
- * the question being asked. The question is on the roadmap — emptying the trash, with blob GC
- * in M4 — and when it is answered, the statement belongs **here**, beside the two that add.
+ * So the shape the design arrived at holds. A decrement per blob existed in
+ * `nodes/service.ts` for months with no caller — correct SQL, unreachable, reading like
+ * evidence that releasing was wired when it was not — and it was removed rather than kept.
  */
 
 /** One version row: what the node pointed at, at which revision, written by whom. */

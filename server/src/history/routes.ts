@@ -3,6 +3,7 @@ import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
+import { purgeTrash } from './purge.js';
 import { listTrash, listVersions, restoreNode } from './service.js';
 
 export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
@@ -48,6 +49,39 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
       if ('kind' in out) return refuse(reply, out);
 
       return { rev: out.rev, lifted: out.lifted };
+    },
+  );
+
+  // Two shapes of one act, and the URL is the only difference: the trash of a vault, or one
+  // subtree of it. `DELETE` on the same path the listing is read from, because that is what
+  // it is — the listing, emptied.
+  //
+  // No `If-Match`, unlike the soft delete. A revision precondition asks "is this still what I
+  // saw", and what was seen here is a set rather than a row; the answer this returns is the
+  // count, so a client that expected more can look again and see why.
+  app.delete<{ Params: { vaultId: string } }>(
+    '/vaults/:vaultId/trash',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      const out = await purgeTrash(db, { vaultId: req.params.vaultId });
+      if ('kind' in out) return refuse(reply, out);
+      return { purged: out.purged, thawed: out.thawed };
+    },
+  );
+
+  app.delete<{ Params: { vaultId: string; nodeId: string } }>(
+    '/vaults/:vaultId/trash/:nodeId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      const out = await purgeTrash(db, { vaultId: req.params.vaultId, nodeId: req.params.nodeId });
+      if ('kind' in out) return refuse(reply, out);
+      return { purged: out.purged, thawed: out.thawed };
     },
   );
 };

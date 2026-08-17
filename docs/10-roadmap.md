@@ -7,7 +7,7 @@
 | **M1** | **two-way** sync of one vault: adoption of a non-empty vault, conflict files, rescan, resync after journal TTL — scope below | ☑ |
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
-| **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☐ |
+| **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☐ |
 | **M5** | **the operator's milestone**: the management console (both zones), backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
 | **M6** | WebDAV gateway | ☐ |
@@ -147,13 +147,13 @@ so the recovery attempt went to an address nobody had chosen and failed before t
       the catch-up runs in the same transaction: a walk of another member's copy, delivering what arrived
       during the gap **and the version rows behind it**, authorship intact. Not the journal — that is a
       90-day transport buffer, and a freeze has no expiry of its own.
-- [ ] **Something a frozen account can actually delete.** Thawing has a trigger only if usage can fall,
+- [x] **Something a frozen account can actually delete.** Thawing has a trigger only if usage can fall,
       and today it can fall two ways: a vault reset, and deleting a whole vault. An ordinary delete is
       **soft** — the row is the trash entry — so it frees nothing, and there is no purge. SH-20 says
       "deleting is the only way out"; until the trash can be emptied that sentence is not true, and the
-      exit that recovery-by-deletion promises is a vault reset. It is **the first item of M4** and the
-      reason that milestone leads with the purge; naming it here so the gap is not discovered by somebody
-      stuck behind it. This box is what keeps M3.5 open, and it closes there rather than here.
+      exit that recovery-by-deletion promises is a vault reset. Closed by M4's first item: the trash can
+      be emptied, the claim goes down through `dropUnreferenced`, and the freeze lifts in the same
+      transaction that freed the space.
 
 ## M4 — space, and the history already on disk
 
@@ -169,14 +169,16 @@ mean the space problem waits for a front end.
 
 ### The trash can be emptied, and a claim can go down
 
-- [ ] **A purge, so SH-20 stops being a sentence with nothing behind it.** Deleting is soft — the row *is*
+- [x] **A purge, so SH-20 stops being a sentence with nothing behind it.** Deleting is soft — the row *is*
       the trash entry — so today it frees nothing, and a frozen account's only exit is a vault reset. The
       statement that **lowers** a claim belongs in `holdings.ts`, beside the two that raise one; a per-blob
       decrement lived unreachable in `nodes/service.ts` for months, which read as evidence that releasing
       was already wired. This is the item M3.5 is still open on, and the reason it is first here.
-- [ ] **Emptying is a write like any other**, so it obeys what writes obey: inside a share it propagates
-      (SH-10 gave every participant their own row, and every one of them their own decision), and a frozen
-      account may still do it — a freeze that blocked the only way out is a deadlock.
+- [x] **It is local, and a replica is not exempt** (SH-30). The item is already deleted in every copy, so
+      there is nothing to propagate; what is discarded is this account's own retention of it, which is per
+      account exactly as the quota it is spent against. A frozen account may do it — a freeze that blocked
+      the only way out is a deadlock, and the schema agrees: the trigger refusing a frozen account's writes
+      fires on `INSERT` and `UPDATE`, never on `DELETE`.
 
 ### The nightly mark and sweep
 

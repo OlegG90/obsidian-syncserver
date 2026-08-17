@@ -317,6 +317,8 @@ GET    /vaults/{vault_id}/list?under={node_id}&snapshot=…  subtree listing for
 GET    /vaults/{vault_id}/versions/{node_id}    → [{rev, sha256, size, at, author_id}]
 GET    /vaults/{vault_id}/trash?under={node_id}  → deleted nodes with live history
 POST   /vaults/{vault_id}/restore {node_id, rev}  → a new put with an old hash → a new version
+DELETE /vaults/{vault_id}/trash                 → {purged, thawed}   discard it all, for good
+DELETE /vaults/{vault_id}/trash/{node_id}       → {purged, thawed}   discard one subtree
 WS     /events                          → {vault_id, head_rev}   across the account's synced vaults
 ```
 

@@ -405,3 +405,22 @@ partial share outcome: other participants continue normally, and the affected re
 An initiator ending a share starts the same finalization for every participant. A `preparing` share has no
 added copies yet and is cancelled instead; an active share may only end after all finalizations have started
 or completed.
+
+## SH-30 · Discarding the trash is local, and a replica is not exempt
+
+Emptying the trash removes rows the participant already deleted, so it **does not propagate** and it is not
+withheld from nodes carrying a share mark. Both halves are decisions, and neither follows from the other.
+
+It does not travel because there is nothing to say: the deletion itself propagated when it happened, and
+every copy already holds the node as deleted. What a purge discards is this account's **retention** of it,
+which is per account exactly as the quota that retention is spent against (AC-Q2). One participant keeping
+their trash for a year and another emptying it weekly is two people spending their own space, not two copies
+disagreeing.
+
+A replica is not excluded, and this is where it differs from a reset (SH-27). A reset mass-deletes *live*
+nodes, and each of those deletions would propagate — one person choosing "my client wins" would empty the
+shared folders of up to seven others. A purge deletes nothing that is alive anywhere.
+
+**The cost, stated here rather than discovered:** having purged, that participant cannot restore the item,
+even while another still holds a copy of it — restoring is a local act on a local row, and there is no row
+left. This is the same trade every retention setting makes, and it is why emptying the trash asks first.
