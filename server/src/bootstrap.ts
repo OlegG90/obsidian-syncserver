@@ -1,15 +1,15 @@
 /**
  * First run: the server answers one thing until it has an administrator (#107).
  *
- * `schema.sql` seeds an unredeemed invitation for the first administrator — the only shape
- * the server can create, since keys are born on a device (#83). That token is a default
- * credential, and two properties make it acceptable; this file is the second one.
+ * `schema.sql` seeds the first administrator with NO credential at all: a console account
+ * (#115) whose password column is null. `POST /auth/bootstrap` creates that password, and
+ * two properties make the window acceptable; this file is the second one.
  *
- *   1. redeeming it is what replaces it — the invitation is consumed and the row becomes
- *      the operator's own keyed account, so there is no state in which the default still
- *      works;
- *   2. while it is outstanding the server does nothing else. The window is the first run,
- *      not "until somebody remembers".
+ *   1. there is nothing to guess. A seeded token or password keeps working for anybody who
+ *      never got round to changing it; a null one cannot be used at all, and the statement
+ *      that sets it is the same one that moves the row out of the state it matched on;
+ *   2. while it is unset the server does nothing else. The window is the first run, not
+ *      "until somebody remembers".
  *
  * Neither half works alone, which is why the guard is not optional and not a warning.
  */
@@ -34,23 +34,6 @@ export const hasActiveAdministrator = async (db: Db): Promise<boolean> => {
     `SELECT EXISTS (SELECT 1 FROM users WHERE state = 'active' AND role = 'admin') AS exists`,
   );
   return row?.exists ?? false;
-};
-
-/**
- * Re-arm the seeded invitation if it expired unredeemed.
- *
- * A bricked server helps nobody: without this, an installation left alone for longer than
- * the seeded expiry can never be set up at all. It is safe precisely because of the guard
- * above — while there is no administrator the token opens nothing except the act that
- * replaces it.
- */
-export const rearmBootstrapInvitation = async (db: Db): Promise<boolean> => {
-  const rows = await db.query(
-    `UPDATE users SET invite_expires_at = now() + interval '7 days'
-      WHERE role = 'admin' AND state = 'provisioned' AND invite_expires_at <= now()
-      RETURNING id`,
-  );
-  return rows.length > 0;
 };
 
 export const registerBootstrapGuard = (app: FastifyInstance, db: Db): void => {

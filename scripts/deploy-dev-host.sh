@@ -184,7 +184,9 @@ for i in $(seq 1 60); do
                     cat <<EOF
 
 The server is up and has no administrator yet, which is the expected first-run state: it
-answers only /auth/kdf, /auth/redeem and /health until the seeded invitation is redeemed.
+answers only /auth/kdf, /auth/bootstrap, /health and the console until a password is set.
+
+Open http://127.0.0.1:$port/ to set it, or walk the whole first run from here:
 
     ./scripts/smoke.sh http://127.0.0.1:$port
 

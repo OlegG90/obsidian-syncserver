@@ -10,7 +10,10 @@
 # therefore been unable to claim an administrator since that milestone shipped, which nothing
 # noticed because it only ever runs against a real deployment.
 #
-# Claims the seeded administrator if nobody has, then exercises the account surface, a
+# On a server nobody has claimed it walks the first run as a person would (#115): set the
+# console password, sign in with it, invite a VAULT account, and redeem that. The two kinds
+# are separate, so the administrator it creates has no vault and everything below happens as
+# the invited account. Then it exercises the account surface, a
 # blob, all three node verbs the roadmap names for M0 — create, put, delete — and the
 # delta that reports them. Everything it sends is shaped correctly and means nothing — the key
 # material is placeholder bytes, so this account can never decrypt anything a real client
@@ -67,12 +70,39 @@ if [ -n "${ACCESS:-}" ]; then
     printf '  vault %s\n' "$vault"
 
 elif printf '%s' "$health" | grep -q '"bootstrap_pending":true'; then
-    step "claiming the seeded administrator"
+    # The first run, in the order a person does it. There is no seeded credential to redeem
+    # any more (#107): the password is CREATED here, and the account it creates is a console
+    # one — a password and no key material at all, so it cannot own the vault this walk
+    # needs. That is why there are two accounts below rather than one.
+    step "creating the first administrator"
+    console_password="smoke-$(hex32)"
+    curl -fsS -X POST "$base/auth/bootstrap" -H 'content-type: application/json' \
+        -d '{"password":"'"$console_password"'"}' >/dev/null \
+        || fail "bootstrap refused; this server may already have an administrator"
+    printf '  console password (this run only): %s\n' "$console_password"
+
+    step "signing in to the console"
+    admin_access="$(curl -fsS -X POST "$base/auth/console" -H 'content-type: application/json' \
+        -d '{"login":"admin","password":"'"$console_password"'","device_name":"smoke"}' \
+        | field access)" || fail "console sign-in refused"
+    [ -n "$admin_access" ] || fail "console sign-in returned no token"
+
+    step "inviting a vault account"
+    smoke_login="smoke-$(date +%s)"
+    invite="$(curl -fsS -X POST "$base/admin/invitations" \
+        -H "authorization: Bearer $admin_access" -H 'content-type: application/json' \
+        -d '{"login":"'"$smoke_login"'","quota_bytes":"10737418240"}')" \
+        || fail "the console refused to create an invitation"
+    invitation_token="$(printf '%s' "$invite" | field token)"
+    [ -n "$invitation_token" ] || fail "no token in the invitation: $invite"
+    printf '  login %s\n' "$smoke_login"
+
+    step "redeeming it, as the plugin would"
     auth_secret="$(secret)"
     vault="$(uuid)"
     resp="$(curl -fsS -X POST "$base/auth/redeem" -H 'content-type: application/json' -d '{
-      "invitation_token": "admin",
-      "login": "admin",
+      "invitation_token": "'"$invitation_token"'",
+      "login": "'"$smoke_login"'",
       "auth_secret": "'"$auth_secret"'",
       "account_salt": "'"$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)"'",
       "kdf_params": {"v":19,"m":65536,"t":3,"p":1},

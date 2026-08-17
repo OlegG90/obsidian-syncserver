@@ -7,8 +7,9 @@
 # allows, and walks M0 and M4. Run it ON the server — smoke.sh reads /proc for a UUID and talks to
 # 127.0.0.1, so neither works from a Windows share.
 #
-# The token is the part that kept going wrong by hand. A fresh installation hands one out at
-# redeem; a claimed one only issues them to somebody who knows the account's auth_secret,
+# The token is the part that kept going wrong by hand. A fresh installation walks its own
+# first run and is handed one at redeem; a claimed one only issues them to somebody who
+# knows the account's auth_secret,
 # which is printed once and then gone. So for a claimed installation this script signs its
 # own, from the SERVER_SECRET in .env — see the step for why that is the operator's own key
 # rather than a way around anything.
@@ -65,11 +66,11 @@ say "is it up?"
 health="$(curl -fsS "$base/health" 2>/dev/null)" || fail "no answer from $base"
 printf '  %s\n' "$health"
 
-# A server with no administrator hands out a token at redeem, which is exactly what
-# smoke.sh does on its own. Nothing to arrange.
+# A server with no administrator can walk its own first run: smoke.sh sets the console
+# password, invites itself a vault account and redeems it. Nothing to arrange.
 case "$health" in
     *'"bootstrap_pending":true'*)
-        say "no administrator yet — smoke.sh will claim the seeded invitation"
+        say "no administrator yet — smoke.sh will walk the first run"
         exec ./scripts/smoke.sh "$base"
         ;;
 esac
@@ -91,15 +92,26 @@ q() { docker exec syncserver-db psql -U "$pguser" -d "$pgdb" -At -c "$1"; }
 # The token names an account and a DEVICE, because a session that cannot be signed out one
 # device at a time is a session nobody signs out (#90). Both come from the database rather
 # than being invented: a device row that does not exist is refused on the upload path.
-user_id="$(q "SELECT id FROM users WHERE login = 'admin' AND state = 'active'")" \
+#
+# A VAULT account, not the administrator. Since #115 those are different rows: a console
+# account holds a password and no key material, and therefore owns no vault, so minting a
+# token for it would produce one that authenticates and has nothing to walk. Any active
+# vault account with a live device and a vault will do — the walk makes its own content.
+user_id="$(q "SELECT u.id FROM users u
+              WHERE u.role = 'user' AND u.state = 'active'
+                AND EXISTS (SELECT 1 FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL)
+                AND EXISTS (SELECT 1 FROM vaults v WHERE v.user_id = u.id)
+              ORDER BY u.created_at LIMIT 1")" \
     || fail "could not reach the database container (syncserver-db)"
-[ -n "$user_id" ] || fail "no active administrator named 'admin' in the database"
+[ -n "$user_id" ] || fail "no active vault account with a device and a vault in the database.
+An administrator alone is not enough: a console account owns no vault. Invite one from the
+console and connect it from Obsidian, then re-run this."
 
 device_id="$(q "SELECT id FROM devices WHERE user_id = '$user_id' AND revoked_at IS NULL LIMIT 1")"
-[ -n "$device_id" ] || fail "the administrator has no live device; nothing can hold a token"
+[ -n "$device_id" ] || fail "that account has no live device; nothing can hold a token"
 
 vault="$(q "SELECT id FROM vaults WHERE user_id = '$user_id' ORDER BY created_at LIMIT 1")"
-[ -n "$vault" ] || fail "the administrator has no vault"
+[ -n "$vault" ] || fail "that account has no vault"
 printf '  user %s\n  device %s\n  vault %s\n' "$user_id" "$device_id" "$vault"
 
 # HS256, which is what @fastify/jwt does with a string secret. base64url is base64 with two

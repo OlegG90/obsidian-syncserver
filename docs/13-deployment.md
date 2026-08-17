@@ -247,32 +247,43 @@ reported on the `503` path too: the version is a fact about the process, not abo
 
 ## Claiming the first administrator
 
-Until that invitation is redeemed the API answers **only** `/auth/kdf`, `/auth/redeem` and
-`/health`; everything else is `503 bootstrap_pending`. That is what makes the seeded token
-`admin` safe — it opens exactly one thing, and redeeming it is what replaces it.
+Until a password is set the API answers **only** `/auth/kdf`, `/auth/bootstrap`, `/health` and
+the console's own two files; everything else is `503 bootstrap_pending`. What makes that window
+safe is not a token being short-lived — it is that there is **no credential at all** until this
+call creates one (#107). A seeded password would keep working for anybody who never got round
+to changing it.
 
-Redemption is normally the plugin's job, because the key material is born on the device. It can
-be done by hand with values that are *shaped* right and mean nothing:
+The ordinary way is the console: open `http://<host>:$PUBLISH_PORT/` and it shows one screen,
+asking for the password. By hand it is one request:
 
 ```bash
-curl -s -X POST "localhost:$PUBLISH_PORT/auth/redeem" -H 'content-type: application/json' -d '{
-  "invitation_token": "admin",
-  "auth_secret": "'"$(openssl rand -base64 32)"'",
-  "account_salt": "'"$(openssl rand -base64 16)"'",
-  "kdf_params": {"v":19,"m":65536,"t":3,"p":1},
-  "pubkey": "AQ==", "enc_privkey": "Ag==", "wrapped_seed": "Aw==",
-  "recovery_key": "BA==", "recovery_code_hash": "'"$(openssl rand -hex 32)"'",
-  "initial_vault_id": "'"$(uuidgen)"'",
-  "initial_vault_name_enc": "'"$(printf 'test vault' | base64)"'",
-  "device_name": "curl", "device_platform": "linux"
-}'
+curl -s -X POST "localhost:$PUBLISH_PORT/auth/bootstrap" \
+  -H 'content-type: application/json' \
+  -d '{"password":"a password you would give a password manager"}'
 ```
 
-Keep the `auth_secret` you generated: it is what logs that account in from then on. The server
-stores only its hash (#108) and cannot tell you what it was.
+It answers `{"login":"admin"}` once and `409 already_bootstrapped` every time after: the
+statement that sets the password is the same one that moves the row out of the state it matched
+on, so there is no second chance and no window between checking and writing.
 
-The response carries `access`, `refresh`, `device_id`, `vault_id` and `root_node_id`. `/health`
-now reports `bootstrap_pending: false`, and the rest of the API answers.
+That account is a **console account** (#115): a password, and no key material at all. It
+administers the server and cannot sync a vault — there is no seed to derive a vault key from.
+Signing in is `POST /auth/console` with the login `admin` and that password, which answers with
+the usual access and refresh tokens.
+
+**A vault for yourself is a separate account**, invited from the console like anybody else's:
+
+```bash
+curl -s -X POST "localhost:$PUBLISH_PORT/admin/invitations" \
+  -H "authorization: Bearer $ACCESS" -H 'content-type: application/json' \
+  -d '{"login":"you","quota_bytes":"10737418240"}'
+```
+
+The token in that answer is shown once — only its hash is stored — and it is what the plugin
+redeems, on the device where the keys are made.
+
+`/health` reports `bootstrap_pending: false` from the moment the password exists, and the rest
+of the API answers.
 
 > **This is a test account, not a real one.** Its `wrapped_seed` and keys are placeholder bytes,
 > so nothing it stores could ever be decrypted by a real client — and the plugin cannot adopt it,

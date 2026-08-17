@@ -25,8 +25,9 @@ if (cfg.serverSecretIsDefault) {
 
 if (!(await hasActiveAdministrator(db))) {
   console.warn(
-    'No administrator yet: this server answers only /auth/kdf and /auth/redeem until the ' +
-      'seeded invitation for login "admin" is redeemed.',
+    'No administrator yet: this server answers only /auth/kdf, /auth/bootstrap, /health and ' +
+      'the console until the first administrator password is set. Open the console, or POST ' +
+      'a password to /auth/bootstrap.',
   );
 }
 

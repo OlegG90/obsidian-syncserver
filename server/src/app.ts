@@ -18,7 +18,7 @@ import { registerConsoleRoutes } from './console.js';
 import { backupInProgress } from './backup.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
-import { hasActiveAdministrator, rearmBootstrapInvitation, registerBootstrapGuard } from './bootstrap.js';
+import { hasActiveAdministrator, registerBootstrapGuard } from './bootstrap.js';
 import type { Config } from './config.js';
 import type { Db } from './db.js';
 import { SERVER_VERSION } from './version.js';
@@ -98,10 +98,6 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerDeltaRoutes(app, db, cfg);
 
   if (events) registerEventsRoutes(app, events);
-
-  // A seeded invitation that expired unredeemed would otherwise leave the installation
-  // with no way in at all.
-  await rearmBootstrapInvitation(db);
 
   return app;
 };
