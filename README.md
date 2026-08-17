@@ -62,6 +62,14 @@ the client), and nothing either side can decide alone.
 `db/` sits at the root beside `docs/` rather than inside `server/`, because the documentation
 cites it as the executable half of the data model rather than as part of any one program.
 
+### Using it
+
+[`GUIDE.md`](GUIDE.md) is the one document written for the people who **use** this rather
+than the people who build it: bringing a server up, claiming it, connecting a vault, adding
+a second device, coming back after losing one, sharing a folder, and what actually frees
+space. It is deliberately not normative — every rule it describes lives in `docs/`, and it
+cites them rather than restating them.
+
 ### The design record
 
 `docs/` is not commentary written after the fact — it is where decisions are made and the reason
@@ -93,7 +101,7 @@ Requires **PostgreSQL 18+** and **Node 22+**.
 ```bash
 npm ci
 npm run db:reset          # drop the dev database, apply schema.sql + tests.sql, report
-npm test                  # every workspace, after asserting one version across all five manifests
+npm test                  # every workspace, after asserting one version across all six manifests
 npm run check:compose     # assert the shape the deployment depends on
 ```
 
