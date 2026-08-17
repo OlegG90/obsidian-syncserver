@@ -9,7 +9,7 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development, version 0.3.0.** Two-way sync works on desktop and on Android against a
+> **Status: in development, version 0.4.0.** Two-way sync works on desktop and on Android against a
 > self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
 > keep both versions. **Folder sharing works too** — two accounts have shared a folder, written into
 > it both ways and left it again, each keeping their copy — and **a vault can be recovered from the
@@ -121,7 +121,7 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.3.0"}` and serves
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.4.0"}` and serves
 nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
@@ -148,7 +148,7 @@ both at once.
 
 ## Status
 
-Current release: **0.3.0** — see [Versions](#versions).
+Current release: **0.4.0** — see [Versions](#versions).
 
 | Milestone | |
 |---|---|
@@ -158,7 +158,7 @@ Current release: **0.3.0** — see [Versions](#versions).
 | **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
 | **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
 | **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. Its last open item, a frozen account with nothing it could delete to free space, is closed by M4's purge |
-| **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | built, not yet walked — the tables the schema has carried since M0 finally have code behind them, and the scenario that closes the milestone (a frozen account empties its trash and comes back under its limit) is waiting on a real server |
+| **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | done — walked by a person: a vault at 210% of its limit emptied its trash, the claim went with the row, and the collector unlinked the freed bytes. That pass found **six defects 302 green tests had no opinion about**, the quietest being a login the client stored without the server ever confirming it |
 | **M5** — the operator's milestone: management console (both zones), backup operations, and an image pulled from a registry instead of built on the server | not started |
 | **M6** — WebDAV gateway | not started |
 | **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | not started — specified since M3.5, with its columns in the schema and null meaning honestly "this account has no code" |
@@ -204,17 +204,23 @@ work together.
 `0.2` and `0.3` are as unrelated as `1.x` and `2.x` will be. The rule collapses to the plain "same
 major" on the day the first `1.0.0` ships, with no code change: the zero test simply stops being true.
 
-`0.3.0` earns its number the way the rule intends. Registration now requires a recovery verifier and
-the endpoints that hand an account back did not exist before it, so a `0.2` client cannot claim an
-invitation from a `0.3` server, and a `0.2` server has nothing to answer a `0.3` client's recovery
-with. That is the whole point of the number: neither build has to discover this by failing.
+`0.4.0` earns its number in both directions. Claiming an invitation now sends the login for the
+server to **check**, so a `0.3` client omits a field a `0.4` server refuses on; and the trash answers
+with a page and a total where it used to answer with a bare array, so a `0.3` client reading a `0.4`
+server finds no list at all. The endpoints an operator uses — accounts, invitations, quotas, storage,
+the audit log, account deletion — did not exist before it either.
+
+`0.3.0` earned its number the same way: registration began requiring a recovery verifier and the
+endpoints that hand an account back did not exist before it, so a `0.2` client could not claim an
+invitation from a `0.3` server. That is the whole point of the number: neither build has to discover
+any of this by failing.
 
 The server reports its version from `/health`, and only there — it is the one endpoint open before
 authentication and before an administrator exists, which is exactly when a client needs the answer:
 
 ```bash
 curl -s localhost:8080/health
-# {"status":"ok","bootstrap_pending":false,"version":"0.3.0"}
+# {"status":"ok","bootstrap_pending":false,"version":"0.4.0"}
 ```
 
 The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does

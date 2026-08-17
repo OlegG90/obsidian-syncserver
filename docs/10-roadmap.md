@@ -8,7 +8,7 @@
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
-| **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☐ |
+| **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console (both zones), backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
 | **M6** | WebDAV gateway | ☐ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
@@ -242,10 +242,23 @@ deleting a vault:
 If any step needs an administrator, the milestone has failed: the person who ran out of space is the person
 who must be able to make space.
 
-**Every box above is ticked and the milestone is not**, which is this project's standard rather than an
-oversight: M0, M3 and M3.5 were each closed by a walk and not by a suite, and each walk found defects the
-tests had no opinion about — eighteen of them, once. The scenario above is what the walk is, and until
-somebody has run it against a real server the honest state of this row is unticked.
+**Walked, and it holds.** A person emptied the trash of a vault sitting at 210% of its limit; the claim
+went with the row, usage fell from 210 bytes to 85 against a 100-byte limit, and the collector unlinked
+the freed bytes once their quarantine expired. Nothing in it needed an administrator.
+
+The walk found **six defects that 302 green tests had no opinion about**, which is the ratio M3 produced
+and the reason this row waits for a person. Five were the same shape — a decision made where no test was
+watching — and the quietest of them cost the walk its first twenty minutes: `/auth/redeem` takes the
+account's name from the invitation and never took one from the caller, so a client that typed a different
+name stored one the server had never confirmed. Nothing failed at the moment of the mistake. It failed at
+the next unlock, and it had bound the recovery proof to a name nobody had.
+
+The others: a confirmation whose "yes" was read as "no", because the dialogue closed before it recorded
+the answer; a guard written for irreversible acts that also gagged reads, so a screen asking for two
+things at once got one; a usage line marked red on `frozen` rather than on being over the limit, which an
+account syncing alone never is; three passphrase prompts to open one page; and a trash listing nobody had
+ever bounded. The last of those was not the walk's — it had one file in it — but the walk is what made
+somebody ask.
 
 ## M5 — the operator's milestone
 

@@ -234,7 +234,7 @@ the postgres image takes that directory over as its own user, so create it and l
 A fresh instance answers:
 
 ```json
-{"status":"ok","bootstrap_pending":true,"version":"0.3.0"}
+{"status":"ok","bootstrap_pending":true,"version":"0.4.0"}
 ```
 
 `bootstrap_pending` is the whole first-run state: the database has been created and seeded, and
