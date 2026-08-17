@@ -73,6 +73,13 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       return reply.code(409).send({ error: 'share_not_prepared', gaps: refusal.gaps });
     case 'invite_failed':
       return reply.code(409).send({ error: 'invite_failed' });
+    case 'console_account':
+      return reply.code(409).send({
+        error: 'console_account',
+        detail:
+          'that login administers the server and holds no keys, so there is nothing to seal a ' +
+          'share to. Whoever it is has a separate account for their own notes — invite that one.',
+      });
     case 'initiator_cannot_be_removed':
       return reply.code(409).send({ error: 'initiator_cannot_be_removed' });
     case 'finalization_incomplete':

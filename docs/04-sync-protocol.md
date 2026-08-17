@@ -164,6 +164,15 @@ Two more measures, because a single uniform answer is not by itself enough:
 - **`POST /shares/{id}/invite` fails generically** for a `user_id` that names no account. It must not say
   "no such account" — that is the same oracle, one call later.
 
+**A CONSOLE account is the one login that gets a straight answer**, `409 console_account` (#115). It is
+not an exception to the rule so much as a case outside it: what the fake protects is *whether an account
+exists*, and a console account's existence is not the secret — `admin` is seeded on every installation and
+named in this document. What it holds is no `pubkey`, so a share key cannot be sealed to it at all, and the
+alternatives are both worse: a fake sends the initiator on to an invitation that fails for no stated reason,
+and the real row sends them on to an envelope sealed to `null`. The schema enforces the same rule from
+underneath — a trigger refuses a `share_members` row for an account with no key material, so the one code
+path that knows about this is not the only thing standing between a console account and a share.
+
 **The residual is named rather than claimed away.** A determined caller who follows a probe through to an
 invite still learns, from the failure, that the account does not exist; rate limiting bounds how often, and
 the attempt is an auditable administrative event. That is weaker than `/auth/kdf`'s guarantee, and

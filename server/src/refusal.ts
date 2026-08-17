@@ -73,6 +73,14 @@ export type Refusal =
    * the login oracle #73 closed on /auth/kdf.
    */
   | { kind: 'invite_failed' }
+  /**
+   * That login belongs to a CONSOLE account, which has no key to seal an invitation to
+   * (#115). Named rather than folded into the deliberately-silent `invite_failed`, because
+   * it is not the case that refusal protects: a console account's existence is not a secret
+   * — `admin` is seeded on every installation and documented — while "your invitation went
+   * nowhere and nobody will say why" is a bug report waiting to happen.
+   */
+  | { kind: 'console_account' }
   /** Removing the initiator is not a removal — it ends the share, which is its own act. */
   | { kind: 'initiator_cannot_be_removed' }
   /**

@@ -1067,12 +1067,17 @@ export const recipientPubkey = async (
   ]);
   if (!share || share.initiator !== userId) return { kind: 'not_found' };
 
-  const found = await db.one<{ id: string; pubkey: string }>(
+  const found = await db.one<{ id: string; pubkey: string | null }>(
     `SELECT id, encode(pubkey, 'base64') AS pubkey
        FROM users WHERE lower(login) = lower($1) AND state = 'active'`,
     [login],
   );
-  if (found) return { userId: found.id, pubkey: found.pubkey };
+  // A console account is `active` and has no `pubkey` at all (#115). Without this it fell
+  // through as a recipient carrying a null key, and the failure surfaced two calls later as
+  // an envelope sealed to nothing — the initiator being told their share is broken, about an
+  // account that was never a possible participant.
+  if (found && found.pubkey === null) return { kind: 'console_account' };
+  if (found) return { userId: found.id, pubkey: found.pubkey! };
 
   const fake = fakeRecipient(serverSecret, login);
   return { userId: fake.userId, pubkey: fake.pubkey.toString('base64') };

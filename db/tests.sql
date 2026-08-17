@@ -1442,6 +1442,15 @@ SELECT expect_ok($$
     UPDATE users SET history_days = 30 WHERE login = 'alice'
 $$, 'an account may keep less history than the default year');
 
+-- A console account administers the server and holds no key material (#115), so there is
+-- nothing to seal a share key to. The FK does not catch it — the row exists and is active —
+-- which is exactly why this is a trigger and not left to the one code path that knows.
+SELECT expect_fail($$
+    INSERT INTO share_members (share_id, user_id, wrapped_key)
+    SELECT s.id, u.id, '\x01'::bytea FROM shares s, users u
+     WHERE u.login = 'root' LIMIT 1
+$$, '23514', 'administers the server', 'a console account invited into a share');
+
 -- ============================================================ backup runs
 
 -- The dangerous order (#114), refused by the schema rather than by the one file that knows

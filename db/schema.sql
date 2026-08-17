@@ -1124,6 +1124,30 @@ CREATE CONSTRAINT TRIGGER shares_ended_leaves_nobody
 
 -- At most 8 participants, the initiator included (SH-11) — what keeps synchronous fan-out
 -- honest.
+-- A console account cannot be a participant (#115), and this is where that stops being a
+-- sentence in a document. It holds no `pubkey`, so there is nothing to seal a share key to
+-- — and the FK alone does not notice, because the row exists and is perfectly `active`.
+-- Without this the invitation lands, the envelope is sealed to nothing, and the failure
+-- reaches the initiator as a broken share rather than as "that account cannot be invited".
+CREATE FUNCTION share_members_check_keyed_account() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (SELECT pubkey IS NULL FROM users WHERE id = NEW.user_id) THEN
+        RAISE EXCEPTION 'a share participant must hold key material; % administers the server and has none',
+            (SELECT login FROM users WHERE id = NEW.user_id)
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- Named to sort BEFORE `share_members_join_carries_a_key`: PostgreSQL fires same-event
+-- triggers in name order, and "that account cannot hold a share key at all" is the more
+-- useful answer than whatever the share's state happens to be.
+CREATE TRIGGER share_members_account_holds_keys
+    BEFORE INSERT OR UPDATE OF user_id ON share_members
+    FOR EACH ROW EXECUTE FUNCTION share_members_check_keyed_account();
+
 CREATE FUNCTION share_members_check_ceiling() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN

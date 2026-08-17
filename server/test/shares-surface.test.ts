@@ -254,6 +254,29 @@ describe('who to seal a share key to', () => {
     assert.deepEqual((await ask()).json(), (await ask()).json());
   });
 
+  it('says plainly that a console account cannot be a recipient', async () => {
+    // #115: it holds no `pubkey`, so there is nothing to seal a share key to. Named rather
+    // than folded into the deliberately-silent answers around it, because a console
+    // account's existence is not a secret — `admin` is seeded on every installation — while
+    // an invitation that vanished with no reason is a bug report waiting to happen.
+    const shareId = await activeShare('pubkey-console');
+    const login = `console-${Date.now()}`;
+    await w.db.query(
+      `INSERT INTO users (id, login, role, state, password_hash, quota_bytes)
+       VALUES (gen_random_uuid(), $1, 'admin', 'active', '$argon2id$fake', 1)`,
+      [login],
+    );
+
+    const r = await w.app.inject({
+      method: 'GET',
+      url: `/shares/${shareId}/recipients/${encodeURIComponent(login)}/pubkey`,
+      headers: auth(),
+    });
+
+    assert.equal(r.statusCode, 409);
+    assert.equal(r.json().error, 'console_account');
+  });
+
   it('is the initiator’s question and nobody else’s', async () => {
     const shareId = await activeShare('pubkey-whose');
     const r = await w.app.inject({

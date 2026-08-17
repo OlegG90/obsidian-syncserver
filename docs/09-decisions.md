@@ -71,7 +71,7 @@ Three prefixes appear across the corpus:
 | 59 | Trash and restore work in groups; restoring a file lifts its ancestor chain |
 | 63 | The client does not apply a delta it cannot materialise — case collision, forbidden name, undecryptable name go to a problem list, not to disk |
 | 72 | Pending uploads are counted in `user_blobs.refs_pending`, not in a table of their own |
-| 73 | An endpoint that takes a **login** never answers `404` for one that does not exist: `/auth/kdf` returns a deterministic fake salt, `/shares/{id}/recipients/{login}/pubkey` a deterministic fake key pair, and an invite naming no account fails generically |
+| 73 | An endpoint that takes a **login** never answers `404` for one that does not exist: `/auth/kdf` returns a deterministic fake salt, `/shares/{id}/recipients/{login}/pubkey` a deterministic fake key pair, and an invite naming no account fails generically. A **console account** is answered plainly instead (`409 console_account`, #115): its existence is not what the fake protects — it is seeded and documented — and it can never be a recipient, since it holds no key to seal a share to |
 | 98 | `ancestry` is the strict ancestor chain, own id excluded, and a deferred constraint trigger verifies it at commit |
 | 100 | The delta cursor is authenticated: `base64url(payload) "." base64url(HMAC(cursor_key, payload))`, with the user id and vault id inside the payload; a bad tag is `400`, not `410` |
 | 102 | `nodes.type` is immutable |

@@ -75,6 +75,7 @@ export type RefusalCode =
   | 'share_not_active'
   | 'share_not_prepared'
   | 'invite_failed'
+  | 'console_account'
   | 'initiator_cannot_be_removed'
   | 'finalization_incomplete';
 
