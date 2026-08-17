@@ -1,0 +1,12 @@
+{
+  // The tests run in Node, the bundle does not. `types` is empty in tsconfig.json on purpose
+  // — a browser bundle must not be able to reach a Node API even by accident — so the Node
+  // types are added HERE and nowhere else, which keeps that rule and still checks the tests.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

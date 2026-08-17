@@ -35,7 +35,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      # One version across five manifests (#111), and a compose file that still says what
+      # The console's own tests. They live in this job rather than the server one because
+      # they need no database — the only judgement in that workspace is what a line under a
+      # login says, and that is a pure function.
+      - run: npm test --workspace @syncserver/console
+      # One version across six manifests (#111), and a compose file that still says what
       # docs/13 promises it says.
       - run: node scripts/check-version.mjs
       - run: node scripts/check-compose.mjs

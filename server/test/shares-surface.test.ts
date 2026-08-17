@@ -263,7 +263,7 @@ describe('who to seal a share key to', () => {
     const login = `console-${Date.now()}`;
     await w.db.query(
       `INSERT INTO users (id, login, role, state, password_hash, quota_bytes)
-       VALUES (gen_random_uuid(), $1, 'admin', 'active', '$argon2id$fake', 1)`,
+       VALUES (gen_random_uuid(), $1, 'admin', 'active', '$argon2id$fake', 0)`,
       [login],
     );
 

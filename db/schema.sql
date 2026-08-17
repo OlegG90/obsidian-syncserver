@@ -180,7 +180,11 @@ CREATE TABLE users (
     state        user_state  NOT NULL DEFAULT 'provisioned',
     invite_token_hash text,
     invite_expires_at timestamptz,
-    quota_bytes  bigint      NOT NULL CHECK (quota_bytes > 0),   -- per account (AC-Q2)
+    -- Per account (AC-Q2). ZERO is a real value and means "stores nothing at all": it is
+    -- what a console account and the tombstone hold, because neither owns a vault. The
+    -- constraint below is what keeps zero from meaning that anywhere else — a vault account
+    -- with no quota would be an account frozen from the moment it was made.
+    quota_bytes  bigint      NOT NULL CHECK (quota_bytes >= 0),
     -- How far back history is kept, in days. The RETENTION LADDER above it (docs/03) is
     -- fixed — everything under a week, one a day to thirty, one a week after that — and
     -- this is its outer bound, which is the one part that is a trade the user makes rather
@@ -194,6 +198,15 @@ CREATE TABLE users (
     -- because deleting is the only way out.
     frozen_at    timestamptz,
     created_at   timestamptz NOT NULL DEFAULT now(),
+
+    -- Storage is a vault account's business and nothing else's. An administrator owns no
+    -- vault (#115) and the tombstone owns nothing at all, so both hold zero rather than a
+    -- token positive number that exists only to satisfy a `> 0` check and is never read.
+    -- Stated here so the two seeded rows below need no such number.
+    CONSTRAINT quota_matches_the_kind CHECK (
+        CASE WHEN role = 'admin' OR state = 'tombstone'
+             THEN quota_bytes = 0
+             ELSE quota_bytes > 0 END),
 
     -- An account is an unclaimed invitation, the reserved tombstone, or a fully keyed
     -- account. No half-initialised middle.
@@ -2040,19 +2053,20 @@ CREATE CONSTRAINT TRIGGER versions_revision_within_node
 -- exist BEFORE the first deletion, and nothing else would ever insert it. The nil UUID is
 -- deliberate: gen_random_uuid() never produces it, so the id is unmistakable in a log.
 -- Seeding it here is also what reserves its login — users_login_key is unique, so no real
--- account can take 'deleted' afterwards. quota_bytes must be > 0 and is never used.
+-- account can take 'deleted' afterwards. It stores nothing, so its quota is zero.
 INSERT INTO users (id, login, role, state, quota_bytes)
-VALUES ('00000000-0000-0000-0000-000000000000', 'deleted', 'user', 'tombstone', 1);
+VALUES ('00000000-0000-0000-0000-000000000000', 'deleted', 'user', 'tombstone', 0);
 
--- The FIRST ADMINISTRATOR, as an unredeemed invitation — the only shape the server can
--- create, because keys are born on a device (#83) and the server has none to give.
--- The token is the literal string 'admin'. That is a default credential, and it is made
--- safe by being SINGLE USE BY CONSTRUCTION: redeeming it is what replaces it, filling in
--- the operator's own key material and turning this row into their account. Until then the
--- application serves nothing but its redemption (#107), so the window is "first run",
--- not "for ever, because nobody changed it".
+-- The FIRST ADMINISTRATOR, as a CONSOLE account with NO PASSWORD (#107, #115). It cannot be
+-- an invitation: an invitation is redeemed on a device that makes keys, and a console
+-- account has none to make. What it is missing is the one thing a person can supply without
+-- a client, and `POST /auth/bootstrap` CREATES it rather than replacing a known value —
+-- which is the property a seeded default cannot have, since a default keeps working for
+-- anybody who never got round to changing it. Until then the application serves nothing but
+-- the setting of it, so the window is "first run", not "for ever, because nobody changed it".
+-- Zero quota, like every console account: it administers the server and stores nothing.
 INSERT INTO users (id, login, role, state, quota_bytes)
-VALUES ('00000000-0000-0000-0000-000000000001', 'admin', 'admin', 'provisioned', 1);
+VALUES ('00000000-0000-0000-0000-000000000001', 'admin', 'admin', 'provisioned', 0);
 
 -- ============================================================ notes on what is NOT here
 --

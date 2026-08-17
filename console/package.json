@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node esbuild.mjs",
-    "typecheck": "tsc -b ../shared && tsc --noEmit",
+    "typecheck": "tsc -b ../shared && tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {

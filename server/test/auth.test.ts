@@ -198,6 +198,38 @@ describe('first run', () => {
     assert.equal(row!.keys, null, 'and a console account holds no key material at all (#115)');
   });
 
+  it('signs the administrator in to the console on ONE device row, however often', async () => {
+    // A device row exists so a session can be revoked one at a time (#90) — it stands for
+    // something somebody installed. A browser is not that: it signs in, closes, signs in
+    // again, and a row per sign-in is a list of devices nobody owns that grows for ever.
+    const signIn = () =>
+      app.inject({
+        method: 'POST',
+        url: '/auth/console',
+        payload: { login: 'admin', password: 'a console password' },
+      });
+
+    const first = await signIn();
+    assert.equal(first.statusCode, 200, first.body);
+    assert.ok(first.json().access && first.json().refresh);
+
+    const second = await signIn();
+    assert.equal(second.statusCode, 200, second.body);
+
+    const rows = await db.query<{ id: string }>(
+      `SELECT id FROM devices
+        WHERE user_id = '00000000-0000-0000-0000-000000000001' AND revoked_at IS NULL`,
+    );
+    assert.equal(rows.length, 1, 'the second sign-in reused the first one’s device');
+
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/auth/console',
+      payload: { login: 'admin', password: 'not the password' },
+    });
+    assert.equal(wrong.statusCode, 401, wrong.body);
+  });
+
   it('refuses a valid invitation claimed under the wrong name, and says which name it is', async () => {
     // The account's name belongs to the invitation, so redeeming cannot choose it — but the
     // client binds `kek_verifier` to the name it was given and writes that name into its

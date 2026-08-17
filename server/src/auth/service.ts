@@ -125,6 +125,26 @@ export const consoleSignIn = async (
   );
   if (!row || !passwordMatches(password, row.hash)) return undefined;
 
+  // One console device per account, reused. A device row exists so a session can be revoked
+  // one at a time (#90) — it is a thing somebody installed and can point at. A browser is not
+  // that: it signs in, closes, signs in again, and a row per sign-in is a list of devices
+  // nobody owns, growing for ever, that makes the real ones harder to find.
+  //
+  // The consequence is stated rather than hidden: signing in to the console from a second
+  // browser takes the session from the first, because they share the one refresh token.
+  // Acceptable here in a way it would not be for a vault — an administrator has one console
+  // session by design, and the sign-in is a password prompt away.
+  const existing = await db.one<{ id: string }>(
+    `SELECT id FROM devices
+      WHERE user_id = $1 AND platform = 'console' AND revoked_at IS NULL
+      ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`,
+    [row.id],
+  );
+  if (existing) {
+    await db.query(`UPDATE devices SET name = $2, last_seen_at = now() WHERE id = $1`, [existing.id, deviceName]);
+    return { userId: row.id, deviceId: existing.id };
+  }
+
   const device = await db.one<{ id: string }>(
     `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, 'console') RETURNING id`,
     [row.id, deviceName],

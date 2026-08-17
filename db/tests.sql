@@ -240,7 +240,7 @@ $$, '23514', 'keys_match_state',
 -- A CONSOLE account (#115): a password and no key material. An administrator carrying keys
 -- is now a shape the check refuses, which the negatives further down assert.
 INSERT INTO users (id, login, state, role, password_hash, quota_bytes)
-VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', '$argon2id$fake', 1);
+VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', '$argon2id$fake', 0);
 
 SELECT expect_fail($$
     UPDATE users SET role = 'user' WHERE login = 'root'
@@ -700,13 +700,13 @@ $$, 'the tombstone may be named as author — otherwise anonymisation blocks on 
 
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state, wrapped_seed)
-    VALUES ('dd000000-0000-0000-0000-0000000000de', 'deleted-2', 1, 'tombstone', '\x04'::bytea)
+    VALUES ('dd000000-0000-0000-0000-0000000000de', 'deleted-2', 0, 'tombstone', '\x04'::bytea)
 $$, '23514', 'keys_match_state',
    'a tombstone carrying key material');
 
 SELECT expect_fail($$
     INSERT INTO users (id, login, quota_bytes, state)
-    VALUES ('dd000000-0000-0000-0000-0000000000df', 'deleted-3', 1, 'tombstone')
+    VALUES ('dd000000-0000-0000-0000-0000000000df', 'deleted-3', 0, 'tombstone')
 $$, '23505', 'users_single_tombstone',
    'a second tombstone');
 
@@ -1428,6 +1428,22 @@ SELECT expect_ok($$
        AND state = 'provisioned' AND role = 'admin'
        AND password_hash IS NULL AND invite_token_hash IS NULL
 $$, 'the seeded administrator waits with no password and no token');
+
+-- Quota belongs to accounts that store things. An administrator owns no vault (#115), so a
+-- positive quota on one is a number that would never be read — and zero on a vault account
+-- is an account frozen from the moment it was made.
+SELECT expect_fail($$
+    UPDATE users SET quota_bytes = 1 WHERE login = 'root'
+$$, '23514', 'quota_matches_the_kind', 'a console account with storage it can never use');
+
+SELECT expect_fail($$
+    UPDATE users SET quota_bytes = 0 WHERE login = 'alice'
+$$, '23514', 'quota_matches_the_kind', 'a vault account with no quota at all');
+
+SELECT expect_ok($$
+    SELECT 1 FROM users
+     WHERE id = '00000000-0000-0000-0000-000000000001' AND quota_bytes = 0
+$$, 'the seeded administrator stores nothing, and says so');
 
 -- ============================================================ retention
 

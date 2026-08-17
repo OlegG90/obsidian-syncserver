@@ -14,6 +14,14 @@ people's* accounts, which is what makes it a separate surface at all.
 | can it sync | no — there is no seed to derive a vault key from | yes |
 | can it be invited into a share | no — there is no public key to seal one to | yes |
 | can it read the console | yes | no |
+| quota | **zero**, and the schema insists on it — it owns no vault | positive, per account (AC-Q2) |
+| device rows | **one, reused** on every sign-in | one per device, revocable one at a time (#90) |
+
+A console session is a browser, and a browser is not a device somebody installed and can point at. So a
+sign-in reuses the account's one console device row rather than adding another — the alternative is a
+list of devices nobody owns, growing for ever, in the surface whose job is to make the real ones legible.
+The consequence is stated rather than hidden: signing in from a second browser takes the session from the
+first, which is acceptable for an administrator and would not be for a vault.
 
 **"An administrator cannot browse another user's vault" is now a fact about the row rather than a promise
 about behaviour.** With E2EE always on (AC-08) the server holds only ciphertext, and a console account

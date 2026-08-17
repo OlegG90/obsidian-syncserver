@@ -322,7 +322,7 @@ source at all. That has three costs, and only one of them is convenience:
   whole build context.
 
 - [ ] **Publish the image from CI to a registry**, on a version tag rather than on every push to `main`
-      — one image per released version, matching the single version across five manifests (#111), and
+      — one image per released version, matching the single version across six manifests (#111), and
       tagged by commit as well so a running container can be traced to a build. The runners are x86-64,
       which is the platform the trap is about.
 - [ ] **`docker compose pull` replaces `docker compose build`** in the procedure, with the image

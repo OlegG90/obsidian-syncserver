@@ -12,11 +12,9 @@
  * have.
  */
 import { accounts, bootstrap, health, invite, signedIn, signIn, type AccountRow } from './api.js';
+import { describeAccount } from './format.js';
 
 const app = document.getElementById('app') as HTMLElement;
-
-/** Bytes as something a person reads. Mebibytes, because quotas are set in them. */
-const mib = (bytes: string): string => `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -46,6 +44,22 @@ const field = (label: string, type = 'text'): { row: HTMLElement; input: HTMLInp
 };
 
 /**
+ * A button that does one thing and cannot be asked to do it twice at once.
+ *
+ * All three screens are the same shape — disable, call the API, put whatever it refused with
+ * on the card, enable again — and each wrote it out. The disabling is the part that matters:
+ * every act behind these buttons is once-only on the server (the first password, an
+ * invitation), so a second click while the first is in flight asks for a refusal the person
+ * did not earn.
+ */
+const submits = (button: HTMLButtonElement, card: HTMLElement, run: () => Promise<void>): void => {
+  button.onclick = (): void => {
+    button.disabled = true;
+    void attempt(card, run).finally(() => (button.disabled = false));
+  };
+};
+
+/**
  * The first run, and the only screen a fresh server has.
  *
  * It **creates** a password rather than changing one (#107): there is no default here to be
@@ -69,13 +83,10 @@ const firstRun = (): void => {
     button,
   );
 
-  button.onclick = (): void => {
-    button.disabled = true;
-    void attempt(form, async () => {
-      await bootstrap(password.input.value);
-      render();
-    }).finally(() => (button.disabled = false));
-  };
+  submits(button, form, async () => {
+    await bootstrap(password.input.value);
+    render();
+  });
 
   app.replaceChildren(form);
 };
@@ -88,35 +99,21 @@ const signInScreen = (): void => {
 
   form.append(el('h1', { textContent: 'SyncServer' }), login.row, password.row, button);
 
-  button.onclick = (): void => {
-    button.disabled = true;
-    void attempt(form, async () => {
-      await signIn(login.input.value, password.input.value);
-      render();
-    }).finally(() => (button.disabled = false));
-  };
+  submits(button, form, async () => {
+    await signIn(login.input.value, password.input.value);
+    render();
+  });
 
   app.replaceChildren(form);
 };
 
-const accountRow = (a: AccountRow): HTMLElement => {
-  const what =
-    a.state === 'provisioned'
-      ? `invitation${a.inviteExpiresAt ? `, expires ${new Date(a.inviteExpiresAt).toLocaleDateString()}` : ''}`
-      : `${a.role === 'admin' ? 'console' : 'vault'} account · ${a.state}`;
-  const usage =
-    a.role === 'admin' || a.state === 'provisioned' ? '' : ` · ${mib(a.usedBytes)} of ${mib(a.quotaBytes)}`;
-
-  return el(
+const accountRow = (a: AccountRow): HTMLElement =>
+  el(
     'div',
     { className: 'card' },
     el('strong', { textContent: a.login }),
-    el('div', {
-      className: 'muted',
-      textContent: `${what}${usage}${a.frozenAt ? ' · over its limit' : ''}`,
-    }),
+    el('div', { className: 'muted', textContent: describeAccount(a) }),
   );
-};
 
 const accountsScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Accounts' }));
@@ -139,15 +136,12 @@ const accountsScreen = (): void => {
     button,
   );
 
-  button.onclick = (): void => {
-    button.disabled = true;
-    void attempt(inviteCard, async () => {
-      const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
-      const out = await invite(login.input.value, bytes);
-      inviteCard.append(say(`Invitation for ${login.input.value}. Token: ${out.token}`));
-      await fill();
-    }).finally(() => (button.disabled = false));
-  };
+  submits(button, inviteCard, async () => {
+    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+    const out = await invite(login.input.value, bytes);
+    inviteCard.append(say(`Invitation for ${login.input.value}. Token: ${out.token}`));
+    await fill();
+  });
 
   const fill = async (): Promise<void> => {
     const out = await accounts();

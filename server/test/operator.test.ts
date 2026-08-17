@@ -51,7 +51,7 @@ const makeAccount = async (login: string, role: 'user' | 'admin'): Promise<{ id:
   if (role === 'admin') {
     await db.query(
       `INSERT INTO users (id, login, state, role, password_hash, quota_bytes)
-       VALUES ($1, $2, 'active', 'admin', '$argon2id$test', 1)`,
+       VALUES ($1, $2, 'active', 'admin', '$argon2id$test', 0)`,
       [id, login],
     );
   } else {
