@@ -467,13 +467,14 @@ export class SyncServerSettings extends PluginSettingTab {
       if (over) usage.style.color = 'var(--text-error)';
     });
 
-    void flow.trash().then((rows) => {
+    void flow.trash().then((page) => {
       list.empty();
-      if (!rows) {
+      if (!page) {
         list.createEl('p', { text: 'The trash could not be read.' });
         return;
       }
-      if (rows.length === 0) {
+      const rows = page.rows;
+      if (page.total === 0) {
         list.createEl('p', { text: 'Nothing has been deleted.' });
         return;
       }
@@ -506,6 +507,16 @@ export class SyncServerSettings extends PluginSettingTab {
         );
       }
 
+      // Said rather than left to be inferred: the list is a page, and the button below it is
+      // not. A screen that showed 200 rows and then discarded 3,000 would be telling the
+      // truth twice and lying once.
+      if (page.total > rows.length) {
+        const more = list.createEl('p', {
+          text: `Showing the ${rows.length} most recently deleted of ${page.total}.`,
+        });
+        more.style.fontSize = 'var(--font-ui-smaller)';
+      }
+
       new Setting(list)
         .setName('Empty the trash')
         .setDesc(
@@ -516,7 +527,7 @@ export class SyncServerSettings extends PluginSettingTab {
           b
             .setButtonText('Empty')
             .setWarning()
-            .onClick(() => void flow.empty(rows.length)),
+            .onClick(() => void flow.empty(page.total)),
         );
     });
   }

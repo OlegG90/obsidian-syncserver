@@ -126,7 +126,7 @@ describe('reset', () => {
 
     // Hard, not soft (AC-14): nothing is left in the trash to purge later.
     const trash = await app.inject({ method: 'GET', url: `/vaults/${v.vaultId}/trash`, headers: auth() });
-    assert.equal(trash.json().length, 0, 'space is freed at once, with no leftover occupying quota');
+    assert.equal(trash.json().total, 0, 'space is freed at once, with no leftover occupying quota');
   });
 
   it('bumps the epoch, so every other device is answered 410 reset', async () => {

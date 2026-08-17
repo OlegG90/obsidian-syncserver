@@ -46,9 +46,16 @@ export interface VersionRow {
   at: string;
 }
 
+/** A page of the trash, and how much of it there is. */
+export interface TrashPage {
+  rows: TrashRow[];
+  /** The whole trash, which is what `Empty` acts on — never the length of `rows`. */
+  total: number;
+}
+
 export interface HistoryFlowDeps {
   /** The trash, with names already decrypted — the scopes are the caller's to resolve. */
-  trash(): Promise<TrashRow[]>;
+  trash(): Promise<TrashPage>;
   versions(nodeId: string): Promise<VersionRow[]>;
   /** Bring a node back at a revision. `409 name_taken` names what blocks it. */
   restore(nodeId: string, rev: number): Promise<void>;
@@ -64,7 +71,7 @@ export interface HistoryFlowDeps {
 }
 
 export interface HistoryFlow {
-  trash(): Promise<TrashRow[] | undefined>;
+  trash(): Promise<TrashPage | undefined>;
   versions(nodeId: string): Promise<VersionRow[] | undefined>;
   restore(nodeId: string, rev: number): Promise<void>;
   discard(nodeId: string, name: string): Promise<void>;

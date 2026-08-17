@@ -375,7 +375,7 @@ describe('a departure has to account for the trash too', () => {
 
     const trash = await w.app.inject({ method: 'GET', url: `/vaults/${w.vaultId}/trash`, headers: auth() });
     assert.ok(
-      !(trash.json() as { node_id: string }[]).some((t) => t.node_id === doomed),
+      !(trash.json().entries as { node_id: string }[]).some((t) => t.node_id === doomed),
       'and the trash does not, which is the whole point of asking somewhere else',
     );
   });

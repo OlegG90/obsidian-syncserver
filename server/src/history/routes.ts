@@ -18,14 +18,17 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
     },
   );
 
-  app.get<{ Params: { vaultId: string }; Querystring: { under?: string } }>(
+  app.get<{ Params: { vaultId: string }; Querystring: { under?: string; limit?: string } }>(
     '/vaults/:vaultId/trash',
     { preHandler: requireAuth },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
       }
-      return listTrash(db, req.params.vaultId, req.query.under);
+      // Bounded here rather than trusted, like the audit log: the trash only grows until
+      // retention catches up with it.
+      const limit = Math.min(Number(req.query.limit) || 200, 1000);
+      return listTrash(db, req.params.vaultId, req.query.under, limit);
     },
   );
 

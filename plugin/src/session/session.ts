@@ -592,6 +592,11 @@ export class Session {
     const client = new SyncClient(args.serverUrl, deps.transport);
     const out = await client.redeem({
       invitation_token: args.invitationToken,
+      // Sent so the server can REFUSE it. The account's name belongs to the invitation, and
+      // this side has already bound `kek_verifier` to the one it was given — so a mismatch
+      // has to fail here, while the person is still looking at the form, rather than
+      // becoming a device that syncs once and can never log in again.
+      login: args.login,
       auth_secret: authSecret(account.seed),
       account_salt: toBase64(account.accountSalt),
       kdf_params: account.kdfParams,

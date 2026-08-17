@@ -46,9 +46,30 @@ export type TrashEntry = {
  *
  * A node whose versions have all been thinned away is past recovering, and the collector
  * removes it on the next pass; listing it would offer something that cannot be done.
+ *
+ * **Bounded, and the total comes with it.** The trash grows by itself — every delete lands
+ * there and stays until the retention ladder takes its last version, which is a year by
+ * default — so an unbounded listing is a listing that eventually decrypts thousands of names
+ * to draw thousands of rows. The count is separate rather than inferred from the page,
+ * because the one button that acts on the whole trash has to be able to say how much *the
+ * whole trash* is; a page length in that sentence would be a lie the moment there was a
+ * second page.
  */
-export const listTrash = (db: Db, vaultId: string, under: string | undefined): Promise<TrashEntry[]> =>
-  db.query<TrashEntry & { versions: string }>(
+export const listTrash = async (
+  db: Db,
+  vaultId: string,
+  under: string | undefined,
+  limit: number,
+): Promise<{ entries: TrashEntry[]; total: number }> => {
+  const total = await db.one<{ n: string }>(
+    `SELECT count(*)::text AS n
+       FROM nodes n
+      WHERE n.vault_id = $1 AND n.deleted_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM versions v WHERE v.vault_id = n.vault_id AND v.node_id = n.id)
+        AND ($2::uuid IS NULL OR n.ancestry @> ARRAY[$2::uuid])`,
+    [vaultId, under ?? null],
+  );
+  const entries = await db.query<TrashEntry & { versions: string }>(
     `SELECT n.id AS node_id, n.parent_id, encode(n.name_enc,'base64') AS name_enc,
             n.type::text AS type, n.deleted_at, n.name_key_id, n.share_id,
             (SELECT count(*) FROM versions v WHERE v.vault_id = n.vault_id AND v.node_id = n.id)::text AS versions
@@ -57,9 +78,15 @@ export const listTrash = (db: Db, vaultId: string, under: string | undefined): P
         AND n.deleted_at IS NOT NULL
         AND EXISTS (SELECT 1 FROM versions v WHERE v.vault_id = n.vault_id AND v.node_id = n.id)
         AND ($2::uuid IS NULL OR n.ancestry @> ARRAY[$2::uuid])
-      ORDER BY n.deleted_at DESC`,
-    [vaultId, under ?? null],
-  ).then((rows) => rows.map((r) => ({ ...r, versions: Number(r.versions) })) as unknown as TrashEntry[]);
+      ORDER BY n.deleted_at DESC
+      LIMIT $3`,
+    [vaultId, under ?? null, limit],
+  );
+  return {
+    entries: entries.map((r) => ({ ...r, versions: Number(r.versions) })) as unknown as TrashEntry[],
+    total: Number(total?.n ?? 0),
+  };
+};
 
 /** Is a live sibling already using this name under this parent? */
 const blockingSibling = async (

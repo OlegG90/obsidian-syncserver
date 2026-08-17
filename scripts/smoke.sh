@@ -72,6 +72,7 @@ elif printf '%s' "$health" | grep -q '"bootstrap_pending":true'; then
     vault="$(uuid)"
     resp="$(curl -fsS -X POST "$base/auth/redeem" -H 'content-type: application/json' -d '{
       "invitation_token": "admin",
+      "login": "admin",
       "auth_secret": "'"$auth_secret"'",
       "account_salt": "'"$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)"'",
       "kdf_params": {"v":19,"m":65536,"t":3,"p":1},

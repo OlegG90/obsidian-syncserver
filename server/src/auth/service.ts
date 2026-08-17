@@ -16,6 +16,17 @@ import type { Db } from '../db.js';
 
 export interface RedeemInput {
   invitationToken: string;
+  /**
+   * The login the person typed, which the server **checks** rather than stores.
+   *
+   * The account's name belongs to the invitation — an administrator sets it when issuing one
+   * — so redeeming cannot choose it. But the client binds `kek_verifier` to the name it was
+   * given and writes that name into its connection record, both before it could learn the
+   * real one. A silent mismatch therefore produces a device that syncs until its first
+   * relock and then cannot log in, and an account whose recovery proof is bound to a name
+   * nobody has. Found on a live walk, exactly that way round.
+   */
+  login: string;
   authSecret: string;
   accountSalt: Buffer;
   kdfParams: KdfParams;
@@ -67,6 +78,12 @@ export const redeemInvitation = async (db: Db, input: RedeemInput) => {
     );
     const row = user.rows[0];
     if (!row) return undefined;
+
+    // A typo in the login is a typo, and it fails here, in a sentence, rather than a week
+    // later as "that passphrase does not open this account".
+    if (row.login.toLowerCase() !== input.login.trim().toLowerCase()) {
+      return { mismatch: row.login } as const;
+    }
 
     await c.query(
       `UPDATE users

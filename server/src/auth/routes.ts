@@ -49,6 +49,7 @@ export const registerAuthRoutes = (
   app.post<{
     Body: {
       invitation_token: string;
+      login: string;
       auth_secret: string;
       account_salt: string;
       kdf_params: KdfParams;
@@ -100,6 +101,7 @@ export const registerAuthRoutes = (
 
     const out = await redeemInvitation(db, {
       invitationToken: b.invitation_token,
+      login: b.login ?? '',
       authSecret: b.auth_secret,
       accountSalt: b64(b.account_salt),
       kdfParams: b.kdf_params,
@@ -121,6 +123,17 @@ export const registerAuthRoutes = (
     // three it was is not the caller's business, and saying would leak whether a token
     // ever existed.
     if (!out) return reply.code(404).send({ error: 'invitation_not_redeemable' });
+
+    // Named, unlike the refusal above, and the difference is what the caller can do about
+    // it. "No such token" must stay one answer for three cases or it becomes an oracle;
+    // this one is a person holding a valid invitation who typed the wrong name for it, and
+    // telling them which name it is gives away nothing they were not just handed.
+    if ('mismatch' in out) {
+      return reply.code(409).send({
+        error: 'login_mismatch',
+        detail: `this invitation is for "${out.mismatch}"`,
+      });
+    }
 
     return {
       access: app.jwt.sign({ sub: out.userId, device: out.deviceId }, { expiresIn: cfg.accessTokenTtlSeconds }),

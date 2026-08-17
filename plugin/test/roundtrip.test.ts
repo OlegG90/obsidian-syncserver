@@ -883,7 +883,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     await a.delete(path);
     assert.equal((await engineA.sync()).errors.length, 0);
     const trash = await client.trash(ownVaultId);
-    const entry = trash.find((t) => t.name_enc && decryptName(kv2, t.name_enc) === 'trashable.md');
+    const entry = trash.entries.find((t) => t.name_enc && decryptName(kv2, t.name_enc) === 'trashable.md');
     assert.ok(entry, 'the deleted node is in the trash');
     assert.ok(entry!.versions >= 1, 'with history still alive');
 

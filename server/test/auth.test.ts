@@ -31,8 +31,9 @@ const RECOVERY_CODE = 'a-code-the-client-showed-once';
 const sha256hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /** The material a client produces on the device; opaque to the server, so shape is all that matters here. */
-const redeemBody = (token: string) => ({
+const redeemBody = (token: string, login = 'admin') => ({
   invitation_token: token,
+  login,
   auth_secret: 'a'.repeat(43),
   account_salt: Buffer.alloc(16, 7).toString('base64'),
   kdf_params: { v: 19, m: 65536, t: 3, p: 1 },
@@ -90,6 +91,33 @@ describe('first run', () => {
 
     const open = await app.inject({ method: 'GET', url: '/auth/kdf?login=admin' });
     assert.equal(open.statusCode, 200);
+  });
+
+  it('refuses a valid invitation claimed under the wrong name, and says which name it is', async () => {
+    // The account's name belongs to the invitation, so redeeming cannot choose it — but the
+    // client binds `kek_verifier` to the name it was given and writes that name into its
+    // connection record, both before it could learn the real one. A live walk found what a
+    // silent mismatch produces: a device that syncs until its first relock and then cannot
+    // log in, with a recovery proof bound to a name nobody has.
+    //
+    // Named, unlike "no such token" — that one stays a single answer for three cases so it
+    // cannot become an oracle. This is somebody holding a valid invitation who mistyped the
+    // name on it, and telling them gives away nothing they were not just handed.
+    const wrong = await app.inject({
+      method: 'POST', url: '/auth/redeem', payload: redeemBody('admin', 'oleg'),
+    });
+    assert.equal(wrong.statusCode, 409, wrong.body);
+    assert.equal(wrong.json().error, 'login_mismatch');
+    assert.match(wrong.json().detail, /"admin"/);
+
+    // And the invitation is untouched: a typo must not spend a single-use token. Asserted
+    // against the row rather than by redeeming, which would spend it here instead.
+    const row = await db.one<{ state: string; token: string | null }>(
+      `SELECT state::text AS state, invite_token_hash AS token FROM users
+        WHERE id = '00000000-0000-0000-0000-000000000001'`,
+    );
+    assert.equal(row!.state, 'provisioned');
+    assert.ok(row!.token, 'the invitation is still there to be claimed correctly');
   });
 
   it('redeems the seeded invitation, and the default token stops working afterwards', async () => {

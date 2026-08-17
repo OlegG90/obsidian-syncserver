@@ -132,7 +132,7 @@ describe('trash', () => {
 
     const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/trash`, headers: auth() });
     assert.equal(r.statusCode, 200);
-    const entry = r.json().find((e: { node_id: string }) => e.node_id === file.node_id);
+    const entry = r.json().entries.find((e: { node_id: string }) => e.node_id === file.node_id);
     assert.ok(entry, 'the soft-deleted node is what the trash lists');
     assert.ok(entry.versions > 0);
   });
@@ -144,7 +144,7 @@ describe('trash', () => {
     await db.query(`DELETE FROM versions WHERE vault_id = $1 AND node_id = $2`, [vaultId, file.node_id]);
 
     const r = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/trash`, headers: auth() });
-    assert.ok(!r.json().some((e: { node_id: string }) => e.node_id === file.node_id),
+    assert.ok(!r.json().entries.some((e: { node_id: string }) => e.node_id === file.node_id),
       'offering a restore that cannot happen is worse than not offering it');
   });
 });

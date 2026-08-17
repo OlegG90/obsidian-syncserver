@@ -82,6 +82,8 @@ export default class SyncServerPlugin extends Plugin {
   private sync: SyncCoordinator | undefined;
   /** Kept so a finished pairing can rebuild the screen that was showing its code. */
   private settingsTab: SyncServerSettings | undefined;
+  /** One unlock in flight at a time, so a screen that asks for three things asks once. */
+  private unlocking: Promise<Session> | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
@@ -396,14 +398,28 @@ export default class SyncServerPlugin extends Plugin {
    */
   private async unlocked(): Promise<Session> {
     if (!this.sess) throw new Error('this vault is not connected');
-    if (this.sess.state === 'locked') {
-      const passphrase = await askPassphrase(this.app);
-      if (!passphrase) throw new Error('the passphrase is needed to open this account');
-      if ((await this.sess.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
-      // The screen still said "locked", which stopped being true a line ago.
-      this.setPhase({ kind: 'idle' });
-    }
-    return this.sess;
+    if (this.sess.state !== 'locked') return this.sess;
+
+    // **One question, however many callers.** A screen fills itself in from several places
+    // at once — the settings tab asks for the shares, the trash and the usage without
+    // waiting for any of them — and each would find the session locked, because Argon2id
+    // takes about a second and the state does not move until it finishes. A live walk met
+    // that as three passphrase prompts to open one page. `SyncClient` already solves the
+    // same shape for token refresh; this is that, for the unlock.
+    this.unlocking ??= this.askAndOpen().finally(() => {
+      this.unlocking = undefined;
+    });
+    return this.unlocking;
+  }
+
+  /** The question itself, held by `unlocked` so that concurrent callers share one asking. */
+  private async askAndOpen(): Promise<Session> {
+    const passphrase = await askPassphrase(this.app);
+    if (!passphrase) throw new Error('the passphrase is needed to open this account');
+    if ((await this.sess!.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
+    // The screen still said "locked", which stopped being true a line ago.
+    this.setPhase({ kind: 'idle' });
+    return this.sess!;
   }
 
   /** The vault adapter, built the same way the sync pass builds it. */
@@ -513,7 +529,8 @@ export default class SyncServerPlugin extends Plugin {
           const keys = this.openShareKeys(h, opened) ?? new Map<string, Uint8Array>();
           const vaultScope = vaultScopeIdOf(opened.scopes);
 
-          return (await h.client.trash(this.data.connection!.vaultId)).map((n) => {
+          const page = await h.client.trash(this.data.connection!.vaultId);
+          const rows = page.entries.map((n) => {
             // The key follows the scope the server names. A node this device holds no key
             // for still gets a row — its id, and the fact that it can be discarded — because
             // an unreadable name is a worse reason to hide something than to show it plainly.
@@ -528,6 +545,7 @@ export default class SyncServerPlugin extends Plugin {
               shared: n.share_id !== null,
             };
           });
+          return { rows, total: page.total };
         }),
 
       versions: (nodeId) =>

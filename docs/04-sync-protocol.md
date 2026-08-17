@@ -14,11 +14,18 @@ DELETE /auth/devices/{id}                              → 204; the caller's own
                                                     deleted so history keeps naming its authors
 POST /auth/refresh        {refresh}                      → access
 POST /auth/devices        {name, platform}              → device_id
-POST /auth/redeem         {invitation_token, auth_secret, account_salt, kdf_params,
+POST /auth/redeem         {invitation_token, login, auth_secret, account_salt, kdf_params,
                              pubkey, enc_privkey, wrapped_seed, kek_verifier,
                              recovery_key?, recovery_code_hash?,
                              initial_vault_id, initial_vault_name_enc}
                                                    → access + refresh + device_id + vault_id
+                                                   `login` is CHECKED against the invitation, never
+                                                   stored from here — the name belongs to whoever
+                                                   issued it. A mismatch is `409 login_mismatch` and
+                                                   names the right one; the token is not spent. The
+                                                   client binds `kek_verifier` to the name it was
+                                                   given, so a silent mismatch would make an account
+                                                   that syncs once and can never log in again.
                                                    the recovery pair is OPTIONAL and null-by-default:
                                                    an account without a code says so, rather than
                                                    carrying a placeholder that claims otherwise
@@ -315,7 +322,7 @@ POST   /vaults/{vault_id}/nodes/{node_id}/move {parent_id, name_enc, name_hmac, 
 
 GET    /vaults/{vault_id}/list?under={node_id}&snapshot=…  subtree listing for a resync
 GET    /vaults/{vault_id}/versions/{node_id}    → [{rev, sha256, size, at, author_id}]
-GET    /vaults/{vault_id}/trash?under={node_id}  → deleted nodes with live history
+GET    /vaults/{vault_id}/trash?under=&limit=    → {entries, total}  a page, and the whole count
 POST   /vaults/{vault_id}/restore {node_id, rev}  → a new put with an old hash → a new version
 DELETE /vaults/{vault_id}/trash                 → {purged, thawed}   discard it all, for good
 DELETE /vaults/{vault_id}/trash/{node_id}       → {purged, thawed}   discard one subtree

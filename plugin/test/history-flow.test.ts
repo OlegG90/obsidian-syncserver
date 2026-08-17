@@ -20,7 +20,7 @@ const deps = (over: Partial<HistoryFlowDeps> = {}) => {
   const said: string[] = [];
   const asked: string[] = [];
   const base: HistoryFlowDeps = {
-    trash: async () => rows,
+    trash: async () => ({ rows, total: rows.length }),
     versions: async () => [{ rev: 7, size: 10, at: '2026-08-01T00:00:00Z' }],
     restore: async () => undefined,
     discard: async () => ({ purged: 1, thawed: false }),
@@ -122,7 +122,7 @@ describe('the screen asks for several things at once', () => {
     const { deps: d, said } = deps({
       trash: async () => {
         await new Promise((r) => setTimeout(r, 20));
-        return rows;
+        return { rows, total: rows.length };
       },
     });
     const flow = openHistoryFlow(d);

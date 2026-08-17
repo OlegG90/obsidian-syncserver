@@ -280,6 +280,8 @@ export class SyncClient {
 
   redeem(body: {
     invitation_token: string;
+    /** Checked against the invitation, never stored from here — a mismatch is a `409`. */
+    login: string;
     auth_secret: string;
     account_salt: string;
     kdf_params: KdfParams;
@@ -437,12 +439,18 @@ export class SyncClient {
     return this.json('POST', `/vaults/${vaultId}/reset`);
   }
 
-  /** Deleted nodes that can still be brought back — `deleted_at` with live versions. */
+  /**
+   * Deleted nodes that can still be brought back — `deleted_at` with live versions.
+   *
+   * `total` is the whole trash, not the length of this page: the button that empties it acts
+   * on everything, so the sentence it asks has to count everything.
+   */
   trash(
     vaultId: string,
     under?: string,
-  ): Promise<
-    {
+  ): Promise<{
+    total: number;
+    entries: {
       node_id: string;
       parent_id: string | null;
       name_enc: string | null;
@@ -452,8 +460,8 @@ export class SyncClient {
       /** The scope the name is under — a trashed node of a share is still under `KS`. */
       name_key_id: string | null;
       share_id: string | null;
-    }[]
-  > {
+    }[];
+  }> {
     const q = under ? `?under=${encodeURIComponent(under)}` : '';
     return this.json('GET', `/vaults/${vaultId}/trash${q}`);
   }
