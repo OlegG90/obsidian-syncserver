@@ -14,13 +14,20 @@
  * Neither half works alone, which is why the guard is not optional and not a warning.
  */
 import type { FastifyInstance } from 'fastify';
+import { CONSOLE_PATHS } from './console.js';
 import type { Db } from './db.js';
 
 /** The only routes reachable before an administrator exists. */
 // /health is open too: a server waiting for its first administrator is working as
 // designed, and a container marked unhealthy for it would never be allowed to finish
 // starting.
-const OPEN_DURING_BOOTSTRAP = new Set(['/auth/kdf', '/auth/bootstrap', '/health']);
+//
+// The console's own files are open too, and they have to be: on a fresh server the only
+// screen that matters is the one that sets the first password, and a guard that answered
+// 503 to the page carrying it would make the server unreachable by the very thing meant to
+// start it. The list stays exact rather than a prefix — "everything under /" would open the
+// whole API, which is the opposite of what this file is for.
+const OPEN_DURING_BOOTSTRAP = new Set(['/auth/kdf', '/auth/bootstrap', '/health', ...CONSOLE_PATHS]);
 
 export const hasActiveAdministrator = async (db: Db): Promise<boolean> => {
   const row = await db.one<{ exists: boolean }>(

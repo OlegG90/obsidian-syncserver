@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // No "node": this bundle runs in a browser, so Node APIs must not be reachable by the
+    // type checker — the same rule the plugin holds, for the same reason.
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "noEmit": true,
+    "rootDir": "src",
+    "composite": false
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../shared" }]
+}

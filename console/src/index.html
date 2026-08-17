@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SyncServer</title>
+    <style>
+      /* No stylesheet pipeline, for the same reason there is no framework: the console is
+         thin, and a build step earns its place by removing work rather than by existing. */
+      :root { color-scheme: light dark; --edge: #8884; }
+      body {
+        margin: 0; padding: 2rem 1.25rem; font: 15px/1.5 system-ui, sans-serif;
+        max-width: 46rem; margin-inline: auto;
+      }
+      h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+      .muted { opacity: 0.7; font-size: 0.9em; }
+      .card { border: 1px solid var(--edge); border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+      label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.9em; }
+      input { width: 100%; padding: 0.5rem; border: 1px solid var(--edge); border-radius: 6px;
+              background: transparent; color: inherit; font: inherit; }
+      button { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid var(--edge);
+               border-radius: 6px; background: transparent; color: inherit; font: inherit;
+               cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .bad { color: #c0392b; }
+      .ok { color: #1e8449; }
+    </style>
+  </head>
+  <body>
+    <main id="app">Loading…</main>
+    <script src="app.js"></script>
+  </body>
+</html>

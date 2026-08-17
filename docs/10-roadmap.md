@@ -272,25 +272,25 @@ The third half is specified nowhere, because it has never been a feature — it 
 
 ### Where the console lives, and what it may not assume
 
-- [ ] **The server serves it**, from the same process and therefore the same version and the same
+- [x] **The server serves it**, from the same process and therefore the same version and the same
       `/health` — which is what [11](11-management-console.md)'s "one deployment, one session" means when
       read literally. A second container would be a moving part that document already refuses.
-- [ ] **The bootstrap guard has to let it in.** It is an exact-match allowlist today — `/auth/kdf`,
+- [x] **The bootstrap guard has to let it in.** It is an exact-match allowlist today — `/auth/kdf`,
       `/auth/redeem`, `/health` and nothing else — so a fresh server would answer `503` to the console's
       own assets, and the one screen that matters on a fresh server is the one that redeems the seeded
       invitation (#107). Whatever widens it must widen it for **exactly** the static bundle, since the
       point of the guard is that a server with no administrator does nothing else.
 - [ ] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
       list: a halt that also refuses the endpoint used to confirm the restore is a halt nobody can leave.
-- [ ] **The first administrator sets a password rather than redeeming an invitation** (#107, #115). The
+- [x] **The first administrator sets a password rather than redeeming an invitation** (#107, #115). The
       seeded row is a console account with none, the console's only screen until one exists is the setting
       of it, and setting it is what creates it — so no default ever works. A fresh server therefore needs
       no Obsidian to become usable, which is what made "the console shows a notice" a dead end before.
-- [ ] **A console account is administered, not synced** (#115): it holds no key material, so it cannot be
+- [x] **A console account is administered, not synced** (#115): it holds no key material, so it cannot be
       invited into a share and cannot open a vault. Inviting one must refuse in a sentence rather than on
       a null `pubkey`, and `role` stops being a column crossed with a keyed account — an administrator IS
       a console account.
-- [ ] **The password gets a slow hash on the server** (#108, #115), which nothing else here needs: every
+- [x] **The password gets a slow hash on the server** (#108, #115), which nothing else here needs: every
       other verifier is at least 128 bits of CSPRNG and a person's password is not. `@noble/hashes` is
       already in the tree.
 

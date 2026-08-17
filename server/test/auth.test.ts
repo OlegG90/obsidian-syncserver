@@ -149,6 +149,20 @@ describe('first run', () => {
     assert.equal(open.statusCode, 200);
   });
 
+  it('serves the console, because that is where the first password is set', async () => {
+    // The guard is an exact-match allowlist, so this is not automatic: a fresh server would
+    // otherwise answer 503 to the page carrying the only screen it has. Found by planning
+    // M5 rather than by running it.
+    const page = await app.inject({ method: 'GET', url: '/' });
+    assert.equal(page.statusCode, 200, page.body);
+    assert.match(page.headers['content-type'] as string, /text\/html/);
+
+    // And the API stays shut, which is the point of the guard being a list and not a prefix.
+    const api = await app.inject({ method: 'GET', url: '/vaults' });
+    assert.equal(api.statusCode, 503);
+    assert.equal(api.json().error, 'bootstrap_pending');
+  });
+
   it('creates the first password rather than replacing one, and only once', async () => {
     // The property a seeded default cannot have (#107): there is no value that works until
     // somebody gets round to changing it, because until this call there is no value at all.

@@ -22,6 +22,7 @@ const files = [
   'package.json',
   'shared/package.json',
   'server/package.json',
+  'console/package.json',
   'plugin/package.json',
   'plugin/manifest.json',
 ];
