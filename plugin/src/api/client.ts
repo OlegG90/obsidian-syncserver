@@ -458,6 +458,20 @@ export class SyncClient {
     return this.json('GET', `/vaults/${vaultId}/trash${q}`);
   }
 
+  /**
+   * Discard the trash for good — one subtree, or all of it.
+   *
+   * The only call in this client that makes usage go **down**. `thawed` says whether that
+   * was enough to lift an over-quota freeze, which is the answer somebody emptying their
+   * trash to make room is actually asking for.
+   */
+  purgeTrash(vaultId: string, nodeId?: string): Promise<{ purged: number; thawed: boolean }> {
+    const path = nodeId
+      ? `/vaults/${vaultId}/trash/${encodeURIComponent(nodeId)}`
+      : `/vaults/${vaultId}/trash`;
+    return this.json('DELETE', path);
+  }
+
   /** One row per revision, newest first. A restore needs one of these `rev`s. */
   versions(vaultId: string, nodeId: string): Promise<{ rev: number; sha256: string; size: number; at: string; author_id: string }[]> {
     return this.json('GET', `/vaults/${vaultId}/versions/${nodeId}`);

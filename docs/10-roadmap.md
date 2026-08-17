@@ -222,11 +222,11 @@ behaviour that a web client merely calls.
 
 ### History and the trash, where the notes are
 
-- [ ] **The trash and the version list in the plugin.** The server surface has existed since M0 — the
+- [x] **The trash and the version list in the plugin.** The server surface has existed since M0 — the
       versions of a node, the trash of a vault, and restore as a new write with an old hash — and no screen
       has ever called it. Restoring into a taken name is `409` with the blocking node id, and stays that
       way: a file silently named "Note (1).md" is a file the user cannot account for.
-- [ ] **Usage the user can act on**, broken into current content and history. A number without the action
+- [x] **Usage the user can act on**, broken into current content and history. A number without the action
       that lowers it is the same dead end this milestone exists to close.
 
 ### The scenario that decides it
@@ -241,6 +241,11 @@ deleting a vault:
 
 If any step needs an administrator, the milestone has failed: the person who ran out of space is the person
 who must be able to make space.
+
+**Every box above is ticked and the milestone is not**, which is this project's standard rather than an
+oversight: M0, M3 and M3.5 were each closed by a walk and not by a suite, and each walk found defects the
+tests had no opinion about — eighteen of them, once. The scenario above is what the walk is, and until
+somebody has run it against a real server the honest state of this row is unticked.
 
 ## M5 — the operator's milestone
 

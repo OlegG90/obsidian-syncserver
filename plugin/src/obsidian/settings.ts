@@ -20,6 +20,9 @@ import { installWarning, PLUGIN_VERSION, versionWarning } from '../version.js';
 import { ConfirmModal } from './modals.js';
 import type SyncServerPlugin from '../main.js';
 
+/** Bytes as something a person reads. Mebibytes throughout, because quotas are set in them. */
+const mib = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+
 export class SyncServerSettings extends PluginSettingTab {
   constructor(
     app: App,
@@ -96,6 +99,7 @@ export class SyncServerSettings extends PluginSettingTab {
 
       this.approveSection(containerEl);
       this.shareSection(containerEl);
+      this.trashSection(containerEl);
       this.disconnectSection(containerEl);
       this.versionSection(containerEl);
       return;
@@ -430,6 +434,87 @@ export class SyncServerSettings extends PluginSettingTab {
    * is the passphrase, and somebody who does not have it should learn that here rather than
    * afterwards.
    */
+  /**
+   * The trash, the history behind each row, and the only button in the product that frees
+   * space.
+   *
+   * Rendered from the server rather than from anything remembered: the trash is the one
+   * listing this device does not keep a copy of, and a stale one here would offer to restore
+   * something another device discarded.
+   */
+  private trashSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Trash and history' });
+    const list = containerEl.createEl('div');
+    list.createEl('p', { text: 'Loading…' });
+
+    const flow = this.plugin.history();
+
+    const usage = containerEl.createEl('p');
+    usage.style.fontSize = 'var(--font-ui-smaller)';
+    void flow.usage().then((u) => {
+      if (!u) return;
+      const pct = u.quota > 0 ? Math.round((u.used / u.quota) * 100) : 0;
+      usage.setText(
+        `Using ${mib(u.used)} of ${mib(u.quota)} (${pct}%)` +
+          (u.frozen ? ' — over the limit. Discarding from the trash is what frees space.' : ''),
+      );
+      if (u.frozen) usage.style.color = 'var(--text-error)';
+    });
+
+    void flow.trash().then((rows) => {
+      list.empty();
+      if (!rows) {
+        list.createEl('p', { text: 'The trash could not be read.' });
+        return;
+      }
+      if (rows.length === 0) {
+        list.createEl('p', { text: 'Nothing has been deleted.' });
+        return;
+      }
+
+      for (const row of rows) {
+        const setting = new Setting(list)
+          .setName(row.name)
+          .setDesc(
+            `${row.type} · deleted ${new Date(row.deletedAt).toLocaleString()} · ` +
+              `${row.versions} version${row.versions === 1 ? '' : 's'}` +
+              (row.shared ? ' · was in a shared folder' : ''),
+          );
+
+        // Restoring takes a revision, and the newest is what a person means by "restore"
+        // unless they say otherwise — so the button does that, and the list is one press
+        // further in rather than in everybody's way.
+        setting.addButton((b) =>
+          b.setButtonText('Restore').onClick(async () => {
+            const versions = await flow.versions(row.nodeId);
+            if (!versions || versions.length === 0) return;
+            await flow.restore(row.nodeId, versions[0]!.rev);
+          }),
+        );
+
+        setting.addButton((b) =>
+          b
+            .setButtonText('Discard')
+            .setWarning()
+            .onClick(() => void flow.discard(row.nodeId, row.name)),
+        );
+      }
+
+      new Setting(list)
+        .setName('Empty the trash')
+        .setDesc(
+          'Discards every deleted file and all of its history, for good. This is the only ' +
+            'action that lowers what the account is using.',
+        )
+        .addButton((b) =>
+          b
+            .setButtonText('Empty')
+            .setWarning()
+            .onClick(() => void flow.empty(rows.length)),
+        );
+    });
+  }
+
   private disconnectSection(containerEl: HTMLElement): void {
     containerEl.createEl('h3', { text: 'Disconnect' });
     containerEl.createEl('p', {
@@ -453,6 +538,7 @@ export class SyncServerSettings extends PluginSettingTab {
               new Notice('SyncServer: disconnected. Files were left as they are.', 8000);
               this.display();
             },
+            'Disconnect',
           ).open();
         }),
     );

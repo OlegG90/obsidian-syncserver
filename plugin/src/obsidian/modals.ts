@@ -134,6 +134,12 @@ export class ConfirmModal extends Modal {
     private readonly title: string,
     private readonly consequence: string,
     private readonly confirmed: () => Promise<void>,
+    /**
+     * What the button says. Named rather than defaulted, because "OK" on the one dialogue
+     * that cannot be undone tells a person nothing about what they are agreeing to — the
+     * verb is the information.
+     */
+    private readonly verb = 'Confirm',
   ) {
     super(app);
   }
@@ -145,7 +151,7 @@ export class ConfirmModal extends Modal {
       .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()))
       .addButton((b) =>
         b
-          .setButtonText('Disconnect')
+          .setButtonText(this.verb)
           .setWarning()
           .onClick(async () => {
             this.close();
@@ -158,6 +164,34 @@ export class ConfirmModal extends Modal {
     this.contentEl.empty();
   }
 }
+
+/**
+ * Ask before something irreversible, and resolve to what the person chose.
+ *
+ * `false` for a dismissal as well as for Cancel: closing a dialogue is not consent, and a
+ * promise that never settled would leave the caller holding a lock for the rest of the
+ * session.
+ */
+export const askConfirmation = (app: App, question: string, verb = 'Discard'): Promise<boolean> =>
+  new Promise((resolve) => {
+    let answered = false;
+    const modal = new ConfirmModal(
+      app,
+      'This cannot be undone',
+      question,
+      async () => {
+        answered = true;
+        resolve(true);
+      },
+      verb,
+    );
+    const close = modal.onClose.bind(modal);
+    modal.onClose = (): void => {
+      close();
+      if (!answered) resolve(false);
+    };
+    modal.open();
+  });
 
 /** The complete status, on every platform — see `status.ts` for why the status bar is not enough. */
 export class StatusModal extends Modal {

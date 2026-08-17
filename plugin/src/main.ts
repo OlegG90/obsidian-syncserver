@@ -25,13 +25,14 @@ import { newPairingCode } from './crypto/pairing-code.js';
 import { sharedFolderCss } from './obsidian/shared-marks.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport } from './obsidian/net.js';
-import { askFolderName, askPassphrase, StatusModal } from './obsidian/modals.js';
+import { askConfirmation, askFolderName, askPassphrase, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
 
 import { session, type Connection, type Handle, type Session } from './session/index.js';
 import type { OpenedVault } from '@syncserver/shared';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
+import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { decryptName } from './crypto/scope.js';
 import { shareKeyFor, shareKeysFrom, vaultScopeIdOf, type ShareKeyDeps } from './share-keys.js';
 import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
@@ -496,6 +497,64 @@ export default class SyncServerPlugin extends Plugin {
    * Every one of these needs the vault key, so every one needs an open session — the
    * passphrase is asked for exactly as a sync asks, and once, before the first request.
    */
+  /**
+   * The trash and the version list, bound to this vault's session.
+   *
+   * Every one of these needs the vault key: the listing's names are ciphertext, and a
+   * trashed node of a shared folder is still named under `KS`. So the scopes are opened
+   * once per operation and the right key is chosen per row — which is a decision only this
+   * side can make, since the server holds no key and says only which scope each name is in.
+   */
+  history(): HistoryFlow {
+    return openHistoryFlow({
+      trash: () =>
+        this.withSession(async (h) => {
+          const opened = await this.openVault(h);
+          const keys = this.openShareKeys(h, opened) ?? new Map<string, Uint8Array>();
+          const vaultScope = vaultScopeIdOf(opened.scopes);
+
+          return (await h.client.trash(this.data.connection!.vaultId)).map((n) => {
+            // The key follows the scope the server names. A node this device holds no key
+            // for still gets a row — its id, and the fact that it can be discarded — because
+            // an unreadable name is a worse reason to hide something than to show it plainly.
+            const key = !n.name_key_id || n.name_key_id === vaultScope ? h.kv : keys.get(n.name_key_id);
+            const name = n.name_enc && key ? decryptName(key, n.name_enc) : n.node_id;
+            return {
+              nodeId: n.node_id,
+              name,
+              type: n.type,
+              deletedAt: n.deleted_at,
+              versions: n.versions,
+              shared: n.share_id !== null,
+            };
+          });
+        }),
+
+      versions: (nodeId) =>
+        this.withSession(async (h) =>
+          (await h.client.versions(this.data.connection!.vaultId, nodeId)).map((v) => ({
+            rev: v.rev,
+            size: v.size,
+            at: v.at,
+          })),
+        ),
+
+      restore: (nodeId, rev) =>
+        this.withSession(async (h) => {
+          await h.client.restore(this.data.connection!.vaultId, nodeId, rev);
+        }),
+
+      discard: (nodeId) =>
+        this.withSession((h) => h.client.purgeTrash(this.data.connection!.vaultId, nodeId)),
+
+      usage: () => this.withSession((h) => h.client.usage()),
+
+      confirm: (question) => askConfirmation(this.app, question),
+      notify: (message, durationMs) => new Notice(message, durationMs),
+      done: () => this.settingsTab?.display(),
+    });
+  }
+
   sharing(): ShareFlow {
     return openShareFlow({
       list: () =>
