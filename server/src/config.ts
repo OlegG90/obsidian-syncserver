@@ -62,6 +62,17 @@ export interface Config {
     /** docs/04: 90 days on the delta journal. */
     journalTtlSeconds: number;
     /**
+     * docs/03: how long a blob nobody references waits before its bytes go.
+     *
+     * The hold is the only thing standing between "the last reference went away" and "the
+     * file is unlinked", and it matters more now that emptying the trash makes losing a
+     * last reference an ordinary event rather than one that never happened. An upload of
+     * the same content writes its file before it commits its row, so a delete that raced
+     * that gap would leave a committed row pointing at nothing. Seven days makes the race
+     * theoretical instead of merely unlikely.
+     */
+    gcQuarantineSeconds: number;
+    /**
      * docs/04: 10 minutes on an unclaimed device pairing.
      *
      * The clock a human runs on while carrying a code from one device to the other, with
@@ -101,6 +112,7 @@ export const loadConfig = (): Config => {
       abandonedPartTtlSeconds: int('ABANDONED_PART_TTL_SECONDS', 24 * 60 * 60),
       unboundBlobTtlSeconds: int('UNBOUND_BLOB_TTL_SECONDS', 48 * 60 * 60),
       journalTtlSeconds: int('JOURNAL_TTL_SECONDS', 90 * 24 * 60 * 60),
+      gcQuarantineSeconds: int('GC_QUARANTINE_SECONDS', 7 * 24 * 60 * 60),
       pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),

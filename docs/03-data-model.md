@@ -311,7 +311,7 @@ live counter drifts, and an error towards zero means data loss.
 4. recompute user_blobs from scratch and reconcile against the accumulated counters
 5. mark blobs with no reference from nodes (including deleted ones), surviving versions,
    OR a live refs_pending row — an upload inside its TTL is a reference like any other
-6. hold quarantine (e.g. 7 days) — protection against a race with an active upload
+6. hold quarantine (`GC_QUARANTINE_SECONDS`, 7 days) — protection against a race with an active upload
 7. re-check the references, then delete from storage and the blobs row; binding a blob
    between the mark and the sweep clears gc_marked_at
 ```
@@ -339,9 +339,21 @@ Four details that are not cosmetic:
 |---|---|
 | under 7 days | all versions |
 | 7–30 days | one per day |
-| 30–365 days | one per week |
+| 30 days to `users.history_days` | one per week |
 | older | none |
 | the current version of a live node | **always**, outside the policy |
+
+The ladder is fixed; its **outer bound is not**. `users.history_days` (default 365, the figure this
+table was written with) is the one part of retention that is a trade rather than a rule — history is
+spent against the same per-account quota as content, so the bound belongs to the account, not to a
+vault and not to the server.
+
+**The head of a live node is outside the policy, and a deleted node's head is not.** That asymmetry
+is what makes the trash finite: a trashed node's versions age out like any others, and when the last
+one goes the row has nothing left to restore, which is the condition step 2 above is looking for.
+The head is identified by revision rather than by hash — the highest revision of a node is what its
+content is, while a hash comparison would spare every other version that happens to hold the same
+bytes, a different rule that looks identical until somebody reverts an edit.
 
 There is no separate trash entity: a deleted node is a row with `deleted_at` whose versions are still
 alive. That covers both accidental deletion and "the phone synchronised an empty vault".

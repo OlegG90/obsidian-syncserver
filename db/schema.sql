@@ -172,6 +172,13 @@ CREATE TABLE users (
     invite_token_hash text,
     invite_expires_at timestamptz,
     quota_bytes  bigint      NOT NULL CHECK (quota_bytes > 0),   -- per account (AC-Q2)
+    -- How far back history is kept, in days. The RETENTION LADDER above it (docs/03) is
+    -- fixed — everything under a week, one a day to thirty, one a week after that — and
+    -- this is its outer bound, which is the one part that is a trade the user makes rather
+    -- than a rule the product holds: history is spent against the same per-account quota
+    -- as content. Per account for that reason, not per vault. The default is the ladder's
+    -- own documented end, so an account that never touches it behaves exactly as before.
+    history_days integer     NOT NULL DEFAULT 365 CHECK (history_days > 0),
     -- Over quota (SH-20). Quota is per ACCOUNT, so the freeze is too: it covers every
     -- vault the account owns and every share it participates in, all at once. Frozen
     -- means nothing may be sent that grows usage; reading and deleting stay available,

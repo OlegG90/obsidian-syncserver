@@ -109,7 +109,7 @@ six months later, and how you tell a mistake from a misunderstanding.
 | Devices | list, last seen, **sign out this device**, sign out everywhere |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
 | Security | change passphrase, regenerate the recovery code — **in the plugin**, see below. The console arrives in M5 and the recovery code itself in [M7](10-roadmap.md), so until then this section offers the passphrase alone rather than a control for something that does not exist |
-| History | retention setting: the length of history is the user's own trade against quota |
+| History | retention setting — `users.history_days`, the outer bound of the ladder in [03](03-data-model.md). The rungs are fixed; how far back they reach is the user's own trade against quota |
 
 **Changing the passphrase never re-encrypts anything.** The account **seed** stays the same, and every
 vault key derives from it (`KV = HKDF(seed, vault_id)`); changing the passphrase only re-wraps the seed

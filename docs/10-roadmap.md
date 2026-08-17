@@ -186,16 +186,19 @@ mean the space problem waits for a front end.
 own header. The rest is this milestone, and its traps are already written down — they become tests, not
 comments:
 
-- [ ] **Thinning by the retention ladder**, which needs the column it has never had: [11](11-management-console.md)
-      offers the user a retention setting and the schema holds nothing to set. The policy itself
-      (all under 7 days, one a day to 30, one a week to a year, and the live head always) is in [03](03-data-model.md).
-- [ ] **Node rows removed bottom-up**, ordered by ancestry length descending, because `parent_id` is
+- [x] **Thinning by the retention ladder**, which needs the column it has never had: [11](11-management-console.md)
+      offered the user a retention setting and the schema held nothing to set: `users.history_days`
+      is the ladder's outer bound, per account because history is spent against the account's quota.
+      The rungs themselves stay fixed (all under 7 days, one a day to 30, one a week after that), and
+      the live head sits outside the policy entirely — a deleted node's head does not, which is what
+      lets the trash empty itself.
+- [x] **Node rows removed bottom-up**, ordered by ancestry length descending, because `parent_id` is
       `ON DELETE RESTRICT` — an orphaned branch is worse than a failed delete.
-- [ ] **`user_blobs` recomputed from scratch** and reconciled against the accumulated counters. A live
+- [x] **`user_blobs` recomputed from scratch** and reconciled against the accumulated counters. A live
       counter drifts under concurrent writes, and an error towards zero is data loss.
-- [ ] **Mark, quarantine, and look again.** A blob's only reference may be a live `refs_pending` row, and a
+- [x] **Mark, quarantine, and look again.** A blob's only reference may be a live `refs_pending` row, and a
       blob bound on day three must not be swept on day seven. Both halves are the rule, not an optimisation.
-- [ ] **`blob_keys` is never collected on its own.** Tidying up the envelopes of a dissolved share would cut
+- [x] **`blob_keys` is never collected on its own.** Tidying up the envelopes of a dissolved share would cut
       detached ex-members off from folders that are now their own.
 
 ### The administrative API, and the trail it leaves

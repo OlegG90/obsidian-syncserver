@@ -51,7 +51,12 @@ const redeemBody = (token: string) => ({
 before(async () => {
   db = connect(cfg.databaseUrl);
   // Undo whatever an earlier run redeemed: these tests need the seeded first-run state.
-  await db.query(`DELETE FROM audit_log`);
+  //
+  // `audit_log` is deliberately NOT among them. It is append-only by trigger (#87), so
+  // wiping it only worked while it happened to be empty — a `DELETE` matching no rows
+  // fires no per-row trigger — and it failed the moment any other suite recorded something
+  // first. A test that has to break a rule to set itself up is asserting against the rule;
+  // the one assertion that needed a clean table now takes a baseline instead.
   await db.query(`DELETE FROM devices`);
   await db.query(`DELETE FROM nodes WHERE vault_id IN (SELECT id FROM vaults WHERE user_id <> '00000000-0000-0000-0000-000000000000')`);
   await db.query(`DELETE FROM vaults`);
@@ -167,6 +172,13 @@ describe('recovery — the account comes back to a device that holds nothing', (
   const recover = (payload: Record<string, unknown>) =>
     app.inject({ method: 'POST', url: '/auth/recover', payload });
 
+  /** Where the append-only log stood before this suite ran, so a count can be a delta. */
+  let auditHighWater = '0';
+  before(async () => {
+    const top = await db.one<{ id: string }>(`SELECT COALESCE(max(id), 0)::text AS id FROM audit_log`);
+    auditHighWater = top!.id;
+  });
+
   it('returns the passphrase envelope against the KEK verifier, and a device to use it from', async () => {
     // The whole milestone in one call: no second device approves anything, and what comes
     // back is the envelope — never the seed, which the server has never held.
@@ -183,8 +195,9 @@ describe('recovery — the account comes back to a device that holds nothing', (
     assert.equal(device!.name, 'new laptop', 'the device exists and is bound to the account');
 
     const audited = await db.one<{ n: string }>(
-      `SELECT count(*)::text AS n FROM audit_log WHERE action = 'account.recover' AND target_user_id = $1`,
-      [body.user_id],
+      `SELECT count(*)::text AS n FROM audit_log
+        WHERE action = 'account.recover' AND target_user_id = $1 AND id > $2`,
+      [body.user_id, auditHighWater],
     );
     assert.equal(audited!.n, '1', 'a recovery is recorded: nobody approved it, so nothing else would show it');
   });

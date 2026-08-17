@@ -38,8 +38,18 @@
 import type { Config } from './config.js';
 import type { Db } from './db.js';
 import type { BlobStore } from './blobs/store.js';
+import { dropSpentClaims, markUnreferenced, REFERENCED, removeSpentTrash, thinVersions } from './retention.js';
 
 export interface CollectorResult {
+  /** Version rows the retention ladder no longer keeps. */
+  versionsThinned: number;
+  /** Trashed nodes whose history had all been thinned away. */
+  trashRemoved: number;
+  /** `user_blobs` rows nothing of the account references any more. */
+  claimsDropped: number;
+  /** Blobs newly put into quarantine, and blobs taken back out of it. */
+  blobsMarked: number;
+  blobsUnmarked: number;
   partsSwept: number;
   unboundDropped: number;
   pendingCleared: number;
@@ -61,6 +71,7 @@ export interface CollectorResult {
 export const COLLECTOR_LOCK_ID = 0x53_59_4e_43;
 
 const EMPTY: CollectorResult = {
+  versionsThinned: 0, trashRemoved: 0, claimsDropped: 0, blobsMarked: 0, blobsUnmarked: 0,
   partsSwept: 0, unboundDropped: 0, pendingCleared: 0, blobsRemoved: 0, journalPruned: 0, skipped: false,
 };
 
@@ -84,6 +95,19 @@ export const runCollector = async (
 
 const sweep = async (db: Db, store: BlobStore, cfg: Config, log: (s: string) => void): Promise<CollectorResult> => {
   const out: CollectorResult = { ...EMPTY };
+
+  // Steps 1 and 2 of docs/03, and they are first for the reason it gives: **thinning
+  // precedes marking, in the same pass**, because the reverse order leaves a window in which
+  // a version row exists and the blob it names is already gone. The trash follows it in the
+  // same transaction — a node whose history the ladder just took is exactly what step 2 is
+  // looking for, and a crash between the two would leave a row describing nothing.
+  const aged = await db.tx(async (c) => {
+    const versionsThinned = await thinVersions(c);
+    const trashRemoved = await removeSpentTrash(c);
+    return { versionsThinned, trashRemoved };
+  });
+  out.versionsThinned = aged.versionsThinned;
+  out.trashRemoved = aged.trashRemoved;
 
   // Unbound blobs: uploaded, never bound by a node, past their TTL. Only rows with no
   // `refs_own` — a pending upload the client is still binding must not be swept, which
@@ -152,13 +176,33 @@ const sweep = async (db: Db, store: BlobStore, cfg: Config, log: (s: string) => 
   // it can only take a *duplicate* upload whose bytes the client still holds, so a 404 on
   // it sends the same bytes again, and the row without a file is swept again once its
   // pending claim expires — it does not accumulate.
+  // Steps 4 and 5, and they must come after the TTL sweeps above rather than before them:
+  // an unbound claim dropped for age is a reference disappearing, and a mark taken before it
+  // went would find the blob still held and leave it alive for another whole pass.
+  const claims = await db.tx(async (c) => {
+    const claimsDropped = await dropSpentClaims(c);
+    const { marked, unmarked } = await markUnreferenced(c);
+    return { claimsDropped, marked, unmarked };
+  });
+  out.claimsDropped = claims.claimsDropped;
+  out.blobsMarked = claims.marked;
+  out.blobsUnmarked = claims.unmarked;
+
+  //
+  // **It sweeps what the mark condemned, not what it finds unreferenced now.** The
+  // quarantine is the difference: a blob loses its last reference the moment a claim is
+  // dropped — which emptying the trash now makes an ordinary event — and deleting on the
+  // spot races an upload of the same content, which writes its file before it commits its
+  // row. The `NOT REFERENCED` half is still asked here, and asking it twice is the point:
+  // the mark says "this looked dead a week ago", this says "and it still is".
   const orphans = await db.tx(async (c) => {
     const keys = await c.query<{ storageKey: string }>(
       `DELETE FROM blobs b
-        WHERE NOT EXISTS (SELECT 1 FROM user_blobs u  WHERE u.sha256 = b.sha256)
-          AND NOT EXISTS (SELECT 1 FROM nodes n      WHERE n.sha256 = b.sha256)
-          AND NOT EXISTS (SELECT 1 FROM versions v   WHERE v.sha256 = b.sha256)
+        WHERE b.gc_marked_at IS NOT NULL
+          AND b.gc_marked_at < now() - make_interval(secs => $1::double precision)
+          AND NOT ${REFERENCED}
         RETURNING b.storage_key AS "storageKey"`,
+      [cfg.limits.gcQuarantineSeconds],
     );
     return keys.rows.map((r) => r.storageKey);
   });
@@ -216,9 +260,14 @@ export const startCollector = (db: Db, store: BlobStore, cfg: Config, log = cons
       // same, and the operator holding the lock wants to see that it took effect.
       if (r.skipped) {
         log('collector: skipped, the advisory lock is held elsewhere');
-      } else if (r.partsSwept || r.unboundDropped || r.pendingCleared || r.blobsRemoved || r.journalPruned) {
+      } else if (
+        r.partsSwept || r.unboundDropped || r.pendingCleared || r.blobsRemoved || r.journalPruned ||
+        r.versionsThinned || r.trashRemoved || r.claimsDropped || r.blobsMarked || r.blobsUnmarked
+      ) {
         log(
-          `collector: ${r.unboundDropped} unbound, ${r.pendingCleared} pending cleared, ` +
+          `collector: ${r.versionsThinned} versions thinned, ${r.trashRemoved} trashed nodes, ` +
+            `${r.claimsDropped} claims dropped, ${r.blobsMarked} marked, ${r.blobsUnmarked} unmarked, ` +
+            `${r.unboundDropped} unbound, ${r.pendingCleared} pending cleared, ` +
             `${r.blobsRemoved} blobs, ${r.partsSwept} parts, ${r.journalPruned} journal rows`,
         );
       }

@@ -1376,6 +1376,19 @@ SELECT expect_ok($$
     END $inner$
 $$, 'terminal share cleanup cascades completed memberships');
 
+-- ============================================================ retention
+
+-- The outer bound of the history ladder is the user's, and it is a length of time: zero
+-- days is not "keep nothing", it is a setting that would delete the head of a live file
+-- the ladder keeps unconditionally (docs/03).
+SELECT expect_fail($$
+    UPDATE users SET history_days = 0 WHERE login = 'alice'
+$$, '23514', 'users_history_days_check', 'history cannot be kept for no days at all');
+
+SELECT expect_ok($$
+    UPDATE users SET history_days = 30 WHERE login = 'alice'
+$$, 'an account may keep less history than the default year');
+
 -- ============================================================ deferred checkpoint
 
 -- Everything above ran inside one transaction that ends in ROLLBACK, so a DEFERRED
