@@ -167,7 +167,16 @@ CREATE TABLE users (
     CONSTRAINT recovery_code_is_whole CHECK (
         (recovery_key IS NULL) = (recovery_code_hash IS NULL)),
 
+    -- `role` carries the KIND of account, not a permission crossed with one (#115). An
+    -- administrator IS a console account: password, no key material, no vault. A user IS a
+    -- vault account: keys born on their device, and no way into the console. Neither can be
+    -- the other, and the shape check below is what makes that true rather than hoped for.
     role         user_role   NOT NULL DEFAULT 'user',
+    -- Argon2id over a password a PERSON chose, which is why it is the one verifier on this
+    -- server that needs a slow hash (#108, #115): every other stored secret is at least 128
+    -- bits of CSPRNG, and no client-side KDF can stand in here because the browser is not
+    -- trusted to have run one. NULL only on the seeded row, before the first run sets one.
+    password_hash text,
     state        user_state  NOT NULL DEFAULT 'provisioned',
     invite_token_hash text,
     invite_expires_at timestamptz,
@@ -189,10 +198,33 @@ CREATE TABLE users (
     -- An account is an unclaimed invitation, the reserved tombstone, or a fully keyed
     -- account. No half-initialised middle.
     CONSTRAINT keys_match_state CHECK (
-        (state = 'provisioned'
+        -- An unclaimed invitation, for a VAULT account: a token and nothing else.
+        (state = 'provisioned' AND role = 'user'
             AND auth_secret_hash IS NULL AND pubkey IS NULL AND wrapped_seed IS NULL
-            AND kek_verifier_hash IS NULL
+            AND kek_verifier_hash IS NULL AND password_hash IS NULL
             AND invite_token_hash IS NOT NULL AND invite_expires_at IS NOT NULL)
+        OR
+        -- The seeded first administrator, before the first run sets a password (#107). It
+        -- has no token either: there is nothing to redeem, only a password to create, and
+        -- creating it is what makes this row usable. A seeded PASSWORD would still work if
+        -- nobody changed it, which is the property this shape exists to deny.
+        (state = 'provisioned' AND role = 'admin'
+            AND auth_secret_hash IS NULL AND account_salt IS NULL AND kdf_params IS NULL
+            AND pubkey IS NULL AND enc_privkey IS NULL AND wrapped_seed IS NULL
+            AND kek_verifier_hash IS NULL AND recovery_key IS NULL AND recovery_code_hash IS NULL
+            AND password_hash IS NULL
+            AND invite_token_hash IS NULL AND invite_expires_at IS NULL)
+        OR
+        -- A live CONSOLE account: a password, and not one byte of key material. It cannot
+        -- sync (no seed to derive a vault key from), cannot be invited into a share (no
+        -- public key to seal one to) and can decrypt nothing — which is how "an
+        -- administrator cannot browse another user's vault" stops being a promise.
+        (state NOT IN ('provisioned', 'tombstone') AND role = 'admin'
+            AND password_hash IS NOT NULL
+            AND auth_secret_hash IS NULL AND account_salt IS NULL AND kdf_params IS NULL
+            AND pubkey IS NULL AND enc_privkey IS NULL AND wrapped_seed IS NULL
+            AND kek_verifier_hash IS NULL AND recovery_key IS NULL AND recovery_code_hash IS NULL
+            AND invite_token_hash IS NULL AND invite_expires_at IS NULL)
         OR
         -- The tombstone holds NOTHING: no keys to steal, no token to redeem, no way in.
         (state = 'tombstone'
@@ -201,14 +233,15 @@ CREATE TABLE users (
             AND recovery_code_hash IS NULL AND kek_verifier_hash IS NULL
             AND wrapped_seed IS NULL
             AND invite_token_hash IS NULL AND invite_expires_at IS NULL
-            AND frozen_at IS NULL)
+            AND frozen_at IS NULL AND password_hash IS NULL)
         OR
         -- A live account carries every key it needs to be opened again, and the recovery
         -- PAIR is deliberately not among them: it answers a different loss and is optional
         -- (#112). `kek_verifier_hash` is not optional — without it an account that loses
         -- its last device cannot be recovered at all, which is the state this milestone
         -- exists to make impossible.
-        (state NOT IN ('provisioned', 'tombstone')
+        (state NOT IN ('provisioned', 'tombstone') AND role = 'user'
+            AND password_hash IS NULL
             AND auth_secret_hash IS NOT NULL AND account_salt IS NOT NULL
             AND kdf_params IS NOT NULL AND pubkey IS NOT NULL
             AND enc_privkey IS NOT NULL AND kek_verifier_hash IS NOT NULL
@@ -1978,9 +2011,8 @@ VALUES ('00000000-0000-0000-0000-000000000000', 'deleted', 'user', 'tombstone', 
 -- the operator's own key material and turning this row into their account. Until then the
 -- application serves nothing but its redemption (#107), so the window is "first run",
 -- not "for ever, because nobody changed it".
-INSERT INTO users (id, login, role, state, invite_token_hash, invite_expires_at, quota_bytes)
-VALUES ('00000000-0000-0000-0000-000000000001', 'admin', 'admin', 'provisioned',
-        encode(sha256(convert_to('admin', 'UTF8')), 'hex'), now() + interval '7 days', 10737418240);
+INSERT INTO users (id, login, role, state, quota_bytes)
+VALUES ('00000000-0000-0000-0000-000000000001', 'admin', 'admin', 'provisioned', 1);
 
 -- ============================================================ notes on what is NOT here
 --

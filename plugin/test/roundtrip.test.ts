@@ -166,15 +166,59 @@ describe('a vault, end to end', () => {
   let kv: Uint8Array;
   let address: string;
 
-  it('claims the seeded invitation through the session', async () => {
+  /**
+   * A vault account to be, invited the way every real one is.
+   *
+   * A fresh server holds no invitation any more: it holds a console administrator with no
+   * password (#107, #115). So the first run here is what it is anywhere — set that password,
+   * sign in to the console, and issue an invitation — and only then is there something for a
+   * client to redeem. It is three requests rather than none, and each one is the real path.
+   */
+  const inviteVaultAccount = async (login: string): Promise<string> => {
+    // Each body is read ONCE. `assert.equal`'s message argument is evaluated whether or not
+    // the assertion holds, so `await res.text()` there consumes the stream the next line
+    // wants to parse — which fails as "Body has already been read", about the wrong thing.
+    const ask = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, text: await res.text() };
+    };
+
+    const bootstrap = await ask('/auth/bootstrap', { password: 'the first administrator password' });
+    assert.equal(bootstrap.status, 201, bootstrap.text);
+
+    // The ADMINISTRATOR signs in here, not the account being invited: the console is a
+    // different kind of account (#115), and it is the one that may issue an invitation.
+    const signIn = await ask('/auth/console', {
+      login: 'admin',
+      password: 'the first administrator password',
+    });
+    assert.equal(signIn.status, 200, signIn.text);
+    const { access } = JSON.parse(signIn.text) as { access: string };
+
+    const invited = await ask(
+      '/admin/invitations',
+      { login, quota_bytes: '10737418240' },
+      { authorization: `Bearer ${access}` },
+    );
+    assert.equal(invited.status, 201, invited.text);
+    return (JSON.parse(invited.text) as { token: string }).token;
+  };
+
+  it('claims an invitation through the session', async () => {
     const health = await client.health();
     assert.equal(health.bootstrap_pending, true, 'this test needs a fresh database — see npm run test:live');
+
+    const token = await inviteVaultAccount('roundtrip-user');
 
     sess = await session.connect(
       {
         serverUrl: base,
-        login: 'admin',
-        invitationToken: 'admin',
+        login: 'roundtrip-user',
+        invitationToken: token,
         passphrase,
         vaultName: 'testVault',
         deviceName: 'roundtrip',
@@ -357,7 +401,7 @@ describe('a vault, end to end', () => {
     const second = await session.pair(
       {
         serverUrl: base,
-        login: 'admin',
+        login: 'roundtrip-user',
         passphrase,
         pairingCode: code,
         deviceName: 'phone',
@@ -401,7 +445,7 @@ describe('a vault, end to end', () => {
     const code = newPairingCode();
     await assert.rejects(
       session.pair(
-        { serverUrl: base, login: 'admin', passphrase, pairingCode: code },
+        { serverUrl: base, login: 'roundtrip-user', passphrase, pairingCode: code },
         fetchTransport,
         async () => {
           // Approve once, then approve again: the second must be refused, and the refusal

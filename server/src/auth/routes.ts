@@ -7,6 +7,8 @@ import {
   findDeviceByRefresh,
   issueRefreshToken,
   recoverAccount,
+  consoleSignIn,
+  setFirstPassword,
   redeemInvitation,
   verifyAuthSecret,
 } from './service.js';
@@ -44,6 +46,29 @@ export const registerAuthRoutes = (
       account_salt: (found?.accountSalt ?? fakeAccountSalt(cfg.serverSecret, login)).toString('base64'),
       kdf_params: found?.kdfParams ?? fallback,
     };
+  });
+
+  /**
+   * The first run, and the only thing this server answers until it is done (#107, #115).
+   *
+   * A password is CREATED here rather than replaced: the seeded administrator has none, so
+   * there is no default that keeps working for anybody who never got round to changing it.
+   * The refusal afterwards is `409` and not `404` — the caller found the right endpoint, it
+   * is simply no longer the first run, and saying so is what stops somebody hunting for a
+   * typo in their request.
+   */
+  app.post<{ Body: { password: string } }>('/auth/bootstrap', async (req, reply) => {
+    const password = req.body?.password;
+    if (typeof password !== 'string' || password.length < 12) {
+      return reply.code(400).send({
+        error: 'password_too_short',
+        detail: 'at least 12 characters — this one is not slowed down by a client-side KDF',
+      });
+    }
+
+    const out = await setFirstPassword(db, password);
+    if (!out) return reply.code(409).send({ error: 'already_bootstrapped' });
+    return reply.code(201).send({ login: out.login });
   });
 
   app.post<{
@@ -146,6 +171,44 @@ export const registerAuthRoutes = (
       user_id: out.userId,
     };
   });
+
+  /**
+   * Sign in to the console (#115).
+   *
+   * Rate-limited on the same limiter as recovery, and for the same reason: this is the other
+   * endpoint on this server where guessing pays, because the secret behind it is one a person
+   * chose rather than 128 bits of CSPRNG.
+   */
+  app.post<{ Body: { login: string; password: string; device_name?: string } }>(
+    '/auth/console',
+    async (req, reply) => {
+      const login = req.body?.login;
+      const password = req.body?.password;
+      if (typeof login !== 'string' || typeof password !== 'string') {
+        return reply.code(400).send({ error: 'login_and_password_required' });
+      }
+
+      const allowed = attempts.check(login);
+      if (!allowed.ok) {
+        return reply
+          .code(429)
+          .send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
+      }
+
+      const out = await consoleSignIn(db, login, password, req.body.device_name ?? 'console');
+      if (!out) {
+        attempts.fail(login);
+        return reply.code(401).send({ error: 'invalid_credentials' });
+      }
+      attempts.succeed(login);
+
+      return {
+        access: app.jwt.sign({ sub: out.userId, device: out.deviceId }, { expiresIn: cfg.accessTokenTtlSeconds }),
+        refresh: await issueRefreshToken(db, out.deviceId),
+        user_id: out.userId,
+      };
+    },
+  );
 
   app.post<{ Body: { login: string; auth_secret: string; device_id?: string } }>(
     '/auth/login',

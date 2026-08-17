@@ -20,7 +20,7 @@ import type { Db } from './db.js';
 // /health is open too: a server waiting for its first administrator is working as
 // designed, and a container marked unhealthy for it would never be allowed to finish
 // starting.
-const OPEN_DURING_BOOTSTRAP = new Set(['/auth/kdf', '/auth/redeem', '/health']);
+const OPEN_DURING_BOOTSTRAP = new Set(['/auth/kdf', '/auth/bootstrap', '/health']);
 
 export const hasActiveAdministrator = async (db: Db): Promise<boolean> => {
   const row = await db.one<{ exists: boolean }>(
@@ -62,8 +62,9 @@ export const registerBootstrapGuard = (app: FastifyInstance, db: Db): void => {
     return reply.code(503).send({
       error: 'bootstrap_pending',
       message:
-        'This server has no administrator yet. Redeem the seeded invitation for login "admin" ' +
-        'from a client; that is what replaces the default token.',
+        'This server has no administrator yet. Set the first administrator password at ' +
+        'POST /auth/bootstrap — creating it is what makes this server usable, and there is ' +
+        'no default to change.',
     });
   });
 };

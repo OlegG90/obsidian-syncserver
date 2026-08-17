@@ -69,12 +69,7 @@ before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
   await db.query(
-    `UPDATE users SET state = 'active', role = 'admin', auth_secret_hash = 'h',
-            account_salt = decode('00112233445566778899aabbccddeeff','hex'),
-            kdf_params = '{"v":19,"m":65536,"t":3,"p":1}', pubkey = '\\x01', enc_privkey = '\\x02',
-            kek_verifier_hash = 'kv',
-            recovery_key = '\\x03', recovery_code_hash = 'rh', wrapped_seed = '\\x04',
-            invite_token_hash = NULL, invite_expires_at = NULL
+    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
       WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
   );
 

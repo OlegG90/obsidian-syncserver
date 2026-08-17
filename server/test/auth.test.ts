@@ -49,6 +49,56 @@ const redeemBody = (token: string, login = 'admin') => ({
   device_platform: 'linux',
 });
 
+/**
+ * An invitation for a VAULT account, written straight in.
+ *
+ * The seeded row is a console account now (#115) and there is nothing to redeem on it, so
+ * these tests need an invitation the way every real one arrives: issued by an administrator.
+ * Issuing it through `/admin/invitations` is `operator.test.ts`'s subject; here it is a
+ * fixture, and going through the API would test that endpoint twice and this one not at all.
+ */
+const seedInvitation = async (login: string, token: string): Promise<string> => {
+  const row = await db.one<{ id: string }>(
+    `INSERT INTO users (login, state, role, quota_bytes, invite_token_hash, invite_expires_at)
+     VALUES ($1, 'provisioned', 'user', 10737418240,
+             encode(sha256(convert_to($2,'UTF8')),'hex'), now() + interval '7 days')
+     RETURNING id`,
+    [login, token],
+  );
+  return row!.id;
+};
+
+/**
+ * The vault account the login, refresh and recovery tests are about.
+ *
+ * It used to be the seeded administrator, redeemed at the top of this file. Under #115 that
+ * row is a CONSOLE account — a password and no key material — so it can no longer hold an
+ * `auth_secret` to present or a seed envelope to hand back. These describes are about a
+ * *vault* account, so they get one, seeded directly like every other suite's fixtures:
+ * issuing an invitation is `operator.test.ts`'s subject and redeeming it is tested above.
+ */
+const VAULT_LOGIN = 'vault-user';
+const seedVaultAccount = async (): Promise<void> => {
+  await db.query(
+    `INSERT INTO users (login, state, role, quota_bytes, auth_secret_hash, account_salt,
+                        kdf_params, pubkey, enc_privkey, wrapped_seed, kek_verifier_hash,
+                        recovery_key, recovery_code_hash)
+     VALUES ($1, 'active', 'user', 10737418240, $2, decode('07070707070707070707070707070707','hex'),
+             '{"v":19,"m":65536,"t":3,"p":1}',
+             decode(repeat('01', 32), 'hex'), decode(repeat('02', 48), 'hex'),
+             decode(repeat('03', 48), 'hex'), $3,
+             decode(repeat('04', 48), 'hex'), $4)`,
+    [VAULT_LOGIN, sha256hex('a'.repeat(43)), sha256hex(KEK_VERIFIER), sha256hex(RECOVERY_CODE)],
+  );
+  // And a device, which redeeming used to create along the way: `/auth/login` names one,
+  // because a caller not attributed to a device cannot be throttled or signed out (#90).
+  await db.query(
+    `INSERT INTO devices (user_id, name, platform)
+     SELECT id, 'laptop', 'linux' FROM users WHERE login = $1`,
+    [VAULT_LOGIN],
+  );
+};
+
 before(async () => {
   db = connect(cfg.databaseUrl);
   // Undo whatever an earlier run redeemed: these tests need the seeded first-run state.
@@ -59,15 +109,20 @@ before(async () => {
   // first. A test that has to break a rule to set itself up is asserting against the rule;
   // the one assertion that needed a clean table now takes a baseline instead.
   await db.query(`DELETE FROM devices`);
-  await db.query(`DELETE FROM nodes WHERE vault_id IN (SELECT id FROM vaults WHERE user_id <> '00000000-0000-0000-0000-000000000000')`);
-  await db.query(`DELETE FROM vaults`);
-  await db.query(`UPDATE users SET state = 'provisioned', role = 'admin',
+  // One transaction with the constraint deferred: a vault points at its root node, so
+  // removing nodes first trips `vaults_root_node_fkey` and removing vaults first trips the
+  // RESTRICT from nodes. The FK is deferrable precisely so a transaction may hold both ends
+  // in an inconsistent state until it commits.
+  await db.query(`BEGIN; SET CONSTRAINTS ALL DEFERRED;
+                  DELETE FROM nodes; DELETE FROM vaults; COMMIT;`);
+  // Back to what schema.sql seeds: a console account with no password and no token (#115).
+  // There is nothing to redeem on a fresh server — only a password to create.
+  await db.query(`UPDATE users SET state = 'provisioned', role = 'admin', password_hash = NULL,
                          auth_secret_hash = NULL, account_salt = NULL, kdf_params = NULL,
                          pubkey = NULL, enc_privkey = NULL, wrapped_seed = NULL,
                          kek_verifier_hash = NULL,
                          recovery_key = NULL, recovery_code_hash = NULL,
-                         invite_token_hash = encode(sha256(convert_to('admin','UTF8')),'hex'),
-                         invite_expires_at = now() + interval '7 days'
+                         invite_token_hash = NULL, invite_expires_at = NULL
                    WHERE id = '00000000-0000-0000-0000-000000000001'`);
   // Demoted, not deleted. What "first run" means is that no ACTIVE ADMINISTRATOR exists
   // (#107) — not that the table is empty — and deleting an active account is a procedure
@@ -76,6 +131,7 @@ before(async () => {
   await db.query(`UPDATE users SET role = 'user'
                    WHERE state = 'active' AND id <> '00000000-0000-0000-0000-000000000001'`);
   app = await buildApp(db, cfg);
+  await seedVaultAccount();
 });
 
 after(async () => {
@@ -84,13 +140,48 @@ after(async () => {
 });
 
 describe('first run', () => {
-  it('answers nothing but the bootstrap redemption while there is no administrator', async () => {
+  it('answers nothing but the setting of the first password', async () => {
     const blocked = await app.inject({ method: 'POST', url: '/auth/login', payload: { login: 'admin', auth_secret: 'x' } });
     assert.equal(blocked.statusCode, 503);
     assert.equal(blocked.json().error, 'bootstrap_pending');
 
     const open = await app.inject({ method: 'GET', url: '/auth/kdf?login=admin' });
     assert.equal(open.statusCode, 200);
+  });
+
+  it('creates the first password rather than replacing one, and only once', async () => {
+    // The property a seeded default cannot have (#107): there is no value that works until
+    // somebody gets round to changing it, because until this call there is no value at all.
+    const seeded = await db.one<{ hash: string | null; token: string | null }>(
+      `SELECT password_hash AS hash, invite_token_hash AS token FROM users
+        WHERE id = '00000000-0000-0000-0000-000000000001'`,
+    );
+    assert.equal(seeded!.hash, null, 'nothing to guess before the first run');
+    assert.equal(seeded!.token, null, 'and nothing to redeem either');
+
+    const short = await app.inject({ method: 'POST', url: '/auth/bootstrap', payload: { password: 'short' } });
+    assert.equal(short.statusCode, 400, short.body);
+
+    const set = await app.inject({
+      method: 'POST', url: '/auth/bootstrap', payload: { password: 'a console password' },
+    });
+    assert.equal(set.statusCode, 201, set.body);
+    assert.equal(set.json().login, 'admin');
+
+    // Once only, and by construction: the statement that sets it moves the row out of the
+    // state it matched on, so there is no window between checking and writing.
+    const again = await app.inject({
+      method: 'POST', url: '/auth/bootstrap', payload: { password: 'another password entirely' },
+    });
+    assert.equal(again.statusCode, 409, again.body);
+
+    const row = await db.one<{ state: string; hash: string; keys: string | null }>(
+      `SELECT state::text AS state, password_hash AS hash, pubkey::text AS keys FROM users
+        WHERE id = '00000000-0000-0000-0000-000000000001'`,
+    );
+    assert.equal(row!.state, 'active');
+    assert.match(row!.hash, /^\$argon2id\$/, 'a password a person chose gets a slow hash (#108)');
+    assert.equal(row!.keys, null, 'and a console account holds no key material at all (#115)');
   });
 
   it('refuses a valid invitation claimed under the wrong name, and says which name it is', async () => {
@@ -103,31 +194,37 @@ describe('first run', () => {
     // Named, unlike "no such token" — that one stays a single answer for three cases so it
     // cannot become an oracle. This is somebody holding a valid invitation who mistyped the
     // name on it, and telling them gives away nothing they were not just handed.
+    await seedInvitation('invited-one', 'tok-mismatch');
     const wrong = await app.inject({
-      method: 'POST', url: '/auth/redeem', payload: redeemBody('admin', 'oleg'),
+      method: 'POST', url: '/auth/redeem', payload: redeemBody('tok-mismatch', 'oleg'),
     });
     assert.equal(wrong.statusCode, 409, wrong.body);
     assert.equal(wrong.json().error, 'login_mismatch');
-    assert.match(wrong.json().detail, /"admin"/);
+    assert.match(wrong.json().detail, /"invited-one"/);
 
     // And the invitation is untouched: a typo must not spend a single-use token. Asserted
     // against the row rather than by redeeming, which would spend it here instead.
     const row = await db.one<{ state: string; token: string | null }>(
       `SELECT state::text AS state, invite_token_hash AS token FROM users
-        WHERE id = '00000000-0000-0000-0000-000000000001'`,
+        WHERE login = 'invited-one'`,
     );
     assert.equal(row!.state, 'provisioned');
     assert.ok(row!.token, 'the invitation is still there to be claimed correctly');
   });
 
-  it('redeems the seeded invitation, and the default token stops working afterwards', async () => {
-    const first = await app.inject({ method: 'POST', url: '/auth/redeem', payload: redeemBody('admin') });
+  it('redeems an invitation, and that token stops working afterwards', async () => {
+    await seedInvitation('invited-two', 'tok-once');
+    const first = await app.inject({
+      method: 'POST', url: '/auth/redeem', payload: redeemBody('tok-once', 'invited-two'),
+    });
     assert.equal(first.statusCode, 200, first.body);
     const body = first.json();
     assert.ok(body.access && body.refresh && body.device_id && body.vault_id && body.root_node_id);
 
     // Single use by construction: this is what makes a default credential acceptable.
-    const again = await app.inject({ method: 'POST', url: '/auth/redeem', payload: redeemBody('admin') });
+    const again = await app.inject({
+      method: 'POST', url: '/auth/redeem', payload: redeemBody('tok-once', 'invited-two'),
+    });
     assert.equal(again.statusCode, 404);
   });
 
@@ -161,13 +258,13 @@ describe('/auth/kdf does not enumerate accounts (#73)', () => {
 
 describe('login and refresh', () => {
   it('accepts the auth secret, not a passphrase, and rotates the refresh token', async () => {
-    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = 'admin'`);
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
     const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
 
     const ok = await app.inject({
       method: 'POST',
       url: '/auth/login',
-      payload: { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id },
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
     });
     assert.equal(ok.statusCode, 200, ok.body);
 
@@ -177,9 +274,9 @@ describe('login and refresh', () => {
   });
 
   it('refuses a refresh token that has been superseded', async () => {
-    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = 'admin'`);
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
     const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
-    const payload = { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id };
+    const payload = { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id };
 
     const first = (await app.inject({ method: 'POST', url: '/auth/login', payload })).json().refresh;
     await app.inject({ method: 'POST', url: '/auth/login', payload });
@@ -190,7 +287,7 @@ describe('login and refresh', () => {
 
   it('gives the same answer for an unknown login and a wrong secret', async () => {
     const unknown = await app.inject({ method: 'POST', url: '/auth/login', payload: { login: 'ghost', auth_secret: 'x', device_id: randomUUID() } });
-    const wrong = await app.inject({ method: 'POST', url: '/auth/login', payload: { login: 'admin', auth_secret: 'x', device_id: randomUUID() } });
+    const wrong = await app.inject({ method: 'POST', url: '/auth/login', payload: { login: VAULT_LOGIN, auth_secret: 'x', device_id: randomUUID() } });
     assert.equal(unknown.statusCode, wrong.statusCode);
     assert.deepEqual(unknown.json(), wrong.json());
   });
@@ -215,7 +312,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
   it('returns the passphrase envelope against the KEK verifier, and a device to use it from', async () => {
     // The whole milestone in one call: no second device approves anything, and what comes
     // back is the envelope — never the seed, which the server has never held.
-    const r = await recover({ login: 'admin', kek_verifier: VERIFIER, device_name: 'new laptop' });
+    const r = await recover({ login: VAULT_LOGIN, kek_verifier: VERIFIER, device_name: 'new laptop' });
     assert.equal(r.statusCode, 200, r.body);
 
     const body = r.json();
@@ -238,7 +335,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
   it('returns the recovery-code envelope against the code, and only that one', async () => {
     // Two proofs, two envelopes, and each opens only its own. Handing back both would give
     // whoever guessed one a free second target.
-    const r = await recover({ login: 'admin', recovery_code: CODE });
+    const r = await recover({ login: VAULT_LOGIN, recovery_code: CODE });
     assert.equal(r.statusCode, 200, r.body);
     assert.equal(r.json().opened_by, 'recovery_code');
     assert.equal(r.json().seed_envelope, Buffer.alloc(48, 4).toString('base64'), 'recovery_key, not wrapped_seed');
@@ -247,7 +344,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
   it('answers an unknown login exactly as it answers a wrong proof', async () => {
     // The refusal is the enumeration oracle if it differs by so much as a status (#73).
     const unknown = await recover({ login: `ghost-${randomUUID()}`, kek_verifier: VERIFIER });
-    const wrong = await recover({ login: 'admin', kek_verifier: 'w'.repeat(43) });
+    const wrong = await recover({ login: VAULT_LOGIN, kek_verifier: 'w'.repeat(43) });
     assert.equal(unknown.statusCode, 401);
     assert.equal(unknown.statusCode, wrong.statusCode);
     assert.deepEqual(unknown.json(), wrong.json());
@@ -255,8 +352,8 @@ describe('recovery — the account comes back to a device that holds nothing', (
 
   it('refuses a request carrying both proofs, or neither', async () => {
     // Both would let a caller test two guesses inside one lockout slot.
-    const both = await recover({ login: 'admin', kek_verifier: VERIFIER, recovery_code: CODE });
-    const neither = await recover({ login: 'admin' });
+    const both = await recover({ login: VAULT_LOGIN, kek_verifier: VERIFIER, recovery_code: CODE });
+    const neither = await recover({ login: VAULT_LOGIN });
     assert.equal(both.statusCode, 400, both.body);
     assert.equal(neither.statusCode, 400, neither.body);
   });
@@ -266,7 +363,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
     // where guessing pays. Own limiter: the injected requests all come from one address, so
     // a shared one would leak this test's deliberate failures into every other.
     const solo = await buildApp(db, cfg, { attempts: inProcessAttemptLimiter() });
-    const login = 'admin';
+    const login = VAULT_LOGIN;
     let last = await solo.inject({ method: 'POST', url: '/auth/recover', payload: { login, kek_verifier: 'x' } });
     for (let i = 0; i < 5; i++) {
       assert.equal(last.statusCode, 401, `attempt ${i} is answered, not throttled`);
@@ -300,22 +397,22 @@ describe('recovery — the account comes back to a device that holds nothing', (
         WHERE conname = 'keys_match_state' AND conrelid = 'users'::regclass`,
     );
     await db.query(`ALTER TABLE users DROP CONSTRAINT keys_match_state`);
-    await db.query(`UPDATE users SET kek_verifier_hash = NULL WHERE login = 'admin'`);
+    await db.query(`UPDATE users SET kek_verifier_hash = NULL WHERE login = $1`, [VAULT_LOGIN]);
     await db.query(`ALTER TABLE users ADD CONSTRAINT keys_match_state ${def!.def} NOT VALID`);
 
-    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = 'admin'`);
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
     const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1 LIMIT 1`, [account!.id]);
 
     const login = await app.inject({
       method: 'POST',
       url: '/auth/login',
-      payload: { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id },
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
     });
     assert.equal(login.statusCode, 200, login.body);
     assert.equal(login.json().needs_kek_verifier, true, 'the account says what it is missing');
 
     // Refused until it is filed, which is the state that made this test necessary.
-    assert.equal((await recover({ login: 'admin', kek_verifier: VERIFIER })).statusCode, 401);
+    assert.equal((await recover({ login: VAULT_LOGIN, kek_verifier: VERIFIER })).statusCode, 401);
 
     const filed = await app.inject({
       method: 'PUT',
@@ -325,13 +422,13 @@ describe('recovery — the account comes back to a device that holds nothing', (
     });
     assert.equal(filed.statusCode, 204, filed.body);
 
-    const after = await recover({ login: 'admin', kek_verifier: VERIFIER });
+    const after = await recover({ login: VAULT_LOGIN, kek_verifier: VERIFIER });
     assert.equal(after.statusCode, 200, 'and now the account can be taken back');
     assert.equal(
       (await app.inject({
         method: 'POST',
         url: '/auth/login',
-        payload: { login: 'admin', auth_secret: 'a'.repeat(43), device_id: device!.id },
+        payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
       })).json().needs_kek_verifier,
       false,
       'and stops asking',
@@ -341,14 +438,14 @@ describe('recovery — the account comes back to a device that holds nothing', (
   it('refuses an account that has no recovery code, without saying that is why', async () => {
     // Null is the honest shape for an account with no code (#112), and the refusal for one
     // must be indistinguishable from a wrong code — otherwise it reports on the account.
-    await db.query(`UPDATE users SET recovery_key = NULL, recovery_code_hash = NULL WHERE login = 'admin'`);
-    const none = await recover({ login: 'admin', recovery_code: CODE });
-    const wrong = await recover({ login: 'admin', recovery_code: 'not the code' });
+    await db.query(`UPDATE users SET recovery_key = NULL, recovery_code_hash = NULL WHERE login = $1`, [VAULT_LOGIN]);
+    const none = await recover({ login: VAULT_LOGIN, recovery_code: CODE });
+    const wrong = await recover({ login: VAULT_LOGIN, recovery_code: 'not the code' });
     assert.equal(none.statusCode, 401);
     assert.deepEqual(none.json(), wrong.json());
 
     // …and the passphrase still works, because the two answer different losses.
-    const still = await recover({ login: 'admin', kek_verifier: VERIFIER });
+    const still = await recover({ login: VAULT_LOGIN, kek_verifier: VERIFIER });
     assert.equal(still.statusCode, 200, still.body);
   });
 });

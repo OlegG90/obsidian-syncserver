@@ -12,6 +12,7 @@ import type { PoolClient } from 'pg';
 import type { KdfParams } from '@syncserver/shared';
 import { hashToken, newToken, tokenMatches } from '../crypto.js';
 import { record } from '../admin/audit.js';
+import { hashPassword, passwordMatches } from './password.js';
 import type { Db } from '../db.js';
 
 export interface RedeemInput {
@@ -57,6 +58,78 @@ export type Account = {
   login: string;
   role: string;
   state: string;
+};
+
+/**
+ * The first run: give the seeded administrator a password, which is what brings it to life.
+ *
+ * `schema.sql` seeds a **console account with none** (#107, #115). Setting one is what
+ * *creates* it — there is no default to change, so there is no state in which a default
+ * works, which a seeded password would have left behind for anybody who never got round to
+ * it. While it is unset the server answers nothing else, so the window is the first run.
+ *
+ * The `state = 'provisioned'` in the `WHERE` is the whole of the once-only guarantee: the
+ * same statement that sets the password moves the row out of the state it matches on, so a
+ * second call finds nothing. No separate check, and no window between checking and writing.
+ */
+export const setFirstPassword = async (
+  db: Db,
+  password: string,
+): Promise<{ userId: string; login: string } | undefined> => {
+  const done = await db.query<{ id: string; login: string }>(
+    `UPDATE users SET state = 'active', password_hash = $1
+      WHERE id = '00000000-0000-0000-0000-000000000001'
+        AND role = 'admin' AND state = 'provisioned'
+      RETURNING id, login`,
+    [hashPassword(password)],
+  );
+  const row = done[0];
+  if (!row) return undefined;
+
+  await db.tx(async (c) => {
+    await record(c, {
+      actor: { id: row.id, login: row.login },
+      action: 'account.bootstrap',
+      target: { id: row.id, login: row.login },
+    });
+  });
+  return { userId: row.id, login: row.login };
+};
+
+/**
+ * Sign in a console account, and give it a device to be signed out from.
+ *
+ * A **password** rather than an `auth_secret`, because a console account has no seed to
+ * derive one from — that is the whole of #115. It is checked with Argon2id here, since no
+ * client-side KDF can stand in: the browser is not trusted to have run one.
+ *
+ * **A device row, for a browser.** The access token names an account *and* a device (#90),
+ * so a caller can be throttled and a session can be ended one place at a time. A browser is
+ * not a device in the way a phone is, but it is a session somebody may want to end, and
+ * inventing a second shape of token to avoid a row would cost more than the row.
+ *
+ * The refusal is the same for an unknown login, a vault account and a wrong password.
+ * Anything else would say which logins administer this server, to anybody who asks.
+ */
+export const consoleSignIn = async (
+  db: Db,
+  login: string,
+  password: string,
+  deviceName: string,
+): Promise<{ userId: string; deviceId: string } | undefined> => {
+  const row = await db.one<{ id: string; hash: string }>(
+    `SELECT id, password_hash AS hash FROM users
+      WHERE lower(login) = lower($1) AND state = 'active' AND role = 'admin'
+        AND password_hash IS NOT NULL`,
+    [login],
+  );
+  if (!row || !passwordMatches(password, row.hash)) return undefined;
+
+  const device = await db.one<{ id: string }>(
+    `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, 'console') RETURNING id`,
+    [row.id, deviceName],
+  );
+  return { userId: row.id, deviceId: device!.id };
 };
 
 /**

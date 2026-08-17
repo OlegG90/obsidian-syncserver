@@ -38,21 +38,31 @@ let adminId: string;
 let userToken: string;
 let userId: string;
 
-const KEYED = `auth_secret_hash = 'h',
-               account_salt = decode('00112233445566778899aabbccddeeff','hex'),
-               kdf_params = '{"v":19,"m":65536,"t":3,"p":1}',
-               pubkey = '\\x01', enc_privkey = '\\x02', kek_verifier_hash = 'kv',
-               wrapped_seed = '\\x04', invite_token_hash = NULL, invite_expires_at = NULL`;
-
+/**
+ * An account of either kind (#115).
+ *
+ * A **console** account carries a password and not one byte of key material; a **vault**
+ * account is the mirror. They are different shapes rather than one shape with a flag, and
+ * `keys_match_state` refuses the mixture — so a fixture that wrote keys onto an administrator
+ * would be asking the schema to allow the thing this milestone exists to forbid.
+ */
 const makeAccount = async (login: string, role: 'user' | 'admin'): Promise<{ id: string; token: string }> => {
   const id = randomUUID();
-  await db.query(
-    `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
-                        enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', $3::user_role, 'h', decode('00112233445566778899aabbccddeeff','hex'),
-             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
-    [id, login, role],
-  );
+  if (role === 'admin') {
+    await db.query(
+      `INSERT INTO users (id, login, state, role, password_hash, quota_bytes)
+       VALUES ($1, $2, 'active', 'admin', '$argon2id$test', 1)`,
+      [id, login],
+    );
+  } else {
+    await db.query(
+      `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
+                          enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
+       VALUES ($1, $2, 'active', 'user', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
+      [id, login],
+    );
+  }
   const device = await db.one<{ id: string }>(
     `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [id]);
   return { id, token: app.jwt.sign({ sub: id, device: device!.id }) };
@@ -76,7 +86,7 @@ before(async () => {
   // Claim the seeded administrator so this file stands on its own: until one exists the API
   // answers 503 to everything but its redemption (#107).
   await db.query(
-    `UPDATE users SET state = 'active', role = 'admin', ${KEYED}
+    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
       WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
   );
 
@@ -112,17 +122,21 @@ describe('who may act on somebody else', () => {
     assert.equal(r.statusCode, 401);
   });
 
-  it('reads the role from the database, not from the token', async () => {
+  it('reads the account from the database, not from the token', async () => {
     // The whole reason this guard costs a query. A demotion an hour ago has to be a
     // demotion now, and an access token minted before it says nothing about that.
-    const demoted = await makeAccount(`demoted-${randomUUID()}`, 'admin');
+    const demoted = await makeAccount(`switched-off-${randomUUID()}`, 'admin');
     assert.equal(
       (await app.inject({ method: 'GET', url: '/admin/accounts', headers: { authorization: `Bearer ${demoted.token}` } }))
         .statusCode,
       200,
     );
 
-    await db.query(`UPDATE users SET role = 'user' WHERE id = $1`, [demoted.id]);
+    // Switched off rather than demoted: an administrator IS a console account (#115), so
+    // there is no "same row, lesser role" to move it to — it holds no key material to be a
+    // vault account with. The guard's rule is the same either way, and it is the rule this
+    // test is about: the answer comes from the database, not from the token.
+    await db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [demoted.id]);
     const after = await app.inject({
       method: 'GET', url: '/admin/accounts', headers: { authorization: `Bearer ${demoted.token}` },
     });

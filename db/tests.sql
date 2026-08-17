@@ -237,11 +237,10 @@ $$, '23514', 'keys_match_state',
    'an active account with no way to prove its passphrase');
 
 -- ---- last active administrator
-INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params,
-                    pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', 'h',
-        '\x00112233445566778899aabbccddeeff'::bytea, '{"v":19,"m":65536,"t":3,"p":1}',
-         '\x01'::bytea, '\x02'::bytea, 'kv', '\x03'::bytea, 'rh', '\x04'::bytea, 10000000);
+-- A CONSOLE account (#115): a password and no key material. An administrator carrying keys
+-- is now a shape the check refuses, which the negatives further down assert.
+INSERT INTO users (id, login, state, role, password_hash, quota_bytes)
+VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', '$argon2id$fake', 1);
 
 SELECT expect_fail($$
     UPDATE users SET role = 'user' WHERE login = 'root'
@@ -681,14 +680,17 @@ SELECT expect_ok($$
                           AND state = 'tombstone' AND login = 'deleted') THEN
             RAISE EXCEPTION 'the tombstone was not seeded';
         END IF;
+        -- No token and no password (#107, #115): there is nothing to redeem here, only a
+        -- password to create, and creating it is what makes the row usable. A seeded
+        -- password would keep working if nobody changed it.
         IF NOT EXISTS (SELECT 1 FROM users
                         WHERE id = '00000000-0000-0000-0000-000000000001'
                           AND state = 'provisioned' AND role = 'admin'
-                          AND invite_token_hash = encode(nh('admin'), 'hex')) THEN
-            RAISE EXCEPTION 'the bootstrap administrator invitation was not seeded';
+                          AND password_hash IS NULL AND invite_token_hash IS NULL) THEN
+            RAISE EXCEPTION 'the bootstrap administrator was not seeded';
         END IF;
     END $inner$
-$$, 'the schema seeds the tombstone and the bootstrap administrator invitation');
+$$, 'the schema seeds the tombstone and the bootstrap administrator');
 
 SELECT expect_ok($$
     INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
@@ -1396,6 +1398,36 @@ SELECT expect_ok($$
         DELETE FROM shares WHERE id = 'c0000000-0000-0000-0000-0000000000c2';
     END $inner$
 $$, 'terminal share cleanup cascades completed memberships');
+
+-- ---- the two kinds of account (#115)
+
+-- An administrator with key material is the shape that would have let a browser hold a
+-- seed. It is refused, which is what makes "the admin has no key" a fact about the row.
+SELECT expect_fail($$
+    UPDATE users SET pubkey = ''::bytea WHERE login = 'root'
+$$, '23514', 'keys_match_state', 'a console account carrying key material');
+
+-- And the mirror: a vault account with a password would be a second way in, past the one
+-- authentication path this server has.
+SELECT expect_fail($$
+    UPDATE users SET password_hash = '$argon2id$fake' WHERE login = 'alice'
+$$, '23514', 'keys_match_state', 'a vault account carrying a console password');
+
+-- An active console account without one cannot exist either: it would be an administrator
+-- nobody can sign in as, on a server that answers only to administrators.
+SELECT expect_fail($$
+    UPDATE users SET password_hash = NULL WHERE login = 'root'
+$$, '23514', 'keys_match_state', 'an active console account with no password');
+
+-- The seeded first administrator is the one row allowed to have neither (#107): it is
+-- `provisioned`, holds no token because there is nothing to redeem, and becomes usable by
+-- having a password CREATED rather than replaced.
+SELECT expect_ok($$
+    SELECT 1 FROM users
+     WHERE id = '00000000-0000-0000-0000-000000000001'
+       AND state = 'provisioned' AND role = 'admin'
+       AND password_hash IS NULL AND invite_token_hash IS NULL
+$$, 'the seeded administrator waits with no password and no token');
 
 -- ============================================================ retention
 

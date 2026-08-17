@@ -14,6 +14,15 @@ DELETE /auth/devices/{id}                              → 204; the caller's own
                                                     deleted so history keeps naming its authors
 POST /auth/refresh        {refresh}                      → access
 POST /auth/devices        {name, platform}              → device_id
+POST /auth/bootstrap      {password}                → {login}   the FIRST RUN, once only
+                                                   the seeded administrator has no password;
+                                                   setting one CREATES it, so no default ever
+                                                   works (#107, #115). 409 afterwards.
+POST /auth/console        {login, password}         → access + refresh + user_id
+                                                   a CONSOLE account signs in (#115): no seed,
+                                                   so no `auth_secret` — the password is checked
+                                                   with Argon2id here, since no client-side KDF
+                                                   can stand in. Rate-limited like /auth/recover.
 POST /auth/redeem         {invitation_token, login, auth_secret, account_salt, kdf_params,
                              pubkey, enc_privkey, wrapped_seed, kek_verifier,
                              recovery_key?, recovery_code_hash?,
