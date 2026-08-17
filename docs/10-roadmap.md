@@ -270,6 +270,37 @@ since M0 and is written by nothing.
 The third half is specified nowhere, because it has never been a feature — it has been a procedure in
 [13](13-deployment.md).
 
+### Where the console lives, and what it may not assume
+
+- [ ] **The server serves it**, from the same process and therefore the same version and the same
+      `/health` — which is what [11](11-management-console.md)'s "one deployment, one session" means when
+      read literally. A second container would be a moving part that document already refuses.
+- [ ] **The bootstrap guard has to let it in.** It is an exact-match allowlist today — `/auth/kdf`,
+      `/auth/redeem`, `/health` and nothing else — so a fresh server would answer `503` to the console's
+      own assets, and the one screen that matters on a fresh server is the one that redeems the seeded
+      invitation (#107). Whatever widens it must widen it for **exactly** the static bundle, since the
+      point of the guard is that a server with no administrator does nothing else.
+- [ ] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
+      list: a halt that also refuses the endpoint used to confirm the restore is a halt nobody can leave.
+- [ ] **A vault is still created by the plugin, never here** (#86, AC-11): making one mints a vault key
+      from the seed, and the console holds no key. [11](11-management-console.md) offers "create" in the
+      profile zone and is wrong to; it lists and reports, and creating stays where the keys are.
+
+### Backup, as the thing that runs it
+
+- [ ] **In-process**, because the advisory lock the window needs is already this process's — the collector
+      takes it and skips a pass while it is held, which is half of the machinery. `pg_dump` therefore
+      lives in the runtime image, and its **major version must match the server's** or the first real
+      backup fails on a production database: pinned explicitly, and checked at startup rather than
+      discovered.
+- [ ] **Database first, blobs second** (#114). Not interchangeable here: the window refuses new writes and
+      does not reach the ones in flight, so blobs-first can copy a blob store that is missing a file the
+      dump references — a restore that completes, looks whole, and cannot open a note.
+- [ ] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
+      refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
+- [ ] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
+      periodic restore rehearsal, and whatever runs it nightly. Written once.
+
 ### The image is pulled, not built on the server
 
 Today `docker compose build` runs **on the target**, which is why the deployment copies an archive of the

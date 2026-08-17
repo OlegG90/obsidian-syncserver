@@ -32,16 +32,22 @@ the copy does not hold. Every file created inside the backup window is exactly t
 The failure is silent in the worst way: the restore completes, the tree is intact, the file is in it — and
 it cannot be opened. Nobody finds out at restore time. Someone opens an old note months later.
 
-A freeze removes the question. Both legs then describe the same instant, and the order between them stops
-mattering. `backup_runs` records the window (`writes_frozen_at`, `writes_thawed_at`) alongside both legs,
-and `CHECK`s reject a run with a leg outside it — because an operator who dumps outside the freeze "just
-this once" produces a copy that restores cleanly and is missing files, and nothing about the run would
-otherwise say so.
+A true freeze removes the question: both legs then describe the same instant and the order between them
+stops mattering. `backup_runs` records the window (`writes_frozen_at`, `writes_thawed_at`) alongside both
+legs, and `CHECK`s reject a run with a leg outside it — because an operator who dumps outside the window
+"just this once" produces a copy that restores cleanly and is missing files, and nothing about the run
+would otherwise say so.
 
-> **If a freeze is genuinely impossible, take the database first and the blobs second.** Then the blob copy
-> is a *superset* of what the dump references. Surplus blobs are harmless — the collector removes them —
-> and dangling references are not. Written down because this is the fallback an operator will improvise
-> under pressure, and the intuitive order is the wrong one.
+> **What this server actually holds is a refusal window, not a freeze, and the order is therefore
+> normative** (#114). A write that has already passed the check goes on to commit: the window turns new
+> writes away, it does not reach into the ones in flight. So the two are not interchangeable here —
+> **the database is dumped first and the blobs are copied second**, which makes the blob copy a
+> *superset* of what the dump references. Surplus blobs are harmless, the collector removes them, and
+> dangling references are neither.
+>
+> Blobs-first is safe only under a lock held across the whole dump, which is the thing the window was
+> chosen to avoid. Written this way round because the intuitive order is the wrong one, and because it is
+> what an operator improvising under pressure will otherwise reach for.
 
 The PostgreSQL snapshot must be **transactionally consistent** (`pg_dump`, or a volume snapshot with
 fsync); otherwise the invariant "node, journal and version are written together" breaks. The freeze does
@@ -145,15 +151,18 @@ then the effective quarantine is zero and every restore should expect the report
 
 **Backup — nightly, before the GC window:**
 
-1. freeze writes, record `writes_frozen_at`;
-2. snapshot the blob store;
-3. `pg_dump`;
-4. release writes, record `writes_thawed_at`;
+1. open the window: new writes are refused, record `writes_frozen_at`;
+2. `pg_dump`;
+3. snapshot the blob store;
+4. close the window, record `writes_thawed_at` — in a `finally`, or a failed run leaves the server
+   refusing writes for ever;
 5. copy the configuration;
 6. write an operations log entry: time, sizes, checksums.
 
-Steps 2 and 3 are interchangeable — that is the point of the freeze. Steps 1 and 4 are not optional, and
-a run that records neither is not a usable copy no matter what its status column says.
+Steps 2 and 3 are **not** interchangeable, for the reason above (#114): a window that only refuses new
+writes leaves the ones already running, and blobs-first is what turns one of those into a file that
+restores and cannot be opened. Steps 1 and 4 are not optional, and a run that records neither is not a
+usable copy no matter what its status column says.
 
 **Restore:**
 
