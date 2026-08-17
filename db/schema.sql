@@ -386,15 +386,25 @@ CREATE TABLE audit_log (
 CREATE INDEX audit_log_target ON audit_log (target_user_id, at DESC);
 CREATE INDEX audit_log_at     ON audit_log (at DESC);
 
--- Backup history. A backup is TWO stores captured as ONE frozen window (#95): writes are
--- frozen, both legs run inside the freeze, writes are released. CHECKs reject a leg
--- outside the window.
+-- Backup history. A backup is TWO stores captured inside ONE refusal window (#114): new
+-- writes are refused, both legs run inside the window, the window closes. CHECKs reject a
+-- leg outside it.
+--
+-- `window`, not `freeze`: this server cannot stop a write already running, so what it takes
+-- is a moment in which no NEW write starts — and `freeze` is the quota state (SH-20), which
+-- is a different thing entirely.
+--
+-- The ORDER is a constraint and not a convention, for the reason #114 gives: an in-flight
+-- write can upload a blob after the blob copy while its node still reaches the dump.
+-- Database first makes the blob copy a superset of what the dump references, and the
+-- surplus is swept. Blobs first produces the silent failure — a restore that completes,
+-- with a file in the tree that cannot be opened.
 CREATE TABLE backup_runs (
     id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     started_at   timestamptz NOT NULL DEFAULT now(),
     finished_at  timestamptz,
-    writes_frozen_at timestamptz,
-    writes_thawed_at timestamptz,
+    window_opened_at timestamptz,
+    window_closed_at timestamptz,
     blobs_done_at    timestamptz,
     db_done_at       timestamptz,
     status       backup_status NOT NULL DEFAULT 'running',
@@ -407,20 +417,26 @@ CREATE TABLE backup_runs (
 
     CONSTRAINT finished_has_status CHECK (
         finished_at IS NULL OR status <> 'running'),
-    CONSTRAINT ok_implies_a_closed_freeze CHECK (
-        status <> 'ok' OR (writes_frozen_at IS NOT NULL AND blobs_done_at IS NOT NULL
-                       AND db_done_at IS NOT NULL AND writes_thawed_at IS NOT NULL
+    CONSTRAINT ok_implies_a_closed_window CHECK (
+        status <> 'ok' OR (window_opened_at IS NOT NULL AND blobs_done_at IS NOT NULL
+                       AND db_done_at IS NOT NULL AND window_closed_at IS NOT NULL
                        AND finished_at IS NOT NULL)),
-    CONSTRAINT legs_inside_the_freeze CHECK (
-        (blobs_done_at IS NULL OR (writes_frozen_at IS NOT NULL
-                                   AND blobs_done_at >= writes_frozen_at))
-    AND (db_done_at IS NULL    OR (writes_frozen_at IS NOT NULL
-                                   AND db_done_at >= writes_frozen_at))
-    AND (writes_thawed_at IS NULL OR (
-            writes_frozen_at IS NOT NULL
-        AND writes_thawed_at >= writes_frozen_at
-        AND (blobs_done_at IS NULL OR blobs_done_at <= writes_thawed_at)
-        AND (db_done_at    IS NULL OR db_done_at    <= writes_thawed_at)))),
+    CONSTRAINT legs_inside_the_window CHECK (
+        (blobs_done_at IS NULL OR (window_opened_at IS NOT NULL
+                                   AND blobs_done_at >= window_opened_at))
+    AND (db_done_at IS NULL    OR (window_opened_at IS NOT NULL
+                                   AND db_done_at >= window_opened_at))
+    AND (window_closed_at IS NULL OR (
+            window_opened_at IS NOT NULL
+        AND window_closed_at >= window_opened_at
+        AND (blobs_done_at IS NULL OR blobs_done_at <= window_closed_at)
+        AND (db_done_at    IS NULL OR db_done_at    <= window_closed_at)))),
+    -- Stated as "blobs imply a database that already finished", not as a comparison of two
+    -- possibly-null timestamps: a run that copied blobs without dumping is exactly the
+    -- dangerous order, and a NULL-tolerant `<=` would let it through.
+    CONSTRAINT database_leg_first CHECK (
+        blobs_done_at IS NULL
+        OR (db_done_at IS NOT NULL AND db_done_at <= blobs_done_at)),
     CONSTRAINT failure_is_explained CHECK (status <> 'failed' OR error IS NOT NULL)
 );
 

@@ -20,8 +20,9 @@ account to a device that holds nothing at all.
 
 ## One state, not two copies
 
-> **Writes are frozen for the duration of the backup.** Both legs are taken inside the freeze, and only
-> then are writes released.
+> **New writes are refused for the duration of the backup, the database is dumped first and the blobs
+> are copied second, and only then is the window closed** (#114). Both halves are normative: the window,
+> and the order inside it.
 
 Ordering the legs is not enough, and taking blobs first is the **dangerous** order. The invariant it leans
 on is true ("a blob is uploaded before the node that references it") and does not say what it appears to
@@ -32,25 +33,28 @@ the copy does not hold. Every file created inside the backup window is exactly t
 The failure is silent in the worst way: the restore completes, the tree is intact, the file is in it — and
 it cannot be opened. Nobody finds out at restore time. Someone opens an old note months later.
 
-A true freeze removes the question: both legs then describe the same instant and the order between them
-stops mattering. `backup_runs` records the window (`writes_frozen_at`, `writes_thawed_at`) alongside both
-legs, and `CHECK`s reject a run with a leg outside it — because an operator who dumps outside the window
-"just this once" produces a copy that restores cleanly and is missing files, and nothing about the run
-would otherwise say so.
+A **true** freeze would remove the question: both legs would then describe the same instant and the order
+between them would stop mattering. That is not what this server holds, and the difference is the whole
+rule. A write that has already passed the check goes on to commit — the window turns *new* writes away,
+it does not reach into the ones in flight — so the two legs describe two slightly different instants no
+matter what, and only one order is safe.
 
-> **What this server actually holds is a refusal window, not a freeze, and the order is therefore
-> normative** (#114). A write that has already passed the check goes on to commit: the window turns new
-> writes away, it does not reach into the ones in flight. So the two are not interchangeable here —
-> **the database is dumped first and the blobs are copied second**, which makes the blob copy a
-> *superset* of what the dump references. Surplus blobs are harmless, the collector removes them, and
-> dangling references are neither.
+> **The database is dumped first and the blobs are copied second** (#114). That makes the blob copy a
+> *superset* of what the dump references: surplus blobs are harmless and the collector removes them,
+> while dangling references are neither. Blobs-first is safe only under a lock held across the whole
+> dump, which is the thing the window was chosen to avoid. Written this way round because the intuitive
+> order is the wrong one, and because it is what an operator improvising under pressure will reach for.
 >
-> Blobs-first is safe only under a lock held across the whole dump, which is the thing the window was
-> chosen to avoid. Written this way round because the intuitive order is the wrong one, and because it is
-> what an operator improvising under pressure will otherwise reach for.
+> `freeze` is deliberately not the word for it. That one belongs to the quota state (SH-20), and one word
+> for both would make every sentence naming it ambiguous — hence `window_opened_at` / `window_closed_at`.
+
+`backup_runs` records the window alongside both legs, and `CHECK`s reject a run with a leg outside it —
+or a blob leg the database leg did not precede. An operator who dumps outside the window "just this once",
+or in the intuitive order, produces a copy that restores cleanly and is missing files, and nothing about
+the run would otherwise say so.
 
 The PostgreSQL snapshot must be **transactionally consistent** (`pg_dump`, or a volume snapshot with
-fsync); otherwise the invariant "node, journal and version are written together" breaks. The freeze does
+fsync); otherwise the invariant "node, journal and version are written together" breaks. The window does
 not replace this: it makes the two *stores* agree, not the tables inside one of them.
 
 The garbage collector must not run inside the window either, and it is not enough to schedule it elsewhere
@@ -151,10 +155,10 @@ then the effective quarantine is zero and every restore should expect the report
 
 **Backup — nightly, before the GC window:**
 
-1. open the window: new writes are refused, record `writes_frozen_at`;
+1. open the window: new writes are refused, record `window_opened_at`;
 2. `pg_dump`;
 3. snapshot the blob store;
-4. close the window, record `writes_thawed_at` — in a `finally`, or a failed run leaves the server
+4. close the window, record `window_closed_at` — in a `finally`, or a failed run leaves the server
    refusing writes for ever;
 5. copy the configuration;
 6. write an operations log entry: time, sizes, checksums.

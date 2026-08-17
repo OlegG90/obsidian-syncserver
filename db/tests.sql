@@ -1442,6 +1442,34 @@ SELECT expect_ok($$
     UPDATE users SET history_days = 30 WHERE login = 'alice'
 $$, 'an account may keep less history than the default year');
 
+-- ============================================================ backup runs
+
+-- The dangerous order (#114), refused by the schema rather than by the one file that knows
+-- about it. A run that copied blobs without a database leg behind them is the shape that
+-- restores cleanly and cannot open a file — months later, with no way back.
+SELECT expect_fail($$
+    INSERT INTO backup_runs (window_opened_at, blobs_done_at, destination)
+    VALUES (now(), now(), '/backups')
+$$, '23514', 'database_leg_first', 'blobs copied with no database leg before them');
+
+SELECT expect_fail($$
+    INSERT INTO backup_runs (window_opened_at, blobs_done_at, db_done_at, destination)
+    VALUES (now(), now(), now() + interval '1 second', '/backups')
+$$, '23514', 'database_leg_first', 'blobs copied before the database was dumped');
+
+SELECT expect_ok($$
+    INSERT INTO backup_runs (window_opened_at, db_done_at, blobs_done_at, window_closed_at,
+                             finished_at, status, destination)
+    VALUES (now(), now(), now(), now(), now(), 'ok', '/backups')
+$$, 'database first, blobs second, both inside the window');
+
+-- A leg outside the window is refused whichever side it falls on: a dump taken before the
+-- window opened describes an instant the blob copy does not.
+SELECT expect_fail($$
+    INSERT INTO backup_runs (window_opened_at, db_done_at, destination)
+    VALUES (now(), now() - interval '1 minute', '/backups')
+$$, '23514', 'legs_inside_the_window', 'a database leg taken before the window opened');
+
 -- ============================================================ deferred checkpoint
 
 -- Everything above ran inside one transaction that ends in ROLLBACK, so a DEFERRED

@@ -262,6 +262,9 @@ curl -s -X POST "localhost:$PUBLISH_PORT/auth/bootstrap" \
   -d '{"password":"a password you would give a password manager"}'
 ```
 
+**At least 12 characters**, or `400 password_too_short` — the one secret on this server a person
+chooses, with only the server's own Argon2id behind it.
+
 It answers `{"login":"admin"}` once and `409 already_bootstrapped` every time after: the
 statement that sets the password is the same one that moves the row out of the state it matched
 on, so there is no second chance and no window between checking and writing.
@@ -297,7 +300,8 @@ of the API answers.
   Public exposure stays out of scope until authentication has had a review of its own
   ([02](02-architecture.md)). Reaching it from elsewhere is a VPN's job, not this compose file's;
 - **not backed up.** The two bind mounts hold everything and nothing copies them anywhere. The
-  procedure that would — one frozen window, both legs inside it — is [08](08-backup-restore.md),
+  procedure that would — one refusal window, database dumped first and blobs copied second
+  inside it (#114) — is [08](08-backup-restore.md),
   and it is not wired up. Note that the collector must be held off during that window, which is
   what its advisory lock is for;
 - **not upgradable in place.** `schema.sql` runs once, on an empty data directory. There is no

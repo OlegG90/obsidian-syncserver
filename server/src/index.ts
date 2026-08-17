@@ -1,4 +1,5 @@
 import { buildApp } from './app.js';
+import { settleInterruptedRuns } from './backup.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
@@ -14,6 +15,18 @@ const app = await buildApp(db, cfg, events);
 // The collector shares the blob store with the routes — same path, same directory.
 const collectorStore = openStore(cfg.blobStorePath);
 const stopCollector = startCollector(db, collectorStore, cfg);
+
+// A `running` backup row that survived a restart is a lie: the window it recorded went with
+// the process, so nothing has been refusing writes since. Nothing else will ever settle it —
+// the `finally` that would have belongs to a process that no longer exists — and a row an
+// operator could mistake for a usable copy is the one thing `backup_runs` exists to prevent.
+const interrupted = await settleInterruptedRuns(db);
+if (interrupted > 0) {
+  console.warn(
+    `${interrupted} backup run(s) were still marked running from before this restart and have ` +
+      'been recorded as failed. Whatever they produced is not a copy to restore from.',
+  );
+}
 
 if (cfg.serverSecretIsDefault) {
   console.warn(

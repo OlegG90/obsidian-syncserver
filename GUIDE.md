@@ -67,8 +67,9 @@ asking for a password.
 
 **That password is created here, not changed.** There is no default to leave lying around
 — which is the point ([#107](docs/09-decisions.md)). Choose something you would choose for a
-password manager; it is checked with Argon2id on the server, and it is the only credential
-here that a person invented.
+password manager; **at least 12 characters**, and nothing else is required of it. It is
+checked with Argon2id on the server, and it is the only credential here that a person
+invented — everything else is random.
 
 Sign in with login `admin` and that password. You are now looking at the accounts list.
 

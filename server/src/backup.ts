@@ -20,7 +20,11 @@
  *
  * The advisory lock is the collector's, deliberately: a backup and a garbage collection must
  * never overlap, because one removes blobs the other is copying. `collector.ts` already skips
- * a pass while the lock is held, so taking it here is the whole of that interlock.
+ * a pass while the lock is held, so taking it here is the whole of that interlock — and it
+ * serialises backups against each other for free. It is taken **blocking, with a timeout**
+ * (docs/08): waiting for a pass that is already running is what makes the window clean from
+ * the moment the lock is granted, while the timeout stops a backup job inheriting somebody
+ * else's stuck session.
  */
 import type { Db } from './db.js';
 import { COLLECTOR_LOCK_ID } from './collector.js';
@@ -34,7 +38,12 @@ export interface Legs {
 }
 
 export interface BackupResult {
-  id: string;
+  /**
+   * Absent when nothing ran. A skipped call never inserted a row, so there is no id to
+   * report — and an empty string in its place is a value a caller can log, store or compare
+   * without ever being told it means "none".
+   */
+  id?: string;
   status: 'ok' | 'failed' | 'skipped';
   bytes?: number;
   blobCount?: number;
@@ -53,26 +62,55 @@ let windowOpen = false;
 
 export const backupInProgress = (): boolean => windowOpen;
 
+/** How long a run waits for the collector's lock before calling itself skipped. */
+const LOCK_WAIT_MS = 60_000;
+
 /**
  * Run one backup, or say that another is already running.
  *
- * The window closes in a `finally` and the row is settled there too. A run that failed
- * between the legs must not leave the server refusing writes — that is a backup taking the
- * whole installation down with it — and a `running` row that outlived its process is a lie
- * the next boot has to clear rather than something to reason about.
+ * **The window closes in a `finally`; the row is settled on both paths before it.** A run that
+ * failed between the legs must not leave the server refusing writes — that is a backup taking
+ * the whole installation down with it — so releasing the window cannot depend on which way the
+ * run ended. The row is written in `try` and `catch` instead, because `finally` cannot tell
+ * them apart and `ok` and `failed` are exactly what has to be told apart. A `running` row that
+ * outlives its process is not settled here at all: `settleInterruptedRuns` clears it at the
+ * next boot, since a dead process runs no `finally`.
  */
 export const runBackup = async (
   db: Db,
   legs: Legs,
   destination: string,
-  triggeredBy?: string,
+  opts: { triggeredBy?: string; lockWaitMs?: number } = {},
 ): Promise<BackupResult> =>
   db.session(async (lock) => {
-    const got = await lock.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [COLLECTOR_LOCK_ID]);
-    if (!got.rows[0]?.ok) return { id: '', status: 'skipped' as const };
+    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS } = opts;
+    // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
+    // for a collector pass already running, so the window is clean from the moment the lock
+    // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
+    // here and turned a pass that happened to be mid-flight into a backup that silently did
+    // not happen — and a nightly copy nobody took is a worse outcome than one that waited a
+    // few seconds for a collector.
+    //
+    // Bounded, because "blocking" and "for ever" are not the same promise: a collector pass
+    // is seconds, so anything past this is another backup or a session nobody will release,
+    // and waiting on either is how a backup job becomes a hung process. The timeout is what
+    // keeps `skipped` an honest answer instead of the usual one.
+    await lock.query(`SET lock_timeout = ${lockWaitMs}`);
+    try {
+      await lock.query('SELECT pg_advisory_lock($1)', [COLLECTOR_LOCK_ID]);
+    } catch {
+      return {
+        status: 'skipped' as const,
+        error: `the collector lock was still held after ${lockWaitMs}ms; another backup is probably running`,
+      };
+    } finally {
+      // This connection goes back to the pool, and a lock_timeout left on it would apply to
+      // whatever runs there next.
+      await lock.query('SET lock_timeout = DEFAULT');
+    }
 
     const started = await db.one<{ id: string }>(
-      `INSERT INTO backup_runs (writes_frozen_at, destination, triggered_by)
+      `INSERT INTO backup_runs (window_opened_at, destination, triggered_by)
        VALUES (now(), $1, $2) RETURNING id::text AS id`,
       [destination, triggeredBy ?? null],
     );
@@ -90,7 +128,7 @@ export const runBackup = async (
 
       await db.query(
         `UPDATE backup_runs
-            SET writes_thawed_at = now(), finished_at = now(), status = 'ok',
+            SET window_closed_at = now(), finished_at = now(), status = 'ok',
                 bytes = $2, blob_count = $3
           WHERE id = $1`,
         [id, dumped.bytes + blobs.bytes, blobs.count],
@@ -100,7 +138,7 @@ export const runBackup = async (
       const message = e instanceof Error ? e.message : String(e);
       await db.query(
         `UPDATE backup_runs
-            SET writes_thawed_at = now(), finished_at = now(), status = 'failed', error = $2
+            SET window_closed_at = now(), finished_at = now(), status = 'failed', error = $2
           WHERE id = $1`,
         [id, message],
       );
@@ -115,7 +153,7 @@ export const runBackup = async (
  * Settle any run that a restart interrupted.
  *
  * A `running` row means a window was open when the process died — and with the process went
- * the refusal, so nothing was actually frozen afterwards. Calling that anything but `failed`
+ * the refusal, so nothing was being turned away afterwards. Calling that anything but `failed`
  * would leave a row an operator could mistake for a usable copy, which is the one thing
  * `backup_runs` exists to prevent.
  */
@@ -123,7 +161,7 @@ export const settleInterruptedRuns = async (db: Db): Promise<number> => {
   const rows = await db.query(
     `UPDATE backup_runs
         SET status = 'failed', finished_at = now(),
-            writes_thawed_at = COALESCE(writes_thawed_at, now()),
+            window_closed_at = COALESCE(window_closed_at, now()),
             error = 'interrupted by a restart'
       WHERE status = 'running'
       RETURNING id`,

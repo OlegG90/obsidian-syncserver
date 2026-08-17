@@ -55,16 +55,16 @@ describe('the window a backup takes', () => {
   it('records both legs inside the window, which the schema insists on', async () => {
     const out = await runBackup(db, recording([]), '/backups');
     const row = await db.one<{
-      frozen: string; thawed: string; db: string; blobs: string; status: string; bytes: string; count: string;
+      opened: string; closed: string; db: string; blobs: string; status: string; bytes: string; count: string;
     }>(
-      `SELECT writes_frozen_at AS frozen, writes_thawed_at AS thawed, db_done_at AS db,
+      `SELECT window_opened_at AS opened, window_closed_at AS closed, db_done_at AS db,
               blobs_done_at AS blobs, status::text AS status, bytes::text AS bytes,
               blob_count::text AS count
          FROM backup_runs WHERE id = $1`,
       [out.id],
     );
     assert.equal(row!.status, 'ok');
-    assert.ok(row!.frozen && row!.thawed && row!.db && row!.blobs, 'every timestamp is on the row');
+    assert.ok(row!.opened && row!.closed && row!.db && row!.blobs, 'every timestamp is on the row');
     assert.equal(row!.bytes, '3072', 'both legs counted');
     assert.equal(row!.count, '3');
   });
@@ -105,19 +105,23 @@ describe('the window a backup takes', () => {
     assert.equal(out.status, 'failed');
     assert.equal(backupInProgress(), false, 'the window closed anyway');
 
-    const row = await db.one<{ status: string; error: string; thawed: string }>(
-      `SELECT status::text AS status, error, writes_thawed_at AS thawed FROM backup_runs WHERE id = $1`,
+    const row = await db.one<{ status: string; error: string; closed: string }>(
+      `SELECT status::text AS status, error, window_closed_at AS closed FROM backup_runs WHERE id = $1`,
       [out.id],
     );
     assert.equal(row!.status, 'failed');
     assert.match(row!.error, /version mismatch/, 'and says what broke, not that something did');
-    assert.ok(row!.thawed, 'a failed run still records the window closing');
+    assert.ok(row!.closed, 'a failed run still records the window closing');
   });
 
   it('runs one at a time, sharing the collector’s lock', async () => {
     // A backup and a garbage collection must never overlap: one removes blobs the other is
     // copying. The collector already skips a pass while this lock is held, so taking it here
     // is the whole interlock — and it serialises backups with each other for free.
+    //
+    // WAITS rather than skips, which is the point of the blocking form (docs/08): the second
+    // run's window opens only once the first has closed, so both produce a whole copy. The
+    // try-form stood here and turned a second run into one that silently did not happen.
     const first = runBackup(
       db,
       {
@@ -131,19 +135,52 @@ describe('the window a backup takes', () => {
     );
     await new Promise((r) => setTimeout(r, 15));
     const second = await runBackup(db, recording([]), '/backups');
+    const firstRun = await first;
 
-    assert.equal(second.status, 'skipped', 'the second one says so rather than taking half a copy');
-    assert.equal((await first).status, 'ok');
+    assert.equal(second.status, 'ok', 'it waited for the lock rather than giving up');
+    assert.equal(firstRun.status, 'ok');
+
+    const overlap = await db.one<{ serialised: boolean }>(
+      `SELECT (SELECT window_opened_at FROM backup_runs WHERE id = $2)
+              >= (SELECT window_closed_at FROM backup_runs WHERE id = $1) AS serialised`,
+      [firstRun.id, second.id],
+    );
+    assert.equal(overlap!.serialised, true, 'the two windows did not overlap');
+  });
+
+  it('gives up rather than hanging when the lock is never released', async () => {
+    // Bounded blocking: a collector pass is seconds, so a wait past the timeout is another
+    // session nobody will release — and a backup job that hangs on it is how a nightly job
+    // stops being nightly. `skipped` carries the reason rather than looking like nothing
+    // needed doing.
+    const held = runBackup(
+      db,
+      {
+        dumpDatabase: async () => {
+          await new Promise((r) => setTimeout(r, 300));
+          return { bytes: 1 };
+        },
+        copyBlobs: async () => ({ bytes: 1, count: 0 }),
+      },
+      '/backups',
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const gaveUp = await runBackup(db, recording([]), '/backups', { lockWaitMs: 50 });
+
+    assert.equal(gaveUp.status, 'skipped');
+    assert.equal(gaveUp.id, undefined, 'nothing ran, so there is no run to point at');
+    assert.match(gaveUp.error!, /still held/);
+    assert.equal((await held).status, 'ok');
   });
 });
 
 describe('a run the process did not outlive', () => {
-  it('is settled as failed, because nothing was frozen after the crash', async () => {
+  it('is settled as failed, because nothing was being refused after the crash', async () => {
     // The window lived in the dead process, so a `running` row means neither a backup nor a
     // refusal — and calling it anything else leaves a row an operator could mistake for a
     // usable copy.
     const orphan = await db.one<{ id: string }>(
-      `INSERT INTO backup_runs (writes_frozen_at, destination) VALUES (now(), '/backups')
+      `INSERT INTO backup_runs (window_opened_at, destination) VALUES (now(), '/backups')
        RETURNING id::text AS id`,
     );
     assert.equal(await settleInterruptedRuns(db), 1);

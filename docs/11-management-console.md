@@ -60,6 +60,13 @@ in which a default works; a seeded password that had to be changed would still w
 The console shows that one form in place of a login while it is pending, which is the whole of a fresh
 server's interface.
 
+**At least 12 characters**, refused as `password_too_short` below that. A length rule and nothing else —
+no character classes, which push people towards `Passw0rd!` and buy less than length does. The floor
+exists because this is the one secret on the server a person chooses: everything else it stores is
+≥128 bits of CSPRNG output (#108), and everything the *client* holds has Argon2id in front of it before
+the server ever sees it. Here there is only Argon2id on the server, so the phrase has to carry its own
+weight.
+
 The operator's own **vault** account is a separate thing they invite for themselves afterwards, exactly as
 they would invite anybody. Administering a server and keeping notes on it are different jobs, and this is
 where that stops being a figure of speech.
@@ -158,8 +165,8 @@ console adds on top.
 ### Backups: trigger and observe, do not download
 
 The console can start a backup, show the schedule, and list previous runs with their status, size, blob
-count and destination. A run records the **freeze window** and both legs (#95), and a `CHECK` rejects a leg
-taken outside it — so a half-finished backup, or one whose two stores describe different instants, can
+count and destination. A run records the **refusal window** and both legs (#114), and `CHECK`s reject a leg
+taken outside it, or a blob leg the database leg did not precede — so a half-finished backup, or one whose two stores describe different instants, can
 never be mistaken for a usable one.
 
 **Downloading a backup through the console is deliberately not a feature.** The reason is operational rather

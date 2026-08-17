@@ -18,6 +18,12 @@ POST /auth/bootstrap      {password}                → {login}   the FIRST RUN,
                                                    the seeded administrator has no password;
                                                    setting one CREATES it, so no default ever
                                                    works (#107, #115). 409 afterwards.
+                                                   MINIMUM 12 CHARACTERS, refused as
+                                                   `password_too_short`: this is the one
+                                                   secret here a person invents, and the only
+                                                   KDF standing behind it is the server's own
+                                                   — there is no client-side one to slow a
+                                                   guess down first.
 POST /auth/console        {login, password}         → access + refresh + user_id
                                                    a CONSOLE account signs in (#115): no seed,
                                                    so no `auth_secret` — the password is checked
