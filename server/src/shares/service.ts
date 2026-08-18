@@ -42,6 +42,7 @@ import { headroom } from '../quota.js';
 import { preparationGaps } from './owed.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { nextRev } from '../revision.js';
+import { FINALIZING, INVITED, INVITATION, JOINED, LIVE, NOT_FINALIZING, NOT_STARTED, PRESENT } from './membership.js';
 
 /** PostgreSQL's `foreign_key_violation` — here, a vault, node or account that is not there. */
 const FOREIGN_KEY_VIOLATION = '23503';
@@ -268,7 +269,7 @@ export const listShares = async (
             (SELECT n.id FROM nodes n
               WHERE n.vault_id = m.vault_id AND n.share_item_id = s.root_item_id) AS "rootNodeId"
        FROM share_members m JOIN shares s ON s.id = m.share_id
-      WHERE m.user_id = $1 AND m.joined_at IS NOT NULL AND m.left_at IS NULL
+      WHERE m.user_id = $1 AND ${JOINED}
       ORDER BY s.created_at`,
     [userId],
   );
@@ -281,7 +282,7 @@ export const listShares = async (
        FROM share_members m
        JOIN shares s ON s.id = m.share_id
        JOIN users  u ON u.id = s.initiator_id
-      WHERE m.user_id = $1 AND m.joined_at IS NULL AND s.state = 'active'
+      WHERE m.user_id = $1 AND ${INVITED} AND s.state = 'active'
       ORDER BY m.invited_at`,
     [userId],
   );
@@ -318,7 +319,7 @@ export const listMembers = async (db: Db, userId: string, shareId: string): Prom
       WHERE s.id = $1
         AND (s.initiator_id = $2
              OR EXISTS (SELECT 1 FROM share_members m
-                         WHERE m.share_id = s.id AND m.user_id = $2 AND m.left_at IS NULL))`,
+                         WHERE m.share_id = s.id AND m.user_id = $2 AND ${PRESENT}))`,
     [shareId, userId],
   );
   if (!visible) return undefined;
@@ -333,7 +334,7 @@ export const listMembers = async (db: Db, userId: string, shareId: string): Prom
        FROM share_members m
        JOIN shares s ON s.id = m.share_id
        JOIN users  u ON u.id = m.user_id
-      WHERE m.share_id = $1 AND m.left_at IS NULL
+      WHERE m.share_id = $1 AND ${PRESENT}
       ORDER BY "isInitiator" DESC, m.invited_at`,
     [shareId],
   );
@@ -428,9 +429,9 @@ export const invite = async (
  */
 export const declineInvitation = async (db: Db, userId: string, shareId: string): Promise<Refusal | undefined> => {
   const gone = await db.one<{ shareId: string }>(
-    `DELETE FROM share_members
-      WHERE share_id = $1 AND user_id = $2 AND joined_at IS NULL
-  RETURNING share_id AS "shareId"`,
+    `DELETE FROM share_members m
+      WHERE m.share_id = $1 AND m.user_id = $2 AND ${INVITED}
+  RETURNING m.share_id AS "shareId"`,
     [shareId, userId],
   );
   return gone ? undefined : { kind: 'not_found' };
@@ -461,7 +462,7 @@ export const removeMember = async (
   if (targetUserId === userId) return { kind: 'initiator_cannot_be_removed' };
 
   const member = await db.one<{ joined: string | null }>(
-    `SELECT joined_at AS joined FROM share_members WHERE share_id = $1 AND user_id = $2 AND left_at IS NULL`,
+    `SELECT m.joined_at AS joined FROM share_members m WHERE m.share_id = $1 AND m.user_id = $2 AND ${PRESENT}`,
     [shareId, targetUserId],
   );
   if (!member) return { kind: 'not_found' };
@@ -629,8 +630,8 @@ export const joinShare = async (
     // An outstanding invitation, and nothing else: a row already joined would make this a
     // second redemption, and no row at all means nobody asked them.
     const invite = await c.query(
-      `SELECT 1 FROM share_members
-        WHERE share_id = $1 AND user_id = $2 AND joined_at IS NULL AND left_at IS NULL
+      `SELECT 1 FROM share_members m
+        WHERE m.share_id = $1 AND m.user_id = $2 AND ${INVITATION}
           FOR UPDATE`,
       [shareId, userId],
     );
@@ -863,9 +864,9 @@ export const departMember = async (
   initiator: string,
 ): Promise<boolean> => {
   const remaining = await c.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM share_members
-      WHERE share_id = $1 AND user_id <> $2 AND user_id <> $3
-        AND joined_at IS NOT NULL AND finalization_started_at IS NULL AND left_at IS NULL`,
+    `SELECT count(*)::text AS n FROM share_members m
+      WHERE m.share_id = $1 AND m.user_id <> $2 AND m.user_id <> $3
+        AND ${LIVE}`,
     [shareId, leaving, initiator],
   );
   const ends = leaving === initiator || Number(remaining.rows[0]!.n) === 0;
@@ -891,14 +892,14 @@ export const departMember = async (
       [shareId],
     );
     await c.query(
-      `UPDATE share_members SET finalization_started_at = now()
-        WHERE share_id = $1 AND left_at IS NULL AND finalization_started_at IS NULL`,
+      `UPDATE share_members m SET finalization_started_at = now()
+        WHERE m.share_id = $1 AND ${NOT_FINALIZING}`,
       [shareId],
     );
   } else {
     await c.query(
-      `UPDATE share_members SET finalization_started_at = now()
-        WHERE share_id = $1 AND user_id = $2 AND finalization_started_at IS NULL`,
+      `UPDATE share_members m SET finalization_started_at = now()
+        WHERE m.share_id = $1 AND m.user_id = $2 AND ${NOT_STARTED}`,
       [shareId, leaving],
     );
   }
@@ -919,8 +920,8 @@ export const leaveShare = async (
     if (!share) return { kind: 'not_found' } as Refusal;
 
     const mine = await c.query<{ started: string | null }>(
-      `SELECT finalization_started_at AS started FROM share_members
-        WHERE share_id = $1 AND user_id = $2 AND joined_at IS NOT NULL AND left_at IS NULL
+      `SELECT m.finalization_started_at AS started FROM share_members m
+        WHERE m.share_id = $1 AND m.user_id = $2 AND ${JOINED}
           FOR UPDATE`,
       [shareId, userId],
     );
@@ -975,7 +976,7 @@ export const finalizeLeave = async (
       `SELECT m.vault_id AS "vaultId", s.initiator_id AS initiator
          FROM share_members m JOIN shares s ON s.id = m.share_id
         WHERE m.share_id = $1 AND m.user_id = $2
-          AND m.finalization_started_at IS NOT NULL AND m.left_at IS NULL
+          AND ${FINALIZING}
           FOR UPDATE OF m`,
       [shareId, userId],
     );

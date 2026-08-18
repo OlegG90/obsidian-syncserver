@@ -11,6 +11,7 @@
  * drift, and the drift stays invisible until somebody cannot leave a folder they shared.
  */
 import type { Db } from '../db.js';
+import { PRESENT } from './membership.js';
 
 /**
  * The material a participant would need and does not have yet.
@@ -136,7 +137,7 @@ export const replicaOf = async (
   const member = await db.one<{ vaultId: string; vaultKeyId: string }>(
     `SELECT m.vault_id AS "vaultId", v.vault_key_id AS "vaultKeyId"
        FROM share_members m JOIN vaults v ON v.id = m.vault_id
-      WHERE m.share_id = $1 AND m.user_id = $2 AND m.left_at IS NULL`,
+      WHERE m.share_id = $1 AND m.user_id = $2 AND ${PRESENT}`,
     [shareId, userId],
   );
   if (!member?.vaultId) return undefined;

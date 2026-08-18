@@ -32,6 +32,7 @@ import { counterpartOf, createCounterpart } from './replica.js';
 import { journalEntry } from '../revision.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
+import { LIVE_UNFROZEN } from './membership.js';
 
 /** A participant a write must reach: their account, and the vault their replica lives in. */
 interface Target {
@@ -140,10 +141,7 @@ const fanoutTargets = async (c: PoolClient, shareId: string, exceptVaultId: stri
        FROM share_members m
        JOIN users u ON u.id = m.user_id
       WHERE m.share_id = $1
-        AND m.joined_at IS NOT NULL
-        AND m.finalization_started_at IS NULL
-        AND m.left_at IS NULL
-        AND u.frozen_at IS NULL
+        AND ${LIVE_UNFROZEN}
         AND m.vault_id <> $2
       ORDER BY m.user_id
         FOR UPDATE OF m`,

@@ -116,6 +116,38 @@ describe('the keys a client needs to read a vault', () => {
     assert.equal(r.json().scopes[0].scope, 'vault');
     assert.equal(r.json().scopes[0].key_id, w.vaultKeyId);
   });
+
+  it('agrees with the blob-key surface about who may open a share scope', async () => {
+    // The two surfaces must not drift: a scope worth reporting is a scope worth opening.
+    // Both use the same named membership predicate (`PRESENT`) — and the test pins the
+    // agreement behaviorally: for the SAME participant, the vault reports the scope, and
+    // blob-keys offers the envelope under it. `blobs/service.ts` used to claim this in a
+    // comment that said `left_at IS NULL` while the vault surface added two more conditions.
+    const { shareId, inside, ks } = await sharedWith('surface-agree');
+    const file = await createFile(inside, `agree-${randomUUID()}.md`, 'the contents', ks);
+    const theirs = await theirCopyOf(file.nodeId);
+    assert.ok(theirs, 'the file reached their copy');
+
+    const scopes = await w.app.inject({
+      method: 'GET',
+      url: `/vaults/${w.strangerVaultId}`,
+      headers: { authorization: `Bearer ${w.strangerAccess}` },
+    });
+    assert.ok(
+      scopes.json().scopes.some((s: { key_id: string }) => s.key_id === ks),
+      'the participant is told the share scope exists',
+    );
+
+    const keys = await w.app.inject({
+      method: 'GET',
+      url: `/vaults/${w.strangerVaultId}/blob-keys?sha256=${file.sha256}`,
+      headers: { authorization: `Bearer ${w.strangerAccess}` },
+    });
+    assert.ok(
+      (keys.json().keys as { scope_id: string }[]).some((k) => k.scope_id === ks),
+      'and the envelope under it is offered, so the scope is more than a name',
+    );
+  });
 });
 
 describe('the states the delta carries', () => {

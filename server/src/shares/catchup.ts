@@ -30,6 +30,7 @@ import { counterpartOf, createCounterpart, type Counterpart } from './replica.js
 import { journalEntry } from '../revision.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
+import { LIVE, LIVE_UNFROZEN } from './membership.js';
 
 /** One node of the source replica, in the order a reconciliation can apply it. */
 interface SourceNode {
@@ -61,6 +62,11 @@ export interface CaughtUp {
  * preferred because it is the one copy guaranteed to hold the whole history: an added
  * participant's own history was zeroed when they joined and starts at their entry horizon
  * (SH-22, SH-23), so a freeze that began before they joined would catch up short.
+ *
+ * **Frozen accounts are not sources.** The fan-out set excluded them, so their copy is
+ * behind *by construction* — two members frozen at once, and the first to thaw would
+ * otherwise be served the second's stale copy. Same test as fan-out's, and for the same
+ * reason: what you would not deliver from is not what you should read from.
  */
 const sourceOf = async (
   c: PoolClient,
@@ -71,8 +77,9 @@ const sourceOf = async (
     `SELECT m.vault_id AS "vaultId"
        FROM share_members m
        JOIN shares s ON s.id = m.share_id
+       JOIN users u ON u.id = m.user_id
       WHERE m.share_id = $1
-        AND m.joined_at IS NOT NULL AND m.left_at IS NULL AND m.finalization_started_at IS NULL
+        AND ${LIVE_UNFROZEN}
         AND m.vault_id IS DISTINCT FROM $2
       ORDER BY (m.user_id = s.initiator_id) DESC
       LIMIT 1`,
@@ -270,7 +277,7 @@ export const catchUpMember = async (c: PoolClient, userId: string): Promise<Caug
        FROM share_members m
        JOIN shares s ON s.id = m.share_id
       WHERE m.user_id = $1
-        AND m.joined_at IS NOT NULL AND m.left_at IS NULL AND m.finalization_started_at IS NULL
+        AND ${LIVE}
         AND s.state = 'active'
       ORDER BY m.share_id`,
     [userId],

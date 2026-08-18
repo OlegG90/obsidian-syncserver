@@ -33,6 +33,7 @@ import { removeNodesByDepth, DEPTH } from '../nodes/remove.js';
 import { txGuarded, type Refusal } from '../refusal.js';
 import { departMember } from '../shares/service.js';
 import { record, type Actor } from './audit.js';
+import { PRESENT } from '../shares/membership.js';
 
 /** The reserved account authorship is reassigned to. Seeded by `schema.sql` (#55). */
 const TOMBSTONE = '00000000-0000-0000-0000-000000000000';
@@ -114,7 +115,7 @@ const begin = async (c: PoolClient, user: Actor): Promise<void> => {
   const involved = await c.query<{ shareId: string; initiator: string }>(
     `SELECT s.id AS "shareId", s.initiator_id AS initiator
        FROM shares s
-       JOIN share_members m ON m.share_id = s.id AND m.user_id = $1 AND m.left_at IS NULL
+       JOIN share_members m ON m.share_id = s.id AND m.user_id = $1 AND ${PRESENT}
       WHERE s.state <> 'ended' AND s.state <> 'cancelled'
       ORDER BY s.id`,
     [user.id],
@@ -134,7 +135,7 @@ const begin = async (c: PoolClient, user: Actor): Promise<void> => {
  */
 const OUTSTANDING = `SELECT m.share_id AS "shareId", u.login
        FROM shares s
-       JOIN share_members m ON m.share_id = s.id AND m.user_id <> s.initiator_id AND m.left_at IS NULL
+       JOIN share_members m ON m.share_id = s.id AND m.user_id <> s.initiator_id AND ${PRESENT}
        JOIN users u ON u.id = m.user_id
       WHERE s.initiator_id = $1
       ORDER BY u.login`;

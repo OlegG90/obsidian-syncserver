@@ -6,6 +6,7 @@ import { refusalFromDatabase, type Refusal } from '../refusal.js';
 import type { Config } from '../config.js';
 import { HashMismatch, PartsMissing, type BlobStore } from './store.js';
 import type { RateLimiter } from './rate.js';
+import { PRESENT } from '../shares/membership.js';
 
 /**
  * > A hash is not a capability.
@@ -45,8 +46,11 @@ export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): P
  * the right scope, and the query declined to hand it over. Found the first time somebody
  * joined a share and synced.
  *
- * The membership test matches the one that decides which keys a vault is told about, for
- * the same reason both must agree: a scope worth reporting is a scope worth opening.
+ * The membership test is `surface.ts`'s, spelled by the same name — `PRESENT` (not left) —
+ * so the claim that the two agree is a shared string rather than a comment that could drift
+ * from the SQL it describes. The surface's participant branch adds `wrapped_key IS NOT NULL`
+ * on top, which is delivery material rather than membership: the initiator holds no such
+ * envelope (their key is `wrapped_key_initiator`), and `envelopesFor` must still serve them.
  */
 export const envelopesFor = async (
   db: Db,
@@ -66,7 +70,7 @@ export const envelopesFor = async (
              OR bk.scope_id IN (SELECT s.subtree_key_id
                                   FROM share_members m JOIN shares s ON s.id = m.share_id
                                  WHERE m.user_id = $1 AND m.vault_id = $2
-                                   AND m.left_at IS NULL AND s.subtree_key_id IS NOT NULL))`,
+                                   AND ${PRESENT} AND s.subtree_key_id IS NOT NULL))`,
     [userId, vaultId, addresses],
   );
 
