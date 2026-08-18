@@ -392,6 +392,38 @@ export interface LeaveDeps {
  * @param nodes every live node of the replica, the root included.
  * @returns whether this departure ended the share for everybody.
  */
+/**
+ * Refuse to start leaving unless every name in the replica can be read.
+ *
+ * **A precondition, not a filter.** Finalization is checked for completeness — the server
+ * refuses a pass that misses a live node, trash included, and the schema refuses to unmark a
+ * node whose name is not yet under `KV`. So a name this device cannot read is not a node to
+ * skip; it is a departure that cannot be completed, and the only kind answer is to say so
+ * before the share is touched. Called before `leaveShare`, which begins by stopping
+ * propagation — after that point there is no unaltered share left to refuse on behalf of.
+ *
+ * The alternative it exists to prevent is worse than a refusal. `rekey` re-encrypts each name
+ * unconditionally, so a departure that carried on with a stand-in would name somebody's file
+ * "(name unavailable)" under their own vault key: a wrong name rather than a missing one,
+ * with nothing downstream able to tell.
+ *
+ * Structurally typed rather than taking `VaultScopes`, because `share-keys` imports this
+ * module and the dependency may not run both ways.
+ */
+export const requireEveryNameReadable = (
+  rows: readonly { name_enc: string | null; name_key_id: string | null }[],
+  scopes: { keyIfOpenable(nameKeyId: string | null | undefined): Uint8Array | undefined },
+): void => {
+  const unreadable = rows.filter((n) => n.name_enc === null || scopes.keyIfOpenable(n.name_key_id) === undefined);
+  if (unreadable.length === 0) return;
+
+  const scopeIds = [...new Set(unreadable.map((n) => n.name_key_id ?? 'no scope'))];
+  throw new Error(
+    `this device cannot read ${unreadable.length} name(s) in that folder (${scopeIds.join(', ')}), and leaving ` +
+      `would have to rewrite every one of them. Nothing has been changed — the share is as it was.`,
+  );
+};
+
 export const leaveShare = async (
   deps: LeaveDeps,
   shareId: string,

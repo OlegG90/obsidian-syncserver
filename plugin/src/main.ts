@@ -34,7 +34,9 @@ import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { decryptName } from './crypto/scope.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
-import { acceptInvitation, freeName, inviteTo, leaveShare, shareFolder, type SharedNode } from './sharing.js';
+import {
+  acceptInvitation, freeName, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
+} from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
@@ -664,13 +666,26 @@ export default class SyncServerPlugin extends Plugin {
           // vault root while it sat inside the shared folder.
           const pathOfNode = await this.pathsByNode(h, scopes);
 
-          const replica = (await h.client.shareReplica(shareId)).map((n) => {
+          const rows = await h.client.shareReplica(shareId);
+
+          // Before anything starts, and it has to be before: `leaveShare` opens by stopping
+          // propagation, and past that point there is no unaltered share left to refuse on
+          // behalf of.
+          requireEveryNameReadable(rows, scopes);
+
+          const replica = rows.map((n) => {
             // A node can carry the mark without ever having been converted — the trash of a
             // folder shared later, for one. Its name is under `KV` already, and there is no
             // `KS` envelope for its content to move back, so the only thing it needs is the
             // mark gone. Asking for a conversion it never had is how leaving got stuck.
-            const underShare = n.name_key_id === scopeId;
-            const name = n.name_enc ? decryptName(underShare ? key : h.kv, n.name_enc) : n.node_id;
+            //
+            // One question, asked of the scopes rather than of a two-way test: `KV` and this
+            // share's `KS` are both in there, so which key a name wants is a lookup rather
+            // than an assumption about how many scopes can exist.
+            // `unreadable` was empty, so both of these resolve. `keyFor` is what makes that
+            // a fact rather than a comment: if the check above ever stopped covering a case,
+            // this refuses instead of naming a file something it is not.
+            const name = decryptName(scopes.keyFor(n.name_key_id), n.name_enc!);
             return {
               nodeId: n.node_id,
               // A trashed node has no path and needs none: nothing reads it.
