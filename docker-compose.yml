@@ -55,8 +55,11 @@ services:
       retries: 5
 
   server:
-    build: .
-    image: syncserver:dev
+    # Pinned to a version, from .env — never `latest`: a server updated a few times a year
+    # must be able to say what it is running, and to go back. The image is published from
+    # CI (docs/13), and the default tracks the release in package.json. To build from
+    # source instead of pulling, see docker-compose.dev.yml.
+    image: ${SERVER_IMAGE:?set SERVER_IMAGE in .env — see .env.example}
     container_name: syncserver
     restart: unless-stopped
     deploy:

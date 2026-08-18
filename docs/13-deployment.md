@@ -9,45 +9,44 @@ directory, an identity to run as — they live in a **host profile** that is not
 
 ## Before anything: the architecture trap
 
-**Build the image on the machine that will run it, or explicitly for that machine's platform.**
-A home server is usually x86-64 while the laptop preparing the deployment may be ARM, and an
-image built for the wrong one starts and dies immediately with an exec format error that says
-nothing about why. Two ways out, and the first is simpler:
+**An image built on the wrong platform starts and dies immediately with an exec format error**
+that says nothing about why. A home server is usually x86-64 while the laptop preparing the
+deployment may be ARM, and this project's answer to the trap is to **not build on either**. The
+server image is built and published from CI, on the x86-64 runners, and pulled here — see
+[Publishing the image](#publishing-the-image). That is why nothing in the deployment procedure
+below builds anything.
 
-- **build on the target** — no flag needed, `docker compose build` does the right thing;
-- **build elsewhere for the right platform**:
-  `docker buildx build --platform linux/amd64 -t syncserver:dev .`
+Getting the source here is still a copy — the archive — but the server image itself is not
+built from it. It carries the version to pull.
 
 ## Getting the source there
 
-The image is built **on the target**, so the source has to reach it — and a NAS commonly has no
-git. The deployment is therefore a copy: one archive, made here, extracted there.
+The image is **pulled, not built on the target**. The source has to reach it only for the
+compose file, the schema, and the deploy script — a NAS commonly has no git, so the deployment
+is a copy: one archive, made here, extracted there.
 
 ```bash
-npm run pack        # → dist-deploy/syncserver-<sha>.tar.gz, about 85 KB
+npm run pack        # → dist-deploy/syncserver-<version>-<sha>.tar.gz
 ```
 
-It also writes `VERSION` and `MANIFEST.sha256` **into** the archive, so the far side can say
-which build it holds and prove every file arrived — see the extraction rule below, which is the
-reason those exist.
+It also writes `VERSION` (the release version, which the image tag is composed from) and
+`MANIFEST.sha256` **into** the archive, so the far side can say which build it holds and prove
+every file arrived — see the extraction rule below, which is the reason those exist.
 
-One archive rather than a list of paths to copy, because a list drifts from the Dockerfile the
-moment either changes, and the failure — a build stopping halfway on a missing file — lands on
-the far side where it is least convenient to diagnose. `scripts/pack.sh` names what goes in
-explicitly and **fails here** if any of it is absent.
+One archive rather than a list of paths to copy, because a list drifts from the compose file
+the moment either changes, and the failure lands on the far side where it is least convenient
+to diagnose. `scripts/pack.sh` names what goes in explicitly and **fails here** if any of it is
+absent.
 
-It contains the Docker build context plus the two files compose reads directly: the compose
-file, and `db/schema.sql`, which the database container mounts to initialise itself. The
-plugin's source is deliberately not in it — a different program with a different build has no
-business in a server image.
+It contains the compose file, `.env.example`, the schema, the deploy script, and the sources
+that get built *if* a deployment chooses the local-build override — the default path pulls the
+published image instead. The plugin's source is deliberately not in it — a different program
+with a different build has no business in a server image.
 
-> **Not "build here, copy the image".** Even with Docker on the preparing machine, a
-> cross-platform image needs `--platform linux/amd64` and a `docker save`/`load` round trip.
-> Building where it runs avoids the question.
->
-> The third answer — **publish the image from CI and pull it** — removes the question instead of
-> avoiding it, since the runners are the platform the trap is about. That is [M5](10-roadmap.md), and
-> until then this page describes the procedure as it is rather than as it will be.
+> **Not "build here, copy the image".** Cross-platform images are a `docker save`/`load` round
+> trip with no check that the platform came out right. **Publishing from CI and pulling**
+> removes the question instead of avoiding it: the runners are x86-64, which is the platform
+> the trap is about. This is M5.
 
 ### What the deployment is
 
@@ -93,16 +92,16 @@ Re-deploying later is the same three commands: `npm run pack` here, copy, extrac
 Two things, and neither announces itself as what it is.
 
 **The Docker CLI keeps its state in the calling user's home directory**, and on some NAS
-container runtimes that path is one an ordinary administrator cannot create. The build stops
-with a permission denied on a directory whose name never mentions Docker. Point it somewhere
-writable instead:
+container runtimes that path is one an ordinary administrator cannot create. The deploy
+stops with a permission denied on a directory whose name never mentions Docker. Point it
+somewhere writable instead:
 
 ```bash
 export DOCKER_CONFIG="$DEPLOY_ROOT/.docker"
 mkdir -p "$DOCKER_CONFIG"
 ```
 
-Worth putting in the shell profile on that host: it is needed for every build, not once.
+Worth putting in the shell profile on that host: it is needed for every pull, not once.
 `deploy-dev-host.sh` sets it too, so this matters mainly when running `docker` by hand.
 
 **Directory permissions want the same care.** `chown` needs root there and is usually not what
@@ -149,10 +148,10 @@ rm -rf checkout && mkdir checkout && tar xzf syncserver-*.tar.gz -C checkout && 
 ```
 
 It sets `DOCKER_CONFIG`, creates and permits the two data directories, writes `.env` with
-generated secrets **only if there is none**, builds, starts, and waits for health. The exception
-matters: the secrets in `.env` are what the database was initialised with and what every issued
-token is signed by, so regenerating them on a redeploy would lock the installation out of its
-own data.
+generated secrets **only if there is none**, pulls the image, starts, and waits for health.
+The exception matters: the secrets in `.env` are what the database was initialised with and
+what every issued token is signed by, so regenerating them on a redeploy would lock the
+installation out of its own data.
 
 **`.env` lives beside the checkout, not inside it** — next to `db/` and `blobs/`, with a symlink
 in the checkout so ordinary `docker compose` commands still work. It was inside once, which
@@ -160,7 +159,7 @@ meant installing a new build by extracting into a clean directory destroyed it, 
 generated fresh secrets against a database that still expected the old ones. What that looks
 like is a server restarting for ever while the database reports itself healthy, and nothing on
 screen connecting the two. Now the file survives the checkout, and a deployment that would
-generate secrets over an existing `db/` says so before it builds.
+generate secrets over an existing `db/` says so before it pulls.
 
 Then walk M0 end to end against it — one command, from any state:
 
@@ -213,7 +212,8 @@ mkdir -p "$DEPLOY_ROOT"/{db,blobs}
 # administrator's primary group is commonly the group the container runs as.
 chmod 775 "$DEPLOY_ROOT/blobs"
 
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose ps            # both healthy
 curl -s "localhost:$PUBLISH_PORT/health"
 ```
@@ -293,6 +293,34 @@ of the API answers.
 > because it derives its own material from a passphrase. Redeeming by hand is a way to exercise
 > the server, not a way to start using it. To connect the plugin instead, leave the invitation
 > unclaimed and let it redeem.
+
+## Publishing the image
+
+The server image is built and pushed from CI, on a `v*` tag — one image per released version,
+matching the single version across six manifests (#111). Each run also tags by commit, so a
+running container can be traced to a build:
+
+- `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.4.0`;
+- `ghcr.io/<owner>/syncserver:sha-<short-commit>`.
+
+The registry is GitHub's, and the image is **public** — a server pulls it with no credential,
+which is the whole point of the choice. A private image would need a token stored on the
+server, a credential added to a machine in exchange for hiding source that is already public.
+
+`docker-compose.yml` pins `SERVER_IMAGE` from `.env`, defaulting to the release in
+`package.json` — never `latest`. A server updated a few times a year must be able to say what
+it is running, and to go back; `latest` names a moving target that a specific installation
+cannot be rolled back to.
+
+To run the source instead of the release — development, or a change not yet tagged — compose
+merges the local-build override over the deployment file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+The override builds the same image name locally, so switching back to the published image is
+just `docker compose pull` again.
 
 ## What this deployment is not
 

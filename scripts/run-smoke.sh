@@ -33,7 +33,7 @@ base="http://127.0.0.1:$port"
 
 say "checkout"
 if [ -f MANIFEST.sha256 ]; then
-    printf '  build %s\n' "$(cat VERSION 2>/dev/null || echo unknown)"
+    printf '  release %s\n' "$(cat VERSION 2>/dev/null || echo unknown)"
     # `-c` without --quiet, because busybox has the first and not always the second; every
     # line that is not ": OK" is a file that did not arrive or did not get replaced.
     bad="$(sha256sum -c MANIFEST.sha256 2>&1 | grep -v ': OK$' || true)"
