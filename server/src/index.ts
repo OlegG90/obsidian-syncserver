@@ -6,6 +6,7 @@ import { openStore } from './blobs/store.js';
 import { loadConfig } from './config.js';
 import { connect } from './db.js';
 import { openEventsHub } from './events.js';
+import { restoreStatus, writeEpochFile } from './restore.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
@@ -42,6 +43,24 @@ if (!(await hasActiveAdministrator(db))) {
       'the console until the first administrator password is set. Open the console, or POST ' +
       'a password to /auth/bootstrap.',
   );
+}
+
+// The restore guard (docs/11): on every successful start the newest epoch this server has
+// run with is written to the state file, so a later restore that lowers the database's
+// epoch is detectable. When the database is BEHIND the file, the app's hooks will answer
+// `restore_pending` to everything but the confirm path — say so here, because a server
+// that answers only one endpoint is not a broken one.
+const restore = await restoreStatus(db, cfg.restoreStateFile);
+if (restore.pending) {
+  console.warn(
+    `The database's restore_epoch (${restore.dbEpoch}) is behind this server's state file ` +
+      `(${restore.fileEpoch}). A restore happened and was not confirmed — the server is ` +
+      'answering only the console and the restore endpoints until it is.',
+  );
+} else {
+  // Not pending: the file was at or below the database. Bring it up to the database so the
+  // guard knows the newest value — this is what "writes the current epoch at startup" means.
+  await writeEpochFile(cfg.restoreStateFile, restore.dbEpoch);
 }
 
 const port = Number(process.env['PORT'] ?? 8080);

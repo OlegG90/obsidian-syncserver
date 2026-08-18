@@ -11,7 +11,7 @@
  * third. A reload is therefore never wrong, which is the cheapest correctness a web page can
  * have.
  */
-import { accounts, backups, bootstrap, health, invite, runBackup, signedIn, signIn, verify, type AccountRow, type BackupRun } from './api.js';
+import { accounts, backups, bootstrap, confirmRestore, health, invite, restoreStatus, runBackup, signedIn, signIn, verify, type AccountRow, type BackupRun } from './api.js';
 import { describeAccount } from './format.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -228,9 +228,52 @@ const backupsScreen = (): void => {
   void attempt(page, fill);
 };
 
+const restoreScreen = (): void => {
+  const page = el('div', { className: 'card' });
+  const status = el('div', {}, el('p', { className: 'muted', textContent: 'Checking…' }));
+  const button = el('button', { textContent: 'Confirm the restore' });
+
+  page.append(
+    el('h1', { textContent: 'Restore pending' }),
+    el('p', {
+      className: 'muted',
+      textContent:
+        'This database is older than this server has ever run with — a restore happened and was ' +
+        'not confirmed. Until you confirm, every client is refused, because the alternative is ' +
+        'silent divergence: revision numbers reused, and files missing weeks later.',
+    }),
+    status,
+  );
+
+  const fill = async (): Promise<void> => {
+    const s = await restoreStatus();
+    status.replaceChildren(
+      el('p', { textContent: `database epoch ${s.dbEpoch}, server has run with ${s.fileEpoch ?? '—'}` }),
+    );
+    page.append(button);
+  };
+
+  submits(button, page, async () => {
+    const out = await confirmRestore();
+    page.append(say(`Confirmed. The epoch is now ${out.epoch} — clients will resync on their next pass.`));
+    button.remove();
+  });
+
+  app.replaceChildren(page);
+  void attempt(page, fill);
+};
+
 const render = (): void => {
   void attempt(app, async () => {
     if (signedIn()) {
+      // A pending restore is the one thing that outranks the accounts screen: the server
+      // answers everything else with restore_pending anyway, so the first thing the console
+      // shows is the way out.
+      const status = await restoreStatus();
+      if (status.pending) {
+        restoreScreen();
+        return;
+      }
       accountsScreen();
       return;
     }

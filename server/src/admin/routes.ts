@@ -25,8 +25,9 @@ import {
 } from './service.js';
 import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
 import { openStore } from '../blobs/store.js';
+import { confirmRestore, restoreStatus } from '../restore.js';
 
-/** What the console's backup button needs, supplied by the composition root. */
+/** What the console's backup and restore surface needs, supplied by the composition root. */
 export interface BackupDeps {
   /**
    * Build the legs for one run. Called per backup, so each run lands in its own
@@ -34,6 +35,8 @@ export interface BackupDeps {
    */
   makeLegs?(runDir: string): Legs;
   destination?: string;
+  /** Where the restore epoch lives — see `restore.ts`. */
+  restoreStateFile?: string;
 }
 
 /** A week to redeem an invitation, matching the one the schema seeds for the first administrator. */
@@ -179,5 +182,29 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     const copy = openStore(join(run.destination, 'blobs'));
     const out = await verifyBackup(db, copy, req.params.id);
     return { checked: out.checked, missing: out.missing, whole: out.missing.length === 0 };
+  });
+
+  // The restore surface: what the server knows, and the one act that resolves it. Both are
+  // reachable even in the halt state, because a restore nobody can confirm is a restore
+  // nobody can leave.
+  app.get('/admin/restore', admin, async (req, reply) => {
+    if (!backup.restoreStateFile) {
+      return reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file' });
+    }
+    return restoreStatus(db, backup.restoreStateFile);
+  });
+
+  app.post('/admin/restore/confirm', admin, async (req, reply) => {
+    if (!backup.restoreStateFile) {
+      return reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file' });
+    }
+    // Refuse to confirm when nothing is pending: the act is audited and irreversible, and
+    // there is nothing to resolve.
+    const status = await restoreStatus(db, backup.restoreStateFile);
+    if (!status.pending) {
+      return reply.code(409).send({ error: 'nothing_to_confirm', detail: 'the database is not behind its state file' });
+    }
+    const out = await confirmRestore(db, req.admin!, backup.restoreStateFile);
+    return { epoch: out.epoch };
   });
 };

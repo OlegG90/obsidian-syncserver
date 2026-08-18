@@ -97,6 +97,9 @@ services:
       BACKUP_DESTINATION: ${BACKUP_DESTINATION:-}
       BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-}
       BACKUP_BLOB_SOURCE: ${BACKUP_BLOB_SOURCE:-}
+      # Where the restore epoch lives — must survive a restore, so it is a host path, not
+      # inside the database or the blobs.
+      RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/data/restore.epoch}
     volumes:
       - ${BLOB_DIR:-./data/blobs}:/data/blobs
     ports:

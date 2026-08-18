@@ -198,13 +198,14 @@ all-or-nothing (server/src/config.ts).
 Restoring the database means replacing the database the console itself is running on. So the console does
 not restore; it **prepares and confirms**:
 
-- verify a backup: check that all `nodes.sha256` and `versions.sha256` values are present in the blob copy, report missing blobs;
+- verify a backup: check that all `nodes.sha256` and `versions.sha256` values are present in the blob copy, report missing blobs — done, the Verify button on each finished run (#59);
 - show the post-restore checklist;
 - after a restore, take the confirmation and **raise `restore_epoch`** — an audited administrative action,
   because it forces every client into a full resync. The new value is `max(state file, restored database)
   + 1`, never a blind `+ 1` on what the restored database happens to hold: that value may be several
   restores behind, and re-issuing an epoch the server has already used makes stale cursors pass validation
-  again. The console computes it and shows both inputs; the administrator confirms.
+  again. The console computes it and shows both inputs; the administrator confirms. `POST
+  /admin/restore/confirm` does this, and refuses with `nothing_to_confirm` when nothing is pending.
 
 > **The console refuses to serve after an unconfirmed restore.** On every successful start the server
 > writes the current epoch to a small state file that lives outside both the database dump and the blob
@@ -213,10 +214,13 @@ not restore; it **prepares and confirms**:
 >
 > The server then halts and asks the administrator to choose: "restored from backup" (raise the epoch above
 > the file's value, clients resync without applying deletions) or "this is not a restore" (investigate —
-> the alternative is a database rollback nobody performed deliberately).
+> the alternative is a database rollback nobody performed deliberately). Implemented: everything except
+> `/health`, `/auth/console`, the console and the two restore endpoints answers `restore_pending`, and the
+> console's first screen when signed in is the confirmation.
 >
 > The state file is also what makes the correct new epoch computable at all: it is the only record that
-> survives the restore holding the newest epoch this server ever ran with.
+> survives the restore holding the newest epoch this server ever ran with. `RESTORE_STATE_FILE` names it,
+> defaulting to `var/restore.epoch`.
 >
 > Without this guard the failure is silent: revision numbers get reused for different content, clients
 > believe they are current, and the divergence surfaces weeks later as missing notes. Step 3 of the restore

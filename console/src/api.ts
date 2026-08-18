@@ -102,3 +102,16 @@ export const backups = (): Promise<{ backups: BackupRun[] }> => call('GET', '/ad
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>
   call('POST', `/admin/backups/${id}/verify`);
+
+/** Whether a restore is pending, and the two epochs that decide it. */
+export interface RestoreStatus {
+  dbEpoch: number;
+  fileEpoch: number | null;
+  pending: boolean;
+}
+
+/** What the server knows about a possible restore. Reachable even in the halt state. */
+export const restoreStatus = (): Promise<RestoreStatus> => call('GET', '/admin/restore');
+
+/** Confirm a restore: raise the epoch above anything this server has issued. */
+export const confirmRestore = (): Promise<{ epoch: number }> => call('POST', '/admin/restore/confirm');
