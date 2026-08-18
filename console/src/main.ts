@@ -255,13 +255,30 @@ const restoreScreen = (): void => {
 
   submits(button, page, async () => {
     const out = await confirmRestore();
-    page.append(say(`Confirmed. The epoch is now ${out.epoch} — clients will resync on their next pass.`));
     button.remove();
+    page.append(
+      el('p', { className: 'ok', textContent: `Confirmed. The restore epoch is now ${out.epoch}.` }),
+      el('h2', { textContent: 'After the restore' }),
+      el('ul', {},
+        ...afterRestore.map((step) => el('li', { textContent: step })),
+      ),
+    );
   });
 
   app.replaceChildren(page);
   void attempt(page, fill);
 };
+
+/**
+ * What follows a confirmed restore (docs/08). The confirmation is the machine's act — it
+ * raised the epoch so every client resyncs — and the rest is what only the administrator
+ * can decide: which copy was restored, and who to tell that the resync is not a fault.
+ */
+const afterRestore = [
+  'Every client will resync on its next pass — a long synchronisation is expected, not a fault.',
+  'Verify the restored copy against the blobs, and note any files the copy could not restore.',
+  'Tell anyone who uses this server that the restore happened, so the resync does not read as data loss.',
+];
 
 const render = (): void => {
   void attempt(app, async () => {
