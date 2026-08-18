@@ -6,8 +6,7 @@ import { openStore } from './blobs/store.js';
 import { loadConfig } from './config.js';
 import { connect } from './db.js';
 import { openEventsHub } from './events.js';
-import { writeFile } from 'node:fs/promises';
-import { restoreStatus } from './restore.js';
+import { restoreStatus, writeEpochFile } from './restore.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
@@ -61,7 +60,7 @@ if (restore.pending) {
 } else {
   // Not pending: the file was at or below the database. Bring it up to the database so the
   // guard knows the newest value — this is what "writes the current epoch at startup" means.
-  await writeFile(cfg.restoreStateFile, String(restore.dbEpoch), 'utf8');
+  await writeEpochFile(cfg.restoreStateFile, restore.dbEpoch);
 }
 
 const port = Number(process.env['PORT'] ?? 8080);

@@ -20,7 +20,8 @@
  * nothing but the confirm endpoint — because the alternative is the silent divergence the
  * epoch exists to prevent.
  */
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { Db } from './db.js';
 import { record, type Actor } from './admin/audit.js';
 
@@ -55,6 +56,17 @@ export const readFileEpoch = async (stateFile: string): Promise<number | null> =
 const readDbEpoch = async (db: Db): Promise<number> => {
   const row = await db.one<{ epoch: string }>(`SELECT restore_epoch::text AS epoch FROM server_meta`);
   return Number(row!.epoch);
+};
+
+/**
+ * Write the epoch to the state file, creating its directory first.
+ *
+ * The file has to survive a restore, so it lives outside the dump and the blob store — a
+ * path that may not exist yet, and a first start has no reason to have created it.
+ */
+export const writeEpochFile = async (stateFile: string, epoch: number): Promise<void> => {
+  await mkdir(dirname(stateFile), { recursive: true });
+  await writeFile(stateFile, String(epoch), 'utf8');
 };
 
 /** Whether a restore is pending, and both numbers that decide it. */
@@ -98,6 +110,6 @@ export const confirmRestore = async (db: Db, actor: Actor, stateFile: string): P
   // so it is written after. A crash between the two leaves the epoch raised and the file
   // stale — the guard then sees pending=false and brings the file up at the next start,
   // which is the honest reading: the restore WAS confirmed.
-  await writeFile(stateFile, String(next), 'utf8');
+  await writeEpochFile(stateFile, next);
   return { epoch: next };
 };
