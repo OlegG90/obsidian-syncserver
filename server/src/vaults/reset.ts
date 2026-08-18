@@ -15,6 +15,7 @@
  */
 import type { PoolClient } from 'pg';
 import { thawIfUnderQuota } from '../shares/thaw.js';
+import { removeNodesByDepth, DEPTH } from '../nodes/remove.js';
 import type { Db } from '../db.js';
 
 /**
@@ -40,33 +41,19 @@ const KEEP = `
                 AND m.ancestry @> ARRAY[n.id])`;
 
 /**
- * Deleted deepest-first, one depth at a time.
+ * Remove the vault's own tree, leaving `KEEP` alone.
  *
- * `parent_id` is `ON DELETE RESTRICT`, and RESTRICT is checked per row without noticing
- * that the child is being removed by the same statement — so a single `DELETE` over the
- * whole set fails on the first parent it reaches. The restriction is deliberate: an
- * orphaned branch is worse than a failed delete.
+ * The set is the whole vault minus what `KEEP` protects; the order it goes in is
+ * `removeNodesByDepth`'s, which is the one place that honours `parent_id`'s RESTRICT.
  */
 const deleteOwnTree = async (c: PoolClient, vaultId: string): Promise<number> => {
-  const depths = await c.query<{ depth: number | null }>(
-    `SELECT DISTINCT array_length(n.ancestry, 1) AS depth
-       FROM nodes n WHERE n.vault_id = $1 AND NOT (${KEEP})
-      ORDER BY depth DESC NULLS LAST`,
+  const doomed = await c.query<{ id: string; vaultId: string; depth: number }>(
+    `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth
+       FROM nodes n WHERE n.vault_id = $1 AND NOT (${KEEP})`,
     [vaultId],
   );
 
-  let removed = 0;
-  for (const { depth } of depths.rows) {
-    const r = await c.query(
-      `DELETE FROM nodes n
-        WHERE n.vault_id = $1
-          AND array_length(n.ancestry, 1) IS NOT DISTINCT FROM $2::int
-          AND NOT (${KEEP})`,
-      [vaultId, depth],
-    );
-    removed += r.rowCount ?? 0;
-  }
-  return removed;
+  return removeNodesByDepth(c, doomed.rows);
 };
 
 /**

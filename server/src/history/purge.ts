@@ -25,6 +25,7 @@
  */
 import type { Db } from '../db.js';
 import { dropUnreferenced } from '../holdings.js';
+import { removeNodesByDepth, DEPTH } from '../nodes/remove.js';
 import { txGuarded, type Refusal } from '../refusal.js';
 import { thawIfUnderQuota } from '../shares/thaw.js';
 
@@ -33,12 +34,6 @@ export interface PurgeResult {
   purged: number;
   /** True when this freed enough for the account to come back under its limit. */
   thawed: boolean;
-}
-
-/** One node the purge would remove, and how deep it sits. */
-interface Doomed {
-  id: string;
-  depth: number;
 }
 
 /**
@@ -81,8 +76,8 @@ export const purgeTrash = async (
     // this set safe to remove: a node whose subtree is entirely deleted takes its descendants
     // with it, and one with a live descendant is refused by the foreign key rather than
     // orphaning it.
-    const doomed = await c.query<Doomed>(
-      `SELECT n.id, COALESCE(array_length(n.ancestry, 1), 0) AS depth
+    const doomed = await c.query<{ id: string; vaultId: string; depth: number }>(
+      `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth
          FROM nodes n
         WHERE n.vault_id = $1
           AND n.deleted_at IS NOT NULL
@@ -90,8 +85,7 @@ export const purgeTrash = async (
           AND NOT EXISTS (SELECT 1 FROM nodes live
                            WHERE live.vault_id = n.vault_id
                              AND live.ancestry @> ARRAY[n.id]::uuid[]
-                             AND live.deleted_at IS NULL)
-        ORDER BY depth DESC`,
+                             AND live.deleted_at IS NULL)`,
       [input.vaultId, input.nodeId ?? null],
     );
 
@@ -102,18 +96,9 @@ export const purgeTrash = async (
       } as Refusal;
     }
 
-    // Deepest first, one statement per level. `parent_id` is `ON DELETE RESTRICT`, so a
-    // parent removed before its children errors out — and a single `DELETE … WHERE id = ANY`
-    // gives no ordering guarantee to lean on. The version rows go with each node by cascade;
-    // they are the reason a purge frees anything at all.
-    let purged = 0;
-    for (const level of byDepth(doomed.rows)) {
-      const gone = await c.query(`DELETE FROM nodes WHERE vault_id = $1 AND id = ANY($2::uuid[])`, [
-        input.vaultId,
-        level,
-      ]);
-      purged += gone.rowCount ?? 0;
-    }
+    // The version rows go with each node by cascade; they are the reason a purge frees
+    // anything at all. The ordering is `removeNodesByDepth`'s.
+    const purged = await removeNodesByDepth(c, doomed.rows);
 
     // The claim goes down here and nowhere else. `dropUnreferenced` asks the account-wide
     // question — does anything of mine still point at these bytes — which is the right one:
@@ -128,17 +113,3 @@ export const purgeTrash = async (
 
     return { purged, thawed: thawed !== undefined };
   });
-
-/** The ids grouped by depth, deepest group first — the order the foreign key demands. */
-const byDepth = (rows: readonly Doomed[]): string[][] => {
-  const levels: string[][] = [];
-  let depth: number | undefined;
-  for (const row of rows) {
-    if (row.depth !== depth) {
-      levels.push([]);
-      depth = row.depth;
-    }
-    levels[levels.length - 1]!.push(row.id);
-  }
-  return levels;
-};
