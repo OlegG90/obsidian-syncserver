@@ -141,11 +141,26 @@ const vaultKeyOf = async (vaultId: string) =>
 const writeWhileAway = async (
   share: Awaited<ReturnType<typeof sharedFolder>>,
   body: string,
+): Promise<{ shareItemId: string; sha256: string }> => writeInto(share.owner, share, body);
+
+/** A file written into one member's copy — the copy that must be a valid source for others. */
+const writeInto = async (
+  member: Awaited<ReturnType<typeof account>>,
+  share: Awaited<ReturnType<typeof sharedFolder>>,
+  body: string,
 ): Promise<{ shareItemId: string; sha256: string }> => {
   const bytes = Buffer.from(body);
   const hex = sha(bytes);
   const shareItemId = randomUUID();
   const nodeId = randomUUID();
+
+  // The file lands under the member's OWN replica root, which is the node that carries the
+  // share's root item in their vault — the owner's folder id means nothing here.
+  const replicaRoot = await db.one<{ id: string }>(
+    `SELECT id FROM nodes WHERE vault_id = $1 AND share_item_id = $2`,
+    [member.vaultId, share.rootItemId],
+  );
+  const parentId = replicaRoot!.id;
 
   await db.tx(async (c) => {
     await c.query(
@@ -167,7 +182,7 @@ const writeWhileAway = async (
     await c.query(
       `INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, decode($2,'hex'), 1)
        ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
-      [share.owner.id, hex],
+      [member.id, hex],
     );
     await c.query(
       `INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type,
@@ -175,24 +190,24 @@ const writeWhileAway = async (
        VALUES ($1, $2, $3, decode($4,'base64'), decode($5,'hex'), $6, 'file',
                decode($7,'hex'), $8, now(), 3, ARRAY[$9,$3]::uuid[], $10, $11)`,
       [
-        share.owner.vaultId,
+        member.vaultId,
         nodeId,
-        share.folderId,
+        parentId,
         b64(body),
         sha(Buffer.from(body)),
         share.scopeId,
         hex,
         bytes.length,
-        share.owner.rootId,
+        member.rootId,
         share.shareId,
         shareItemId,
       ],
     );
-    await c.query(`UPDATE vaults SET head_rev = 3 WHERE id = $1`, [share.owner.vaultId]);
+    await c.query(`UPDATE vaults SET head_rev = 3 WHERE id = $1`, [member.vaultId]);
     await c.query(
       `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id)
        VALUES ($1, $2, 3, decode($3,'hex'), $4, $5)`,
-      [share.owner.vaultId, nodeId, hex, bytes.length, share.owner.id],
+      [member.vaultId, nodeId, hex, bytes.length, member.id],
     );
   });
 
@@ -302,5 +317,65 @@ describe('catching a thawed replica up (SH-21)', () => {
       [share.away.vaultId, share.rootItemId],
     );
     assert.deepEqual(after, before, 'the name they gave it is theirs, and so is its revision');
+  });
+
+  it('never catches up FROM a frozen member, whose copy is stale by construction', async () => {
+    // The divergence this module exists to close. Fan-out excludes a frozen account (SH-20),
+    // so a frozen member's replica is behind *by construction*. A catch-up that read from it
+    // would inherit the gap instead of closing it — and if the frozen member happens to be
+    // the initiator, the initiator preference makes the mistake first. Two members frozen at
+    // once, and the second thaws off the first's stale copy.
+    //
+    // Built to force the choice: the initiator is FROZEN, a third member is LIVE and holds a
+    // write made while `away` was frozen, and `away` thaws. The catch-up must read from the
+    // live third member, not from the frozen initiator the preference would otherwise pick.
+    const share = await sharedFolder();
+    const third = await account('third');
+
+    // The third member joins with their own replica root and the `KS` envelope the schema
+    // demands of a participant who can read the folder.
+    const thirdRoot = randomUUID();
+    await db.tx(async (c) => {
+      await c.query(
+        `INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev,
+                            ancestry, share_id, share_item_id)
+         VALUES ($1, $2, $3, decode($4,'base64'), decode($5,'hex'), $6, 'folder', now(), 2, ARRAY[$3]::uuid[], $7, $8)`,
+        [
+          third.vaultId,
+          thirdRoot,
+          third.rootId,
+          b64('third copy'),
+          sha(Buffer.from('third copy')),
+          await vaultKeyOf(third.vaultId),
+          share.shareId,
+          share.rootItemId,
+        ],
+      );
+      await c.query(
+        `INSERT INTO share_members (share_id, user_id, vault_id, joined_at, wrapped_key)
+         VALUES ($1, $2, $3, now(), '\xfeed')`,
+        [share.shareId, third.id, third.vaultId],
+      );
+      await c.query(`UPDATE vaults SET head_rev = 2 WHERE id = $1`, [third.vaultId]);
+    });
+
+    // `away` is frozen out of the write; the initiator is frozen too, so the ONLY live member
+    // holding it is `third`.
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [share.owner.id]);
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [share.away.id]);
+    const written = await writeInto(third, share, `the third copy saw this ${randomUUID()}`);
+
+    await db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [share.away.id]);
+    const done = await db.tx((c) =>
+      catchUpShare(c, { userId: share.away.id, vaultId: share.away.vaultId }, share.shareId),
+    );
+
+    assert.equal(done.created, 1, 'the write made while frozen arrives');
+    const theirs = await db.one<{ sha256: string }>(
+      `SELECT encode(sha256,'hex') AS sha256 FROM nodes
+        WHERE vault_id = $1 AND share_item_id = $2`,
+      [share.away.vaultId, written.shareItemId],
+    );
+    assert.equal(theirs!.sha256, written.sha256, 'from the live third member, not the frozen initiator');
   });
 });

@@ -15,6 +15,7 @@
  */
 import type { DeltaEvent } from '@syncserver/shared';
 import type { Db } from '../db.js';
+import { JOINED, PRESENT } from './membership.js';
 
 /** A key scope this vault's nodes may be named under, and how the caller opens it. */
 export type ShareScope = {
@@ -59,13 +60,13 @@ export const shareScopesFor = (db: Db, userId: string, vaultId: string): Promise
        FROM shares s
        JOIN share_members m ON m.share_id = s.id AND m.user_id = s.initiator_id
       WHERE s.initiator_id = $1 AND s.initiator_vault_id = $2
-        AND m.left_at IS NULL
+        AND ${PRESENT}
         AND s.subtree_key_id IS NOT NULL
       UNION ALL
      SELECT s.id, s.subtree_key_id, encode(m.wrapped_key, 'base64'), 'account'
        FROM share_members m JOIN shares s ON s.id = m.share_id
       WHERE m.user_id = $1 AND m.vault_id = $2 AND m.user_id <> s.initiator_id
-        AND m.joined_at IS NOT NULL AND m.left_at IS NULL
+        AND ${JOINED}
         AND m.wrapped_key IS NOT NULL AND s.subtree_key_id IS NOT NULL`,
     [userId, vaultId],
   );
@@ -89,7 +90,7 @@ export const deltaEventsFor = async (db: Db, userId: string, vaultId: string): P
     `SELECT 'share_ended' AS kind, s.id AS "shareId", s.terminal_at AS at
        FROM share_members m JOIN shares s ON s.id = m.share_id
       WHERE m.user_id = $1 AND m.vault_id = $2
-        AND s.state = 'ended' AND m.left_at IS NULL AND s.terminal_at IS NOT NULL
+        AND s.state = 'ended' AND ${PRESENT} AND s.terminal_at IS NOT NULL
       UNION ALL
      SELECT 'account_frozen', NULL, u.frozen_at
        FROM users u WHERE u.id = $1 AND u.frozen_at IS NOT NULL`,
