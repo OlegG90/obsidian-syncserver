@@ -89,6 +89,17 @@ export interface SyncReport {
    * about a disappearance (a folder not yet mounted) must not delete somebody's work.
    */
   vanished: { path: string }[];
+  /**
+   * Shared folders this device holds no key for, one entry each (#115's cousin: a key that
+   * has not arrived, not a permission that was refused).
+   *
+   * **Not an error, and deliberately not part of the pass's mood.** Everything that could
+   * sync did; a folder whose key has not reached this device is a state that persists until
+   * it does, so letting it dominate would make "up to date" an unreachable answer for as
+   * long as the state lasts. It is counted and named, which is what a person can act on —
+   * deliver the key, or pair this device — and nothing more.
+   */
+  unreadable: UnreadableFolder[];
   errors: { path: string; message: string }[];
 }
 
@@ -113,16 +124,17 @@ export interface ServerNode {
 }
 
 /**
- * What a pass could not read, and therefore what it must leave alone on both sides.
+ * A shared folder this pass could not read, and therefore must leave alone on both sides.
  *
- * `scopes` is the fact worth telling a person — once per share, not once per file, since one
- * undelivered key makes every name inside that folder unreadable together. `prefixes` are the
- * paths the walk must not treat as its business: without them the folder's local files look
- * like files the server has never seen.
+ * One entry per SHARE, not per file: one undelivered key makes every name inside a folder
+ * unreadable together, so a list per node would be the same fact repeated as many times as
+ * the folder has files. The `path` is the folder itself, which is readable because a share
+ * root's own label is under `KV` (SH-01) — it is both what a person needs told and what the
+ * walk must not treat as its business.
  */
-interface Unreadable {
-  scopes: Set<string>;
-  prefixes: string[];
+export interface UnreadableFolder {
+  path: string;
+  scopeId: string;
 }
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
@@ -250,7 +262,7 @@ export class SyncEngine {
   async sync(): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
-      deleted: [], removed: [], quarantined: [], vanished: [], errors: [], events: [],
+      deleted: [], removed: [], quarantined: [], vanished: [], unreadable: [], errors: [], events: [],
     };
     const state = await this.store.load();
 
@@ -279,7 +291,9 @@ export class SyncEngine {
      * `.obsidian/`: out of scope, in both directions, for as long as it stays unreadable.
      */
     const inScope = (path: string): boolean =>
-      this.scope(path) && !unreadable.prefixes.some((p) => path === p || path.startsWith(`${p}/`));
+      this.scope(path) && !unreadable.some((u) => path === u.path || path.startsWith(`${u.path}/`));
+
+    report.unreadable = unreadable;
 
     const local = (await this.vault.list()).filter((f) => inScope(f.path));
     report.scanned = local.length;
@@ -440,12 +454,12 @@ export class SyncEngine {
    */
   private async readServerTree(
     rootNodeId: string,
-  ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: Unreadable }> {
+  ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: UnreadableFolder[] }> {
     const res = await this.client.listNodes(this.vaultId);
     const pathOf = new Map<string, string>([[rootNodeId, '']]);
     const tree = new Map<string, ServerNode>();
     const skipped = new Set<string>();
-    const unreadable: Unreadable = { scopes: new Set(), prefixes: [] };
+    const unreadable: UnreadableFolder[] = [];
 
     for (const n of res.nodes) {
       if (n.node_id === rootNodeId) continue;
@@ -460,11 +474,13 @@ export class SyncEngine {
       const key = n.name_enc ? this.scopes.keyIfOpenable(n.name_key_id) : this.scopes.vaultKey;
       if (!key) {
         skipped.add(n.node_id);
-        unreadable.scopes.add(n.name_key_id!);
         // An empty parent path would mean excluding the whole vault, which no missing share
         // key can justify. It is also unreachable — a node named under a share scope has a
         // share root above it, and that root is never the vault root.
-        if (parentPath && !unreadable.prefixes.includes(parentPath)) unreadable.prefixes.push(parentPath);
+        const scopeId = n.name_key_id!;
+        if (parentPath && !unreadable.some((u) => u.scopeId === scopeId)) {
+          unreadable.push({ path: parentPath, scopeId });
+        }
         continue;
       }
       const name = n.name_enc ? decryptName(key, n.name_enc) : n.node_id;

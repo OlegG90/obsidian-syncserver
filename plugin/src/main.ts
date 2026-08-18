@@ -455,14 +455,17 @@ export default class SyncServerPlugin extends Plugin {
     );
   }
 
-  /** The vault, opened once for an operation and passed to everything the operation needs. */
+  /**
+   * The vault, opened once for an operation and passed to everything the operation needs.
+   *
+   * A share whose key did not arrive is **not** announced here, though this is where it is
+   * discovered. It used to be: a notice, once per operation, about a state that lasts until
+   * somebody delivers a key — so pressing anything three times said it three times, and a
+   * sync said nothing about the folder it had just left alone. The pass reports it now, once,
+   * naming the folder rather than counting scopes (`SyncReport.unreadable`).
+   */
   private async openVault(h: Handle): Promise<VaultScopes> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId);
-    const scopes = VaultScopes.open(opened, this.keyDeps(h));
-    if (scopes.unopenable.length > 0) {
-      new Notice(`SyncServer: ${scopes.unopenable.length} shared folder(s) could not be opened on this device.`, 10000);
-    }
-    return scopes;
+    return VaultScopes.open(await h.client.openVault(this.data.connection!.vaultId), this.keyDeps(h));
   }
 
   /**

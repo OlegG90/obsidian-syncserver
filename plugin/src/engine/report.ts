@@ -12,6 +12,15 @@
  *
  * Nothing here depends on Obsidian, so the precedence is testable where the UI classes are
  * not (report.test.ts).
+ *
+ * **`categories` and `priority` are no longer the same order, and that is deliberate.** They
+ * answer different questions: `priority` is "does this need a person right now", `categories`
+ * is "what happened". An unreadable shared folder is the case that separates them — it is
+ * worth counting and naming every pass, and it is not a call to action, because everything
+ * that could sync did and the missing key arrives by a route no pass controls. Folding it
+ * into the mood would make "up to date" unreachable for as long as the key is late, which is
+ * the same fault as putting it in `errors`, just quieter. If the two lists ever look like a
+ * discrepancy worth tidying: they are not, and this paragraph is the reason.
  */
 import type { DeltaEvent } from '@syncserver/shared';
 import type { SyncReport } from './engine.js';
@@ -78,6 +87,7 @@ export type ReportCategory =
   | { kind: 'failed'; items: SyncReport['errors'] }
   | { kind: 'conflicts'; items: SyncReport['conflicts'] }
   | { kind: 'quarantined'; items: SyncReport['quarantined'] }
+  | { kind: 'unreadable'; items: SyncReport['unreadable'] }
   | { kind: 'pushed'; items: SyncReport['pushed'] }
   | { kind: 'pulled'; items: SyncReport['pulled'] }
   | { kind: 'renamed'; items: SyncReport['renamed'] }
@@ -90,13 +100,17 @@ export type ReportCategory =
  *
  * The one place the counts and their order are decided. `vanished` is deliberately absent:
  * it is reported, never acted on, and neither `priority` nor `summary` reads it — a surface
- * that wants it reads the report directly.
+ * that wants it reads the report directly. `unreadable` IS here, and has no mood: see the
+ * paragraph at the top of this file for why those two facts are not in tension.
  */
 export const categories = (report: SyncReport): ReportCategory[] => {
   const out: ReportCategory[] = [];
   if (report.errors.length) out.push({ kind: 'failed', items: report.errors });
   if (report.conflicts.length) out.push({ kind: 'conflicts', items: report.conflicts });
   if (report.quarantined.length) out.push({ kind: 'quarantined', items: report.quarantined });
+  // Above the ordinary movement because it is worth reading first, and below the three that
+  // need a person because it does not. It has no counterpart in `priority` on purpose.
+  if (report.unreadable.length) out.push({ kind: 'unreadable', items: report.unreadable });
   if (report.pushed.length) out.push({ kind: 'pushed', items: report.pushed });
   if (report.pulled.length) out.push({ kind: 'pulled', items: report.pulled });
   if (report.renamed.length) out.push({ kind: 'renamed', items: report.renamed });
@@ -110,6 +124,7 @@ const PHRASE: Record<ReportCategory['kind'], (count: number) => string> = {
   failed: (n) => `${n} failed`,
   conflicts: (n) => `${n} conflict${n === 1 ? '' : 's'}`,
   quarantined: (n) => `${n} kept aside`,
+  unreadable: (n) => `${n} folder${n === 1 ? '' : 's'} unreadable`,
   pushed: (n) => `${n} up`,
   pulled: (n) => `${n} down`,
   renamed: (n) => `${n} moved`,

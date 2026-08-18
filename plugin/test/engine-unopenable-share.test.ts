@@ -18,6 +18,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { priority, summary } from '../src/engine/report.js';
 import type { Change, Delta, OpenedVault } from '@syncserver/shared';
 import { sealBlob } from '../src/crypto/blob.js';
 import { randomBytes, utf8 } from '../src/crypto/bytes.js';
@@ -154,6 +155,19 @@ describe('a shared folder this device cannot open', () => {
     assert.ok(tree.has('Shared'), 'the share root is named under KV and stays readable');
     assert.equal(tree.has('inside.md'), false, 'a child of a skipped node must not land at the vault root');
     assert.equal([...tree.keys()].some((p) => p.endsWith('inside.md')), false, 'nor anywhere else');
+  });
+
+  it('names the folder once, and does not call the pass a failure', async () => {
+    // Once per SHARE, not per file: one undelivered key makes every name inside unreadable
+    // together, so counting nodes would report the same fact as many times as the folder has
+    // files. And it is not a failure — everything that could sync did, and the key arrives by
+    // a route no pass controls, so letting it dominate the mood would make "up to date" an
+    // answer this vault could never reach again.
+    const report = await engineOver(new FakeVault()).sync();
+
+    assert.deepEqual(report.unreadable, [{ path: 'Shared', scopeId: shareScopeId }]);
+    assert.notEqual(priority(report), 'failed', 'unreachable is not broken');
+    assert.ok(summary(report).includes('1 folder unreadable'), 'and it is still said out loud');
   });
 
   it('does not push the local files inside it as new notes', async () => {
