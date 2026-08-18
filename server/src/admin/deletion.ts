@@ -29,6 +29,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { Db } from '../db.js';
+import { removeNodesByDepth, DEPTH } from '../nodes/remove.js';
 import { txGuarded, type Refusal } from '../refusal.js';
 import { departMember } from '../shares/service.js';
 import { record, type Actor } from './audit.js';
@@ -151,10 +152,10 @@ const outstanding = async (c: PoolClient, userId: string): Promise<Awaited_[]> =
  * vaults, which is the whole reason the tombstone is a shared singleton rather than a
  * per-account marker.
  *
- * Then the nodes, deepest first: `parent_id` is `ON DELETE RESTRICT`, so a vault cannot be
- * emptied top-down, and vaults themselves refuse to go while they hold anything (the
- * `CASCADE` from `users` reaches them, not through them). Once the tree is gone the single
- * `DELETE FROM users` carries the vaults, devices, claims and memberships with it.
+ * Then the nodes, in the order `removeNodesByDepth` demands — a vault cannot be emptied
+ * top-down, and vaults themselves refuse to go while they hold anything (the `CASCADE` from
+ * `users` reaches them, not through them). Once the tree is gone the single `DELETE FROM
+ * users` carries the vaults, devices, claims and memberships with it.
  */
 const finish = async (c: PoolClient, userId: string): Promise<void> => {
   await c.query(
@@ -164,30 +165,12 @@ const finish = async (c: PoolClient, userId: string): Promise<void> => {
   );
 
   const doomed = await c.query<{ id: string; vaultId: string; depth: number }>(
-    `SELECT n.id, n.vault_id AS "vaultId", COALESCE(array_length(n.ancestry, 1), 0) AS depth
+    `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth
        FROM nodes n JOIN vaults va ON va.id = n.vault_id
-      WHERE va.user_id = $1
-      ORDER BY depth DESC`,
+      WHERE va.user_id = $1`,
     [userId],
   );
-  let depth: number | undefined;
-  let level: { id: string; vaultId: string }[] = [];
-  const flush = async (): Promise<void> => {
-    if (level.length === 0) return;
-    await c.query(`DELETE FROM nodes WHERE (vault_id, id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))`, [
-      level.map((n) => n.vaultId),
-      level.map((n) => n.id),
-    ]);
-    level = [];
-  };
-  for (const node of doomed.rows) {
-    if (node.depth !== depth) {
-      await flush();
-      depth = node.depth;
-    }
-    level.push(node);
-  }
-  await flush();
+  await removeNodesByDepth(c, doomed.rows);
 
   await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
 };

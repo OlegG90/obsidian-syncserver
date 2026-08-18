@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { removeNodesByDepth, DEPTH } from '../src/nodes/remove.js';
 
 const STORE = `var/test-nodes-${process.pid}`;
 const cfg = { ...loadConfig(), blobStorePath: STORE };
@@ -445,5 +446,29 @@ describe('a file write names its bytes and their size', () => {
 
     assert.equal(r.statusCode, 400, r.body);
     assert.equal(r.json().error, 'content_required');
+  });
+});
+
+describe('removing a set of nodes, deepest-first', () => {
+  it('deletes a whole subtree in one pass, in the order parent_id demands', async () => {
+    const folder = await createFolder(rootId, 'to-doom');
+    const inner = await createFolder(folder.node_id, 'to-doom-inner');
+    const file = await createFile(inner.node_id, 'to-doom-leaf.md');
+
+    // The doomed set, deliberately queried WITHOUT an order guarantee — the module, not
+    // the caller, owns the ordering `parent_id`'s RESTRICT demands.
+    const doomed = await db.query<{ id: string; vaultId: string; depth: number }>(
+      `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth
+         FROM nodes n WHERE n.vault_id = $1 AND n.id = ANY($2::uuid[])
+         ORDER BY depth ASC`,
+      [vaultId, [folder.node_id, inner.node_id, file.node_id]],
+    );
+
+    const removed = await db.tx((c) => removeNodesByDepth(c, doomed));
+    assert.equal(removed, 3, 'all three rows went');
+
+    const left = await db.one(`SELECT 1 AS x FROM nodes WHERE vault_id = $1 AND id = ANY($2::uuid[])`,
+      [vaultId, [folder.node_id, inner.node_id, file.node_id]]);
+    assert.equal(left, undefined, 'and nothing survived');
   });
 });

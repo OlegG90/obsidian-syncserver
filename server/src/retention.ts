@@ -19,6 +19,7 @@
  * other order, leaves a window in which the database contradicts itself.
  */
 import type { PoolClient } from 'pg';
+import { DEPTH, removeNodesByDepth } from './nodes/remove.js';
 
 /**
  * Thin history down to the ladder (docs/03), with each account's own outer bound.
@@ -73,33 +74,22 @@ export const thinVersions = async (c: PoolClient): Promise<number> => {
  * trash entry (docs/03). Once the ladder has taken the last of them there is nothing left to
  * restore, and the row is a name and a parent pointer describing nothing.
  *
- * **Bottom-up, and only where nothing hangs below.** `parent_id` is `ON DELETE RESTRICT`
- * because an orphaned branch is worse than a failed delete, so a folder goes only after
- * everything inside it has, and a folder holding anything at all — deleted or alive — is left
- * for a later pass. Deepest first, one statement per level, for the same reason the purge
- * does it that way: a single `DELETE … WHERE id = ANY` offers no ordering to lean on.
+ * **Bottom-up, and only where nothing hangs below.** A folder holding anything at all —
+ * deleted or alive — is left for a later pass; the ORDER in which the doomed set goes is
+ * `removeNodesByDepth`'s, which is the one place that honours `parent_id`'s RESTRICT.
  */
 export const removeSpentTrash = async (c: PoolClient): Promise<number> => {
   const doomed = await c.query<{ id: string; vaultId: string; depth: number }>(
-    `SELECT n.id, n.vault_id AS "vaultId", COALESCE(array_length(n.ancestry, 1), 0) AS depth
+    `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth
        FROM nodes n
       WHERE n.deleted_at IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM versions v
                          WHERE v.vault_id = n.vault_id AND v.node_id = n.id)
         AND NOT EXISTS (SELECT 1 FROM nodes child
-                         WHERE child.vault_id = n.vault_id AND child.parent_id = n.id)
-      ORDER BY depth DESC`,
+                         WHERE child.vault_id = n.vault_id AND child.parent_id = n.id)`,
   );
 
-  let removed = 0;
-  for (const level of byDepth(doomed.rows)) {
-    const gone = await c.query(`DELETE FROM nodes WHERE (vault_id, id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))`, [
-      level.map((n) => n.vaultId),
-      level.map((n) => n.id),
-    ]);
-    removed += gone.rowCount ?? 0;
-  }
-  return removed;
+  return removeNodesByDepth(c, doomed.rows);
 };
 
 /**
@@ -164,19 +154,5 @@ export const markUnreferenced = async (c: PoolClient): Promise<{ marked: number;
 const REFERENCED = `(EXISTS (SELECT 1 FROM user_blobs u WHERE u.sha256 = b.sha256)
                   OR EXISTS (SELECT 1 FROM nodes    n WHERE n.sha256 = b.sha256)
                   OR EXISTS (SELECT 1 FROM versions v WHERE v.sha256 = b.sha256))`;
-
-/** The rows grouped by depth, deepest group first — the order the foreign key demands. */
-const byDepth = <T extends { depth: number }>(rows: readonly T[]): T[][] => {
-  const levels: T[][] = [];
-  let depth: number | undefined;
-  for (const row of rows) {
-    if (row.depth !== depth) {
-      levels.push([]);
-      depth = row.depth;
-    }
-    levels[levels.length - 1]!.push(row);
-  }
-  return levels;
-};
 
 export { REFERENCED };
