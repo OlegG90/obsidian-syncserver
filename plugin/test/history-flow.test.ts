@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.js';
 import { openHistoryFlow, type HistoryFlowDeps } from '../src/history-flow.js';
+import { openGate } from '../src/gate.js';
 
 const rows = [
   { nodeId: 'n1', name: 'note.md', type: 'file', deletedAt: '2026-08-01T00:00:00Z', versions: 3, shared: false },
@@ -20,6 +21,7 @@ const deps = (over: Partial<HistoryFlowDeps> = {}) => {
   const said: string[] = [];
   const asked: string[] = [];
   const base: HistoryFlowDeps = {
+    gate: openGate(),
     trash: async () => ({ rows, total: rows.length }),
     versions: async () => [{ rev: 7, size: 10, at: '2026-08-01T00:00:00Z' }],
     restore: async () => undefined,
@@ -86,7 +88,7 @@ describe('one operation at a time', () => {
     await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
 
     assert.equal(peak, 1, 'discarding is irreversible; a queue of them is not a feature');
-    assert.ok(said.some((s) => /still running/.test(s)), `expected a busy notice: ${said.join(' | ')}`);
+    assert.ok(said.some((s) => /already running/.test(s)), `expected a busy notice: ${said.join(' | ')}`);
   });
 });
 
@@ -148,6 +150,6 @@ describe('the screen asks for several things at once', () => {
     const flow = openHistoryFlow(d);
     await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
     assert.equal(peak, 1);
-    assert.ok(said.some((s) => /still running/.test(s)));
+    assert.ok(said.some((s) => /already running/.test(s)));
   });
 });

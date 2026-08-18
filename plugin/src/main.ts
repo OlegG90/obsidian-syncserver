@@ -38,6 +38,7 @@ import {
   acceptInvitation, freeName, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
 } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
+import { openGate } from './gate.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
 
@@ -85,6 +86,8 @@ export default class SyncServerPlugin extends Plugin {
   private settingsTab: SyncServerSettings | undefined;
   /** One unlock in flight at a time, so a screen that asks for three things asks once. */
   private unlocking: Promise<Session> | undefined;
+  /** One operation at a time across sync, sharing and the trash — created once, shared by all three. */
+  private gate = openGate();
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
@@ -93,6 +96,7 @@ export default class SyncServerPlugin extends Plugin {
 
     // Everything Obsidian is bound here, at the edge; the coordinator itself is a module.
     this.sync = openSyncCoordinator({
+      gate: this.gate,
       sessionState: () => (this.sess ? this.sess.state : 'none'),
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
@@ -509,6 +513,7 @@ export default class SyncServerPlugin extends Plugin {
    */
   history(): HistoryFlow {
     return openHistoryFlow({
+      gate: this.gate,
       trash: () =>
         this.withSession(async (h) => {
           const scopes = await this.openVault(h);
@@ -558,6 +563,7 @@ export default class SyncServerPlugin extends Plugin {
 
   sharing(): ShareFlow {
     return openShareFlow({
+      gate: this.gate,
       list: () =>
         this.withSession(async (h) => {
           const scopes = await this.openVault(h);
