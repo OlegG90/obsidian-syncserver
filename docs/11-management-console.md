@@ -199,7 +199,7 @@ Restoring the database means replacing the database the console itself is runnin
 not restore; it **prepares and confirms**:
 
 - verify a backup: check that all `nodes.sha256` and `versions.sha256` values are present in the blob copy, report missing blobs — done, the Verify button on each finished run (#59);
-- show the post-restore checklist;
+- show the post-restore checklist — done: after the confirmation the console lists what only the administrator can decide next — that clients resync on their own, that the copy was verified against the blobs, and that users are told (docs/08);
 - after a restore, take the confirmation and **raise `restore_epoch`** — an audited administrative action,
   because it forces every client into a full resync. The new value is `max(state file, restored database)
   + 1`, never a blind `+ 1` on what the restored database happens to hold: that value may be several
