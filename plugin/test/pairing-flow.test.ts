@@ -106,6 +106,29 @@ describe('joining an account from the new device', () => {
     assert.equal(h.rebuilt(), 0, 'a cancelled pairing does not rebuild the screen as if it had worked');
   });
 
+  it('redraws the live code and status into a rebuilt element', async () => {
+    // The settings tab is rebuilt on every display(), and the flow is now HELD across those
+    // rebuilds — so a rebuilt tab must be able to draw the wait it began back in, or a
+    // person who navigated away comes back to a code that exists on the server and nowhere
+    // on screen. `redraw` is that call.
+    let release: (() => void) | undefined;
+    const h = harness({
+      join: () => new Promise<void>((resolve) => (release = resolve)),
+    });
+
+    const first = h.flow.join(args);
+    assert.equal(h.shown.length, 1, 'the code was drawn once, at the start of the wait');
+
+    h.flow.redraw();
+    assert.equal(h.shown.length, 2, 'a rebuilt tab gets the code back');
+    assert.equal(h.shown[1], h.shown[0], 'the same code — the wait is the same wait');
+    assert.equal(h.statuses.at(-1), 'Waiting for approval…', 'and the status line with it');
+
+    h.flow.cancel();
+    release!();
+    await first;
+  });
+
   it('refuses a second attempt while one is waiting', async () => {
     // Two live pairings would mean two codes on screen and only one of them approvable.
     let release: (() => void) | undefined;

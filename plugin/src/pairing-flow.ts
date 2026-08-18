@@ -49,6 +49,8 @@ export interface PairingFlow {
   approve(code: string): Promise<void>;
   /** Stop waiting. Takes effect before the next attempt, not during the current one. */
   cancel(): void;
+  /** Re-draw the live code and status into the current element — a rebuild must not lose them. */
+  redraw(): void;
 }
 
 /** A second: long enough that a person is still walking, short enough not to feel stuck. */
@@ -60,6 +62,19 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
   // and only one of them could ever be approved.
   let running = false;
   let cancelled = false;
+  /** The code currently being waited on — kept so a rebuild can draw it again. */
+  let liveCode: string | undefined;
+  /** The line under it — the status a rebuild has to put back. */
+  let liveStatus: string | undefined;
+
+  const show = (code: string): void => {
+    liveCode = code;
+    deps.showCode(code);
+  };
+  const status = (text: string): void => {
+    liveStatus = text;
+    deps.setStatus(text);
+  };
 
   return {
     async join(args) {
@@ -77,8 +92,8 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
       running = true;
       cancelled = false;
       const pairingCode = deps.newCode();
-      deps.showCode(pairingCode);
-      deps.setStatus('Waiting for approval…');
+      show(pairingCode);
+      status('Waiting for approval…');
 
       try {
         await deps.join({ ...args, pairingCode }, async () => {
@@ -92,10 +107,13 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
         // Twice, and on purpose: the notice is seen, and the line under the code is where
         // somebody who has been staring at that code will look.
         const message = e instanceof Error ? e.message : String(e);
-        deps.setStatus(message);
+        status(message);
         deps.notify(`SyncServer: ${message}`, 10000);
       } finally {
         running = false;
+        // The wait is over — the code is spent, and a later `redraw` must not resurrect it
+        // as if the pairing were still live.
+        liveCode = undefined;
       }
     },
 
@@ -116,7 +134,14 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
 
     cancel() {
       cancelled = true;
-      deps.setStatus('Cancelled.');
+      status('Cancelled.');
+    },
+
+    redraw() {
+      // The settings tab is rebuilt on every display(); the element a held flow drew into
+      // is gone, and the flow itself must draw the live state back into the fresh one.
+      if (liveCode) show(liveCode);
+      if (liveStatus) status(liveStatus);
     },
   };
 };
