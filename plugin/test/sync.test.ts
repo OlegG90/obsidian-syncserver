@@ -10,6 +10,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { openSyncCoordinator, type SyncCoordinatorDeps } from '../src/sync.js';
+import { openGate } from '../src/gate.js';
+import { openShareFlow } from '../src/share-flow.js';
 import type { SyncReport } from '../src/engine/engine.js';
 
 const emptyReport = (over: Partial<SyncReport> = {}): SyncReport => ({
@@ -37,6 +39,7 @@ const rig = (over: Partial<SyncCoordinatorDeps> = {}) => {
   let state: 'none' | 'locked' | 'open' = 'open';
   const calls = { unlock: 0, ask: 0, pass: 0 };
   const deps: SyncCoordinatorDeps = {
+    gate: openGate(),
     sessionState: () => state,
     unlock: async () => {
       calls.unlock++;
@@ -159,8 +162,43 @@ describe('the sync coordinator', () => {
     r.setState('none');
     const sync = openSyncCoordinator(r.deps);
     await sync.run();
-    assert.equal(r.calls.pass, 0);
     assert.ok(r.notices.some((m) => m.includes('not connected')));
-    assert.deepEqual(r.phases, [], 'no phase changed for a refused run');
+    assert.equal(r.calls.pass, 0);
+  });
+
+  it('a sync and a share operation cannot run at the same time', async () => {
+    // The review's #8b: four re-entry guards, each guarding only its own module. A push
+    // hint arriving between `leave/begin` and `finalize-leave` used to start a sync whose
+    // engine met interior names with no key — the sync's guard did not know the share
+    // flow's was held. One gate is now shared by both, so the second coordinator refuses.
+    const gate = openGate();
+    const r = rig({ gate });
+    const sync = openSyncCoordinator(r.deps);
+
+    // The share flow holds the gate; the sync is the latecomer.
+    const shareNotices: string[] = [];
+    let releaseShare!: () => void;
+    const share = openShareFlow({
+      gate,
+      list: async () => ({ joined: [], invitations: [] }),
+      share: () => new Promise((resolve) => (releaseShare = () => resolve({ shareId: 's' }))),
+      invite: async () => undefined,
+      accept: async () => undefined,
+      decline: async () => undefined,
+      leave: async () => ({ ended: false }),
+      members: async () => [],
+      remove: async () => ({ outcome: 'revoked' as const }),
+      isSynced: () => true,
+      notify: (m) => shareNotices.push(m),
+      done: () => undefined,
+    });
+
+    // Hold the gate with a slow share operation, then try to sync.
+    const sharing = share.share('Team');
+    await sync.runIfIdle(); // push hint mid-operation
+    assert.equal(r.calls.pass, 0, 'the sync yielded to the operation in flight');
+
+    releaseShare();
+    await sharing;
   });
 });

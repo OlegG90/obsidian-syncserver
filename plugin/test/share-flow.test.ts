@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.js';
 import { openShareFlow, type ShareFlowDeps } from '../src/share-flow.js';
+import { openGate } from '../src/gate.js';
 
 const harness = (over: Partial<ShareFlowDeps> = {}) => {
   const notices: string[] = [];
@@ -19,6 +20,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
   let rebuilt = 0;
 
   const deps: ShareFlowDeps = {
+    gate: openGate(),
     list: async () => ({ joined: [], invitations: [] }),
     share: async (folderPath) => {
       shared.push(folderPath);
@@ -92,7 +94,7 @@ describe('sharing a folder', () => {
 
     const first = h.flow.share('Team');
     await h.flow.share('Other');
-    assert.match(h.notices.at(-1)!, /still running/);
+    assert.match(h.notices.at(-1)!, /already running/);
 
     release!();
     await first;

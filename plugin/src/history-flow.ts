@@ -25,6 +25,7 @@
  *   enough to lift a freeze — because making room is usually why anybody asked.
  */
 import { ApiError } from './api/client.js';
+import type { Gate } from './gate.js';
 
 /** One node in the trash, as the person sees it. */
 export interface TrashRow {
@@ -54,6 +55,8 @@ export interface TrashPage {
 }
 
 export interface HistoryFlowDeps {
+  /** The one gate every operation family shares — one operation at a time, across all of them. */
+  gate: Gate;
   /** The trash, with names already decrypted — the scopes are the caller's to resolve. */
   trash(): Promise<TrashPage>;
   versions(nodeId: string): Promise<VersionRow[]>;
@@ -102,18 +105,19 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
    * One irreversible act at a time, which is what the guard was always for: discarding
    * cannot be undone, and a second press partway through a list is how somebody discards
    * what they meant to restore. Listing twice costs a round-trip and nothing else.
+   *
+   * The gate is the shared one — the same a sync and a share operation take — so a
+   * discard cannot interleave with a pass that is reading what is about to be removed.
    */
-  let busy = false;
   const once = async <T>(what: string, run: () => Promise<T>): Promise<T | undefined> => {
-    if (busy) {
-      deps.notify('SyncServer: another trash operation is still running.');
+    if (!deps.gate.tryBegin()) {
+      deps.notify('SyncServer: another operation is already running.');
       return undefined;
     }
-    busy = true;
     try {
       return await attempt(what, run);
     } finally {
-      busy = false;
+      deps.gate.end();
     }
   };
 

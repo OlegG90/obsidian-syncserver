@@ -20,6 +20,7 @@
  *   the share for everybody, and "you left" would be the wrong sentence for it.
  */
 import { ApiError, type ShareMember } from './api/client.js';
+import type { Gate } from './gate.js';
 
 /** A share as the person sees it in the list. */
 export interface ShareRow {
@@ -43,6 +44,8 @@ export interface InvitationRow {
 }
 
 export interface ShareFlowDeps {
+  /** The one gate every operation family shares — one operation at a time, across all of them. */
+  gate: Gate;
   /** What this account is in and what is waiting for it. */
   list(): Promise<{ joined: ShareRow[]; invitations: InvitationRow[] }>;
   /** Share a folder by its vault-relative path. Resolving it to a node is the caller's. */
@@ -107,24 +110,22 @@ const message = (e: unknown): string => {
 };
 
 export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
-  // Set synchronously before any await, for the reason `sync.ts` gives: two presses arrive
-  // as two calls before either has reached the network.
-  let running = false;
-
   /** One operation at a time, with its failure reported rather than thrown at the UI. */
   const once = async <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
-    if (running) {
-      deps.notify('SyncServer: another sharing operation is still running.');
+    // The shared gate, taken synchronously before any await, for the reason `sync.ts`
+    // gives: two presses arrive as two calls before either has reached the network. It is
+    // the SAME gate a sync takes, so a departure cannot start mid-pass or vice versa.
+    if (!deps.gate.tryBegin()) {
+      deps.notify('SyncServer: another operation is already running.');
       return undefined;
     }
-    running = true;
     try {
       return await fn();
     } catch (e) {
       deps.notify(`SyncServer: ${what} failed — ${message(e)}`, 10000);
       return undefined;
     } finally {
-      running = false;
+      deps.gate.end();
     }
   };
 

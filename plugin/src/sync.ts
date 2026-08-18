@@ -19,8 +19,11 @@
 import type { SyncReport } from './engine/engine.js';
 import { eventSentence, priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
+import type { Gate } from './gate.js';
 
 export interface SyncCoordinatorDeps {
+  /** The one gate every operation family shares — one operation at a time, across all of them. */
+  gate: Gate;
   /** `'none'` before a connection exists, otherwise the session's own state. */
   sessionState(): 'none' | 'locked' | 'open';
   /** Unlock with the passphrase. False means refused; a thrown error is a failed pass. */
@@ -43,16 +46,15 @@ export interface SyncCoordinator {
 }
 
 export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator => {
-  // Set synchronously before any await, so a second call cannot slip past the guard while
-  // the first waits on the passphrase prompt or the pass itself — that is the whole point.
-  let running = false;
-
   const pass = async (prompt: boolean): Promise<void> => {
-    if (running) {
-      if (prompt) deps.notify('SyncServer: a sync is already running.');
+    // The shared gate, taken synchronously before any await: a second call — manual or a
+    // push hint — cannot slip past while the first waits on the passphrase or the pass. It
+    // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
+    // finds it held and yields instead of meeting interior names with no key.
+    if (!deps.gate.tryBegin()) {
+      if (prompt) deps.notify('SyncServer: another operation is already running.');
       return;
     }
-    running = true;
     try {
       const state = deps.sessionState();
       if (state === 'none') {
@@ -74,7 +76,7 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
       deps.setPhase({ kind: 'failed', message, at: Date.now() });
       deps.notify(`SyncServer: ${message}`, 10000);
     } finally {
-      running = false;
+      deps.gate.end();
     }
   };
 
