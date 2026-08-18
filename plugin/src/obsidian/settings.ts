@@ -187,6 +187,10 @@ export class SyncServerSettings extends PluginSettingTab {
 
     // 2 — an account that exists, and a device of it that still works to approve this one.
     const shown = containerEl.createEl('div');
+    // Re-bind the held pairing flow to THIS element on every display: the tab was rebuilt,
+    // and a live pairing's code and cancel button must be drawn back in (pairing-flow is
+    // held by the plugin precisely so a rebuild does not orphan the wait it began).
+    this.plugin.pairing(shown);
     new Setting(containerEl)
       .setName('Add this device to an account')
       .setDesc('Shows a code to type on a device that is already connected. It seals the account key to this one.')

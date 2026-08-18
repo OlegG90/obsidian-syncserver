@@ -351,32 +351,58 @@ export default class SyncServerPlugin extends Plugin {
   /**
    * The pairing coordinator, bound to the element it may draw into.
    *
-   * Built per call rather than held: the settings tab is rebuilt on every `display()`, so a
-   * flow that outlived it would write the code into a detached element — visible to nobody
-   * and impossible to cancel.
+   * **One flow, held for the lifetime of the plugin** — the change from "built per call".
+   * Two things follow:
+   *
+   * - `cancel()` finally has an address. The settings tab is rebuilt on every `display()`,
+   *   and a flow created per call was discarded on the same line it was used, so the wait
+   *   it began could never be stopped; a rebuilt tab then started a SECOND pairing, because
+   *   the `running` guard belonged to the discarded instance too.
+   * - a rebuilt tab does not lose the code: `pairing()` re-binds the render target and asks
+   *   the held flow to draw its live state back in.
+   *
+   * The flow is created once; every call after the first just re-binds the element and
+   * redraws. That is what makes the settings tab's rebuilds harmless instead of fatal.
    */
+  private pairingFlow: PairingFlow | undefined;
+  private pairingTarget: HTMLElement | undefined;
+
   pairing(target: HTMLElement): PairingFlow {
-    return openPairingFlow({
+    this.pairingTarget = target;
+    this.pairingFlow ??= openPairingFlow({
       newCode: () => newPairingCode(),
       join: (args, waiting) => this.pair(args, waiting),
       approve: (code) => this.approvePairing(code),
-      showCode: (code) => {
-        target.empty();
-        target.createEl('p', { text: 'Type this on the device that is already connected:' });
-        // Set apart rather than left in a paragraph: it is read off one screen and typed
-        // into another, and 26 characters are hard enough to follow without prose around
-        // them.
-        target.createEl('pre', { text: code });
-      },
-      setStatus: (text) => {
-        const line = target.querySelector('p.syncserver-pairing-status') ?? target.createEl('p');
-        line.addClass('syncserver-pairing-status');
-        line.setText(text);
-      },
+      showCode: (code) => this.renderPairingCode(code),
+      setStatus: (text) => this.renderPairingStatus(text),
       notify: (message, durationMs) => new Notice(message, durationMs),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       done: () => this.settingsTab?.display(),
     });
+    this.pairingFlow.redraw();
+    return this.pairingFlow;
+  }
+
+  /** The code, plus a button that can actually stop the wait it starts. */
+  private renderPairingCode(code: string): void {
+    const target = this.pairingTarget;
+    if (!target) return;
+    target.empty();
+    target.createEl('p', { text: 'Type this on the device that is already connected:' });
+    // Set apart rather than left in a paragraph: it is read off one screen and typed
+    // into another, and 26 characters are hard enough to follow without prose around
+    // them.
+    target.createEl('pre', { text: code });
+    // The whole reason the flow is held: a cancel only exists if something can reach it.
+    target.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.pairingFlow?.cancel());
+  }
+
+  private renderPairingStatus(text: string): void {
+    const target = this.pairingTarget;
+    if (!target) return;
+    const line = target.querySelector('p.syncserver-pairing-status') ?? target.createEl('p');
+    line.addClass('syncserver-pairing-status');
+    line.setText(text);
   }
 
   /**
