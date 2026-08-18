@@ -20,6 +20,7 @@
 import type { OpenedVault, Scope } from '@syncserver/shared';
 import { fromBase64 } from './crypto/bytes.js';
 import { openFrom } from './crypto/hpke.js';
+import { decryptName } from './crypto/scope.js';
 import { unwrapShareKey } from './crypto/share.js';
 import { shareEnvelopeAad } from './sharing.js';
 
@@ -143,6 +144,17 @@ export const shareKeyFor = (
 const ENC_BYTES = 32;
 
 /**
+ * What stands in for a name this device cannot read.
+ *
+ * A sentence, not the node id. The id looks exactly like something a file could be called, so
+ * a person had no way to tell "this file is named that" from "this device has no key for it"
+ * — and the second is the only one of the two they can do anything about. Reading as prose is
+ * also what keeps it from being mistaken for a value: see `readName` on why writing it back
+ * would be the real damage.
+ */
+export const UNREADABLE_NAME = '(name unavailable)';
+
+/**
  * The scopes of one opened vault: which key opens which name, and which names it cannot.
  *
  * **One value per operation, and it can only come from opening a vault.** The pieces existed
@@ -209,6 +221,29 @@ export class VaultScopes {
     const key = this.keyIfOpenable(nameKeyId);
     if (!key) throw new Error(`a node is named under a scope this client cannot open: ${nameKeyId}`);
     return key;
+  }
+
+  /**
+   * A name to show a person: the real one, or `UNREADABLE_NAME` when this device holds no key.
+   *
+   * **Never for a name that is going to be written back.** The stand-in is a sentence, and
+   * `encryptName` would take it as happily as a filename — so a conversion built on this
+   * would rename somebody's file to "(name unavailable)". That is a wrong name rather than a
+   * missing one, and nothing downstream could tell. Callers that must write use `keyFor`,
+   * which refuses instead.
+   *
+   * The `try` is not defensive noise: `decryptName` is an AEAD open, so the wrong key throws
+   * rather than returning nonsense, and a row is worth showing either way.
+   */
+  readName(nameKeyId: string | null | undefined, nameEnc: string | null): string {
+    if (!nameEnc) return UNREADABLE_NAME;
+    const key = this.keyIfOpenable(nameKeyId);
+    if (!key) return UNREADABLE_NAME;
+    try {
+      return decryptName(key, nameEnc);
+    } catch {
+      return UNREADABLE_NAME;
+    }
   }
 
   /**

@@ -11,8 +11,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { OpenedVault } from '@syncserver/shared';
 import { randomBytes, toHex } from '../src/crypto/bytes.js';
+import { encryptName } from '../src/crypto/scope.js';
 import { wrapShareKey } from '../src/crypto/share.js';
-import { VaultScopes } from '../src/share-keys.js';
+import { UNREADABLE_NAME, VaultScopes } from '../src/share-keys.js';
 
 const vaultScopeId = 'scope-vault';
 const openableId = 'scope-openable';
@@ -83,6 +84,23 @@ describe('the scopes of an opened vault', () => {
     assert.equal(pairs.get('11111111-1111-4111-8111-111111111111'), openableId);
     assert.equal(pairs.get('22222222-2222-4222-8222-222222222222'), undeliveredId);
     assert.equal(pairs.size, 2, 'the vault scope is not a share');
+  });
+
+  it('reads a name it has the key for, and stands in for one it does not', () => {
+    const s = scopes();
+    assert.equal(s.readName(vaultScopeId, encryptName(vaultKey, 'ordinary.md')), 'ordinary.md');
+    assert.equal(s.readName(openableId, encryptName(shareKey, 'shared.md')), 'shared.md');
+    assert.equal(s.readName(undeliveredId, encryptName(randomBytes(32), 'secret.md')), UNREADABLE_NAME);
+  });
+
+  it('stands in rather than throwing when the name itself is unusable', () => {
+    // A row is worth showing either way — it is the only handle a person has on a file they
+    // want gone. `decryptName` is an AEAD open, so the wrong key throws rather than returning
+    // nonsense, and a listing that dies on one bad row shows none of the good ones.
+    const s = scopes();
+    assert.equal(s.readName(vaultScopeId, null), UNREADABLE_NAME, 'no name at all');
+    assert.equal(s.readName(vaultScopeId, encryptName(randomBytes(32), 'x.md')), UNREADABLE_NAME, 'wrong key');
+    assert.equal(s.readName(vaultScopeId, 'not base64 at all'), UNREADABLE_NAME, 'not a sealed value');
   });
 
   it('reports a share key it could not unwrap, without failing the rest', () => {

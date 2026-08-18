@@ -515,13 +515,11 @@ export default class SyncServerPlugin extends Plugin {
           const page = await h.client.trash(this.data.connection!.vaultId);
           const rows = page.entries.map((n) => {
             // The key follows the scope the server names. A node this device holds no key
-            // for still gets a row — its id, and the fact that it can be discarded — because
-            // an unreadable name is a worse reason to hide something than to show it plainly.
-            const key = scopes.keyIfOpenable(n.name_key_id);
-            const name = n.name_enc && key ? decryptName(key, n.name_enc) : n.node_id;
+            // for still gets a row — named as unreadable, and discardable — because an
+            // unreadable name is a worse reason to hide something than to show it plainly.
             return {
               nodeId: n.node_id,
-              name,
+              name: scopes.readName(n.name_key_id, n.name_enc),
               type: n.type,
               deletedAt: n.deleted_at,
               versions: n.versions,
