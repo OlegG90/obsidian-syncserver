@@ -32,8 +32,9 @@ import { session, type Connection, type Handle, type Session } from './session/i
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
-import { decryptName } from './crypto/scope.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
+import { replicaForLeave } from './departure.js';
+import { trashRows } from './trash-map.js';
 import {
   acceptInvitation, freeName, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
 } from './sharing.js';
@@ -538,23 +539,9 @@ export default class SyncServerPlugin extends Plugin {
       trash: () =>
         this.withSession(async (h) => {
           const scopes = await this.openVault(h);
-          const vaultScope = scopes.vaultScopeId;
 
           const page = await h.client.trash(this.data.connection!.vaultId);
-          const rows = page.entries.map((n) => {
-            // The key follows the scope the server names. A node this device holds no key
-            // for still gets a row — named as unreadable, and discardable — because an
-            // unreadable name is a worse reason to hide something than to show it plainly.
-            return {
-              nodeId: n.node_id,
-              name: scopes.readName(n.name_key_id, n.name_enc),
-              type: n.type,
-              deletedAt: n.deleted_at,
-              versions: n.versions,
-              shared: n.share_id !== null,
-            };
-          });
-          return { rows, total: page.total };
+          return { rows: trashRows(page.entries, scopes), total: page.total };
         }),
 
       versions: (nodeId) =>
@@ -699,33 +686,7 @@ export default class SyncServerPlugin extends Plugin {
           // behalf of.
           requireEveryNameReadable(rows, scopes);
 
-          const replica = rows.map((n) => {
-            // A node can carry the mark without ever having been converted — the trash of a
-            // folder shared later, for one. Its name is under `KV` already, and there is no
-            // `KS` envelope for its content to move back, so the only thing it needs is the
-            // mark gone. Asking for a conversion it never had is how leaving got stuck.
-            //
-            // One question, asked of the scopes rather than of a two-way test: `KV` and this
-            // share's `KS` are both in there, so which key a name wants is a lookup rather
-            // than an assumption about how many scopes can exist.
-            // `unreadable` was empty, so both of these resolve. `keyFor` is what makes that
-            // a fact rather than a comment: if the check above ever stopped covering a case,
-            // this refuses instead of naming a file something it is not.
-            const name = decryptName(scopes.keyFor(n.name_key_id), n.name_enc!);
-            return {
-              nodeId: n.node_id,
-              // A trashed node has no path and needs none: nothing reads it.
-              path: pathOfNode.get(n.node_id) ?? name,
-              name,
-              // The server says which bytes still need converting; guessing from the name's
-              // scope was wrong in both directions. It names the head and the history
-              // separately because they are owed different things — an envelope each, but a
-              // dedup tag only where there is a plaintext to compute it over.
-              address: n.needs_vault_material ? n.sha256 : null,
-              history: n.history_needing_material,
-              deleted: n.deleted,
-            };
-          });
+          const replica = replicaForLeave(rows, scopes, pathOfNode);
 
           const out = await leaveShare(
             {
