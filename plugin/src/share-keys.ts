@@ -17,7 +17,7 @@
  * to prevent: a widened field accepts a value the server can never send, and the `switch`
  * that reads it stops being exhaustive without anything saying so.
  */
-import type { Scope } from '@syncserver/shared';
+import type { OpenedVault, Scope } from '@syncserver/shared';
 import { fromBase64 } from './crypto/bytes.js';
 import { openFrom } from './crypto/hpke.js';
 import { unwrapShareKey } from './crypto/share.js';
@@ -55,10 +55,16 @@ export const vaultScopeIdOf = (scopes: readonly Scope[]): string => {
  * The share keys among these scopes, by scope id.
  *
  * **A scope that cannot be opened is dropped, not thrown.** One unreadable share must not
- * stop a vault from syncing: the rest of the tree is fine, and the engine already refuses
- * loudly at the one place it matters — the moment it meets a name under a scope it holds no
- * key for. Failing here instead would turn one bad envelope into a vault that never syncs
- * again, which is the worse of the two failures by a distance.
+ * stop a vault from syncing: the rest of the tree is fine. Failing here instead would turn
+ * one bad envelope into a vault that never syncs again, which is the worse of the two
+ * failures by a distance.
+ *
+ * That promise was not kept for a while, and it is worth saying where it broke rather than
+ * only that it is fixed. This dropped the scope, and the engine then met a name under it in
+ * the listing and threw — from the one read with no `try` around it, before a report existed.
+ * So dropping the scope bought nothing: the pass died anyway, further along. The tree read
+ * now asks `VaultScopes.keyIfOpenable` and skips what it cannot read, which is what makes the
+ * sentence above true.
  *
  * @returns the openable ones, and the scope ids of any that were not.
  */
@@ -135,3 +141,84 @@ export const shareKeyFor = (
 
 /** An X25519 public key, which is what an HPKE envelope carries in front of its ciphertext. */
 const ENC_BYTES = 32;
+
+/**
+ * The scopes of one opened vault: which key opens which name, and which names it cannot.
+ *
+ * **One value per operation, and it can only come from opening a vault.** The pieces existed
+ * already — the vault key, the vault's own scope id, the share keys this device could unwrap,
+ * the ids of the ones it could not — and every operation assembled them by hand from three
+ * separate calls. The comment on the engine's constructor records where that leads: "nine
+ * arguments assembled twice is nine chances for the two to differ, and they already did".
+ * Handing out one value makes the ordering a type rather than a paragraph: the scopes cannot
+ * be held without having opened the vault they describe.
+ *
+ * **The failure policy is the interface, not a flag.** `keyFor` throws and `keyIfOpenable`
+ * answers with a value, and the difference is in the return type, so a caller that must be
+ * strict cannot silently become lenient. This is the same shape `shareKeysFrom` and
+ * `shareKeyFor` already chose one level down, for the same reason: which failure you want is
+ * a property of the question being asked, and a string argument saying so is a thing that
+ * gets read wrong. Three call sites wrote this rule out by hand and the three disagreed.
+ *
+ * Not cached across operations: a share can be ended by somebody else between two syncs, and
+ * a key kept from before would be offered for a scope nothing is named under any more.
+ */
+export class VaultScopes {
+  private constructor(
+    /** The vault as it stood when this operation began — the same instant these keys describe. */
+    readonly opened: OpenedVault,
+    /** `KV = HKDF(seed, vault_id)` — what everything outside a share is named under. */
+    readonly vaultKey: Uint8Array,
+    readonly vaultScopeId: string,
+    private readonly shareKeys: ReadonlyMap<string, Uint8Array>,
+    /**
+     * Scopes this device holds no key for.
+     *
+     * Reported rather than thrown, because a share whose envelope has not arrived is a state
+     * and not a fault: the rest of the vault is fine, and the key may yet be delivered.
+     */
+    readonly unopenable: readonly string[],
+  ) {}
+
+  static open(opened: OpenedVault, deps: ShareKeyDeps): VaultScopes {
+    const { keys, unopenable } = shareKeysFrom(opened.scopes, deps);
+    return new VaultScopes(opened, deps.vaultKey, vaultScopeIdOf(opened.scopes), keys, unopenable);
+  }
+
+  /**
+   * The key for a name, or `undefined` when this device holds none.
+   *
+   * For the caller who has something to do about it: show the row anyway, skip the subtree,
+   * carry on with the rest of the vault.
+   */
+  keyIfOpenable(nameKeyId: string | null | undefined): Uint8Array | undefined {
+    // No scope named is the vault's own — the root's default, which every node inherits
+    // until a share overrides it.
+    if (!nameKeyId || nameKeyId === this.vaultScopeId) return this.vaultKey;
+    return this.shareKeys.get(nameKeyId);
+  }
+
+  /**
+   * The key for a name this caller must be able to read.
+   *
+   * For the caller with nothing to do about it — one that would otherwise carry on and write
+   * a wrong name somewhere. Silently falling back to the vault key would decrypt nothing
+   * while looking like success, which is the failure this throw exists to prevent.
+   */
+  keyFor(nameKeyId: string | null | undefined): Uint8Array {
+    const key = this.keyIfOpenable(nameKeyId);
+    if (!key) throw new Error(`a node is named under a scope this client cannot open: ${nameKeyId}`);
+    return key;
+  }
+
+  /**
+   * Share id → the scope its interior is named under.
+   *
+   * A share root's OWN label is under `KV` (SH-01), so the scope its children belong to
+   * cannot be read off it; the server reports the pairing when the vault is opened, which is
+   * the only place it exists as one fact.
+   */
+  shareScopes(): Map<string, string> {
+    return new Map(this.opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const));
+  }
+}

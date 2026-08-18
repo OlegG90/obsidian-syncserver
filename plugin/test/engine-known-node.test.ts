@@ -9,6 +9,7 @@ import { randomBytes, toHex, utf8 } from '../src/crypto/bytes.js';
 import { encryptName, nameHmac, wrapContentKey } from '../src/crypto/scope.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { SyncEngine } from '../src/engine/engine.js';
+import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
 import { FakeVault } from './fake-vault.js';
 
@@ -198,7 +199,7 @@ const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText
   });
   // No cast: the fake implements the seam the engine declares, so the type checker is
   // proving the double matches rather than being told to stop looking.
-  const engine = new SyncEngine(client, vaultId, opened, kv, vault, store);
+  const engine = new SyncEngine(client, vaultId, scopesOf(opened, kv), vault, store);
   return { client, engine, path, vault };
 };
 

@@ -20,6 +20,7 @@ import { toHex, utf8, randomBytes } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encryptName, nameHmac, wrapContentKey, unwrapContentKey, dedupTag, decryptName } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
+import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
 import { FakeVault } from './fake-vault.js';
 
@@ -241,7 +242,7 @@ describe('delete propagation', () => {
     const { sealed } = nodeListFor([spec]);
     const wire = new FakeWire([spec], sealed, continuous);
     const vault = new FakeVault(); // the file is NOT on disk — the user deleted it
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'was here', sealed.get('gone.md')!.sha256)));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'was here', sealed.get('gone.md')!.sha256)));
 
     const report = await engine.sync();
 
@@ -256,7 +257,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), continuous);
     const vault = new FakeVault();
     vault.seed('there.md', 'server copy');
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'server copy', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'server copy', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -271,7 +272,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), restore);
     const vault = new FakeVault();
     vault.seed('keep.md', 'only copy');
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'only copy', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'only copy', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -290,7 +291,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), unverifiable);
     const vault = new FakeVault();
     vault.seed('unverified.md', 'the only copy');
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'the only copy', 'addr-gone')));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'the only copy', 'addr-gone')));
 
     const report = await engine.sync();
 
@@ -305,7 +306,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), ttl);
     const vault = new FakeVault();
     vault.seed('old.md', 'gone remotely');
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'gone remotely', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'gone remotely', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -318,7 +319,7 @@ describe('delete propagation', () => {
     const wire = new FakeWire([], new Map(), continuous);
     const vault = new FakeVault();
     vault.seed('edited.md', 'my newer edit'); // localChanged: plainHash differs from state
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(knownState(spec, 'synced version', 'addr-was-here')));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(knownState(spec, 'synced version', 'addr-was-here')));
 
     const report = await engine.sync();
 
@@ -340,7 +341,7 @@ describe('remote rename', () => {
       cursor: 'cursor-old',
       nodes: { 'old.md': { nodeId: 'node-6', rev: 6, plainHash: toHex(sha256(utf8('the body'))), address: sealed.get('new.md')!.sha256 } },
     };
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -372,7 +373,7 @@ describe('remote rename', () => {
         'Old/two.md': { nodeId: 'node-b', rev: 3, plainHash: toHex(sha256(utf8('content two'))), address: sealed.get('Old/two.md')!.sha256 },
       },
     };
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -405,7 +406,7 @@ describe('resync after a reset', () => {
         'mine.md': { nodeId: 'node-8', rev: 1, plainHash: toHex(sha256(utf8('my private note'))), address: 'some-old-address' },
       },
     };
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(state));
 
     const report = await engine.sync();
 
@@ -436,7 +437,7 @@ describe('resync after a reset', () => {
       },
     };
     const store = new Store(state);
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, store);
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store);
 
     const first = await engine.sync();
     const quarantinePath = first.quarantined.find((x) => x.from === 'mine.md')!.to;

@@ -19,6 +19,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { encryptName, nameHmac, wrapContentKey, dedupTag } from '../src/crypto/scope.js';
 import { isSyncable } from '../src/engine/vault.js';
 import { SyncEngine } from '../src/engine/engine.js';
+import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
 import { FakeVault } from './fake-vault.js';
 
@@ -166,7 +167,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
       continuous,
     );
     const vault = new FakeVault();
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store({ nodes: {} }));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store({ nodes: {} }));
 
     const report = await engine.sync();
 
@@ -181,7 +182,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
     const vault = new FakeVault();
     vault.seed('Notes/a.md', 'a note');
     vault.seed('.obsidian/appearance.json', '{}');
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store({ nodes: {} }));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store({ nodes: {} }));
 
     const report = await engine.sync();
 
@@ -210,7 +211,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
       continuous,
     );
     const vault = new FakeVault();
-    const engine = new SyncEngine(wire, vaultId, opened, kv, vault, new Store(state));
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store(state));
 
     const report = await engine.sync();
 
