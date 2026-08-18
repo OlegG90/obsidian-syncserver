@@ -14,7 +14,7 @@
  * which resets `syncserver_plugin`, builds the server and runs this.
  */
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +34,9 @@ import { scopesOf } from './vault-scopes.js';
 import { MemoryStateStore } from '../src/engine/state.js';
 import { newPairingCode } from '../src/crypto/pairing-code.js';
 import { session, type Session } from '../src/session/index.js';
+import { wrapShareKey } from '../src/crypto/share.js';
+import { shareFolder } from '../src/sharing.js';
+import { vaultScopeIdOf } from '../src/share-keys.js';
 import { PushListener } from '../src/obsidian/push.js';
 import { FakeVault } from './fake-vault.js';
 
@@ -1030,3 +1033,141 @@ describe('the engine, device A pushes and device B pulls', () => {
 });
 
 const basenameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
+
+/**
+ * A shared folder whose key this device cannot open, against the real server.
+ *
+ * The unit tests for this build the state by hand: a scope reported with nothing to unwrap.
+ * This one makes it the way it actually arises — a real share, prepared and activated through
+ * the real endpoints, whose interior is genuinely named under `KS` by the server's own
+ * triggers — and then takes the key away.
+ *
+ * Taking it away is the one step no client action produces: an envelope that never arrived,
+ * or arrived sealed to somebody else's key, is a state of the DATA. So the share's stored
+ * envelope is replaced with one wrapped under a key nothing here holds, which is exactly what
+ * `shareKeysFrom` meets when it drops a scope — and then the pass is asked to survive it.
+ *
+ * What no fixture could prove and this does: that the server really does name the interior
+ * under `KS` while leaving the root under `KV`, which is the fact the whole exclusion rests on.
+ */
+describe('a shared folder whose key this device cannot open, live', () => {
+  const passphrase = 'a passphrase the server never sees';
+  const folder = 'Team';
+  const inside = `${folder}/plan.md`;
+  const outside = 'ordinary.md';
+
+  let vault: FakeVault;
+  let store: MemoryStateStore;
+  let shareVaultId: string;
+  let kvS: Uint8Array;
+  let seed: Uint8Array;
+  let shareId: string;
+  let goodEnvelope: string;
+
+  /** One statement against the test database — the only way to reach a state no client can make. */
+  const sql = async (statement: string): Promise<void> => {
+    await new Promise<void>((resolve, reject) => {
+      execFile('psql', ['-d', DB, '-q', '-v', 'ON_ERROR_STOP=1', '-c', statement], (err, _out, stderr) =>
+        err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve(),
+      );
+    });
+  };
+
+  const engineHere = async (): Promise<SyncEngine> =>
+    new SyncEngine(
+      client,
+      shareVaultId,
+      scopesOf(await client.openVault(shareVaultId), kvS),
+      vault,
+      store,
+      'share-live',
+    );
+
+  before(async () => {
+    const account = openAccount(
+      passphrase,
+      fromBase64(sess.connection.accountSalt),
+      sess.connection.kdfParams,
+      sess.connection.wrappedSeed,
+    );
+    seed = account.seed;
+    shareVaultId = randomUuid();
+    kvS = vaultKey(seed, shareVaultId);
+    await client.createVault(shareVaultId, encryptName(kvS, 'shareVault'));
+
+    vault = new FakeVault();
+    vault.seed(outside, 'a note that is nobody else’s business');
+    vault.seed(inside, 'the plan');
+    store = new MemoryStateStore();
+  });
+
+  it('shares a folder, and the server names its interior under the share key', async () => {
+    const first = await (await engineHere()).sync();
+    assert.deepEqual(first.errors, [], JSON.stringify(first.errors));
+    assert.equal(first.pushed.length, 2, 'both files went up before anything was shared');
+
+    const tree = await (await engineHere()).readTree();
+    const nodes = [...tree.values()].map((n) => ({
+      path: n.path, nodeId: n.nodeId, address: n.address, nameKeyId: n.nameKeyId ?? '',
+    }));
+
+    const opened = await client.openVault(shareVaultId);
+    const out = await shareFolder(
+      {
+        client,
+        read: (p) => vault.read(p),
+        vaultId: shareVaultId,
+        vaultKey: kvS,
+        vaultScopeId: vaultScopeIdOf(opened.scopes),
+        newScopeId: () => randomUuid(),
+      },
+      folder,
+      nodes,
+    );
+    shareId = out.shareId;
+
+    // The fact the exclusion rests on, asserted against the real schema rather than assumed:
+    // the ROOT keeps the vault's scope (SH-01) while what is inside it moves to the share's.
+    const after = await (await engineHere()).readTree();
+    assert.equal(after.get(folder)?.nameKeyId, vaultScopeIdOf(opened.scopes), 'the root stays under KV');
+    assert.equal(after.get(inside)?.nameKeyId, out.scopeId, 'its interior is under KS');
+
+    const scopes = await client.openVault(shareVaultId);
+    goodEnvelope = scopes.scopes.find((s) => s.share_id === shareId)!.wrapped_key!;
+    assert.ok(goodEnvelope, 'and the server hands this device its own copy of the key');
+  });
+
+  it('syncs normally while the key is still openable', async () => {
+    const report = await (await engineHere()).sync();
+    assert.deepEqual(report.errors, [], JSON.stringify(report.errors));
+    assert.deepEqual(report.unreadable, [], 'nothing is unreadable yet');
+  });
+
+  it('survives the key becoming unopenable, and says which folder', async () => {
+    // Sealed under a key nothing here holds: the shape an envelope has when it was meant for
+    // somebody else, or when it did not survive whatever delivered it.
+    const unopenable = wrapShareKey(randomBytes(32), randomBytes(32));
+    await sql(`UPDATE shares SET wrapped_key_initiator = decode('${unopenable}', 'base64') WHERE id = '${shareId}'`);
+
+    const report = await (await engineHere()).sync();
+
+    assert.deepEqual(report.errors, [], 'the pass finished — this is the defect that made it not');
+    assert.deepEqual(
+      report.unreadable.map((u) => u.path),
+      [folder],
+      'and it names the folder, once, rather than every file in it',
+    );
+    assert.deepEqual(report.pushed, [], 'nothing inside it was re-uploaded under the vault key');
+    assert.equal(vault.contents(inside), 'the plan', 'and nothing on disk was touched');
+  });
+
+  it('picks the folder up again when the key comes back', async () => {
+    await sql(`UPDATE shares SET wrapped_key_initiator = decode('${goodEnvelope}', 'base64') WHERE id = '${shareId}'`);
+
+    const report = await (await engineHere()).sync();
+
+    assert.deepEqual(report.errors, [], JSON.stringify(report.errors));
+    assert.deepEqual(report.unreadable, [], 'readable again, with no resync and nothing to repair');
+    assert.deepEqual(report.pushed, [], 'and it did not mistake the folder for new work');
+  });
+});
