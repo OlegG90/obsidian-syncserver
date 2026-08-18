@@ -79,3 +79,26 @@ export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '
 
 export const invite = (login: string, quotaBytes: string): Promise<{ user_id: string; token: string }> =>
   call('POST', '/admin/invitations', { login, quota_bytes: quotaBytes });
+
+/** One backup run, as the console's history table shows it. */
+export interface BackupRun {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  bytes: string | null;
+  blobCount: string | null;
+  verifiedAt: string | null;
+  error: string | null;
+}
+
+/** Start a backup now. Refused with `backup_not_configured` when the server has none. */
+export const runBackup = (): Promise<{ id?: string; status: string; bytes?: number; blob_count?: number }> =>
+  call('POST', '/admin/backups');
+
+/** The previous runs, newest first. */
+export const backups = (): Promise<{ backups: BackupRun[] }> => call('GET', '/admin/backups');
+
+/** Ask whether a run's blob copy holds every blob the database references. */
+export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>
+  call('POST', `/admin/backups/${id}/verify`);

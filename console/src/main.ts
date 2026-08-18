@@ -11,7 +11,7 @@
  * third. A reload is therefore never wrong, which is the cheapest correctness a web page can
  * have.
  */
-import { accounts, bootstrap, health, invite, signedIn, signIn, type AccountRow } from './api.js';
+import { accounts, backups, bootstrap, health, invite, runBackup, signedIn, signIn, verify, type AccountRow, type BackupRun } from './api.js';
 import { describeAccount } from './format.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -148,7 +148,83 @@ const accountsScreen = (): void => {
     list.replaceChildren(...out.accounts.map(accountRow));
   };
 
-  app.replaceChildren(page, list, inviteCard);
+  const backupsCard = el('button', { textContent: 'Backups' });
+  backupsCard.onclick = () => backupsScreen();
+
+  app.replaceChildren(el('nav', {}, backupsCard), page, list, inviteCard);
+  void attempt(page, fill);
+};
+
+/** When a run happened, as a person reads a table. */
+const mib = (bytes: string | null): string => (bytes === null ? '—' : `${(Number(bytes) / 1024 / 1024).toFixed(1)} MiB`);
+
+const when = (iso: string | null): string =>
+  iso === null ? '—' : new Date(iso).toLocaleString();
+
+const backupRow = (b: BackupRun): HTMLElement => {
+  const card = el('div', { className: 'card' });
+  card.append(
+    el('strong', { textContent: `${b.status} — ${when(b.startedAt)}` }),
+    el('div', { className: 'muted', textContent: `${mib(b.bytes)}, ${b.blobCount ?? '—'} blobs` }),
+  );
+  if (b.error) card.append(el('p', { className: 'bad', textContent: b.error }));
+  if (b.verifiedAt) card.append(el('div', { className: 'muted', textContent: `verified ${when(b.verifiedAt)}` }));
+  if (b.status === 'ok') card.append(verifyButton(b));
+  return card;
+};
+
+const verifyButton = (run: BackupRun): HTMLElement => {
+  const button = el('button', { textContent: 'Verify' });
+  const where = el('div', {});
+  submits(button, where, async () => {
+    const out = await verify(run.id);
+    where.append(
+      out.whole
+        ? say(`whole: all ${out.checked} blobs present`)
+        : say(`${out.missing.length} of ${out.checked} blobs missing from the copy`, true),
+    );
+    // Refresh the list so `verified` appears.
+    void attempt(where, async () => {
+      const fresh = await backups();
+      const row = fresh.backups.find((x) => x.id === run.id);
+      if (row?.verifiedAt) where.append(say(`verified ${when(row.verifiedAt)}`));
+    });
+  });
+  return el('div', {}, button, where);
+};
+
+const backupsScreen = (): void => {
+  const page = el('div', {}, el('h1', { textContent: 'Backups' }));
+  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+
+  const runCard = el('div', { className: 'card' });
+  const runButton = el('button', { textContent: 'Back up now' });
+  runCard.append(
+    el('h1', { textContent: 'Take a backup' }),
+    el('p', {
+      className: 'muted',
+      textContent:
+        'The database is dumped first, then the blobs are copied — the order that makes the ' +
+        'copy a whole thing (docs/08). Downloads are deliberately not a feature: the copy ' +
+        'goes to its configured destination.',
+    }),
+    runButton,
+  );
+  submits(runButton, runCard, async () => {
+    const out = await runBackup();
+    runCard.append(say(out.status === 'ok' ? 'Backup taken.' : `Backup: ${out.status}`));
+    await fill();
+  });
+
+  const fill = async (): Promise<void> => {
+    const out = await backups();
+    list.replaceChildren(...out.backups.map(backupRow));
+  };
+
+  const accountsCard = el('button', { textContent: 'Accounts' });
+  accountsCard.onclick = () => accountsScreen();
+
+  app.replaceChildren(el('nav', {}, accountsCard), page, list, runCard);
   void attempt(page, fill);
 };
 
