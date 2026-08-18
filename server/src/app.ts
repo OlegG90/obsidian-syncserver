@@ -16,6 +16,7 @@ import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes } from './console.js';
 import { backupInProgress } from './backup.js';
+import { backupLegs } from './backup-legs.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, registerBootstrapGuard } from './bootstrap.js';
@@ -80,7 +81,17 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
   registerShareRoutes(app, db, cfg);
-  registerAdminRoutes(app, db);
+  registerAdminRoutes(app, db, {
+    ...(cfg.backup
+      ? {
+          destination: cfg.backup.destination,
+          // The legs are built per run, so each backup lands in its own subdirectory and
+          // two runs never write into each other.
+          makeLegs: (runDir: string) =>
+            backupLegs(cfg.backup!.destination, cfg.backup!.dumpCommand, cfg.backup!.blobSource, runDir),
+        }
+      : {}),
+  });
   await registerConsoleRoutes(app);
 
   // The refusal window (#114). One hook rather than a check in every write path: what the

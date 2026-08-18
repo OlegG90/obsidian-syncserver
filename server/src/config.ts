@@ -86,6 +86,22 @@ export interface Config {
    * how promptly a swept blob disappears, never what gets swept.
    */
   sweepIntervalSeconds: number;
+  /**
+   * Where backups go, and how they are taken. All three are deployment facts, not protocol:
+   * a destination directory, the `pg_dump` invocation (or whatever this deployment calls
+   * it), and the blob store to copy. Absent until configured — a server without them can
+   * still serve, but the console's backup button answers "not configured".
+   */
+  backup?:
+    | {
+        /** Where each run's two legs land. */
+        destination: string;
+        /** `pg_dump`, or whatever this deployment calls it. Must match the server's PG. */
+        dumpCommand: string[];
+        /** The blob store directory, copied after the dump (#114). */
+        blobSource: string;
+      }
+    | undefined;
 }
 
 const DEV_SECRET = 'development-only-server-secret';
@@ -117,6 +133,25 @@ export const loadConfig = (): Config => {
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
   };
+
+  const destination = process.env['BACKUP_DESTINATION'];
+  const dumpCommand = process.env['BACKUP_DB_COMMAND'];
+  const blobSource = process.env['BACKUP_BLOB_SOURCE'];
+  if (destination || dumpCommand || blobSource) {
+    // All or none: a backup with a destination but no dump command is a backup that cannot
+    // be taken, and "configured" is the one thing the console's button asks.
+    if (!(destination && dumpCommand && blobSource)) {
+      throw new Error(
+        'BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE must be set together — ' +
+          'a partial backup configuration would start a run that cannot finish',
+      );
+    }
+    cfg.backup = {
+      destination,
+      dumpCommand: dumpCommand.split(/\s+/),
+      blobSource,
+    };
+  }
 
   if (cfg.limits.abandonedPartTtlSeconds >= cfg.limits.unboundBlobTtlSeconds) {
     throw new Error(

@@ -8,6 +8,7 @@
  * rather than a permission somebody could grant later.
  */
 import type { FastifyInstance } from 'fastify';
+import { join } from 'node:path';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
 import { deleteAccount, deletionProgress } from './deletion.js';
@@ -22,11 +23,23 @@ import {
   setQuota,
   storage,
 } from './service.js';
+import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
+import { openStore } from '../blobs/store.js';
+
+/** What the console's backup button needs, supplied by the composition root. */
+export interface BackupDeps {
+  /**
+   * Build the legs for one run. Called per backup, so each run lands in its own
+   * subdirectory; a fresh run dir is what keeps two backups from writing into each other.
+   */
+  makeLegs?(runDir: string): Legs;
+  destination?: string;
+}
 
 /** A week to redeem an invitation, matching the one the schema seeds for the first administrator. */
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-export const registerAdminRoutes = (app: FastifyInstance, db: Db): void => {
+export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps = {}): void => {
   const admin = { preHandler: requireAdmin(db) };
 
   app.get('/admin/accounts', admin, async () => ({ accounts: await listAccounts(db) }));
@@ -128,4 +141,43 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db): void => {
       return { used_bytes: out.usedBytes, freezes: out.freezes };
     },
   );
+
+  // The backup surface. Trigger is a POST because it starts work; list and verify are GETs
+  // because they only look — a poll that moved the state would make watching a backup
+  // indistinguishable from driving one.
+  app.post('/admin/backups', admin, async (req, reply) => {
+    if (!backup.makeLegs || !backup.destination) {
+      return reply.code(503).send({
+        error: 'backup_not_configured',
+        detail: 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups',
+      });
+    }
+    const runDir = `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    // The destination recorded on the row is THIS run's directory, so verify knows where
+    // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
+    const runDestination = `${backup.destination}/${runDir}`;
+    const out = await runBackup(db, backup.makeLegs(runDir), runDestination, {
+      triggeredBy: req.admin!.id,
+    });
+    if (out.status === 'skipped') return reply.code(409).send({ error: 'backup_in_progress', detail: out.error });
+    if (out.status === 'failed') return reply.code(500).send({ error: 'backup_failed', detail: out.error });
+    return { id: out.id, status: out.status, bytes: out.bytes, blob_count: out.blobCount, destination: runDestination };
+  });
+
+  app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));
+
+  app.post<{ Params: { id: string } }>('/admin/backups/:id/verify', admin, async (req, reply) => {
+    if (!backup.destination) {
+      return reply.code(503).send({ error: 'backup_not_configured', detail: 'no backup destination configured' });
+    }
+    const run = await db.one<{ destination: string }>(
+      `SELECT destination FROM backup_runs WHERE id = $1`, [req.params.id]);
+    if (!run?.destination) return reply.code(404).send({ error: 'not_found' });
+
+    // The COPY, not the live store: the run's destination names its own blob directory,
+    // and verifying against the live data would always answer yes.
+    const copy = openStore(join(run.destination, 'blobs'));
+    const out = await verifyBackup(db, copy, req.params.id);
+    return { checked: out.checked, missing: out.missing, whole: out.missing.length === 0 };
+  });
 };
