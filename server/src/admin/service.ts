@@ -17,24 +17,11 @@
  * and share at once, with reads and deletions still working — so the answer says how much
  * they are using, and the caller can say that out loud before doing it rather than after.
  */
+import type { AccountRow } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import type { Db } from '../db.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { record, type Actor } from './audit.js';
-
-export type AccountRow = {
-  id: string;
-  login: string;
-  state: string;
-  role: string;
-  quotaBytes: string;
-  usedBytes: string;
-  frozenAt: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-  /** For an unclaimed invitation: when it stops being redeemable. */
-  inviteExpiresAt: string | null;
-};
 
 /**
  * Every account, with what it holds and when it was last seen.

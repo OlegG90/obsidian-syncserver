@@ -9,6 +9,11 @@
  * **No key material passes through here, ever.** A console account has none (#115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
+import type { AccountRow, HealthResponse } from '@syncserver/shared';
+
+// The console's screens read these by name; the wire shape lives in shared so the server
+// and this browser agree about a column before it reaches the table as `undefined`.
+export type { AccountRow, HealthResponse };
 
 export class ApiError extends Error {
   constructor(
@@ -58,14 +63,8 @@ const call = async <T>(method: string, path: string, body?: unknown): Promise<T>
   return (text ? JSON.parse(text) : undefined) as T;
 };
 
-export interface Health {
-  status: string;
-  bootstrap_pending: boolean;
-  version?: string;
-}
-
 /** Open before authentication and before an administrator exists — which is when it is needed. */
-export const health = (): Promise<Health> => call('GET', '/health');
+export const health = (): Promise<HealthResponse> => call('GET', '/health');
 
 /** The first run: creates the password rather than replacing one (#107). */
 export const bootstrap = (password: string): Promise<{ login: string }> =>
@@ -75,18 +74,6 @@ export const signIn = async (login: string, password: string): Promise<void> => 
   const out = await call<{ access: string }>('POST', '/auth/console', { login, password });
   access = out.access;
 };
-
-export interface AccountRow {
-  id: string;
-  login: string;
-  state: string;
-  role: string;
-  quotaBytes: string;
-  usedBytes: string;
-  frozenAt: string | null;
-  lastSeenAt: string | null;
-  inviteExpiresAt: string | null;
-}
 
 export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '/admin/accounts');
 
