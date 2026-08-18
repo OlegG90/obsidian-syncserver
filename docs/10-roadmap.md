@@ -311,27 +311,22 @@ The third half is specified nowhere, because it has never been a feature — it 
 
 ### The image is pulled, not built on the server
 
-Today `docker compose build` runs **on the target**, which is why the deployment copies an archive of the
-source at all. That has three costs, and only one of them is convenience:
+The image is published from CI and pulled, which ends the three costs of building on the target:
+the platform trap (an image built on ARM dies on x86-64 with a silent exec-format error), a build
+that happens on the weakest machine involved, and a server that holds the whole build context
+just to build what it runs.
 
-- **the platform trap is permanent.** [13](13-deployment.md) opens with it and the `Dockerfile` repeats
-  it: an image built on an ARM machine dies on an x86-64 server with an exec format error that explains
-  nothing. Building on the target is the current answer, and it is an answer that costs a build;
-- **the build happens on the weakest machine involved**, using its memory and its disk;
-- **the source has to be there to build from**, so a server that only ever runs the thing holds the
-  whole build context.
-
-- [ ] **Publish the image from CI to a registry**, on a version tag rather than on every push to `main`
+- [x] **Publish the image from CI to a registry**, on a version tag rather than on every push to `main`
       — one image per released version, matching the single version across six manifests (#111), and
       tagged by commit as well so a running container can be traced to a build. The runners are x86-64,
-      which is the platform the trap is about.
-- [ ] **`docker compose pull` replaces `docker compose build`** in the procedure, with the image
+      which is the platform the trap is about. `docker-publish.yml` does this on a `v*` tag.
+- [x] **`docker compose pull` replaces `docker compose build`** in the procedure, with the image
       pinned to a version. `latest` is not used: a server updated a few times a year must be able to
-      say what it is running, and to go back.
-- [ ] **`pack.sh` shrinks to what compose actually reads** — the compose file, `.env` and
+      say what it is running, and to go back. The local-build path survives as `docker-compose.dev.yml`.
+- [x] **`pack.sh` shrinks to what compose actually reads** — the compose file, `.env` and
       `db/schema.sql`, which the database container mounts to initialise itself. The copy does not
       disappear, and the roadmap should not pretend it does; it stops being a copy of the source.
-- [ ] **The registry choice is a public one**, so no credential lives on the server. The image holds a
+- [x] **The registry choice is a public one**, so no credential lives on the server. The image holds a
       built server and its dependencies — the same code the repository already publishes — and no
       secret: `.env` is excluded from the build context, and neither `POSTGRES_PASSWORD` nor
       `SERVER_SECRET` has a default to leak.

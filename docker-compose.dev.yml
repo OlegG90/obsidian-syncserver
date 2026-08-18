@@ -1,0 +1,14 @@
+# Build the server image from source, instead of pulling the published one.
+#
+# The deployment path is `docker compose pull` of the image CI publishes (docs/13); this
+# override is for development, where the point is to run the source you are editing rather
+# than the last release. Compose merges it over docker-compose.yml:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# It replaces the image with a locally-built one of the same name, so a deploy that
+# switches back to the published image needs no other change.
+services:
+  server:
+    build: .
+    image: syncserver:dev

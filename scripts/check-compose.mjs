@@ -62,9 +62,26 @@ for (const required of ['POSTGRES_PASSWORD', 'SERVER_SECRET']) {
   );
 }
 
+// The image comes from CI, pinned to a version in .env — never built on the target and
+// never `latest`. `latest` names a moving target a specific installation cannot be rolled
+// back to. The `:?` makes an unset SERVER_IMAGE a refusal rather than a surprise pull of
+// whatever compose decided.
+check(
+  /\$\{SERVER_IMAGE:\?/.test(text),
+  'SERVER_IMAGE must come from .env with ${SERVER_IMAGE:?…}, never a default',
+);
+check(/image: \$\{SERVER_IMAGE/.test(text), 'server must pull the published image, not build one');
+check(!/\n\s+build:/.test(text), 'the deployment compose file must not build — see docker-compose.dev.yml');
+
+// The local-build override exists so development can run the source; it must be the
+// mirror image of the above — a build, of the same image name.
+const dev = readFileSync('docker-compose.dev.yml', 'utf8');
+check(/\n\s+build: \./.test(dev), 'docker-compose.dev.yml must provide the build the deployment file lacks');
+check(/image: syncserver:dev/.test(dev), 'docker-compose.dev.yml must name the same image for the switch back');
+
 if (problems.length > 0) {
   console.error(`${file}:`);
   for (const p of problems) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`${file}: two services, ordered on health, both mounts, no secrets written down`);
+console.log(`${file}: two services, ordered on health, both mounts, no secrets written down, pulled not built`);

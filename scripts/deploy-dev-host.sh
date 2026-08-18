@@ -77,6 +77,10 @@ else
     {
         printf 'POSTGRES_PASSWORD=%s\n' "$(secret)"
         printf 'SERVER_SECRET=%s\n' "$(secret)"
+        # The server image, pinned to this deployment's version. `latest` is not used — a
+        # server must be able to say what it is running, and to go back (docs/13). The
+        # version comes from VERSION, which pack.sh wrote into the archive.
+        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$(cat VERSION 2>/dev/null || echo 0.4.0)"
         # The uid:gid the container runs as, taken from the user running this script —
         # because that is the user creating and owning the data directories below.
         # `.env.example` carries a plausible pair and cannot carry a correct one: on a NAS
@@ -112,7 +116,12 @@ fi
 ln -sfn "$root/.env" .env
 
 say "build and start"
-docker compose up -d --build
+# The image is published from CI and pulled, not built on this host — the whole point of
+# the registry (docs/13, the platform trap). A missing or stale image is what `pull`
+# notices; `up -d` then starts it. A local build is still possible via
+# docker-compose.dev.yml.
+docker compose pull
+docker compose up -d
 
 say "schema"
 # db/schema.sql is an INIT script: PostgreSQL runs it once, on an empty data directory. So

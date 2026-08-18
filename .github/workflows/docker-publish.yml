@@ -1,0 +1,69 @@
+# Publish the server image to the container registry, on a version tag.
+#
+# This is the third answer to the platform trap that docs/13 opens with — "build on the
+# target, or for the target's platform, or publish from CI and pull". The runners are
+# x86-64, which is the platform the trap is about, so an image built here and pulled on
+# the server cannot be built for the wrong architecture by accident.
+#
+# It fires on tags, not on every push to main: one image per released version, matching
+# the single version across six manifests (#111). Every run also tags by commit, so a
+# running container can be traced to a build. The registry is GitHub's, and it is PUBLIC —
+# the server pulls with no credential, which is the whole point of the choice (docs/13).
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  # GitHub's container registry, unauthenticated on the pull side because the image is
+  # public. The image name is lowercased below: registry names must be, and the owner may
+  # not be.
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    name: build and publish the image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The tag to attach, from a `v0.4.0` style tag: the part after `v`. The workflow
+      # fires only on `v*`, so a missing match means the tag was malformed rather than that
+      # this step was reached accidentally. The owner is lowercased for the same reason the
+      # image name is — GHCR names must be lowercase.
+      - name: metadata
+        id: meta
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/syncserver" >> "$GITHUB_OUTPUT"
+
+      - name: login
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          # The workflow token can publish to this repository's packages; nothing else is
+          # asked of it. No long-lived secret lives in this repository.
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The platform the trap is about: a server that pulls this image is whatever it
+          # is, and this build is deliberately x86-64 so that it matches the most common
+          # deployment and says so rather than hoping.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.sha }}
