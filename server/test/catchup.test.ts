@@ -218,6 +218,13 @@ describe('catching a thawed replica up (SH-21)', () => {
   it('delivers what arrived during the freeze, and the history behind it', async () => {
     const share = await sharedFolder();
     const written = await writeWhileAway(share, `while away ${randomUUID()}`);
+    // Backdate the source version, so the test can tell a copied past from one that all
+    // happened at the moment of the catch-up (SH-23).
+    await db.query(
+      `UPDATE versions SET at = now() - interval '3 days' WHERE vault_id = $1 AND node_id = (
+         SELECT n.id FROM nodes n WHERE n.vault_id = $1 AND n.share_item_id = $2)`,
+      [share.owner.vaultId, written.shareItemId],
+    );
 
     const done = await db.tx((c) =>
       catchUpShare(c, { userId: share.away.id, vaultId: share.away.vaultId }, share.shareId),
@@ -233,11 +240,23 @@ describe('catching a thawed replica up (SH-21)', () => {
     assert.ok(theirs, 'their copy now holds the item');
     assert.equal(theirs!.sha256, written.sha256, 'pointing at the same bytes — the blob is not copied');
 
-    const author = await db.one<{ authorId: string }>(
-      `SELECT author_id AS "authorId" FROM versions WHERE vault_id = $1 AND node_id = $2`,
+    const version = await db.one<{ authorId: string; at: Date }>(
+      `SELECT author_id AS "authorId", at FROM versions WHERE vault_id = $1 AND node_id = $2`,
       [share.away.vaultId, theirs!.id],
     );
-    assert.equal(author!.authorId, share.owner.id, 'authorship survives the crossing (SH-19)');
+    assert.equal(version!.authorId, share.owner.id, 'authorship survives the crossing (SH-19)');
+    assert.ok(
+      version!.at.getTime() < Date.now() - 2 * 86400_000,
+      'and the original moment survives too — a past that all happened at the catch-up is not a past (SH-23)',
+    );
+
+    // The catch-up used to record the version but never claim its blob, so the member held
+    // bytes the quota did not know about. A claim must exist now.
+    const claim = await db.one(
+      `SELECT 1 AS x FROM user_blobs WHERE user_id = $1 AND sha256 = decode($2,'hex')`,
+      [share.away.id, written.sha256],
+    );
+    assert.ok(claim, 'the received history is claimed against the member’s quota, not free');
 
     const journal = await db.query(
       `SELECT 1 FROM journal WHERE vault_id = $1 AND node_id = $2`,

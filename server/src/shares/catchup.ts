@@ -25,12 +25,13 @@
  * (SH-01), so its name is not the source's to hand over.
  */
 import type { PoolClient } from 'pg';
-import { claimBlob, recordVersion } from '../holdings.js';
+import { claimBlob } from '../holdings.js';
 import { counterpartOf, createCounterpart, type Counterpart } from './replica.js';
 import { journalEntry } from '../revision.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 import { LIVE, LIVE_UNFROZEN } from './membership.js';
+import { copyVersions } from './materialise.js';
 
 /** One node of the source replica, in the order a reconciliation can apply it. */
 interface SourceNode {
@@ -226,14 +227,13 @@ export const catchUpShare = async (
 
   // The history of the gap, which is the half that makes this a catch-up rather than a
   // re-copy: every version the source holds that this replica does not, attached to the
-  // corresponding node and keeping the author it was written by (SH-19). Revisions are the
-  // source's, not renumbered — `versions` is keyed by them, and the vault's own `rev`
-  // sequence has already moved past them above.
-  const itemOf = new Map([...mine.entries()].map(([item, n]) => [n.id, item]));
+  // corresponding node and keeping the author it was written by (SH-19) and the moment it
+  // was written (SH-23). Revisions are the source's, not renumbered — `versions` is keyed
+  // by them, and the vault's own `rev` sequence has already moved past them above.
   const byItem = new Map([...mine.entries()].map(([item, n]) => [item, n.id]));
-  const missing = await c.query<{ shareItemId: string; rev: string; sha256: string; size: number; authorId: string }>(
+  const missing = await c.query<{ shareItemId: string; rev: string; sha256: string; size: number; authorId: string; at: string }>(
     `SELECT sn.share_item_id AS "shareItemId", v.rev::text AS rev,
-            encode(v.sha256,'hex') AS sha256, v.size, v.author_id AS "authorId"
+            encode(v.sha256,'hex') AS sha256, v.size, v.author_id AS "authorId", v.at
        FROM versions v
        JOIN nodes sn ON sn.vault_id = v.vault_id AND sn.id = v.node_id
       WHERE v.vault_id = $1 AND sn.share_id = $2 AND sn.share_item_id <> $3
@@ -241,22 +241,24 @@ export const catchUpShare = async (
     [source.vaultId, shareId, rootItemId],
   );
 
-  for (const v of missing.rows) {
-    const nodeId = byItem.get(v.shareItemId);
-    if (!nodeId || !itemOf.has(nodeId)) continue;
-    // Absorbing a collision, which only this pass may do: it walks a whole replica and may
-    // meet versions an earlier pass already delivered.
-    const { written } = await recordVersion(c, {
-      vaultId: member.vaultId,
-      nodeId,
-      rev: Number(v.rev),
-      sha256: v.sha256,
-      size: v.size,
-      authorId: v.authorId,
-      ifAbsent: true,
-    });
-    if (written) done.versions++;
-  }
+  // The replica index holds only what the node walk placed; a version whose node the walk
+  // never created (a parent deleted in the meantime) has no counterpart to attach to.
+  const caught = await copyVersions(c, {
+    vaultId: member.vaultId,
+    userId: member.userId,
+    mode: 'keep',
+    versions: missing.rows
+      .filter((v) => byItem.has(v.shareItemId))
+      .map((v) => ({
+        targetNodeId: byItem.get(v.shareItemId)!,
+        rev: Number(v.rev),
+        sha256: v.sha256,
+        size: v.size,
+        authorId: v.authorId,
+        at: v.at,
+      })),
+  });
+  done.versions += caught;
 
   // Catching up is content arriving, so it can put the account straight back over the line —
   // which is the honest outcome, not a failure: they are frozen again, having received what
