@@ -14,9 +14,10 @@ import { registerNodeRoutes } from './nodes/routes.js';
 import { registerPairingRoutes } from './pairing/routes.js';
 import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
-import { registerConsoleRoutes } from './console.js';
+import { registerConsoleRoutes, CONSOLE_PATHS } from './console.js';
 import { backupInProgress } from './backup.js';
 import { backupLegs } from './backup-legs.js';
+import { restoreStatus } from './restore.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, registerBootstrapGuard } from './bootstrap.js';
@@ -82,6 +83,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerVaultRoutes(app, db);
   registerShareRoutes(app, db, cfg);
   registerAdminRoutes(app, db, {
+    restoreStateFile: cfg.restoreStateFile,
     ...(cfg.backup
       ? {
           destination: cfg.backup.destination,
@@ -93,6 +95,25 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
       : {}),
   });
   await registerConsoleRoutes(app);
+
+  // The halt after an unconfirmed restore (docs/11). The database is behind the state
+  // file, so a restore happened and nobody confirmed it — and the silent divergence the
+  // epoch exists to prevent would otherwise begin. Everything except the health check, the
+  // console (which carries the confirm screen) and the restore endpoints answers
+  // `restore_pending`, so the one way out stays reachable.
+  const RESTORE_OPEN = new Set(['/health', '/auth/console', '/admin/restore', '/admin/restore/confirm', ...CONSOLE_PATHS]);
+  app.addHook('onRequest', async (req, reply) => {
+    const path = req.url.split('?')[0] ?? '';
+    if (RESTORE_OPEN.has(path)) return;
+    const status = await restoreStatus(db, cfg.restoreStateFile);
+    if (!status.pending) return;
+    return reply.code(503).send({
+      error: 'restore_pending',
+      message:
+        'This database is older than this server has ever run with — a restore happened and ' +
+        'was not confirmed. Open the console and confirm it, or investigate.',
+    });
+  });
 
   // The refusal window (#114). One hook rather than a check in every write path: what the
   // window turns away is *new* requests, and this is the one place all of them pass. It is

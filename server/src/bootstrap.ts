@@ -27,7 +27,16 @@ import type { Db } from './db.js';
 // 503 to the page carrying it would make the server unreachable by the very thing meant to
 // start it. The list stays exact rather than a prefix — "everything under /" would open the
 // whole API, which is the opposite of what this file is for.
-const OPEN_DURING_BOOTSTRAP = new Set(['/auth/kdf', '/auth/bootstrap', '/health', ...CONSOLE_PATHS]);
+const OPEN_DURING_BOOTSTRAP = new Set([
+  '/auth/kdf',
+  '/auth/bootstrap',
+  '/health',
+  // The restore endpoints: a halt that also refuses the endpoint used to confirm the
+  // restore is a halt nobody can leave (#58).
+  '/admin/restore',
+  '/admin/restore/confirm',
+  ...CONSOLE_PATHS,
+]);
 
 export const hasActiveAdministrator = async (db: Db): Promise<boolean> => {
   const row = await db.one<{ exists: boolean }>(

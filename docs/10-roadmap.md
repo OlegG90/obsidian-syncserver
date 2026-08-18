@@ -280,8 +280,10 @@ The third half is specified nowhere, because it has never been a feature — it 
       own assets, and the one screen that matters on a fresh server is the one that redeems the seeded
       invitation (#107). Whatever widens it must widen it for **exactly** the static bundle, since the
       point of the guard is that a server with no administrator does nothing else.
-- [ ] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
+- [x] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
       list: a halt that also refuses the endpoint used to confirm the restore is a halt nobody can leave.
+      `/admin/restore` and `/admin/restore/confirm` sit in both the bootstrap allowlist and the halt's
+      open list (server/src/bootstrap.ts, server/src/app.ts).
 - [x] **The first administrator sets a password rather than redeeming an invitation** (#107, #115). The
       seeded row is a console account with none, the console's only screen until one exists is the setting
       of it, and setting it is what creates it — so no default ever works. A fresh server therefore needs

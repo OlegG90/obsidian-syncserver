@@ -102,6 +102,13 @@ export interface Config {
         blobSource: string;
       }
     | undefined;
+  /**
+   * Where the server records the newest `restore_epoch` it has ever run with. This file is
+   * what makes an unconfirmed restore detectable at the next start, and what the confirm
+   * step raises the epoch ABOVE — it has to survive a restore, so it lives outside both
+   * the database dump and the blob store (docs/08).
+   */
+  restoreStateFile: string;
 }
 
 const DEV_SECRET = 'development-only-server-secret';
@@ -132,6 +139,7 @@ export const loadConfig = (): Config => {
       pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
+    restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
   };
 
   const destination = process.env['BACKUP_DESTINATION'];
