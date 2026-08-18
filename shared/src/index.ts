@@ -301,3 +301,29 @@ export interface HealthResponse {
    */
   version?: string;
 }
+
+// ---- management console ---------------------------------------------------------
+
+/**
+ * One row of `/admin/accounts` — the shape the server builds and the console renders.
+ *
+ * Here rather than in either side because both touch it: the server's SQL aliases columns
+ * to these names, and the console's table reads them. Declared once, a column renamed in
+ * the query no longer compiles on both sides and reaches the screen as `undefined`.
+ *
+ * The byte figures are strings on purpose: they cross a JSON boundary, and a `bigint`
+ * would round above 2^53.
+ */
+export type AccountRow = {
+  id: string;
+  login: string;
+  state: string;
+  role: string;
+  quotaBytes: string;
+  usedBytes: string;
+  frozenAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  /** For an unclaimed invitation: when it stops being redeemable. */
+  inviteExpiresAt: string | null;
+};
