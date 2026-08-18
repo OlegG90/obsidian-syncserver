@@ -22,6 +22,7 @@ import {
   shareEnvelopeAad,
   shareFolder,
   leaveShare,
+  requireEveryNameReadable,
   type AcceptDeps,
   type LeaveDeps,
   type SharedNode,
@@ -620,6 +621,52 @@ describe('leaving, which is the conversion run backwards', () => {
       () => shareFolder(h.deps, 'Team', [node('Team'), node('Team/a.md', 'addr-a')]),
       /no content key under scope/,
     );
+  });
+});
+
+describe('what a departure demands before it starts', () => {
+  /** A device holding the vault key and this share's key, and nothing else. */
+  const holding = (openable: readonly string[]) => ({
+    keyIfOpenable: (id: string | null | undefined) =>
+      !id || openable.includes(id) ? new Uint8Array(32) : undefined,
+  });
+
+  it('starts when every name in the replica can be read', () => {
+    const rows = [
+      { name_enc: 'aaaa', name_key_id: null },
+      { name_enc: 'bbbb', name_key_id: SHARE_SCOPE },
+    ];
+    assert.doesNotThrow(() => requireEveryNameReadable(rows, holding([SHARE_SCOPE])));
+  });
+
+  it('refuses before anything is touched, and says how many and which scope', () => {
+    // The refusal is the whole point: finalization is checked for COMPLETENESS, and the
+    // schema will not unmark a node whose name is not yet under KV, so a name this device
+    // cannot read is not a node to skip — it is a departure that cannot be completed. Saying
+    // so up front is the difference between "nothing happened" and a share left mid-conversion.
+    const rows = [
+      { name_enc: 'aaaa', name_key_id: null },
+      { name_enc: 'bbbb', name_key_id: 'a-scope-that-never-arrived' },
+      { name_enc: 'cccc', name_key_id: 'a-scope-that-never-arrived' },
+    ];
+
+    assert.throws(
+      () => requireEveryNameReadable(rows, holding([SHARE_SCOPE])),
+      (e: Error) => {
+        assert.match(e.message, /cannot read 2 name/, 'counted, not just noticed');
+        assert.match(e.message, /a-scope-that-never-arrived/, 'and named');
+        assert.match(e.message, /Nothing has been changed/, 'and says the share is intact');
+        return true;
+      },
+    );
+  });
+
+  it('refuses a node with no name at all, rather than inventing one', () => {
+    // This is where the node id used to be substituted. `rekey` re-encrypts a name
+    // unconditionally, so carrying on here renamed somebody's file to a UUID under their own
+    // vault key — a wrong name rather than a missing one, and nothing downstream could tell.
+    const rows = [{ name_enc: null, name_key_id: SHARE_SCOPE }];
+    assert.throws(() => requireEveryNameReadable(rows, holding([SHARE_SCOPE])), /cannot read 1 name/);
   });
 });
 

@@ -30,6 +30,7 @@ import { fromBase64, fromUtf8, randomBytes, randomUuid, toBase64, utf8 } from '.
 import { HEADER_BYTES } from '../src/crypto/format.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
+import { scopesOf } from './vault-scopes.js';
 import { MemoryStateStore } from '../src/engine/state.js';
 import { newPairingCode } from '../src/crypto/pairing-code.js';
 import { session, type Session } from '../src/session/index.js';
@@ -503,8 +504,7 @@ describe('the engine, device A pushes and device B pulls', () => {
     new SyncEngine(
       wire,
       ownVaultId,
-      await client.openVault(ownVaultId),
-      kv2,
+      scopesOf(await client.openVault(ownVaultId), kv2),
       vault,
       store,
       label,

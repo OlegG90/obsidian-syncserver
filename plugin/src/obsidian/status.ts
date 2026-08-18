@@ -218,6 +218,17 @@ const categoryLines = (c: ReportCategory): string[] => {
         `This vault was reset on another device. Your unsynced work was kept, moved aside:`,
         ...c.items.map((q) => `  ${q.from}  →  ${q.to}`),
       ];
+    case 'unreadable':
+      // Says what was NOT done and why, because the folder looks perfectly ordinary on disk
+      // and its files silently stopped moving. "Nothing was changed" is the part that stops
+      // this reading as damage.
+      return [
+        `Shared folder${c.items.length === 1 ? '' : 's'} this device has no key for (${c.items.length}):`,
+        ...c.items.map((u) => `  ${u.path}`),
+        '',
+        'Nothing inside was changed, in either direction. The key reaches this device when',
+        'the folder is shared with it again, or when another of your devices approves it.',
+      ];
     case 'pushed':
       return [`Uploaded: ${c.items.length}`];
     case 'pulled':

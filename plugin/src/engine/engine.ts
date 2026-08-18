@@ -32,7 +32,7 @@
  * *pages* are not applied incrementally — the full walk is the data source, the probe is
  * only the provenance check (incremental application is M2).
  */
-import type { DeltaEvent, OpenedVault } from '@syncserver/shared';
+import type { DeltaEvent } from '@syncserver/shared';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
@@ -42,7 +42,7 @@ import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
 import { folderMoves, renameSourceFor, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
-import { vaultScopeIdOf } from '../share-keys.js';
+import { VaultScopes } from '../share-keys.js';
 
 export interface SyncReport {
   /**
@@ -89,6 +89,17 @@ export interface SyncReport {
    * about a disappearance (a folder not yet mounted) must not delete somebody's work.
    */
   vanished: { path: string }[];
+  /**
+   * Shared folders this device holds no key for, one entry each (#115's cousin: a key that
+   * has not arrived, not a permission that was refused).
+   *
+   * **Not an error, and deliberately not part of the pass's mood.** Everything that could
+   * sync did; a folder whose key has not reached this device is a state that persists until
+   * it does, so letting it dominate would make "up to date" an unreachable answer for as
+   * long as the state lasts. It is counted and named, which is what a person can act on —
+   * deliver the key, or pair this device — and nothing more.
+   */
+  unreadable: UnreadableFolder[];
   errors: { path: string; message: string }[];
 }
 
@@ -110,6 +121,20 @@ export interface ServerNode {
    * the parent already said it was.
    */
   shareId?: string | null;
+}
+
+/**
+ * A shared folder this pass could not read, and therefore must leave alone on both sides.
+ *
+ * One entry per SHARE, not per file: one undelivered key makes every name inside a folder
+ * unreadable together, so a list per node would be the same fact repeated as many times as
+ * the folder has files. The `path` is the folder itself, which is readable because a share
+ * root's own label is under `KV` (SH-01) — it is both what a person needs told and what the
+ * walk must not treat as its business.
+ */
+export interface UnreadableFolder {
+  path: string;
+  scopeId: string;
 }
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
@@ -193,29 +218,24 @@ export class SyncEngine {
     private readonly client: VaultWire,
     private readonly vaultId: string,
     /**
-     * The vault as it stood when this operation began (docs/06).
+     * The vault as it stood when this operation began, and the keys that read it (docs/06).
      *
      * Handed in rather than fetched, and that is the point: `sync` needed it and `readTree`
      * needed it, so a pass asked twice and a single share operation asked five times — every
      * answer describing the same instant. A value the caller opens once is also what lets
      * this class stop knowing how a vault is opened at all.
+     *
+     * It carries `KV` and the share keys too, because they describe that same instant. They
+     * were three constructor arguments assembled by every caller, which is one instant
+     * described three times and three chances for the descriptions to disagree.
      */
-    private readonly opened: OpenedVault,
-    /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
-    private readonly vaultKey: Uint8Array,
+    private readonly scopes: VaultScopes,
     private readonly vault: VaultAdapter,
     private readonly store: StateStore,
     /** Named in a conflict file's filename (docs/04): `Note (conflict 2026-08-01 laptop).md`. */
     private readonly deviceLabel = 'device',
     /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
     private readonly syncObsidian = false,
-    /**
-     * Keys for the scopes beyond the vault's own — a share's `KS`, unwrapped by the client
-     * (docs/06: KS is random and transported, not derived from the seed). Keyed by the
-     * scope's `key_id`, which is what a node's `name_key_id` names. Empty today, which is
-     * exactly right: there are no shares yet, and every node is named under the vault scope.
-     */
-    private readonly shareScopeKeys?: Map<string, Uint8Array>,
   ) {}
 
   /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
@@ -224,16 +244,13 @@ export class SyncEngine {
   /**
    * The key for a key scope, resolved by the scope's `key_id`.
    *
-   * The vault's own scope is the default a node inherits from the root; any other `key_id`
-   * must be a share scope this client can open. A node named under a scope we hold no key
-   * for is a defect — if we can see the node we must be able to decrypt its name — and
-   * silently falling back to the vault key would decrypt nothing while looking like success.
+   * The strict form, deliberately: every caller of this is about to write something — a name,
+   * an hmac, a wrapped content key — and a wrong key there is a wrong value written, not a
+   * failure. The one caller that must survive a missing key is the tree read, and it asks
+   * `keyIfOpenable` instead.
    */
-  private scopeKeyFor(nameKeyId: string | null | undefined, vaultScopeId: string): Uint8Array {
-    if (!nameKeyId || nameKeyId === vaultScopeId) return this.vaultKey;
-    const key = this.shareScopeKeys?.get(nameKeyId);
-    if (!key) throw new Error(`a node is named under a scope this client cannot open: ${nameKeyId}`);
-    return key;
+  private scopeKeyFor(nameKeyId: string | null | undefined): Uint8Array {
+    return this.scopes.keyFor(nameKeyId);
   }
 
   /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
@@ -245,15 +262,13 @@ export class SyncEngine {
   async sync(): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
-      deleted: [], removed: [], quarantined: [], vanished: [], errors: [], events: [],
+      deleted: [], removed: [], quarantined: [], vanished: [], unreadable: [], errors: [], events: [],
     };
     const state = await this.store.load();
 
-    const vaultScopeId = vaultScopeIdOf(this.opened.scopes);
-    const rootNodeId = this.opened.root_node_id;
-    const shareScopes = new Map(
-      this.opened.scopes.filter((s) => s.share_id).map((s) => [s.share_id!, s.key_id] as const),
-    );
+    const vaultScopeId = this.scopes.vaultScopeId;
+    const rootNodeId = this.scopes.opened.root_node_id;
+    const shareScopes = this.scopes.shareScopes();
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
     // what a missing node means (#70). The pages themselves are re-read through the walk —
@@ -262,11 +277,25 @@ export class SyncEngine {
     const epoch: RemoteEpoch = probe.epoch;
     report.events = probe.events;
 
-    const { tree, cursor } = await this.readServerTree(rootNodeId, vaultScopeId);
+    const { tree, cursor, unreadable } = await this.readServerTree(rootNodeId);
     const byNodeId = new Map<string, ServerNode>();
     for (const n of tree.values()) byNodeId.set(n.nodeId, n);
 
-    const local = (await this.vault.list()).filter((f) => this.scope(f.path));
+    /**
+     * In scope for this pass: syncable, and not inside a shared folder we cannot read.
+     *
+     * The second half is not a preference. A folder whose interior was skipped is absent from
+     * the tree, and absent from the tree means "the server has never heard of this" — which
+     * the walk answers by uploading. Under `KV`, into the vault's own scope. That is a share's
+     * contents silently converted into ordinary notes, so the exclusion is the same rule as
+     * `.obsidian/`: out of scope, in both directions, for as long as it stays unreadable.
+     */
+    const inScope = (path: string): boolean =>
+      this.scope(path) && !unreadable.some((u) => path === u.path || path.startsWith(`${u.path}/`));
+
+    report.unreadable = unreadable;
+
+    const local = (await this.vault.list()).filter((f) => inScope(f.path));
     report.scanned = local.length;
 
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
@@ -277,7 +306,7 @@ export class SyncEngine {
       const bytes = await this.vault.read(f.path);
       meta.set(f.path, {
         plainHash: toHex(sha256(bytes)),
-        tag: dedupTag(this.vaultKey, bytes),
+        tag: dedupTag(this.scopes.vaultKey, bytes),
         mtime: f.mtime,
         size: bytes.length,
       });
@@ -307,8 +336,10 @@ export class SyncEngine {
     for (const [path, known] of Object.entries(ctx.state.nodes)) {
       // Out of scope paths are frozen, not vanished: turning the `.obsidian/` switch off
       // must not read "still on the server, not on disk" as a deletion to push. They stay
-      // in state so flipping the switch back on resumes them as ordinary files.
-      if (!this.scope(path)) continue;
+      // in state so flipping the switch back on resumes them as ordinary files. An
+      // unreadable share is frozen for exactly the same reason and by the same rule — when
+      // its key arrives, the files resume as themselves rather than as a pile of deletes.
+      if (!inScope(path)) continue;
       if (here.has(path)) continue;
       const list = ctx.vanished.get(known.plainHash) ?? [];
       list.push({ path, nodeId: known.nodeId, rev: known.rev, address: known.address });
@@ -396,22 +427,63 @@ export class SyncEngine {
    * rebuild the paths" would be a second thing to get wrong about scopes.
    */
   async readTree(): Promise<Map<string, ServerNode>> {
-    const vaultScopeId = vaultScopeIdOf(this.opened.scopes);
-    const { tree } = await this.readServerTree(this.opened.root_node_id, vaultScopeId);
+    const { tree } = await this.readServerTree(this.scopes.opened.root_node_id);
     return tree;
   }
 
-  private async readServerTree(rootNodeId: string, vaultScopeId: string): Promise<{ tree: Map<string, ServerNode>; cursor: string }> {
+  /**
+   * Every node the server holds, as paths — skipping any subtree this device cannot read.
+   *
+   * **The one read that must survive a missing key.** Every other use of a scope key is about
+   * to write something, so a missing key there is a defect worth refusing. This one is a
+   * listing, and refusing it stopped the entire pass — before a report existed, from the only
+   * one of nine such call sites with no `try` around it. A share whose key has not reached
+   * this device is a state, not a fault: the client drops such scopes deliberately, and this
+   * is where that decision is either kept or quietly broken.
+   *
+   * **The skip is transitive, and it has to be.** A path is built from its parent's path, so
+   * a skipped folder whose children were kept would put those children at the vault root.
+   * The listing arrives parents-first, so remembering which ids were skipped is enough.
+   *
+   * `unreadable` travels back with the tree because the local side needs it: a subtree that
+   * is simply absent from the tree reads as "files the server has never heard of", which the
+   * walk would upload — the contents of an unreadable share, re-uploaded as ordinary notes
+   * under `KV`. The prefix is the skipped node's PARENT, which is the share's root: a root's
+   * own label is under `KV` (SH-01), so its path is readable even when its interior is not,
+   * and one key covers a whole share, so every child of that root is unreadable together.
+   */
+  private async readServerTree(
+    rootNodeId: string,
+  ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: UnreadableFolder[] }> {
     const res = await this.client.listNodes(this.vaultId);
     const pathOf = new Map<string, string>([[rootNodeId, '']]);
     const tree = new Map<string, ServerNode>();
+    const skipped = new Set<string>();
+    const unreadable: UnreadableFolder[] = [];
 
     for (const n of res.nodes) {
       if (n.node_id === rootNodeId) continue;
+      // Below something already skipped: no path to build one from, and nothing to read.
+      if (n.parent_id && skipped.has(n.parent_id)) {
+        skipped.add(n.node_id);
+        continue;
+      }
       const parentPath = pathOf.get(n.parent_id ?? '') ?? '';
       // A node's name is encrypted under the scope it is named in — the vault's, or a
       // share's `KS` for a node inside a shared folder (SH-28). The wire names that scope.
-      const name = n.name_enc ? decryptName(this.scopeKeyFor(n.name_key_id, vaultScopeId), n.name_enc) : n.node_id;
+      const key = n.name_enc ? this.scopes.keyIfOpenable(n.name_key_id) : this.scopes.vaultKey;
+      if (!key) {
+        skipped.add(n.node_id);
+        // An empty parent path would mean excluding the whole vault, which no missing share
+        // key can justify. It is also unreachable — a node named under a share scope has a
+        // share root above it, and that root is never the vault root.
+        const scopeId = n.name_key_id!;
+        if (parentPath && !unreadable.some((u) => u.scopeId === scopeId)) {
+          unreadable.push({ path: parentPath, scopeId });
+        }
+        continue;
+      }
+      const name = n.name_enc ? decryptName(key, n.name_enc) : n.node_id;
       const path = parentPath ? `${parentPath}/${name}` : name;
       pathOf.set(n.node_id, path);
 
@@ -428,7 +500,7 @@ export class SyncEngine {
       });
     }
 
-    return { tree, cursor: res.snapshot };
+    return { tree, cursor: res.snapshot, unreadable };
   }
 
   // ---- one local file -----------------------------------------------------------
@@ -548,7 +620,7 @@ export class SyncEngine {
     const bytes = await this.vault.read(path);
     return {
       plainHash: toHex(sha256(bytes)),
-      tag: dedupTag(this.vaultKey, bytes),
+      tag: dedupTag(this.scopes.vaultKey, bytes),
       mtime: Date.now(),
       size: bytes.length,
     };
@@ -582,8 +654,8 @@ export class SyncEngine {
         const nameScopeId = this.contentScopeId(ctx, move.to);
         const out = await this.client.moveNode(this.vaultId, move.nodeId, move.rev, {
           parent_id: destParentId,
-          name_enc: encryptName(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
-          name_hmac: nameHmac(this.scopeKeyFor(nameScopeId, ctx.vaultScopeId), name),
+          name_enc: encryptName(this.scopeKeyFor(nameScopeId), name),
+          name_hmac: nameHmac(this.scopeKeyFor(nameScopeId), name),
           name_key_id: nameScopeId,
         });
         this.remapTreePaths(move.from, move.to, out.rev, ctx);
@@ -653,7 +725,7 @@ export class SyncEngine {
     const name = basename(file.path);
     // The moved node's new name is named under the scope of its destination folder.
     const nameScopeId = this.contentScopeId(ctx, file.path);
-    const nameKey = this.scopeKeyFor(nameScopeId, ctx.vaultScopeId);
+    const nameKey = this.scopeKeyFor(nameScopeId);
 
     const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
       parent_id: parentId,
@@ -757,7 +829,7 @@ export class SyncEngine {
     const { sha256: address, material } = await this.resolveContent(plain, scopeId, ctx);
     const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
-    const nameKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
+    const nameKey = this.scopeKeyFor(scopeId);
 
     const created = await this.client.createNode(this.vaultId, {
       parent_id: parentId,
@@ -789,7 +861,7 @@ export class SyncEngine {
     scopeId: string,
     ctx: PassContext,
   ): Promise<{ sha256: string; material: { blob_envelopes: { sha256: string; scope_id: string; wrapped_key: string }[]; dedup_tags: { sha256: string; scope_id: string; content_tag: string }[] } }> {
-    const scopeKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
+    const scopeKey = this.scopeKeyFor(scopeId);
     const tag = dedupTag(scopeKey, plain);
     const dedupMatch = ctx.dedup.get(tag);
     if (dedupMatch) {
@@ -849,7 +921,7 @@ export class SyncEngine {
 
     const ciphertext = await this.client.getBlob(node.address);
     if (!ciphertext) throw new Error('the server holds no bytes at that address');
-    return openBlob(unwrapContentKey(this.scopeKeyFor(scopeId, ctx.vaultScopeId), envelope.wrappedKey), ciphertext);
+    return openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
   }
 
   // ---- delete ---------------------------------------------------------------------
@@ -962,7 +1034,7 @@ export class SyncEngine {
         const ciphertext = await this.client.getBlob(node.address!);
         if (!ciphertext) throw new Error('the server holds no bytes at that address');
 
-        const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId, ctx.vaultScopeId), envelope.wrappedKey), ciphertext);
+        const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
         ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
@@ -989,7 +1061,7 @@ export class SyncEngine {
       // A folder is named under its own parent's scope, so a folder inside a shared folder
       // is itself named under the share's `KS` (SH-28).
       const scopeId = this.contentScopeId(ctx, sofar);
-      const scopeKey = this.scopeKeyFor(scopeId, ctx.vaultScopeId);
+      const scopeKey = this.scopeKeyFor(scopeId);
       const created = await this.client.createNode(this.vaultId, {
         parent_id: parentId,
         type: 'folder',
