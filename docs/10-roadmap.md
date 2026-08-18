@@ -306,8 +306,10 @@ The third half is specified nowhere, because it has never been a feature — it 
       dump references — a restore that completes, looks whole, and cannot open a note.
 - [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
       refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
-- [ ] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
-      periodic restore rehearsal, and whatever runs it nightly. Written once.
+- [~] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
+      periodic restore rehearsal, and whatever runs it nightly. Written once — `verifyBackup` in
+      `backup.ts`, which the console's Verify button calls. The rehearsal and the nightly self-check
+      are the two callers that do not exist yet.
 
 ### The image is pulled, not built on the server
 
