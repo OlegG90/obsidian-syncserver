@@ -172,16 +172,26 @@ console adds on top.
 
 ### Backups: trigger and observe, do not download
 
-The console can start a backup, show the schedule, and list previous runs with their status, size, blob
-count and destination. A run records the **refusal window** and both legs (#114), and `CHECK`s reject a leg
+The console can start a backup and list previous runs with their status, size, blob
+count, error and verification. A run records the **refusal window** and both legs (#114), and `CHECK`s reject a leg
 taken outside it, or a blob leg the database leg did not precede — so a half-finished backup, or one whose two stores describe different instants, can
 never be mistaken for a usable one.
+
+**Verification is a first-class step**, not an aside: a Verify button on each finished run asks
+the one integrity check — for every `nodes.sha256` and `versions.sha256`, does the copy hold
+the bytes at that address — and reports the missing blobs by name. The check lives in
+`server/src/backup.ts` (`verifyBackup`), shared with the restore rehearsal and any nightly
+self-check that follows.
 
 **Downloading a backup through the console is deliberately not a feature.** The reason is operational rather
 than privacy — under E2EE the backup is ciphertext and would leak no content. A backup is the whole server's
 data, and retrieval belongs at the operating-system / storage layer, at the same trust level as database
 access, not as a convenience button in a management UI. The backup goes to its configured destination, and
 getting it from there is an OS question.
+
+**Backups require configuration.** Without `BACKUP_DESTINATION`, `BACKUP_DB_COMMAND` and
+`BACKUP_BLOB_SOURCE` the button answers "not configured" rather than pretending; the three are
+all-or-nothing (server/src/config.ts).
 
 ### Restore: the console cannot perform it
 

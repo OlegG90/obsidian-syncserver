@@ -12,10 +12,11 @@
  * Needs the development database: `npm run db:reset` first.
  */
 import assert from 'node:assert/strict';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { backupInProgress, runBackup, settleInterruptedRuns, type Legs } from '../src/backup.js';
+import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, type Legs } from '../src/backup.js';
 
 let db: Db;
 
@@ -191,5 +192,127 @@ describe('a run the process did not outlive', () => {
     );
     assert.equal(row!.status, 'failed');
     assert.match(row!.error, /interrupted by a restart/);
+  });
+});
+
+describe('verifying a backup', () => {
+  /** A fake blob store: every address asked for is "present" unless the test says otherwise. */
+  const present = (absent: Set<string> = new Set()) => ({
+    // `verifyBackup` asks for the storage key (`ab/cd/full`), so "absent" has to match
+    // that shape, not the bare address.
+    size: async (key: string) => (absent.has(key) ? undefined : 1),
+  });
+
+  const runId = async (): Promise<string> => {
+    const r = await db.one<{ id: string }>(
+      `INSERT INTO backup_runs (status, window_opened_at, finished_at, db_done_at, blobs_done_at,
+                                window_closed_at, destination)
+       VALUES ('ok', now(), now(), now(), now(), now(), '/backups')
+       RETURNING id::text AS id`,
+    );
+    return r!.id;
+  };
+
+  const absentKey = (sha: string): string => `${sha.slice(0, 2)}/${sha.slice(2, 4)}/${sha}`;
+
+  /** A vault with one file node referencing one blob — the minimal world a verify checks. */
+  const seedWorld = async (): Promise<{ vaultId: string; sha: string }> => {
+    const userId = randomUUID();
+    await db.query(
+      `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
+                          enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
+       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 1048576)`,
+      [userId, `backup-verify-${randomUUID()}`],
+    );
+    const vaultId = randomUUID();
+    const rootId = randomUUID();
+    const keyId = randomUUID();
+    // Content-addressed: a blob IS its sha256, so each seeded world needs its own bytes.
+    const sha = randomBytes(32).toString('hex');
+    await db.query(`INSERT INTO key_scopes (id, kind) VALUES ($1, 'vault')`, [keyId]);
+    await db.tx(async (c) => {
+      await c.query(
+        `INSERT INTO vaults (id, user_id, name_enc, root_node_id, vault_key_id, vault_key_scope_kind)
+         VALUES ($1, $2, '\\x00', $3, $4, 'vault')`,
+        [vaultId, userId, rootId, keyId],
+      );
+      await c.query(
+        `INSERT INTO nodes (vault_id, id, parent_id, type, mtime, rev, ancestry)
+         VALUES ($1, $2, NULL, 'folder', now(), 1, ARRAY[]::uuid[])`,
+        [vaultId, rootId],
+      );
+      await c.query(`UPDATE vaults SET head_rev = 1 WHERE id = $1`, [vaultId]);
+      await c.query(
+        `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+         VALUES (decode($1,'hex'), 1, $1, 'xchacha20-poly1305', $2)`,
+        [sha, keyId],
+      );
+      // The schema demands a file node's blob carry its envelope and dedup tag under the
+      // vault scope — the same material a real client would have produced.
+      await c.query(
+        `INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
+         VALUES (decode($1,'hex'), $2, '\\xbeef')`,
+        [sha, keyId],
+      );
+      await c.query(
+        `INSERT INTO dedup_index (scope_id, content_tag, sha256)
+         VALUES ($1, decode($2,'hex'), decode($3,'hex'))`,
+        [keyId, 'ab'.repeat(32), sha],
+      );
+      await c.query(
+        `INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type,
+                            sha256, size, mtime, rev, ancestry)
+         VALUES ($1, $2, $3, '\\x00', decode($4,'hex'), $5, 'file', decode($6,'hex'), 1, now(), 2, ARRAY[$3]::uuid[])`,
+        [vaultId, randomUUID(), rootId, '00'.repeat(32), keyId, sha],
+      );
+      await c.query(`UPDATE vaults SET head_rev = 2 WHERE id = $1`, [vaultId]);
+    });
+    return { vaultId, sha };
+  };
+
+  it('reports a backup whole when every referenced blob is present', async () => {
+    await seedWorld();
+    const id = await runId();
+    const out = await verifyBackup(db, present(), id);
+    assert.deepEqual(out.missing, []);
+    assert.ok(out.checked > 0, 'there is at least one blob in this world to have checked');
+  });
+
+  it('names every referenced blob that is absent from the copy', async () => {
+    // The whole point of the check: a dump can reference bytes the copy does not hold, and
+    // that restores cleanly and is missing files. The missing half is named, not counted.
+    const { sha } = await seedWorld();
+    const id = await runId();
+    const out = await verifyBackup(db, present(new Set([absentKey(sha)])), id);
+
+    assert.ok(out.missing.includes(sha), `the absent blob is named: ${out.missing}`);
+  });
+
+  it('marks the run verified, which is what the console shows as the answer', async () => {
+    await seedWorld();
+    const id = await runId();
+    await verifyBackup(db, present(), id);
+    const row = await db.one<{ verified: string | null }>(
+      `SELECT verified_at AS verified FROM backup_runs WHERE id = $1`, [id]);
+    assert.ok(row!.verified, 'verified_at is written');
+  });
+});
+
+describe('listing backups', () => {
+  it('returns the runs newest first', async () => {
+    // A clean slate: the verify tests above have left rows behind, and this asserts an
+    // ORDER, not a count of whatever the suite has accumulated.
+    await db.query(`DELETE FROM backup_runs`);
+    const older = await db.one<{ id: string }>(
+      `INSERT INTO backup_runs (status, destination, window_opened_at, finished_at, db_done_at,
+                                blobs_done_at, window_closed_at)
+       VALUES ('ok', '/a', now(), now(), now(), now(), now()) RETURNING id::text AS id`);
+    await db.query(
+      `INSERT INTO backup_runs (status, destination) VALUES ('running', '/b')`);
+    const rows = await listBackups(db);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.status, 'running', 'the newest (the later insert) is first');
+    assert.equal(rows[1]!.id, older!.id);
   });
 });

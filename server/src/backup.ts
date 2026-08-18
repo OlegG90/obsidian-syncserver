@@ -168,3 +168,66 @@ export const settleInterruptedRuns = async (db: Db): Promise<number> => {
   );
   return rows.length;
 };
+
+/** One run, as a console or an operator sees it. */
+export type BackupRunRow = {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  bytes: string | null;
+  blobCount: string | null;
+  verifiedAt: string | null;
+  error: string | null;
+};
+
+/** The previous runs, newest first — what the console's backup list shows. */
+export const listBackups = async (db: Db, limit = 50): Promise<BackupRunRow[]> =>
+  db.query<BackupRunRow>(
+    `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
+            status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
+            verified_at AS "verifiedAt", error
+       FROM backup_runs
+      ORDER BY started_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+
+/**
+ * Whether every blob the database references is present at the copy's address.
+ *
+ * The **one integrity check** the roadmap names, and the three callers share it: the
+ * console's verify button, the periodic restore rehearsal, and the nightly run that checks
+ * the backup it just took. A backup is two stores captured as one window (#114); this is
+ * the question that proves they agree — for every `nodes.sha256` and `versions.sha256`,
+ * the bytes exist in the blob copy under that address.
+ *
+ * The store is the BACKUP's, not the live one's: checking the live store would ask "is the
+ * live data whole" and always answer yes. This asks "did the copy arrive".
+ *
+ * @param copy a reader over the backup's blob directory.
+ * @returns the missing addresses, empty when the backup is whole. The count of checked
+ *   blobs travels with it, because "whole" is only meaningful against "all of them".
+ */
+export const verifyBackup = async (
+  db: Db,
+  copy: { size(storageKey: string): Promise<number | undefined> },
+  runId: string,
+): Promise<{ missing: string[]; checked: number }> => {
+  const addresses = await db.query<{ sha256: string }>(
+    `SELECT encode(sha256, 'hex') AS sha256
+       FROM nodes WHERE sha256 IS NOT NULL
+     UNION
+     SELECT encode(sha256, 'hex') AS sha256
+       FROM versions`,
+  );
+
+  const missing: string[] = [];
+  for (const { sha256 } of addresses) {
+    const key = `${sha256.slice(0, 2)}/${sha256.slice(2, 4)}/${sha256}`;
+    if ((await copy.size(key)) === undefined) missing.push(sha256);
+  }
+
+  await db.query(`UPDATE backup_runs SET verified_at = now() WHERE id = $1`, [runId]);
+  return { missing, checked: addresses.length };
+};

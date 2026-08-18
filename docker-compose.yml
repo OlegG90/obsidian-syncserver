@@ -92,6 +92,11 @@ services:
       HOST: 0.0.0.0
       PORT: 8080
       BLOB_STORE_PATH: /data/blobs
+      # Backups, all-or-nothing: leaving these unset means the console's backup button
+      # answers "not configured", which is a truthful and safe answer.
+      BACKUP_DESTINATION: ${BACKUP_DESTINATION:-}
+      BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-}
+      BACKUP_BLOB_SOURCE: ${BACKUP_BLOB_SOURCE:-}
     volumes:
       - ${BLOB_DIR:-./data/blobs}:/data/blobs
     ports:

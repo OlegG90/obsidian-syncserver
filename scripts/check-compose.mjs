@@ -54,6 +54,15 @@ for (const [name, value] of Object.entries({ ...(db?.environment ?? {}), ...(ser
   check(String(value).startsWith('${'), `${name} must come from the environment, not be written here`);
 }
 
+// The backup variables are all-or-nothing, defaulted to empty so an unset deployment is a
+// truthful "not configured" rather than a secret or a path written here.
+for (const name of ['BACKUP_DESTINATION', 'BACKUP_DB_COMMAND', 'BACKUP_BLOB_SOURCE']) {
+  check(
+    String(server?.environment?.[name] ?? '').startsWith('${'),
+    `${name} must come from the environment, not be written here`,
+  );
+}
+
 // Both secrets must fail loudly when unset rather than default to something.
 for (const required of ['POSTGRES_PASSWORD', 'SERVER_SECRET']) {
   check(
