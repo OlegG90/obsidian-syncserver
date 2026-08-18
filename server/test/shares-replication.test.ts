@@ -237,6 +237,102 @@ describe('all of them or none of them', () => {
     assert.equal(afterSrc.length, beforeSrc.length, 'the ORIGINAL rolled back too, not only the replica');
     assert.equal(afterDst.length, beforeDst.length + 1, 'and the replica gained nothing beyond the row we planted');
   });
+
+  it('advances no replica when a propagated PUT cannot be written', async () => {
+    // Same contract, a different shape. The recipient is made unwritable by DISABLING their
+    // account: `fanoutTargets` excludes only FROZEN accounts, and a disabled one is still a
+    // target whose vault refuses the write (`owned_rows_require_active_user`). The
+    // propagation then raises inside the transaction that already updated the original, and
+    // the original must come undone with it.
+    const { inside, ks } = await sharedWith('atomic-put');
+    const file = await createFile(inside, `put-${randomUUID()}.md`, 'first', ks);
+    await w.db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [w.strangerId]);
+    try {
+      const next = randomUUID();
+      const nextHex = await putBlob(Buffer.from(next), ks);
+      const r = await w.app.inject({
+        method: 'PUT', url: `/vaults/${w.vaultId}/nodes/${file.nodeId}`, headers: auth(),
+        payload: {
+          sha256: nextHex, size: Buffer.byteLength(next), mtime: new Date().toISOString(),
+          base_sha256: file.sha256, ...materialFor(nextHex, ks),
+        },
+      });
+      assert.notEqual(r.statusCode, 200, 'the write did not succeed');
+
+      const src = await w.db.one<{ sha: string }>(
+        `SELECT encode(sha256,'hex') AS sha FROM nodes WHERE vault_id = $1 AND id = $2`, [w.vaultId, file.nodeId]);
+      assert.equal(src!.sha, file.sha256, 'the ORIGINAL still holds its old content');
+
+      const theirs = await theirCopyOf(file.nodeId);
+      const dst = await w.db.one<{ sha: string }>(
+        `SELECT encode(sha256,'hex') AS sha FROM nodes WHERE vault_id = $1 AND id = $2`, [w.strangerVaultId, theirs]);
+      assert.equal(dst!.sha, file.sha256, 'and the replica did not advance either');
+    } finally {
+      await w.db.query(`UPDATE users SET state = 'active' WHERE id = $1`, [w.strangerId]);
+    }
+  });
+
+  it('advances no replica when a propagated delete cannot be written', async () => {
+    const { inside, ks } = await sharedWith('atomic-delete');
+    const doomed = await createNode('folder', `doomed-${randomUUID()}`, inside, ks);
+    const theirs = await theirCopyOf(doomed);
+    await w.db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [w.strangerId]);
+    try {
+      const rev = await w.db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+        w.vaultId, doomed,
+      ]);
+      const r = await w.app.inject({
+        method: 'DELETE', url: `/vaults/${w.vaultId}/nodes/${doomed}`,
+        headers: { ...auth(), 'if-match': rev!.rev },
+      });
+      assert.notEqual(r.statusCode, 200, 'the delete did not succeed');
+
+      const src = await w.db.one<{ deleted: string | null }>(
+        `SELECT deleted_at AS deleted FROM nodes WHERE vault_id = $1 AND id = $2`, [w.vaultId, doomed]);
+      assert.equal(src!.deleted, null, 'the ORIGINAL is not in the trash');
+
+      const dst = await w.db.one<{ deleted: string | null }>(
+        `SELECT deleted_at AS deleted FROM nodes WHERE vault_id = $1 AND id = $2`, [w.strangerVaultId, theirs]);
+      assert.equal(dst!.deleted, null, 'and the replica is not either');
+    } finally {
+      await w.db.query(`UPDATE users SET state = 'active' WHERE id = $1`, [w.strangerId]);
+    }
+  });
+
+  it('advances no replica when a propagated move cannot be written', async () => {
+    const { inside, ks } = await sharedWith('atomic-move');
+    const a = await createNode('folder', `a-${randomUUID()}`, inside, ks);
+    const b = await createNode('folder', `b-${randomUUID()}`, inside, ks);
+    await w.db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [w.strangerId]);
+    try {
+      const rev = await w.db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+        w.vaultId, a,
+      ]);
+      const moved = await w.app.inject({
+        method: 'POST', url: `/vaults/${w.vaultId}/nodes/${a}/move`,
+        headers: { ...auth(), 'if-match': rev!.rev },
+        payload: {
+          parent_id: b,
+          name_enc: b64('moved'),
+          name_hmac: sha(Buffer.from(`moved-${randomUUID()}`)),
+          name_key_id: (await w.db.one<{ id: string }>(`SELECT name_key_id AS id FROM nodes WHERE vault_id = $1 AND id = $2`, [w.vaultId, a]))!.id,
+        },
+      });
+      assert.notEqual(moved.statusCode, 200, 'the move did not succeed');
+
+      const src = await w.db.one<{ parentId: string }>(
+        `SELECT parent_id AS "parentId" FROM nodes WHERE vault_id = $1 AND id = $2`, [w.vaultId, a]);
+      assert.equal(src!.parentId, inside, 'the ORIGINAL did not move');
+
+      const theirA = await theirCopyOf(a);
+      const theirInside = await theirCopyOf(inside);
+      const dst = await w.db.one<{ parentId: string }>(
+        `SELECT parent_id AS "parentId" FROM nodes WHERE vault_id = $1 AND id = $2`, [w.strangerVaultId, theirA]);
+      assert.equal(dst!.parentId, theirInside, 'and the replica stayed put too');
+    } finally {
+      await w.db.query(`UPDATE users SET state = 'active' WHERE id = $1`, [w.strangerId]);
+    }
+  });
 });
 
 describe('history arrives with the folder', () => {

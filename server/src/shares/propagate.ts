@@ -11,6 +11,12 @@
  * Synchronous fan-out is affordable only because a share holds at most eight participants
  * (SH-11), and that ceiling exists for this reason rather than as a product limit.
  *
+ * **One interface, not four.** The write path describes what happened to one node and hands
+ * it over; deciding whether that fans out, to whom, and in which of the four shapes is this
+ * module's alone. It used to be four guards and four `fanoutTargets` calls spread across
+ * `nodes/service.ts`, each restating by hand what a write must be for it to travel — and the
+ * four disagreed in shape even where they agreed in intent.
+ *
  * **`share_item_id` is the whole mechanism.** No participant can see another's node ids —
  * each replica has its own — so every operation here is expressed as "the node carrying
  * this item id, in that vault". It is the identity `join` was careful to copy.
@@ -28,7 +34,94 @@ import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
 
 /** A participant a write must reach: their account, and the vault their replica lives in. */
-export type Target = { userId: string; vaultId: string };
+interface Target {
+  userId: string;
+  vaultId: string;
+}
+
+/**
+ * What happened to one node, in a spelling the write path already holds.
+ *
+ * Every variant carries the share identity the guard needs, nullable because the same write
+ * function serves shared and private folders alike — `fanOut` reads the nulls and answers
+ * "nothing to fan out" when a write did not happen inside a share. The vault it happened in
+ * travels too, because it is the one member the fan-out set must exclude.
+ */
+export type FanoutEvent =
+  | {
+      kind: 'create';
+      vaultId: string;
+      shareId: string | null;
+      shareItemId: string | null;
+      parentShareItemId: string | null;
+      type: string;
+      nameEnc: string;
+      nameHmac: string;
+      nameKeyId: string;
+      sha256: string | null;
+      size: number | null;
+      mtime: string;
+      authorId: string;
+    }
+  | {
+      kind: 'put';
+      vaultId: string;
+      shareId: string | null;
+      shareItemId: string | null;
+      sha256: string;
+      size: number;
+      mtime: string;
+      authorId: string;
+    }
+  | { kind: 'delete'; vaultId: string; shareId: string | null; shareItemId: string | null }
+  | {
+      kind: 'move';
+      vaultId: string;
+      shareId: string | null;
+      shareItemId: string | null;
+      parentShareItemId: string | null;
+      nameEnc: string;
+      nameHmac: string;
+      nameKeyId: string;
+    };
+
+/**
+ * Fan a node write out to every other participant's copy.
+ *
+ * The one place the guard, the set, and the shape are decided. A write outside any share
+ * fans out to nobody; the targets are computed here at execution time rather than
+ * remembered (docs/04); and which of the four shapes applies falls out of the event.
+ *
+ * **Nothing here can throw for a reason the write path should absorb.** A replica that
+ * lacks the item is skipped, because it can only mean the item was created while that
+ * member was frozen and their catch-up is what repairs it — failing on one lagging copy
+ * would block everybody's writes. A replica that *fails to accept* the write is the
+ * atomicity contract: it propagates up and rolls the original write back with it.
+ */
+export const fanOut = async (c: PoolClient, event: FanoutEvent): Promise<void> => {
+  // The guard, once. A create and a move additionally need the parent's item id — the
+  // destination of the move, the containing folder of the create.
+  if (!event.shareId || !event.shareItemId) return;
+  if ((event.kind === 'create' || event.kind === 'move') && !event.parentShareItemId) return;
+
+  const targets = await fanoutTargets(c, event.shareId, event.vaultId);
+  switch (event.kind) {
+    case 'create':
+      // The guard above established the three identities; the internal shape needs them
+      // as facts, so they are re-asserted here rather than re-checked in every loop body.
+      await propagateCreate(c, targets, { ...event, shareId: event.shareId!, shareItemId: event.shareItemId!, parentShareItemId: event.parentShareItemId! });
+      break;
+    case 'put':
+      await propagatePut(c, targets, { ...event, shareId: event.shareId!, shareItemId: event.shareItemId! });
+      break;
+    case 'delete':
+      await propagateDelete(c, targets, event.shareItemId!);
+      break;
+    case 'move':
+      await propagateMove(c, targets, { ...event, shareId: event.shareId!, shareItemId: event.shareItemId!, parentShareItemId: event.parentShareItemId! });
+      break;
+  }
+};
 
 /**
  * The fan-out set, computed at execution time rather than remembered (docs/04): joined,
@@ -41,7 +134,7 @@ export type Target = { userId: string; vaultId: string };
  *
  * @param exceptVaultId the vault the write already happened in.
  */
-export const fanoutTargets = async (c: PoolClient, shareId: string, exceptVaultId: string): Promise<Target[]> => {
+const fanoutTargets = async (c: PoolClient, shareId: string, exceptVaultId: string): Promise<Target[]> => {
   const res = await c.query<{ userId: string; vaultId: string }>(
     `SELECT m.user_id AS "userId", m.vault_id AS "vaultId"
        FROM share_members m
@@ -60,11 +153,8 @@ export const fanoutTargets = async (c: PoolClient, shareId: string, exceptVaultI
 };
 
 /** New content for an item that exists in every replica. */
-export const propagatePut = async (
-  c: PoolClient,
-  targets: Target[],
-  item: { shareItemId: string; sha256: string; size: number; mtime: string; authorId: string },
-): Promise<void> => {
+type PutItem = Extract<FanoutEvent, { kind: 'put' }> & { shareId: string; shareItemId: string };
+const propagatePut = async (c: PoolClient, targets: Target[], item: PutItem): Promise<void> => {
   for (const t of targets) {
     const node = await counterpartOf(c, t.vaultId, item.shareItemId);
     // A replica that does not hold the item is not an error to fail the write over: it can
@@ -93,23 +183,8 @@ export const propagatePut = async (
 };
 
 /** A new item inside the shared folder, which every replica must gain. */
-export const propagateCreate = async (
-  c: PoolClient,
-  targets: Target[],
-  item: {
-    shareId: string;
-    shareItemId: string;
-    parentShareItemId: string;
-    type: string;
-    nameEnc: string;
-    nameHmac: string;
-    nameKeyId: string;
-    sha256: string | null;
-    size: number | null;
-    mtime: string;
-    authorId: string;
-  },
-): Promise<void> => {
+type CreateItem = Extract<FanoutEvent, { kind: 'create' }> & { shareId: string; shareItemId: string; parentShareItemId: string };
+const propagateCreate = async (c: PoolClient, targets: Target[], item: CreateItem): Promise<void> => {
   for (const t of targets) {
     const parent = await counterpartOf(c, t.vaultId, item.parentShareItemId);
     if (!parent) continue;
@@ -135,7 +210,7 @@ export const propagateCreate = async (
 };
 
 /** A deletion, which is a soft delete in every replica exactly as in the original. */
-export const propagateDelete = async (c: PoolClient, targets: Target[], shareItemId: string): Promise<void> => {
+const propagateDelete = async (c: PoolClient, targets: Target[], shareItemId: string): Promise<void> => {
   for (const t of targets) {
     const node = await counterpartOf(c, t.vaultId, shareItemId);
     if (!node) continue;
@@ -155,11 +230,8 @@ export const propagateDelete = async (c: PoolClient, targets: Target[], shareIte
  * two sides are different key scopes, and a tree move must not quietly produce half the
  * cryptographic metadata.
  */
-export const propagateMove = async (
-  c: PoolClient,
-  targets: Target[],
-  item: { shareItemId: string; parentShareItemId: string; nameEnc: string; nameHmac: string; nameKeyId: string },
-): Promise<void> => {
+type MoveItem = Extract<FanoutEvent, { kind: 'move' }> & { shareId: string; shareItemId: string; parentShareItemId: string };
+const propagateMove = async (c: PoolClient, targets: Target[], item: MoveItem): Promise<void> => {
   for (const t of targets) {
     const node = await counterpartOf(c, t.vaultId, item.shareItemId);
     const parent = await counterpartOf(c, t.vaultId, item.parentShareItemId);

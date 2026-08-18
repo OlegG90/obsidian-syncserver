@@ -18,13 +18,7 @@ import { ownerAndFrozen } from '../account.js';
 import { txGuarded, type Refusal } from '../refusal.js';
 import { randomUUID } from 'node:crypto';
 import { writeMaterial, type Material } from '../material.js';
-import {
-  fanoutTargets,
-  propagateCreate,
-  propagateDelete,
-  propagateMove,
-  propagatePut,
-} from '../shares/propagate.js';
+import { fanOut } from '../shares/propagate.js';
 import { journalEntry, nextRev } from '../revision.js';
 
 /**
@@ -136,21 +130,21 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
       await bindBlob(c, owner, input.sha256);
     }
 
-    if (into.shareId && shareItemId && into.shareItemId) {
-      await propagateCreate(c, await fanoutTargets(c, into.shareId, input.vaultId), {
-        shareId: into.shareId,
-        shareItemId,
-        parentShareItemId: into.shareItemId,
-        type: input.type,
-        nameEnc: input.nameEnc,
-        nameHmac: input.nameHmac,
-        nameKeyId: input.nameKeyId,
-        sha256: input.sha256 ?? null,
-        size: input.size ?? null,
-        mtime: input.mtime,
-        authorId: owner,
-      });
-    }
+    await fanOut(c, {
+      kind: 'create',
+      vaultId: input.vaultId,
+      shareId: into.shareId,
+      shareItemId,
+      parentShareItemId: into.shareItemId,
+      type: input.type,
+      nameEnc: input.nameEnc,
+      nameHmac: input.nameHmac,
+      nameKeyId: input.nameKeyId,
+      sha256: input.sha256 ?? null,
+      size: input.size ?? null,
+      mtime: input.mtime,
+      authorId: owner,
+    });
 
     return { nodeId, rev };
   });
@@ -209,15 +203,16 @@ export const putContent = async (
     // The previous content keeps its claim through the version row that still names it;
     // only history thinning releases that (docs/03, retention).
 
-    if (row.shareId && row.shareItemId) {
-      await propagatePut(c, await fanoutTargets(c, row.shareId, input.vaultId), {
-        shareItemId: row.shareItemId,
-        sha256: input.sha256,
-        size: input.size,
-        mtime: input.mtime,
-        authorId: owner,
-      });
-    }
+    await fanOut(c, {
+      kind: 'put',
+      vaultId: input.vaultId,
+      shareId: row.shareId,
+      shareItemId: row.shareItemId,
+      sha256: input.sha256,
+      size: input.size,
+      mtime: input.mtime,
+      authorId: owner,
+    });
 
     return { rev };
   });
@@ -255,9 +250,12 @@ export const deleteNode = async (
     );
     await journalEntry(c, input.vaultId, rev, input.nodeId, 'del');
 
-    if (row.shareId && row.shareItemId) {
-      await propagateDelete(c, await fanoutTargets(c, row.shareId, input.vaultId), row.shareItemId);
-    }
+    await fanOut(c, {
+      kind: 'delete',
+      vaultId: input.vaultId,
+      shareId: row.shareId,
+      shareItemId: row.shareItemId,
+    });
 
     return { rev };
   });
@@ -326,15 +324,16 @@ export const moveNode = async (
 
     await journalEntry(c, input.vaultId, rev, input.nodeId, 'move', row.parentId);
 
-    if (row.shareId && row.shareItemId && dest.rows[0]!.shareItemId) {
-      await propagateMove(c, await fanoutTargets(c, row.shareId, input.vaultId), {
-        shareItemId: row.shareItemId,
-        parentShareItemId: dest.rows[0]!.shareItemId,
-        nameEnc: input.nameEnc,
-        nameHmac: input.nameHmac,
-        nameKeyId: input.nameKeyId,
-      });
-    }
+    await fanOut(c, {
+      kind: 'move',
+      vaultId: input.vaultId,
+      shareId: row.shareId,
+      shareItemId: row.shareItemId,
+      parentShareItemId: dest.rows[0]!.shareItemId,
+      nameEnc: input.nameEnc,
+      nameHmac: input.nameHmac,
+      nameKeyId: input.nameKeyId,
+    });
 
     return { rev };
   });
