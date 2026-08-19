@@ -1,16 +1,17 @@
 /**
- * Making a share's subtree exist in another vault, with its past — the act both arrival
- * paths perform.
+ * Making a share's subtree exist in another vault, with its past — the version-copying
+ * half of both arrival paths.
  *
- * Joining and catching up are the same walk seen at two distances: order the source
- * parents-first, find or create each counterpart, and bring the versions behind it with the
- * people who wrote them. They used to be two loops that each did this by hand, and the
- * copies disagreed where it mattered. The one shared skeleton was `replica.ts` — ancestry —
- * which is the *easy* field; the walk that calls it stayed duplicated, and `recordVersion`'s
- * `ifAbsent` flag existed purely so one caller could behave differently from the other.
+ * Joining and catching up are **different walks**, not one walk duplicated: joining
+ * *creates* an empty replica (a source-id → new-id mapping, every node inserted fresh,
+ * history renumbered), while catching up *levels* an existing replica (correspondence by
+ * `share_item_id`, nodes updated in place, the source's own revisions kept). What the two
+ * genuinely share is this module: placing the version rows behind a counterpart, keeping
+ * authorship (SH-19) and moments (SH-23), and claiming each blob once for the receiving
+ * account. That common core is deliberately not a single "walk" abstraction — the iteration
+ * bodies differ enough that merging them would be a module whose deletion test fails.
  *
- * This module owns the part of the walk that is the same in both, and names the difference
- * as a mode:
+ * The difference between the two modes:
  *
  * - **`renumber`** is joining's: a fresh copy cannot collide, so history is written
  *   unconditionally under revisions the caller reserved **before** creating the head. The
