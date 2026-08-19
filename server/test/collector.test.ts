@@ -391,11 +391,14 @@ describe('the retention ladder', () => {
   });
 
   it('thins to one a day between a week and a month, and one a week beyond it', async () => {
-    // Two versions on the same day, ten days back: one survives. Two in the same week,
-    // sixty days back: one survives. Plus the head, which is not history at all.
+    // Two versions on the same day, ten days back: one survives. Two versions on the SAME
+    // day, sixty days back: one survives (the "one a week" step groups by calendar week, so
+    // the two must share a date or the test would depend on which weekday today is — 60 and
+    // 58 days back landed in different weeks on some days and the assertion drifted between
+    // 3 and 4). Plus the head, which is not history at all.
     const node = await aged(`ladder-${randomUUID()}.md`,
       [randomBytes(64), randomBytes(64), randomBytes(64), randomBytes(64), randomBytes(64)],
-      [60, 58, 10, 10, 0]);
+      [60, 60, 10, 10, 0]);
     await runCollector(db, openStore(STORE), cfg);
     assert.equal(await survivors(node), 3, 'one for the old week, one for the day, and the head');
   });
