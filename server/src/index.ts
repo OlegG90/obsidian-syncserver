@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns } from './backup.js';
+import { assertPgDumpMatches, pgDumpVersion } from './backup-legs.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
@@ -27,6 +28,19 @@ if (interrupted > 0) {
     `${interrupted} backup run(s) were still marked running from before this restart and have ` +
       'been recorded as failed. Whatever they produced is not a copy to restore from.',
   );
+}
+
+// A backup whose dump cannot read this server's PostgreSQL is a backup that will fail the
+// moment it is asked — checked at startup (docs/10) so the operator learns it here rather
+// than on the first real run, when the window is already open. Not fatal: the server still
+// serves, but the console's backup button will refuse until the versions agree.
+if (cfg.backup) {
+  const serverLine = (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? '';
+  try {
+    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), serverLine);
+  } catch (e) {
+    console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 if (cfg.serverSecretIsDefault) {
