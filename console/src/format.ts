@@ -19,8 +19,9 @@ export interface AccountLine {
   inviteExpiresAt?: string | null;
 }
 
-/** Bytes as something a person reads. Mebibytes, because quotas are set in them. */
-export const mib = (bytes: string): string => `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
+/** Bytes as something a person reads. Mebibytes, because quotas are set in them. A `null` is "no number", drawn as a dash. */
+export const mib = (bytes: string | null): string =>
+  bytes === null ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
 /**
  * One line describing what an account is and how it is doing.
