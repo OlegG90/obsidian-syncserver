@@ -47,7 +47,7 @@ export const backupLegs = (
   },
 
   async copyBlobs() {
-    const target = join(destination, runDir, 'blobs');
+    const target = blobDirOf(destination, runDir);
     await cp(blobSource, target, { recursive: true });
     let bytes = 0;
     let count = 0;
@@ -68,5 +68,17 @@ export const backupLegs = (
   },
 });
 
-/** A per-run directory, named so an operator can tell one from another. */
+/**
+ * A per-run directory, named so an operator can tell one from another.
+ *
+ * The stamp is a timestamp rendered filesystem-safe (no `:` or `.`). This is the one rule
+ * the whole layout leans on: the route names the run, the legs copy into it, and a verify
+ * reopens it from the recorded destination — so a single spelling keeps all three honest.
+ */
 export const backupRunDir = (stamp: string): string => `backup-${stamp}`;
+
+/** This run's own directory under the backup destination. */
+export const runDirOf = (destination: string, runDir: string): string => join(destination, runDir);
+
+/** Where the blob copy of a run lives, under the run's own destination. */
+export const blobDirOf = (destination: string, runDir: string): string => join(destination, runDir, 'blobs');

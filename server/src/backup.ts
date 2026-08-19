@@ -28,6 +28,7 @@
  */
 import type { Db } from './db.js';
 import { COLLECTOR_LOCK_ID } from './collector.js';
+import { storageKeyFor } from './blobs/store.js';
 
 /** What each leg reports, so the run can record what it actually produced. */
 export interface Legs {
@@ -224,7 +225,7 @@ export const verifyBackup = async (
 
   const missing: string[] = [];
   for (const { sha256 } of addresses) {
-    const key = `${sha256.slice(0, 2)}/${sha256.slice(2, 4)}/${sha256}`;
+    const key = storageKeyFor(sha256);
     if ((await copy.size(key)) === undefined) missing.push(sha256);
   }
 
