@@ -10,7 +10,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.js';
-import { openShareFlow, type ShareFlowDeps } from '../src/share-flow.js';
+import {
+  initiatorLoginFor,
+  invitationRowsFromWire,
+  openShareFlow,
+  type ShareFlowDeps,
+} from '../src/share-flow.js';
 import { openGate } from '../src/gate.js';
 
 const harness = (over: Partial<ShareFlowDeps> = {}) => {
@@ -362,5 +367,23 @@ describe('reading a refusal by the code that decides what it holds', () => {
 
     assert.equal(refused.carries('share_not_prepared')?.gaps.length, 1);
     assert.equal(refused.carries('invalid_write'), undefined);
+  });
+});
+
+describe('the wire invitation list, as the settings screen reads it', () => {
+  it('turns snake_case into the camelCase the screen renders', () => {
+    const rows = invitationRowsFromWire([
+      { share_id: 's1', initiator_login: 'bob', invited_at: '2026-01-01T00:00:00Z' },
+    ]);
+    assert.deepEqual(rows, [{ shareId: 's1', initiatorLogin: 'bob' }]);
+  });
+
+  it('names the initiator of one invitation, and says nothing for an unknown one', () => {
+    const wire = [
+      { share_id: 's1', initiator_login: 'bob', invited_at: '2026-01-01T00:00:00Z' },
+      { share_id: 's2', initiator_login: 'alice', invited_at: '2026-01-01T00:00:00Z' },
+    ];
+    assert.equal(initiatorLoginFor(wire, 's2'), 'alice');
+    assert.equal(initiatorLoginFor(wire, 's3'), undefined, 'a share that is not an invitation has no initiator to name');
   });
 });

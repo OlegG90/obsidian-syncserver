@@ -29,7 +29,12 @@ import { SyncServerSettings } from './obsidian/settings.js';
 
 import { session, type Connection, type Handle, type Session } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
-import { openShareFlow, type ShareFlow } from './share-flow.js';
+import {
+  initiatorLoginFor,
+  invitationRowsFromWire,
+  openShareFlow,
+  type ShareFlow,
+} from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
 import { replicaForLeave } from './departure.js';
@@ -621,10 +626,7 @@ export default class SyncServerPlugin extends Plugin {
 
           return {
             joined,
-            invitations: out.invitations.map((i) => ({
-              shareId: i.share_id,
-              initiatorLogin: i.initiator_login,
-            })),
+            invitations: invitationRowsFromWire(out.invitations),
           };
         }),
 
@@ -673,8 +675,8 @@ export default class SyncServerPlugin extends Plugin {
           // Asked, not invented. The initiator's own label for that folder is under THEIR
           // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
           // docs/05 says they do. Offering who shared it is the one fact this side holds.
-          const from = (await h.client.shares()).invitations.find((i) => i.share_id === shareId);
-          const chosen = await askFolderName(this.app, freeName(`Shared by ${from?.initiator_login ?? 'someone'}`, siblings));
+          const from = initiatorLoginFor((await h.client.shares()).invitations, shareId);
+          const chosen = await askFolderName(this.app, freeName(`Shared by ${from ?? 'someone'}`, siblings));
           if (!chosen) throw new Error('a name is needed for the folder before it can land here');
 
           const name = freeName(chosen, siblings);
