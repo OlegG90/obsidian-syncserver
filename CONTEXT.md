@@ -27,3 +27,16 @@ nothing is named under any more.
 
 **Not** the rule about which scope a node's content *belongs* to — that is placement, it lives
 in `engine/scopes.ts`, and the two were kept apart on purpose.
+
+## SharedFolderMarks
+
+*(plugin)* The mapping from each live share to the path of its folder **in this vault**, plus
+the badge in the file tree that says so. A share *is* the folder its root node resolves to —
+the server names the root but holds no paths, and only the client can turn a node id into a
+path, because only it can read a name.
+
+One module (`shared-folder-marks.ts`) owns the map, the reconcile guard that decides when the
+expensive node→path resolution is due, and the badge decision; Obsidian, the server and the
+session are ports bound in `main.ts`. The guard compares `share_id:root_node_id` pairs, not
+ids alone — a re-materialised share keeps its id but changes its root, and the badge has to
+follow.

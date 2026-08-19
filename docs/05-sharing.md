@@ -19,7 +19,9 @@ holds are ciphertext. What it can say is **which node** is the share's root in *
 member's vault — a different node for each of them (SH-01, and a participant's replica root
 is their own) — and `GET /shares` reports it. The client resolves that to a path with the
 same tree it resolves everything else with, and remembers it, because the file tree is drawn
-long before anything is unlocked.
+long before anything is unlocked. The remembered path is re-resolved whenever the share list
+changes or the stored path is gone from disk — the rename case, where nothing on the server
+moved but the badge would otherwise stay stuck on a folder that no longer exists.
 
 ## Who is in it, and taking somebody out
 
