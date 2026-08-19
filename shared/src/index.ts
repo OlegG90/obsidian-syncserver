@@ -327,3 +327,42 @@ export type AccountRow = {
   /** For an unclaimed invitation: when it stops being redeemable. */
   inviteExpiresAt: string | null;
 };
+
+/**
+ * One row of `/admin/backups` — the shape the server builds and the console renders.
+ *
+ * Here rather than in either side because both touch it, exactly as `AccountRow` is: the
+ * server's SQL aliases columns to these names, and the console's history table reads them.
+ * They were declared twice (the server called it `BackupRunRow`, the console `BackupRun`)
+ * and a field renamed in the query would have reached the screen as `undefined` on a side
+ * that still compiled.
+ *
+ * The byte figures are strings on purpose: they cross a JSON boundary, and a `bigint`
+ * would round above 2^53.
+ */
+export type BackupRun = {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  bytes: string | null;
+  blobCount: string | null;
+  verifiedAt: string | null;
+  error: string | null;
+};
+
+/**
+ * Whether a restore is pending, and the two epochs that decide it — `/admin/restore`.
+ *
+ * Not to be confused with `RestoreResult`, which is what a **client's** restore of a single
+ * node returned. This is the **operator's** question about the whole server: is the
+ * database behind the state file, which is the halt that needs confirming (docs/08, docs/11).
+ */
+export interface RestoreStatus {
+  /** The epoch the running database holds. */
+  dbEpoch: number;
+  /** The epoch this server has ever run with, from its state file. */
+  fileEpoch: number | null;
+  /** True when the database is behind the state file — a restore happened and nobody confirmed it. */
+  pending: boolean;
+}

@@ -24,23 +24,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { Db } from './db.js';
 import { record, type Actor } from './admin/audit.js';
+import type { RestoreStatus } from '@syncserver/shared';
 
 /** Where a path to the state file is required, but a deployment may not have one configured. */
 export interface RestoreConfig {
   stateFile: string;
-}
-
-/** What the server knows about a possible restore, read at startup and on demand. */
-export interface RestoreStatus {
-  /** The epoch the running database holds. */
-  dbEpoch: number;
-  /** The epoch this server has ever run with, from its state file. */
-  fileEpoch: number | null;
-  /**
-   * True when the database is behind the state file — a restore happened and nobody
-   * confirmed it. In that state the server serves only the confirm endpoint.
-   */
-  pending: boolean;
 }
 
 /** The newest epoch this server ever ran with, from its state file. */

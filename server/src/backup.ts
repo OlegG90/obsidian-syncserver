@@ -29,6 +29,7 @@
 import type { Db } from './db.js';
 import { COLLECTOR_LOCK_ID } from './collector.js';
 import { storageKeyFor } from './blobs/store.js';
+import type { BackupRun } from '@syncserver/shared';
 
 /** What each leg reports, so the run can record what it actually produced. */
 export interface Legs {
@@ -170,21 +171,9 @@ export const settleInterruptedRuns = async (db: Db): Promise<number> => {
   return rows.length;
 };
 
-/** One run, as a console or an operator sees it. */
-export type BackupRunRow = {
-  id: string;
-  startedAt: string;
-  finishedAt: string | null;
-  status: string;
-  bytes: string | null;
-  blobCount: string | null;
-  verifiedAt: string | null;
-  error: string | null;
-};
-
 /** The previous runs, newest first — what the console's backup list shows. */
-export const listBackups = async (db: Db, limit = 50): Promise<BackupRunRow[]> =>
-  db.query<BackupRunRow>(
+export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
+  db.query<BackupRun>(
     `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
             status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
             verified_at AS "verifiedAt", error

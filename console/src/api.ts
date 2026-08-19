@@ -9,11 +9,11 @@
  * **No key material passes through here, ever.** A console account has none (#115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { AccountRow, HealthResponse } from '@syncserver/shared';
+import type { AccountRow, BackupRun, HealthResponse, RestoreStatus } from '@syncserver/shared';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, HealthResponse };
+export type { AccountRow, BackupRun, HealthResponse, RestoreStatus };
 
 export class ApiError extends Error {
   constructor(
@@ -80,18 +80,6 @@ export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '
 export const invite = (login: string, quotaBytes: string): Promise<{ user_id: string; token: string }> =>
   call('POST', '/admin/invitations', { login, quota_bytes: quotaBytes });
 
-/** One backup run, as the console's history table shows it. */
-export interface BackupRun {
-  id: string;
-  startedAt: string;
-  finishedAt: string | null;
-  status: string;
-  bytes: string | null;
-  blobCount: string | null;
-  verifiedAt: string | null;
-  error: string | null;
-}
-
 /** Start a backup now. Refused with `backup_not_configured` when the server has none. */
 export const runBackup = (): Promise<{ id?: string; status: string; bytes?: number; blob_count?: number }> =>
   call('POST', '/admin/backups');
@@ -102,13 +90,6 @@ export const backups = (): Promise<{ backups: BackupRun[] }> => call('GET', '/ad
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>
   call('POST', `/admin/backups/${id}/verify`);
-
-/** Whether a restore is pending, and the two epochs that decide it. */
-export interface RestoreStatus {
-  dbEpoch: number;
-  fileEpoch: number | null;
-  pending: boolean;
-}
 
 /** What the server knows about a possible restore. Reachable even in the halt state. */
 export const restoreStatus = (): Promise<RestoreStatus> => call('GET', '/admin/restore');
