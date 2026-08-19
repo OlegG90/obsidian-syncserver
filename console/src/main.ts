@@ -12,7 +12,8 @@
  * have.
  */
 import { accounts, backups, bootstrap, confirmRestore, health, invite, restoreStatus, runBackup, signedIn, signIn, verify, type AccountRow, type BackupRun } from './api.js';
-import { describeAccount } from './format.js';
+import { describeAccount, mib } from './format.js';
+import { chooseScreen, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
 
@@ -156,8 +157,6 @@ const accountsScreen = (): void => {
 };
 
 /** When a run happened, as a person reads a table. */
-const mib = (bytes: string | null): string => (bytes === null ? '—' : `${(Number(bytes) / 1024 / 1024).toFixed(1)} MiB`);
-
 const when = (iso: string | null): string =>
   iso === null ? '—' : new Date(iso).toLocaleString();
 
@@ -282,21 +281,21 @@ const afterRestore = [
 
 const render = (): void => {
   void attempt(app, async () => {
-    if (signedIn()) {
-      // A pending restore is the one thing that outranks the accounts screen: the server
-      // answers everything else with restore_pending anyway, so the first thing the console
-      // shows is the way out.
-      const status = await restoreStatus();
-      if (status.pending) {
+    const screen = await chooseScreen({ signedIn, restoreStatus, health });
+    switch (screen) {
+      case 'restore':
         restoreScreen();
-        return;
-      }
-      accountsScreen();
-      return;
+        break;
+      case 'accounts':
+        accountsScreen();
+        break;
+      case 'firstRun':
+        firstRun();
+        break;
+      case 'signIn':
+        signInScreen();
+        break;
     }
-    const state = await health();
-    if (state.bootstrap_pending) firstRun();
-    else signInScreen();
   });
 };
 

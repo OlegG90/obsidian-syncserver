@@ -49,4 +49,10 @@ describe('a line under a login', () => {
     assert.equal(mib('0'), '0.0 MiB');
     assert.equal(mib(String(1536 * 1024)), '1.5 MiB');
   });
+
+  it('draws a dash for a run with no byte count, rather than a fabricated number', () => {
+    // A backup run that failed before either leg ran has no bytes; "0.0 MiB" would be a
+    // true statement that reads as a broken one.
+    assert.equal(mib(null), '—');
+  });
 });
