@@ -349,6 +349,8 @@ export type BackupRun = {
   blobCount: string | null;
   verifiedAt: string | null;
   error: string | null;
+  /** Where this run's copy lives — how a verify or a rehearsal reopens it. */
+  destination: string | null;
 };
 
 /**

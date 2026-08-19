@@ -16,7 +16,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, type Legs } from '../src/backup.js';
+import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, verifyLatestBackup, type Legs } from '../src/backup.js';
 import { assertPgDumpMatches, pgMajor } from '../src/backup-legs.js';
 
 let db: Db;
@@ -342,5 +342,65 @@ describe('the pg_dump version check', () => {
 
   it('refuses rather than guessing when either version cannot be read', () => {
     assert.throws(() => assertPgDumpMatches('pg_dump (PostgreSQL) 18.4', 'not a version'), /cannot verify/);
+  });
+});
+
+describe('the backup self-check', () => {
+  it('flags a copy with missing blobs on the row, without failing the run', async () => {
+    // A backup nobody can restore from is not a backup — but the copy exists and is
+    // recorded, so the run is 'ok' with an error telling the operator, not a failure that
+    // hides the fact a copy was made at all (docs/10).
+    const out = await runBackup(
+      db,
+      {
+        dumpDatabase: async () => ({ bytes: 1 }),
+        copyBlobs: async () => ({ bytes: 1, count: 0 }),
+      },
+      '/backups/self-check',
+      {
+        openCopy: () => ({ size: async () => undefined }), // every blob absent
+      },
+    );
+
+    assert.equal(out.status, 'ok', 'the copy was made');
+    assert.match(out.error ?? '', /missing/, 'and the operator is told it is not restorable');
+
+    const row = await db.one<{ status: string; error: string | null }>(
+      `SELECT status::text AS status, error FROM backup_runs WHERE id = $1`, [out.id]);
+    assert.equal(row!.status, 'ok');
+    assert.match(row!.error ?? '', /missing/, 'the row carries the sentence too');
+  });
+
+  it('says nothing on the row when the copy is whole', async () => {
+    const out = await runBackup(
+      db,
+      { dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
+      '/backups/whole',
+      { openCopy: () => ({ size: async () => 1 }) }, // every blob present
+    );
+    assert.equal(out.status, 'ok');
+    assert.equal(out.error, undefined, 'a whole copy is not a warning');
+  });
+});
+
+describe('the restore rehearsal', () => {
+  it('is silent when no backup exists yet', async () => {
+    await db.query(`DELETE FROM backup_runs`);
+    assert.equal(await verifyLatestBackup(db, '/backups'), undefined, 'nothing to rehearse is not a failure');
+  });
+
+  it('reports the latest whole backup as whole', async () => {
+    // The reader is injected so the test does not have to stage real files under the
+    // run's destination — a copy where every referenced blob is present is whole.
+    await db.query(`DELETE FROM backup_runs`);
+    const r = await runBackup(
+      db,
+      { dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
+      '/backups/rehearsal',
+    );
+    assert.equal(r.status, 'ok');
+    const out = await verifyLatestBackup(db, '/backups/rehearsal', () => ({ size: async () => 1 }));
+    assert.ok(out, 'the latest run is found');
+    assert.equal(out!.whole, true);
   });
 });

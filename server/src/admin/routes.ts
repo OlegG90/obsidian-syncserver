@@ -173,10 +173,20 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     const runDestination = runDirOf(backup.destination, runDir);
     const out = await runBackup(db, backup.makeLegs(runDir), runDestination, {
       triggeredBy: req.admin!.id,
+      // The self-check: reopen the copy just written and confirm it is whole, so a backup
+      // nobody can restore from is flagged on the row instead of at restore time (docs/10).
+      openCopy: (dest) => openStore(join(dest, 'blobs')),
     });
     if (out.status === 'skipped') return reply.code(409).send({ error: 'backup_in_progress', detail: out.error });
     if (out.status === 'failed') return reply.code(500).send({ error: 'backup_failed', detail: out.error });
-    return { id: out.id, status: out.status, bytes: out.bytes, blob_count: out.blobCount, destination: runDestination };
+    return {
+      id: out.id,
+      status: out.status,
+      bytes: out.bytes,
+      blob_count: out.blobCount,
+      destination: runDestination,
+      ...(out.error ? { self_check: out.error } : {}),
+    };
   });
 
   app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));

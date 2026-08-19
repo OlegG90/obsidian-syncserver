@@ -1,5 +1,5 @@
 import { buildApp } from './app.js';
-import { settleInterruptedRuns } from './backup.js';
+import { settleInterruptedRuns, verifyLatestBackup } from './backup.js';
 import { assertPgDumpMatches, pgDumpVersion } from './backup-legs.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
@@ -17,6 +17,32 @@ const app = await buildApp(db, cfg, events);
 // The collector shares the blob store with the routes — same path, same directory.
 const collectorStore = openStore(cfg.blobStorePath);
 const stopCollector = startCollector(db, collectorStore, cfg);
+
+// The periodic restore rehearsal (docs/10): reopen the latest backup and confirm it is
+// whole, on its own rare interval rather than the collector's. Lives here rather than in
+// the collector so backup.ts and collector.ts do not import each other. Runs once now, then
+// on the interval; a server with no backups has nothing to rehearse and stays silent.
+let rehearsalTimer: ReturnType<typeof setInterval> | undefined;
+if (cfg.backup) {
+  const rehearse = async (): Promise<void> => {
+    try {
+      const out = await verifyLatestBackup(db, cfg.backup!.destination);
+      if (!out) return;
+      if (out.whole) {
+        console.log(`backup rehearsal: the latest backup is whole (${out.checked} blobs checked)`);
+      } else {
+        console.warn(
+          `backup rehearsal: the latest backup is MISSING ${out.missing} of ${out.checked} blobs — not restorable`,
+        );
+      }
+    } catch (e) {
+      console.warn(`backup rehearsal failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  void rehearse();
+  rehearsalTimer = setInterval(() => void rehearse(), cfg.backupVerifyIntervalSeconds * 1000);
+  rehearsalTimer.unref?.();
+}
 
 // A `running` backup row that survived a restart is a lie: the window it recorded went with
 // the process, so nothing has been refusing writes since. Nothing else will ever settle it —
@@ -89,6 +115,7 @@ console.log(`syncserver listening on ${host}:${port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
+    if (rehearsalTimer) clearInterval(rehearsalTimer);
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
 }
