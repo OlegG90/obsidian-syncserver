@@ -24,6 +24,7 @@ import {
   storage,
 } from './service.js';
 import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
+import { backupRunDir, runDirOf } from '../backup-legs.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
 
@@ -41,6 +42,22 @@ export interface BackupDeps {
 
 /** A week to redeem an invitation, matching the one the schema seeds for the first administrator. */
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * The one sentence a missing configuration answers with, wherever it is asked.
+ *
+ * `backup_not_configured` and `restore_not_configured` are the same refusal at four call
+ * sites, and the details drifted while the meaning did not. Both spellings live here so the
+ * routes only have to know *whether* the thing is configured, not how to say it is not.
+ */
+const unconfigured = (reply: { code(n: number): { send(b: object): unknown } }, error: string): unknown =>
+  reply.code(503).send({
+    error,
+    detail:
+      error === 'backup_not_configured'
+        ? 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups'
+        : 'no restore state file configured',
+  });
 
 export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps = {}): void => {
   const admin = { preHandler: requireAdmin(db) };
@@ -149,16 +166,11 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // because they only look — a poll that moved the state would make watching a backup
   // indistinguishable from driving one.
   app.post('/admin/backups', admin, async (req, reply) => {
-    if (!backup.makeLegs || !backup.destination) {
-      return reply.code(503).send({
-        error: 'backup_not_configured',
-        detail: 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups',
-      });
-    }
-    const runDir = `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    if (!backup.makeLegs || !backup.destination) return unconfigured(reply, 'backup_not_configured');
+    const runDir = backupRunDir(new Date().toISOString().replace(/[:.]/g, '-'));
     // The destination recorded on the row is THIS run's directory, so verify knows where
     // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
-    const runDestination = `${backup.destination}/${runDir}`;
+    const runDestination = runDirOf(backup.destination, runDir);
     const out = await runBackup(db, backup.makeLegs(runDir), runDestination, {
       triggeredBy: req.admin!.id,
     });
@@ -170,9 +182,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));
 
   app.post<{ Params: { id: string } }>('/admin/backups/:id/verify', admin, async (req, reply) => {
-    if (!backup.destination) {
-      return reply.code(503).send({ error: 'backup_not_configured', detail: 'no backup destination configured' });
-    }
+    if (!backup.destination) return unconfigured(reply, 'backup_not_configured');
     const run = await db.one<{ destination: string }>(
       `SELECT destination FROM backup_runs WHERE id = $1`, [req.params.id]);
     if (!run?.destination) return reply.code(404).send({ error: 'not_found' });
@@ -188,16 +198,12 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // reachable even in the halt state, because a restore nobody can confirm is a restore
   // nobody can leave.
   app.get('/admin/restore', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) {
-      return reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file' });
-    }
+    if (!backup.restoreStateFile) return unconfigured(reply, 'restore_not_configured');
     return restoreStatus(db, backup.restoreStateFile);
   });
 
   app.post('/admin/restore/confirm', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) {
-      return reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file' });
-    }
+    if (!backup.restoreStateFile) return unconfigured(reply, 'restore_not_configured');
     // Refuse to confirm when nothing is pending: the act is audited and irreversible, and
     // there is nothing to resolve.
     const status = await restoreStatus(db, backup.restoreStateFile);
