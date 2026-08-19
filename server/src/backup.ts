@@ -28,7 +28,8 @@
  */
 import type { Db } from './db.js';
 import { COLLECTOR_LOCK_ID } from './collector.js';
-import { storageKeyFor } from './blobs/store.js';
+import { openStore, storageKeyFor } from './blobs/store.js';
+import { join } from 'node:path';
 import type { BackupRun } from '@syncserver/shared';
 
 /** What each leg reports, so the run can record what it actually produced. */
@@ -50,6 +51,11 @@ export interface BackupResult {
   bytes?: number;
   blobCount?: number;
   error?: string;
+}
+
+/** A reader over a backup's blob copy — the one thing an integrity check needs (docs/10). */
+export interface CopyReader {
+  size(storageKey: string): Promise<number | undefined>;
 }
 
 /**
@@ -82,10 +88,21 @@ export const runBackup = async (
   db: Db,
   legs: Legs,
   destination: string,
-  opts: { triggeredBy?: string; lockWaitMs?: number } = {},
+  opts: {
+    triggeredBy?: string;
+    lockWaitMs?: number;
+    /**
+     * A reader over the blob copy this run just wrote, when the caller wants it verified
+     * on the spot (the "nightly self-check" of docs/10). Called after the legs, before the
+     * row is settled as `ok`; a copy with missing blobs is still a completed backup, but a
+     * flagged one — a backup nobody can restore from is not a backup, and the operator is
+     * told rather than left to find out at restore time.
+     */
+    openCopy?: (runDestination: string) => CopyReader;
+  } = {},
 ): Promise<BackupResult> =>
   db.session(async (lock) => {
-    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS } = opts;
+    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS, openCopy } = opts;
     // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
     // for a collector pass already running, so the window is clean from the moment the lock
     // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
@@ -128,14 +145,37 @@ export const runBackup = async (
       const blobs = await legs.copyBlobs();
       await db.query(`UPDATE backup_runs SET blobs_done_at = now() WHERE id = $1`, [id]);
 
+      // The self-check (docs/10): reopen the copy just written and confirm it is whole.
+      // A failure here does not fail the run — the copy exists and is recorded — but it is
+      // written to the row so the operator sees a backup they cannot trust, instead of
+      // learning it at restore time.
+      let selfCheckError: string | undefined;
+      if (openCopy) {
+        try {
+          const out = await verifyBackup(db, openCopy(destination), id);
+          if (out.missing.length > 0) {
+            selfCheckError = `${out.missing.length} of ${out.checked} blobs missing from the copy`;
+          }
+        } catch (e) {
+          selfCheckError = `self-check failed: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+
       await db.query(
         `UPDATE backup_runs
             SET window_closed_at = now(), finished_at = now(), status = 'ok',
-                bytes = $2, blob_count = $3
+                bytes = $2, blob_count = $3, error = $4
           WHERE id = $1`,
-        [id, dumped.bytes + blobs.bytes, blobs.count],
+        [id, dumped.bytes + blobs.bytes, blobs.count, selfCheckError ?? null],
       );
-      return { id, status: 'ok' as const, bytes: dumped.bytes + blobs.bytes, blobCount: blobs.count };
+      const out: BackupResult = {
+        id,
+        status: 'ok',
+        bytes: dumped.bytes + blobs.bytes,
+        blobCount: blobs.count,
+        ...(selfCheckError ? { error: selfCheckError } : {}),
+      };
+      return out;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       await db.query(
@@ -176,7 +216,7 @@ export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
   db.query<BackupRun>(
     `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
             status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
-            verified_at AS "verifiedAt", error
+            verified_at AS "verifiedAt", error, destination
        FROM backup_runs
       ORDER BY started_at DESC
       LIMIT $1`,
@@ -220,4 +260,29 @@ export const verifyBackup = async (
 
   await db.query(`UPDATE backup_runs SET verified_at = now() WHERE id = $1`, [runId]);
   return { missing, checked: addresses.length };
+};
+
+/**
+ * The periodic restore rehearsal (docs/10): reopen the latest backup's blob copy and confirm
+ * it is whole.
+ *
+ * One of `verifyBackup`'s three callers. It is deliberately separate from the collector's
+ * history pass — the rehearsal walks every blob the database references, so it runs on its
+ * own rare interval (`backupVerifyIntervalSeconds`), not on the sweep's.
+ *
+ * @returns `undefined` when no backup exists yet — nothing to rehearse, and that is not a
+ *   failure. A backup whose copy is missing blobs is returned whole=false rather than
+ *   thrown, because it is an outcome the operator must see, not an exception to swallow.
+ */
+export const verifyLatestBackup = async (
+  db: Db,
+  destination: string,
+  openCopy: (runDestination: string) => CopyReader = (d) => openStore(join(d, 'blobs')),
+): Promise<{ whole: boolean; checked: number; missing: number } | undefined> => {
+  const runs = await listBackups(db, 1);
+  const latest = runs.find((r) => r.status === 'ok' && r.destination);
+  if (!latest) return undefined;
+  const copy = openCopy(latest.destination!);
+  const out = await verifyBackup(db, copy, latest.id);
+  return { whole: out.missing.length === 0, checked: out.checked, missing: out.missing.length };
 };

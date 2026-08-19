@@ -87,6 +87,12 @@ export interface Config {
    */
   sweepIntervalSeconds: number;
   /**
+   * How often the collector re-opens the latest backup's blob copy and confirms it is whole
+   * (docs/10, "periodic restore rehearsal"). Rare, because the check walks every blob the
+   * database references. Independent of `sweepIntervalSeconds`, which thins history.
+   */
+  backupVerifyIntervalSeconds: number;
+  /**
    * Where backups go, and how they are taken. All three are deployment facts, not protocol:
    * a destination directory, the `pg_dump` invocation (or whatever this deployment calls
    * it), and the blob store to copy. Absent until configured — a server without them can
@@ -139,6 +145,7 @@ export const loadConfig = (): Config => {
       pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
+    backupVerifyIntervalSeconds: int('BACKUP_VERIFY_INTERVAL_SECONDS', 24 * 60 * 60),
     restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
   };
 
