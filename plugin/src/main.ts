@@ -22,7 +22,6 @@ import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
 import { newPairingCode } from './crypto/pairing-code.js';
-import { sharedFolderCss } from './obsidian/shared-marks.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport } from './obsidian/net.js';
 import { askConfirmation, askFolderName, askPassphrase, StatusModal } from './obsidian/modals.js';
@@ -40,6 +39,7 @@ import {
 } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openGate } from './gate.js';
+import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
 
@@ -89,11 +89,43 @@ export default class SyncServerPlugin extends Plugin {
   private unlocking: Promise<Session> | undefined;
   /** One operation at a time across sync, sharing and the trash — created once, shared by all three. */
   private gate = openGate();
+  /** Which local folder each share is, and the badge that says so — see `shared-folder-marks.ts`. */
+  private marks: SharedFolderMarks | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
     this.settingsTab = new SyncServerSettings(this.app, this);
     this.addSettingTab(this.settingsTab);
+
+    // The shared-folder subsystem, bound at the edge exactly like the coordinators: the
+    // module owns the map and the reconcile guard, and Obsidian or the session is a port.
+    this.marks = openSharedFolderMarks({
+      load: () => this.data.sharedFolders ?? {},
+      save: async (map) => {
+        this.data.sharedFolders = map;
+        await this.save();
+      },
+      resolve: (joined) =>
+        this.withSession(async (h) => {
+          const scopes = await this.openVault(h);
+          const pathOfNode = await this.pathsByNode(h, scopes);
+          const rootOf = new Map<string, string>();
+          for (const s of joined) {
+            const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
+            if (folder !== undefined) rootOf.set(s.share_id, folder);
+          }
+          return rootOf;
+        }),
+      existing: (paths) => paths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null),
+      render: (css) => {
+        document.getElementById(SHARED_MARKS_STYLE)?.remove();
+        if (!css) return;
+        const style = document.createElement('style');
+        style.id = SHARED_MARKS_STYLE;
+        style.textContent = css;
+        document.head.appendChild(style);
+      },
+    });
 
     // Everything Obsidian is bound here, at the edge; the coordinator itself is a module.
     this.sync = openSyncCoordinator({
@@ -110,10 +142,9 @@ export default class SyncServerPlugin extends Plugin {
           // exist locally until then, so its badge was filtered out as a path that is not
           // there and nothing ever came back for it — which the initiator never saw, their
           // folder having been on disk before they shared it.
-          await this.refreshSharedFolders(h, scopes);
+          await this.marks!.reconcile((await h.client.shares()).joined);
           return out;
         });
-        this.applySharedMarks();
         return report;
       },
       setPhase: (phase) => this.setPhase(phase),
@@ -147,7 +178,7 @@ export default class SyncServerPlugin extends Plugin {
 
     // Drawn from what was written down, so a shared folder looks shared from the moment the
     // tree appears — not only after something is unlocked.
-    this.app.workspace.onLayoutReady(() => this.applySharedMarks());
+    this.app.workspace.onLayoutReady(() => this.marks!.applyMarks());
 
     this.addCommand({
       id: 'sync-now',
@@ -579,25 +610,17 @@ export default class SyncServerPlugin extends Plugin {
       gate: this.gate,
       list: () =>
         this.withSession(async (h) => {
-          const scopes = await this.openVault(h);
           const out = await h.client.shares();
 
           // Which FOLDER each share is, which the server cannot say in words: it holds no
-          // paths and could not read the names if it did. Resolved once, here, and stored —
-          // two rows reading "Shared by you" and a uuid each are two rows nobody can tell
+          // paths and could not read the names if it did. The module resolves the roots
+          // once, guarding on whether the share list changed, and stores the answer — two
+          // rows reading "Shared by you" and a uuid each are two rows nobody can tell
           // apart, and the buttons beside them are not the same buttons.
-          const rootOf = await this.resolveSharedFolders(h, scopes, out.joined);
+          const joined = await this.marks!.reconcile(out.joined);
 
           return {
-            joined: out.joined.map((s) => {
-              const folder = rootOf.get(s.share_id);
-              return {
-                shareId: s.share_id,
-                isInitiator: s.is_initiator,
-                state: s.state,
-                ...(folder === undefined ? {} : { folder }),
-              };
-            }),
+            joined,
             invitations: out.invitations.map((i) => ({
               shareId: i.share_id,
               initiatorLogin: i.initiator_login,
@@ -630,7 +653,7 @@ export default class SyncServerPlugin extends Plugin {
             folderPath,
             nodes,
           );
-          await this.rememberShared(out.shareId, folderPath);
+          await this.marks!.remember(out.shareId, folderPath);
           return { shareId: out.shareId };
         }),
 
@@ -667,7 +690,7 @@ export default class SyncServerPlugin extends Plugin {
             name,
           );
           // The replica's root lands directly under the vault root, so its path is its name.
-          await this.rememberShared(shareId, name);
+          await this.marks!.remember(shareId, name);
         }),
 
       decline: (shareId) => this.withSession((h) => h.client.declineShare(shareId)),
@@ -709,7 +732,7 @@ export default class SyncServerPlugin extends Plugin {
           );
           // The folder stays and keeps its name (SH-05); what ends is its being shared, so
           // the badge is what has to go.
-          await this.forgetShared(shareId);
+          await this.marks!.forget(shareId);
           return out;
         }),
 
@@ -763,92 +786,6 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * Turn each share into the path of its folder **in this vault**, and remember the answer.
-   *
-   * The server says which node is the root of the caller's own copy — a different node in
-   * every participant's vault — and the client is the only side that can turn a node into a
-   * path, because it is the only side that can read a name.
-   */
-  private async resolveSharedFolders(
-    h: Handle,
-    scopes: VaultScopes,
-    joined: readonly { share_id: string; root_node_id: string | null }[],
-  ): Promise<Map<string, string>> {
-    const pathOfNode = await this.pathsByNode(h, scopes);
-
-    const rootOf = new Map<string, string>();
-    for (const s of joined) {
-      const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
-      if (folder !== undefined) rootOf.set(s.share_id, folder);
-    }
-
-    this.data.sharedFolders = Object.fromEntries(rootOf);
-    await this.save();
-    this.applySharedMarks();
-    return rootOf;
-  }
-
-  /**
-   * Keep the marks true after a sync, without paying for a tree listing every time.
-   *
-   * `GET /shares` is small; resolving paths is not, so the tree is only read when the two
-   * disagree — a share joined on another device, one ended while this one was closed, or a
-   * vault whose map predates this feature entirely, which is how the participant in a live
-   * test ended up with no badge while the initiator had one.
-   */
-  private async refreshSharedFolders(h: Handle, scopes: VaultScopes): Promise<void> {
-    const { joined } = await h.client.shares();
-    const known = Object.keys(this.data.sharedFolders ?? {}).sort().join(',');
-    const now = joined.map((s) => s.share_id).sort().join(',');
-    if (known === now) return;
-
-    await this.resolveSharedFolders(h, scopes, joined);
-  }
-
-  /**
-   * Show, in the file tree, which folders are shared.
-   *
-   * The whole point is that it renders **without a session**: the tree is drawn at startup,
-   * long before anything is unlocked, and a person deciding where to drop a note is not
-   * going to open the plugin's settings first. So the paths come from what was written down,
-   * not from the server.
-   *
-   * Paths that no longer exist are dropped rather than styled — a folder renamed since it
-   * was shared would otherwise leave a badge on nothing, and the settings screen puts the
-   * map right the next time it is opened.
-   */
-  applySharedMarks(): void {
-    const paths = Object.values(this.data.sharedFolders ?? {}).filter(
-      (p) => this.app.vault.getAbstractFileByPath(p) !== null,
-    );
-
-    document.getElementById(SHARED_MARKS_STYLE)?.remove();
-    const css = sharedFolderCss(paths);
-    if (!css) return;
-
-    const style = document.createElement('style');
-    style.id = SHARED_MARKS_STYLE;
-    style.textContent = css;
-    document.head.appendChild(style);
-  }
-
-  /** This device has just shared or joined a folder, and knows which one it is. */
-  private async rememberShared(shareId: string, folderPath: string): Promise<void> {
-    this.data.sharedFolders = { ...this.data.sharedFolders, [shareId]: folderPath };
-    await this.save();
-    this.applySharedMarks();
-  }
-
-  /** The share is over for this device; the folder is not, and keeps everything but the badge. */
-  private async forgetShared(shareId: string): Promise<void> {
-    if (!this.data.sharedFolders) return;
-    const { [shareId]: _gone, ...rest } = this.data.sharedFolders;
-    this.data.sharedFolders = rest;
-    await this.save();
-    this.applySharedMarks();
-  }
-
-  /**
    * Point this connection at a different address (#113).
    *
    * An edit of one field, not a reconnection: the account, the seed, the device and every
@@ -896,9 +833,7 @@ export default class SyncServerPlugin extends Plugin {
     delete this.data.connection;
     delete this.data.state;
     // Nothing is shared with anybody from here any more, whatever the badges said.
-    delete this.data.sharedFolders;
-    await this.save();
-    this.applySharedMarks();
+    await this.marks!.clear();
     this.setPhase({ kind: 'disconnected' });
   }
 }
