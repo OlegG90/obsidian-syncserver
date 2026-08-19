@@ -43,6 +43,36 @@ export interface InvitationRow {
   initiatorLogin: string;
 }
 
+/** One invitation as the server writes it — the wire shape `GET /shares` returns. */
+export interface InvitationWire {
+  share_id: string;
+  initiator_login: string;
+  invited_at: string;
+}
+
+/**
+ * The wire's invitations, as the person sees them.
+ *
+ * `GET /shares` speaks snake_case (the wire is the server's); the settings screen reads
+ * camelCase. One line either way, but written once and tested here rather than inlined in
+ * the main.ts binding — where a renamed field would reach the screen as `undefined` with
+ * nothing having told the compiler.
+ */
+export const invitationRowsFromWire = (invitations: readonly InvitationWire[]): InvitationRow[] =>
+  invitations.map((i) => ({ shareId: i.share_id, initiatorLogin: i.initiator_login }));
+
+/**
+ * The initiator's login for one invitation, to say who sent it.
+ *
+ * `accept` re-reads the invitation list (there is no per-invitation endpoint) to find the
+ * one fact that lets it offer "Shared by X" instead of a bare folder name. The lookup is
+ * pure and tested here; `main.ts` stays out of the wire shape.
+ */
+export const initiatorLoginFor = (
+  invitations: readonly InvitationWire[],
+  shareId: string,
+): string | undefined => invitations.find((i) => i.share_id === shareId)?.initiator_login;
+
 export interface ShareFlowDeps {
   /** The one gate every operation family shares — one operation at a time, across all of them. */
   gate: Gate;
