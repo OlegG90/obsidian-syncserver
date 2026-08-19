@@ -17,6 +17,7 @@ import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, type Legs } from '../src/backup.js';
+import { assertPgDumpMatches, pgMajor } from '../src/backup-legs.js';
 
 let db: Db;
 
@@ -314,5 +315,32 @@ describe('listing backups', () => {
     assert.equal(rows.length, 2);
     assert.equal(rows[0]!.status, 'running', 'the newest (the later insert) is first');
     assert.equal(rows[1]!.id, older!.id);
+  });
+});
+
+describe('the pg_dump version check', () => {
+  it('reads the major out of either version line', () => {
+    assert.equal(pgMajor('pg_dump (PostgreSQL) 18.4 (Ubuntu 18.4-0ubuntu0.26.04.1)'), 18);
+    assert.equal(pgMajor('PostgreSQL 18.4 (Ubuntu 18.4-0ubuntu0.26.04.1) on aarch64'), 18);
+  });
+
+  it('refuses a version line it cannot trust', () => {
+    assert.equal(pgMajor('not a postgres tool at all'), undefined);
+    assert.equal(pgMajor(''), undefined);
+  });
+
+  it('lets a matching dump through', () => {
+    assert.doesNotThrow(() => assertPgDumpMatches('pg_dump (PostgreSQL) 18.4', 'PostgreSQL 18.4 on x86_64'));
+  });
+
+  it('refuses a dump of the wrong major, naming both', () => {
+    assert.throws(
+      () => assertPgDumpMatches('pg_dump (PostgreSQL) 17.0', 'PostgreSQL 18.4 on x86_64'),
+      /pg_dump is major 17 but the server's PostgreSQL is major 18/,
+    );
+  });
+
+  it('refuses rather than guessing when either version cannot be read', () => {
+    assert.throws(() => assertPgDumpMatches('pg_dump (PostgreSQL) 18.4', 'not a version'), /cannot verify/);
   });
 });

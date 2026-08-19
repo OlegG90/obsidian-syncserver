@@ -82,15 +82,30 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
   registerShareRoutes(app, db, cfg);
+
+  // The PostgreSQL major a backup's dump must match (docs/10). Read once, only when backups
+  // are configured — the `SELECT version()` is a single startup row, not a per-request cost.
+  const serverVersionLine = cfg.backup
+    ? (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? ''
+    : '';
   registerAdminRoutes(app, db, {
     restoreStateFile: cfg.restoreStateFile,
     ...(cfg.backup
       ? {
           destination: cfg.backup.destination,
           // The legs are built per run, so each backup lands in its own subdirectory and
-          // two runs never write into each other.
+          // two runs never write into each other. The server's PostgreSQL version is read
+          // once, so a dump whose major disagrees is refused before the window opens
+          // (docs/10 — the check exists precisely because the mismatch is silent until the
+          // first real backup).
           makeLegs: (runDir: string) =>
-            backupLegs(cfg.backup!.destination, cfg.backup!.dumpCommand, cfg.backup!.blobSource, runDir),
+            backupLegs(
+              cfg.backup!.destination,
+              cfg.backup!.dumpCommand,
+              cfg.backup!.blobSource,
+              runDir,
+              serverVersionLine,
+            ),
         }
       : {}),
   });
