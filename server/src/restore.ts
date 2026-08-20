@@ -52,6 +52,41 @@ export const writeEpochFile = async (stateFile: string, epoch: number): Promise<
   await writeFile(stateFile, String(epoch), 'utf8');
 };
 
+/**
+ * Whether this server is halted by an unconfirmed restore.
+ *
+ * In memory, and read by the hook that turns every request away — the same trade
+ * `backupInProgress` makes next door, for a state that changes even less often. It was a
+ * database round-trip **plus a `readFile`, on every request**, to learn something that changes
+ * once: when an operator confirms.
+ *
+ * **It can only become true at a start.** A restore replaces the database under a stopped
+ * server; there is no sequence in which a running one watches its own epoch go backwards. So
+ * reading it per request was not buying freshness, it was buying nothing — which is why this
+ * is a caching change and not a policy one.
+ *
+ * `buildApp` establishes it, rather than leaving it to whoever remembers: an app carrying the
+ * halt hook is the app that must know whether it is halted, and a flag defaulting to "fine"
+ * that nobody set is a halt that silently never happens.
+ */
+let halted = false;
+
+export const restoreHalted = (): boolean => halted;
+
+/**
+ * Read the restore state and remember it — the one place `halted` is raised.
+ *
+ * Separate from `restoreStatus` because the two have different callers: the console asks for
+ * the numbers and must see them as they are now, while the hook asks a yes/no that was settled
+ * at boot. Sharing one function would mean either the console reads a stale answer or the hook
+ * pays for a fresh one.
+ */
+export const checkRestoreState = async (db: Db, stateFile: string): Promise<RestoreStatus> => {
+  const status = await restoreStatus(db, stateFile);
+  halted = status.pending;
+  return status;
+};
+
 /** Whether a restore is pending, and both numbers that decide it. */
 export const restoreStatus = async (db: Db, stateFile: string): Promise<RestoreStatus> => {
   const dbEpoch = await readDbEpoch(db);
@@ -94,5 +129,9 @@ export const confirmRestore = async (db: Db, actor: Actor, stateFile: string): P
   // stale — the guard then sees pending=false and brings the file up at the next start,
   // which is the honest reading: the restore WAS confirmed.
   await writeEpochFile(stateFile, next);
+  // The halt is over, and it has to end here rather than at the next start: this endpoint is
+  // one of the few the halt leaves open, so a server that stayed halted after confirming would
+  // need a bounce to be usable — from a screen whose whole promise is that it is the way out.
+  halted = false;
   return { epoch: next };
 };
