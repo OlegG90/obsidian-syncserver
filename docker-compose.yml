@@ -108,5 +108,15 @@ services:
       RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/data/restore.epoch}
     volumes:
       - ${BLOB_DIR:-./data/blobs}:/data/blobs
+      # Where a backup can actually land. Without this the destination could only be a path
+      # inside the container, so a copy would live in its writable layer and go with the next
+      # `docker compose pull` — which is not a backup, it is a backup-shaped delay.
+      #
+      # Always mounted, even when backups are off: an empty directory costs nothing, and the
+      # alternative is an operator who configures BACKUP_DESTINATION, sees runs succeed, and
+      # finds nothing on the host. `BACKUP_DESTINATION` is the path INSIDE the container
+      # (/backups); `BACKUP_DIR` is where that is on this machine — the same split as
+      # `BLOB_DIR` and /data/blobs.
+      - ${BACKUP_DIR:-./data/backups}:/backups
     ports:
       - "${PUBLISH_PORT:-8080}:8080"

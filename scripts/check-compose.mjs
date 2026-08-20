@@ -46,6 +46,9 @@ const mounts = (svc) =>
 // mounting /var/lib/postgresql/data instead makes it refuse to start.
 check(mounts(db).includes('/var/lib/postgresql'), 'db must mount /var/lib/postgresql, not the data directory inside it');
 check(mounts(server).includes('/data/blobs'), 'server must mount the blob directory');
+// A backup with nowhere on the host to land writes into the container's writable layer and
+// disappears with the next pull. The mount is what makes BACKUP_DESTINATION mean anything.
+check(mounts(server).includes('/backups'), 'server must mount a backup destination');
 
 // Every value that differs between installations comes from .env, so a deployment is a
 // .env and never an edit to the compose file.

@@ -34,12 +34,16 @@ export DOCKER_CONFIG="${DOCKER_CONFIG:-$root/.docker}"
 mkdir -p "$DOCKER_CONFIG"
 
 say "directories"
-mkdir -p "$root/db" "$root/blobs"
+mkdir -p "$root/db" "$root/blobs" "$root/backups"
 # chmod rather than chown: the container runs as a group the administrator usually already
 # belongs to, so group-write is enough — and chown needs root, which is often not available.
 chmod 775 "$root/blobs" || echo "  could not chmod blobs; uploads may fail with EACCES"
+# The same treatment for the backup destination, and for the same reason: the container
+# writes it as the RUN_AS user, and a directory it cannot write turns the first backup into a
+# failed run rather than a copy.
+chmod 775 "$root/backups" || echo "  could not chmod backups; a backup may fail with EACCES"
 # The database directory is not ours to arrange: the image takes it over as its own user.
-printf '  db:    %s\n  blobs: %s\n' "$root/db" "$root/blobs"
+printf '  db:      %s\n  blobs:   %s\n  backups: %s\n' "$root/db" "$root/blobs" "$root/backups"
 
 say "configuration"
 # The real file lives BESIDE the checkout, not inside it.
@@ -102,6 +106,11 @@ else
         printf 'RUN_AS=%s:%s\n' "$(id -u)" "$(id -g)"
         printf 'DB_DIR=%s\n' "$root/db"
         printf 'BLOB_DIR=%s\n' "$root/blobs"
+        # Where a backup lands on THIS machine. `/backups` is where the container sees it,
+        # and `BACKUP_DESTINATION` names that side — the same split as BLOB_DIR and
+        # /data/blobs. Written whether or not backups are switched on, because the mount
+        # exists either way and an empty directory costs nothing.
+        printf 'BACKUP_DIR=%s\n' "$root/backups"
         printf 'PUBLISH_PORT=%s\n' "$port"
     } >> .env
     chmod 600 .env
