@@ -196,6 +196,15 @@ describe('first run', () => {
     assert.equal(row!.state, 'active');
     assert.match(row!.hash, /^\$argon2id\$/, 'a password a person chose gets a slow hash (#108)');
     assert.equal(row!.keys, null, 'and a console account holds no key material at all (#115)');
+
+    // The line that says the administrator was made, which nothing checked and which used to
+    // be written by a second transaction of its own (#88). It commits with the password now:
+    // an administrator existing with no record of its creation is the weakest the log can be,
+    // on the single account whose creation is the most interesting entry it will ever hold.
+    const logged = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM audit_log WHERE action = 'account.bootstrap'`,
+    );
+    assert.equal(logged!.n, '1', 'exactly one — the refused second attempt records nothing');
   });
 
   it('signs the administrator in to the console on ONE device row, however often', async () => {
