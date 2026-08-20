@@ -34,13 +34,23 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # The tag to attach, from a `v0.4.0` style tag: the part after `v`. The workflow
-      # fires only on `v*`, so a missing match means the tag was malformed rather than that
-      # this step was reached accidentally. The owner is lowercased for the same reason the
-      # image name is — GHCR names must be lowercase.
+      # The tag to attach, from a `v0.5.0-a` style tag: the part after `v`. The owner is
+      # lowercased for the same reason the image name is — GHCR names must be lowercase.
+      #
+      # **Refused unless the ref really is a tag.** This step used to say the workflow "fires
+      # only on `v*`, so a missing match means the tag was malformed" — while
+      # `workflow_dispatch` sat three lines above as a second trigger. On that path
+      # `GITHUB_REF` is `refs/heads/main`, the strip does nothing, and the run publishes
+      # `syncserver:main`: a moving tag, which is exactly what choosing against `latest` was
+      # about (docs/13). A release has to be a point somebody can go back to, so the version
+      # comes from a tag or the run stops here.
       - name: metadata
         id: meta
         run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *) echo "::error::publish needs a v* tag; $GITHUB_REF names no version to attach" && exit 1 ;;
+          esac
           tag="${GITHUB_REF#refs/tags/}"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
