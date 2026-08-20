@@ -44,3 +44,25 @@ export const chooseScreen = async (deps: ScreenDeps): Promise<Screen> => {
   const state = await deps.health();
   return state.bootstrap_pending ? 'firstRun' : 'signIn';
 };
+
+/**
+ * Whether a refusal means the session is over rather than the act was refused.
+ *
+ * The console holds its access token in memory and asks for no refresh, so the token simply
+ * expires — fifteen minutes by default — while a tab sits open. Every call after that is
+ * refused, and until this existed the screen showed the refusal as a sentence and left its
+ * "Loading…" in place: a page that had ended, saying nothing about how to carry on. That is
+ * the live walk it comes from — Audit log, then Accounts, then `unauthenticated` above a
+ * list that would have waited forever.
+ *
+ * Matched on the **code**, not the status. The server is careful about which word it uses:
+ * a token that no longer verifies is `unauthenticated`, and a login that does not is
+ * `invalid_credentials`. Both are 401s and only one of them means "sign in again" — reading
+ * the status alone would send somebody who mistyped a password back to a screen they are
+ * already on, saying their session had ended.
+ *
+ * Structural rather than an `ApiError` check, so the screen module keeps depending on
+ * nothing.
+ */
+export const sessionEnded = (e: unknown): boolean =>
+  typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'unauthenticated';

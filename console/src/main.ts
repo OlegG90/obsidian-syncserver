@@ -12,9 +12,9 @@
  * third. A reload is therefore never wrong, which is the cheapest correctness a web page can
  * have.
  */
-import { accounts, audit, backups, bootstrap, confirmRestore, health, invite, restoreStatus, runBackup, setQuota, signedIn, signIn, verify, type AccountRow, type AuditRow, type BackupRun } from './api.js';
+import { accounts, audit, backups, bootstrap, confirmRestore, forgetSession, health, invite, restoreStatus, runBackup, setQuota, signedIn, signIn, verify, type AccountRow, type AuditRow, type BackupRun } from './api.js';
 import { describeAccount, describeAudit, freezeWarning, mib } from './format.js';
-import { chooseScreen, type Screen } from './screen.js';
+import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
 
@@ -36,8 +36,42 @@ const attempt = async (where: HTMLElement, run: () => Promise<void>): Promise<vo
   try {
     await run();
   } catch (e) {
+    if (endedSession(e)) return;
     where.append(say(e instanceof Error ? e.message : String(e), true));
   }
+};
+
+/**
+ * A session that has run out, handled as a change of screen rather than a message.
+ *
+ * `unauthenticated` is not something the person did; it is the console saying it no longer
+ * has anything to act with. There is one thing to do about it and the sign-in screen is it,
+ * so that is what happens — with the reason carried across, because arriving at a login form
+ * unasked is otherwise indistinguishable from the page having crashed.
+ */
+const endedSession = (e: unknown): boolean => {
+  if (!sessionEnded(e)) return false;
+  forgetSession();
+  signInScreen(
+    'Your session ended. The console keeps its token in memory only and never refreshes it, ' +
+      'so a tab left open eventually needs signing in again.',
+  );
+  return true;
+};
+
+/**
+ * Fill a list that is currently saying "Loading…".
+ *
+ * The placeholder is a promise the screen made, and it has to be kept on both paths. The live
+ * walk found the other half: an expired token put `unauthenticated` on the page and left the
+ * "Loading…" underneath it, waiting for something that was never coming. A failure replaces
+ * the placeholder; it does not queue up behind it.
+ */
+const loads = (list: HTMLElement, fill: () => Promise<void>): void => {
+  void fill().catch((e: unknown) => {
+    if (endedSession(e)) return;
+    list.replaceChildren(say(e instanceof Error ? e.message : String(e), true));
+  });
 };
 
 const field = (label: string, type = 'text'): { row: HTMLElement; input: HTMLInputElement } => {
@@ -93,13 +127,15 @@ const firstRun = (): void => {
   app.replaceChildren(form);
 };
 
-const signInScreen = (): void => {
+const signInScreen = (note?: string): void => {
   const form = el('div', { className: 'card' });
   const login = field('Login');
   const password = field('Password', 'password');
   const button = el('button', { textContent: 'Sign in' });
 
-  form.append(el('h1', { textContent: 'SyncServer' }), login.row, password.row, button);
+  form.append(el('h1', { textContent: 'SyncServer' }));
+  if (note) form.append(el('p', { className: 'muted', textContent: note }));
+  form.append(login.row, password.row, button);
 
   submits(button, form, async () => {
     await signIn(login.input.value, password.input.value);
@@ -224,7 +260,7 @@ const accountsScreen = (): void => {
   toAudit.onclick = () => auditScreen();
 
   app.replaceChildren(el('nav', {}, toBackups, toAudit), page, notices, list, inviteCard);
-  void attempt(page, fill);
+  loads(list, fill);
 };
 
 /**
@@ -256,7 +292,7 @@ const auditScreen = (): void => {
   };
 
   app.replaceChildren(el('nav', {}, back), page, list);
-  void attempt(page, fill);
+  loads(list, fill);
 };
 
 const auditRow = (e: AuditRow): HTMLElement =>
@@ -335,7 +371,7 @@ const backupsScreen = (): void => {
   accountsCard.onclick = () => accountsScreen();
 
   app.replaceChildren(el('nav', {}, accountsCard), page, list, runCard);
-  void attempt(page, fill);
+  loads(list, fill);
 };
 
 const restoreScreen = (): void => {
@@ -376,7 +412,7 @@ const restoreScreen = (): void => {
   });
 
   app.replaceChildren(page);
-  void attempt(page, fill);
+  loads(status, fill);
 };
 
 /**
