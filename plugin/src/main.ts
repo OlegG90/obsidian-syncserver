@@ -331,6 +331,32 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * The question a device answers before it binds to a vault (#117).
+   *
+   * Named, because the point is that the person recognises it — the connected screen has
+   * shown a raw `vaultId` since M1 and nobody has ever recognised one of those. And it says
+   * what happens next rather than only what is about to be joined: the first sync is
+   * ADOPTION, so files already sitting in this Obsidian vault are about to be reconciled
+   * against that one. Somebody expecting an empty start needs to know that before it runs,
+   * not from the conflict files afterwards.
+   *
+   * Not titled "this cannot be undone", because it can: nothing has been written yet, and
+   * declining leaves both sides exactly as they were. What is hard to undo is the merge on
+   * the other side of the yes, which is why the sentence describes that and not this.
+   */
+  private confirmVault(vault: { id: string; name: string }): Promise<boolean> {
+    const here = this.app.vault.getName();
+    return askConfirmation(
+      this.app,
+      `This device will sync the vault “${vault.name}” on that account, into the Obsidian vault ` +
+        `“${here}”. Files already here are merged with what is there: identical files join up, ` +
+        `different ones become conflict files, and nothing is deleted on either side.`,
+      'Connect',
+      'Which vault this connects to',
+    );
+  }
+
+  /**
    * Take the account back on a device that holds nothing (docs/07, #112).
    *
    * Not a second device joining a first — there is no first left. The passphrase proves
@@ -340,7 +366,15 @@ export default class SyncServerPlugin extends Plugin {
    */
   async recover(args: { serverUrl: string; login: string; passphrase: string }): Promise<void> {
     const s = await session.recover(
-      { ...args, deviceName: 'obsidian', devicePlatform: Platform.isMobile ? 'mobile' : 'desktop' },
+      {
+        ...args,
+        deviceName: 'obsidian',
+        devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+        // The same hazard as pairing, through the same branch: recovering into an Obsidian
+        // vault other than the original merges the two. #117 names pairing; the code path is
+        // one, and asking here costs a caller nothing.
+        confirmVault: (v) => this.confirmVault(v),
+      },
       transport,
     );
     this.sess = s;
@@ -370,6 +404,7 @@ export default class SyncServerPlugin extends Plugin {
         ...args,
         deviceName: 'obsidian',
         devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+        confirmVault: (v) => this.confirmVault(v),
       },
       transport,
       waiting,

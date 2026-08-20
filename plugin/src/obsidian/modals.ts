@@ -183,9 +183,20 @@ export class ConfirmModal extends Modal {
  * promise that never settled would leave the caller holding a lock for the rest of the
  * session.
  */
-export const askConfirmation = (app: App, question: string, verb = 'Discard'): Promise<boolean> =>
+export const askConfirmation = (
+  app: App,
+  question: string,
+  verb = 'Discard',
+  /**
+   * The heading. Defaulted to the irreversible case because that is what this was written
+   * for — but not every question worth asking is that one, and a dialogue titled "this
+   * cannot be undone" above a choice that plainly can teaches somebody to stop reading the
+   * heading.
+   */
+  title = 'This cannot be undone',
+): Promise<boolean> =>
   new Promise((resolve) => {
-    const modal = new ConfirmModal(app, 'This cannot be undone', question, async () => undefined, verb);
+    const modal = new ConfirmModal(app, title, question, async () => undefined, verb);
     const close = modal.onClose.bind(modal);
     // One place that settles it, on the way out, reading what the button recorded on the way
     // in. Resolving from the button instead means racing its own `close()`, which is the

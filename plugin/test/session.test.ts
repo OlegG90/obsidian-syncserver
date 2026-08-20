@@ -15,9 +15,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { authSecret, createAccount, deriveKek, kekVerifier, openAccount } from '../src/crypto/account.js';
+import { authSecret, createAccount, deriveKek, kekVerifier, openAccount, vaultKey } from '../src/crypto/account.js';
 import { randomBytes, toBase64 } from '../src/crypto/bytes.js';
 import { seal } from '../src/crypto/sealed.js';
+import { encryptName } from '../src/crypto/scope.js';
 import { Session, forTests, type Connection, type Derivation } from '../src/session/index.js';
 import type { Transport, HttpRequest, HttpResponse } from '../src/api/transport.js';
 
@@ -523,5 +524,82 @@ describe('Session.recover — the last device is gone', () => {
         { derivation: realDerivationForTests, transport },
       ),
     );
+  });
+});
+
+describe('the vault a device binds to is confirmed, not assumed (#117)', () => {
+  // The same recover harness as above, because the branch under test is shared: `chooseVault`
+  // is reached identically from pairing and from recovery, and recovery is the one with a
+  // complete fake already built.
+  const PHRASE = 'correct horse battery staple';
+  const SEED = randomBytes(32);
+  const RSALT = randomBytes(16);
+  const ENVELOPE = seal(deriveKek(PHRASE, RSALT, FAST), SEED);
+  const VAULT = '11111111-1111-4111-8111-111111111111';
+
+  const answers = (nameEnc: string) => ({
+    'GET /auth/kdf': { status: 200, body: { account_salt: toBase64(RSALT), kdf_params: FAST } },
+    'POST /auth/recover': {
+      status: 200,
+      body: {
+        seed_envelope: ENVELOPE,
+        opened_by: 'passphrase',
+        enc_privkey: toBase64(new Uint8Array(48).fill(0x22)),
+        account_salt: toBase64(RSALT),
+        kdf_params: FAST,
+        user_id: 'user-1',
+        device_id: 'dev-recovered',
+      },
+    },
+    'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1' } },
+    'GET /vaults': { status: 200, body: [{ id: VAULT, name_enc: nameEnc }] },
+  });
+
+  /** The label as the server holds it: encrypted under this vault's own KV. */
+  const labelled = (name: string) => encryptName(vaultKey(SEED, VAULT), name);
+
+  const run = (nameEnc: string, confirmVault: (v: { id: string; name: string }) => Promise<boolean>) =>
+    Session.recover(
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE, confirmVault },
+      { derivation: realDerivationForTests, transport: fakeTransport(answers(nameEnc)) },
+    );
+
+  it('puts the vault NAME to the person, not its id', async () => {
+    // The whole reason for asking is that they recognise the answer, and nobody recognises a
+    // UUID — which is what the connected screen has shown since M1. The label is encrypted
+    // under KV, so this also pins that the seed is what reads it.
+    const asked: { id: string; name: string }[] = [];
+    await run(labelled('Work notes'), async (v) => (asked.push(v), true));
+
+    assert.equal(asked.length, 1, 'asked exactly once');
+    assert.equal(asked[0]!.name, 'Work notes');
+    assert.equal(asked[0]!.id, VAULT, 'and the id travels too, for a caller that wants it');
+  });
+
+  it('connects nothing when the answer is no', async () => {
+    // Declining has to leave both sides exactly as they were: this is the branch that used to
+    // merge two vaults without asking, so a "no" that still connected would be worse than
+    // never having asked.
+    await assert.rejects(
+      () => run(labelled('Work notes'), async () => false),
+      (e: unknown) => e instanceof Error && /cancelled/i.test(e.message) && /nothing was changed/i.test(e.message),
+    );
+  });
+
+  it('goes on to a normal open session when the answer is yes', async () => {
+    const s = await run(labelled('Work notes'), async () => true);
+
+    assert.equal(s.state, 'open');
+    assert.equal(s.connection.vaultId, VAULT);
+  });
+
+  it('still asks when the label will not open, rather than refusing to connect', async () => {
+    // Being unable to read a name is not a reason to refuse: the id is a worse answer to
+    // "which one", not an absent one. Throwing here would strand a device over a label.
+    const asked: string[] = [];
+    const s = await run('not-a-real-envelope', async (v) => (asked.push(v.name), true));
+
+    assert.match(asked[0]!, /unreadable|unnamed/, `said so instead of throwing: ${asked[0]}`);
+    assert.equal(s.state, 'open', 'and connecting still worked');
   });
 });
