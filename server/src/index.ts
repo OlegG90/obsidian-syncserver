@@ -1,6 +1,7 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns, verifyLatestBackup } from './backup.js';
-import { assertPgDumpMatches, pgDumpVersion } from './backup-legs.js';
+import { assertPgDumpMatches, backupLegs, pgDumpVersion } from './backup-legs.js';
+import { startBackupSchedule } from './backup-schedule.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
@@ -17,6 +18,12 @@ const app = await buildApp(db, cfg, events);
 // The collector shares the blob store with the routes — same path, same directory.
 const collectorStore = openStore(cfg.blobStorePath);
 const stopCollector = startCollector(db, collectorStore, cfg);
+
+// The PostgreSQL major a dump must match (docs/10). Read once at boot, and used by both the
+// things that need it: the legs the schedule builds, and the advisory check below.
+const serverVersionLine = cfg.backup
+  ? (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? ''
+  : '';
 
 // The periodic restore rehearsal (docs/10): reopen the latest backup and confirm it is
 // whole, on its own rare interval rather than the collector's. Lives here rather than in
@@ -44,6 +51,20 @@ if (cfg.backup) {
   rehearsalTimer.unref?.();
 }
 
+// The caller docs/10 named and nothing was: whatever runs a backup nightly. Off when no backup
+// is configured, and off when the interval is zero — a deployment driving backups from cron on
+// the host wants one schedule, not two. Nothing runs at boot: a server in a restart loop would
+// otherwise take a backup per restart, each opening a refusal window.
+const stopBackupSchedule = startBackupSchedule(db, cfg, (runDir) =>
+  backupLegs(
+    cfg.backup!.destination,
+    cfg.backup!.dumpCommand,
+    cfg.backup!.blobSource,
+    runDir,
+    serverVersionLine,
+  ),
+);
+
 // A `running` backup row that survived a restart is a lie: the window it recorded went with
 // the process, so nothing has been refusing writes since. Nothing else will ever settle it —
 // the `finally` that would have belongs to a process that no longer exists — and a row an
@@ -66,9 +87,8 @@ if (interrupted > 0) {
 // not two checks disagreeing — it is the difference between telling somebody early and
 // stopping the thing that would go wrong.
 if (cfg.backup) {
-  const serverLine = (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? '';
   try {
-    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), serverLine);
+    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), serverVersionLine);
   } catch (e) {
     console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -120,6 +140,7 @@ console.log(`syncserver listening on ${host}:${port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
+    stopBackupSchedule();
     if (rehearsalTimer) clearInterval(rehearsalTimer);
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
