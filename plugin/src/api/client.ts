@@ -140,6 +140,13 @@ export interface FinalizeNode {
   vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
 }
 
+/**
+ * One row of a share's membership: who holds a copy of the folder, and who has not answered
+ * yet.
+ *
+ * The two are one list on purpose: an outstanding invitation is a row like any other, and a
+ * caller that had to fetch them separately would be free to forget one.
+ */
 export interface ShareMember {
   user_id: string;
   login: string;
