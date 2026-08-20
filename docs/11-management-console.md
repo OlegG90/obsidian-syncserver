@@ -23,6 +23,18 @@ list of devices nobody owns, growing for ever, in the surface whose job is to ma
 The consequence is stated rather than hidden: signing in from a second browser takes the session from the
 first, which is acceptable for an administrator and would not be for a vault.
 
+**A console session lasts as long as its tab** (#102). Both tokens live in memory — the access token, and
+the refresh token that quietly buys another when it expires — and neither is written down: no storage, no
+cookie. So closing the tab ends the session, and so does a reload, which is consistent with this surface's
+one structural promise: a reload is never wrong.
+
+It was fifteen minutes for a while, and that was not a decision. `/auth/console` has answered with both
+tokens since M4 and the console kept only the first, so the session lasted exactly as long as an access
+token — an operator reading the audit log and coming back to the accounts screen could find the page dead.
+The refresh token is worth more than the access token, because it lasts longer; it sits in the same place
+under the same access, and what it buys is bounded by the one console device row an administrator can
+revoke. A revoked device, or a spent token, drops the person on the sign-in screen with the reason.
+
 **"An administrator cannot browse another user's vault" is now a fact about the row rather than a promise
 about behaviour.** With E2EE always on (AC-08) the server holds only ciphertext, and a console account
 holds no key to open it with — so this is not a permission somebody could grant later, it is an absence.

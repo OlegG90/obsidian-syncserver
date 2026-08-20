@@ -48,12 +48,15 @@ export const chooseScreen = async (deps: ScreenDeps): Promise<Screen> => {
 /**
  * Whether a refusal means the session is over rather than the act was refused.
  *
- * The console holds its access token in memory and asks for no refresh, so the token simply
- * expires — fifteen minutes by default — while a tab sits open. Every call after that is
- * refused, and until this existed the screen showed the refusal as a sentence and left its
- * "Loading…" in place: a page that had ended, saying nothing about how to carry on. That is
- * the live walk it comes from — Audit log, then Accounts, then `unauthenticated` above a
- * list that would have waited forever.
+ * The console holds both tokens in memory and spends the refresh one automatically (#102), so
+ * by the time a call reports `unauthenticated` the renewal has ALREADY been tried and refused:
+ * the device was revoked, or the session was forgotten. There is nothing left to try.
+ *
+ * It came from a live walk taken when there was no renewal at all — the access token simply
+ * expired after fifteen minutes, and the screen showed the refusal as a sentence while leaving
+ * its "Loading…" in place: a page that had ended, saying nothing about how to carry on. Audit
+ * log, then Accounts, then `unauthenticated` above a list that would have waited forever.
+ * Renewal made that rarer; it did not make it impossible, which is why this stayed.
  *
  * Matched on the **code**, not the status. The server is careful about which word it uses:
  * a token that no longer verifies is `unauthenticated`, and a login that does not is
