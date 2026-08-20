@@ -1,6 +1,6 @@
 {
   "name": "@syncserver/console",
-  "version": "0.5.0-b",
+  "version": "0.5.0-c",
   "private": true,
   "type": "module",
   "scripts": {
