@@ -46,7 +46,7 @@ import {
   type OpenedAccount,
 } from '../crypto/account.js';
 import type { KdfParams } from '@syncserver/shared';
-import { encryptName } from '../crypto/scope.js';
+import { decryptName, encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
 import { normalisePairingCode } from '../crypto/pairing-code.js';
@@ -112,6 +112,15 @@ export interface PairArgs {
   pairingCode: string;
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
+  /**
+   * Confirm the vault this device is about to bind to, by name (#117).
+   *
+   * Optional, and the shape is a question rather than a flag: a caller with no way to ask —
+   * a test, a headless flow — passes nothing and keeps the old silent behaviour, while one
+   * with a screen gets to put the vault in front of the person before adoption merges
+   * anything. Returning `false` connects nothing and changes nothing.
+   */
+  confirmVault?: (vault: { id: string; name: string }) => Promise<boolean>;
   deviceName?: string;
   devicePlatform?: string;
 }
@@ -123,6 +132,15 @@ export interface RecoverArgs {
   passphrase: string;
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
+  /**
+   * Confirm the vault this device is about to bind to, by name (#117).
+   *
+   * Optional, and the shape is a question rather than a flag: a caller with no way to ask —
+   * a test, a headless flow — passes nothing and keeps the old silent behaviour, while one
+   * with a screen gets to put the vault in front of the person before adoption merges
+   * anything. Returning `false` connects nothing and changes nothing.
+   */
+  confirmVault?: (vault: { id: string; name: string }) => Promise<boolean>;
   deviceName?: string;
   devicePlatform?: string;
 }
@@ -258,14 +276,59 @@ export class Session {
    * what this device is being set up to do. `purpose` is in the message because "name the
    * one to sync" and "name the one to recover into" are asked at different moments, and a
    * person reading it is in the middle of one of them.
+   *
+   * **The single-vault case is confirmed, not assumed** (#117). Binding to the only vault
+   * there is, is right when a device is joining the vault it means to join — a second laptop
+   * for the same notes — and wrong when it is being set up for a different one. Those are two
+   * intents and this had no way to tell them apart, so it picked. What followed was adoption:
+   * the existing vault materialising into whatever was already on disk, merging two vaults
+   * into one with nothing on any screen having said so. The default was never the bug; the
+   * bug was a default standing in for a question nobody asked.
+   *
+   * `confirm` is optional so that the caller which cannot ask — a flow with no UI, and every
+   * test — keeps the old behaviour. A caller that CAN ask, does.
    */
-  private static async chooseVault(client: SyncClient, wanted: string | undefined, purpose: string): Promise<string> {
+  private static async chooseVault(
+    client: SyncClient,
+    seed: Uint8Array,
+    wanted: string | undefined,
+    purpose: string,
+    confirm?: (vault: { id: string; name: string }) => Promise<boolean>,
+  ): Promise<string> {
     const vaults = await client.listVaults();
-    const vaultId = wanted ?? (vaults.length === 1 ? vaults[0]!.id : undefined);
-    if (vaultId) return vaultId;
-    throw new Error(
-      `this account has ${vaults.length} vaults; name the one to ${purpose}: ${vaults.map((v) => v.id).join(', ')}`,
-    );
+    // Already decided by the caller: they named one, so there is nothing to ask about.
+    if (wanted) return wanted;
+    if (vaults.length !== 1) {
+      throw new Error(
+        `this account has ${vaults.length} vaults; name the one to ${purpose}: ${vaults.map((v) => v.id).join(', ')}`,
+      );
+    }
+
+    const only = vaults[0]!;
+    if (!confirm) return only.id;
+    if (await confirm({ id: only.id, name: Session.vaultLabel(seed, only) })) return only.id;
+    throw new Error('cancelled: this device was not connected to that vault, and nothing was changed.');
+  }
+
+  /**
+   * A vault's own label, which until now was written at redeem and never read back.
+   *
+   * The whole point of asking is that the person recognises the answer, and a UUID is not
+   * something anybody recognises. The label is encrypted under this vault's own `KV`, so
+   * reading it needs the seed — which the caller has by this point, or there would be nothing
+   * to bind.
+   *
+   * A label that will not open is reported as one rather than throwing. Being unable to read
+   * a name is not a reason to refuse to connect, and the id is still an honest answer to
+   * "which one" — just a worse one.
+   */
+  private static vaultLabel(seed: Uint8Array, vault: { id: string; name_enc: string | null }): string {
+    if (!vault.name_enc) return `(unnamed) ${vault.id.slice(0, 8)}`;
+    try {
+      return decryptName(vaultKey(seed, vault.id), vault.name_enc);
+    } catch {
+      return `(name unreadable) ${vault.id.slice(0, 8)}`;
+    }
   }
 
   /**
@@ -481,7 +544,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, args.vaultId, 'sync');
+    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'sync', args.confirmVault);
 
     return Session.finishBootstrap(
       {
@@ -559,7 +622,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, args.vaultId, 'recover into');
+    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.confirmVault);
 
     return Session.finishBootstrap(
       {
