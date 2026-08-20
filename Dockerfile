@@ -48,9 +48,25 @@ RUN npm ci --omit=dev
 # decide to nest later.
 RUN mkdir -p server/node_modules shared/node_modules
 
-FROM node:22-alpine AS runtime
+# The runtime base is pinned to an Alpine RELEASE, unlike the build stages, and the reason is
+# the package below: `postgresql18-client` exists in Alpine 3.23 and does not exist in 3.22.
+# A floating `node:22-alpine` therefore builds today and stops building — or, worse, starts
+# resolving a different major — on whichever Tuesday the tag moves.
+FROM node:22-alpine3.23 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+
+# `pg_dump` lives in the image because the backup runs from this process (docs/10), and its
+# MAJOR VERSION MUST MATCH the server it dumps: pg_dump refuses a newer server outright, and
+# an older one produces a dump that restores into something subtly different.
+#
+# Pinned to the major, deliberately, and it is the same 18 the compose file runs
+# (`postgres:18-alpine`). Two numbers that must agree, in two files — so `assertPgDumpMatches`
+# checks them at startup rather than trusting this line, and the image build in CI asserts the
+# binary is here and is 18. An unpinned `postgresql-client` would follow the base image's
+# repository to whatever major it carries next, which is exactly the drift the check exists to
+# catch, discovered on a rebuild nobody connected to it.
+RUN apk add --no-cache postgresql18-client
 
 # A non-root default that suits a NAS, where services usually share one unprivileged uid
 # and a common group: the blob volume must not end up owned by a user nobody else can write

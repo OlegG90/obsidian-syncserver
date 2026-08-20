@@ -88,9 +88,33 @@ const dev = readFileSync('docker-compose.dev.yml', 'utf8');
 check(/\n\s+build: \./.test(dev), 'docker-compose.dev.yml must provide the build the deployment file lacks');
 check(/image: syncserver:dev/.test(dev), 'docker-compose.dev.yml must name the same image for the switch back');
 
+/**
+ * The two PostgreSQL majors that must agree, and live in two different files.
+ *
+ * `pg_dump` refuses a server newer than itself outright, and an older one produces a dump
+ * that restores into something subtly different — so the client in the image has to be the
+ * same major as the database the compose file runs. `assertPgDumpMatches` checks the pair at
+ * startup, which is the check that matters; this one catches the same drift a build earlier,
+ * where it is one line to fix rather than a deployment that comes up unable to back itself up.
+ *
+ * Static on purpose: this whole file exists because the machine it runs on has no Docker.
+ */
+const dbMajor = /image:\s*postgres:(\d+)/.exec(text)?.[1];
+const clientMajor = /apk add [^\n]*postgresql(\d+)-client/.exec(readFileSync('Dockerfile', 'utf8'))?.[1];
+check(dbMajor !== undefined, 'docker-compose.yml must pin a postgres major, e.g. postgres:18-alpine');
+check(clientMajor !== undefined, 'the Dockerfile runtime stage must install a pinned postgresqlNN-client');
+check(
+  dbMajor === undefined || clientMajor === undefined || dbMajor === clientMajor,
+  `pg_dump major ${clientMajor} in the Dockerfile does not match postgres:${dbMajor} in ${file} — ` +
+    'a backup on this deployment would fail the moment it was asked',
+);
+
 if (problems.length > 0) {
   console.error(`${file}:`);
   for (const p of problems) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`${file}: two services, ordered on health, both mounts, no secrets written down, pulled not built`);
+console.log(
+  `${file}: two services, ordered on health, both mounts, no secrets written down, pulled not built; ` +
+    `pg_dump ${clientMajor} matches postgres ${dbMajor}`,
+);
