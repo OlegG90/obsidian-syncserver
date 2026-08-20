@@ -155,9 +155,16 @@ const quotaControl = (a: AccountRow, done: () => Promise<void>, report: Report):
     const out = await setQuota(a.id, bytes);
     // Reported before the refresh and OUTSIDE the list, because `done()` replaces every card
     // — including the one this control is drawn in.
+    // "will be", not "is". `freezes` answers what the NEXT write will meet: the server
+    // deliberately does not freeze here — that happens in `freezeIfOverQuota`, where a write
+    // crosses the line, because two places deciding one thing is how they come to disagree.
+    // So the account is over its limit and not yet frozen, and a sentence saying otherwise
+    // sends an operator looking for a state the database does not have. Confirmed on a live
+    // walk: quota lowered under usage, `frozen_at` still null.
     report(
       out.freezes
-        ? `${a.login} now stores more than its limit and is frozen; deleting is the way out.`
+        ? `${a.login} now stores ${mib(out.used_bytes)}, over its new limit. The next write is refused ` +
+          `and the account freezes; nothing is deleted, and deleting is the way out.`
         : `${a.login} may now store ${mib(bytes)}.`,
       out.freezes,
     );
