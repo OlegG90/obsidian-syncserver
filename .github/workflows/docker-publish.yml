@@ -1,4 +1,5 @@
-# Publish the server image to the container registry, on a version tag.
+# Publish a release: the server image to the container registry, and the plugin bundle to a
+# GitHub release, from one version tag.
 #
 # This is the third answer to the platform trap that docs/13 opens with — "build on the
 # target, or for the target's platform, or publish from CI and pull". The runners are
@@ -9,11 +10,18 @@
 # the single version across six manifests (#111). Every run also tags by commit, so a
 # running container can be traced to a build. The registry is GitHub's, and it is PUBLIC —
 # the server pulls with no credential, which is the whole point of the choice (docs/13).
+#
+# **The tag carries no `v`, and that is BRAT's rule rather than a preference.** The plugin is
+# installed by pointing BRAT at this repository; it reads `manifest.json` out of a release's
+# assets, and Obsidian requires the release tag, the release name and the version inside that
+# manifest to be the same string. A `v` on the front makes two of the three disagree. So the
+# tag IS the version — which is also what #111 has said since M2, now with one more file
+# forced to agree with the other six.
 name: publish
 
 on:
   push:
-    tags: ['v*']
+    tags: ['[0-9]+.[0-9]+.[0-9]+', '[0-9]+.[0-9]+.[0-9]+-*']
   workflow_dispatch:
 
 env:
@@ -34,25 +42,35 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # The tag to attach, from a `v0.5.0-a` style tag: the part after `v`. The owner is
-      # lowercased for the same reason the image name is — GHCR names must be lowercase.
+      # The tag IS the version. The owner is lowercased for the same reason the image name
+      # is — GHCR names must be lowercase.
       #
-      # **Refused unless the ref really is a tag.** This step used to say the workflow "fires
-      # only on `v*`, so a missing match means the tag was malformed" — while
+      # **Refused unless the ref really is a version tag.** This step used to say the workflow
+      # "fires only on `v*`, so a missing match means the tag was malformed" — while
       # `workflow_dispatch` sat three lines above as a second trigger. On that path
       # `GITHUB_REF` is `refs/heads/main`, the strip does nothing, and the run publishes
       # `syncserver:main`: a moving tag, which is exactly what choosing against `latest` was
       # about (docs/13). A release has to be a point somebody can go back to, so the version
       # comes from a tag or the run stops here.
+      #
+      # **And the tag has to agree with the manifests.** `check-version.mjs` pins six files to
+      # each other on every push; nothing pinned them to the tag, so tagging without bumping
+      # produced an image called one thing containing another. That is the same quiet failure
+      # #111 was opened about, one layer out, and it is one line to refuse.
       - name: metadata
         id: meta
         run: |
           case "$GITHUB_REF" in
-            refs/tags/v*) ;;
-            *) echo "::error::publish needs a v* tag; $GITHUB_REF names no version to attach" && exit 1 ;;
+            refs/tags/[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::publish needs a version tag like 0.5.0-b; $GITHUB_REF names no version to attach" && exit 1 ;;
           esac
           tag="${GITHUB_REF#refs/tags/}"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          declared="$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$declared" ]; then
+            echo "::error::tag $tag but the manifests say $declared — one version, or the release is named after code it does not contain"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/syncserver" >> "$GITHUB_OUTPUT"
 
@@ -77,3 +95,49 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.sha }}
+
+  # The plugin half of the same release, which is how it is INSTALLED (docs/13).
+  #
+  # There is no plugin in the image and there never will be: the server holds no key, and the
+  # plugin holds every one of them, so they are shipped to different places by different
+  # people. Obsidian's own plugin list is not one of those places yet — that is a submission
+  # with its own review — so the route is BRAT, which installs from a repository's releases.
+  #
+  # BRAT's contract is narrow and worth stating: it reads `manifest.json` out of the RELEASE
+  # ASSETS, not the repository, and it skips anything GitHub marks as a prerelease unless the
+  # person installing has turned that on. So the assets are the deliverable, and this release
+  # is an ordinary one whatever the version string says about how finished it is.
+  #
+  # After the image, deliberately. A release is an announcement, and announcing a version
+  # whose server could not be built would send somebody to install half of one.
+  plugin:
+    name: the plugin bundle, for BRAT
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # `--out` rather than `--vault`: the same bundle, with the installation left out.
+      - run: node plugin/esbuild.mjs --out dist-plugin
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # The three strings Obsidian requires to be one string. The manifest was already
+          # checked against the other five by `check-version.mjs` and against the tag by the
+          # job above; this is the copy that actually ships, read back from the asset.
+          shipped="$(node -p 'require("./dist-plugin/manifest.json").version')"
+          if [ "$tag" != "$shipped" ]; then
+            echo "::error::the bundled manifest says $shipped, not $tag — BRAT would install a version nobody released"
+            exit 1
+          fi
+          gh release create "$tag" --title "$tag" --generate-notes             dist-plugin/main.js dist-plugin/manifest.json
