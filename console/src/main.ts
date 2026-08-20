@@ -13,7 +13,7 @@
  * have.
  */
 import { accounts, audit, backups, bootstrap, confirmRestore, forgetSession, health, invite, restoreStatus, runBackup, setQuota, signedIn, signIn, verify, type AccountRow, type AuditRow, type BackupRun } from './api.js';
-import { describeAccount, describeAudit, freezeWarning, mib } from './format.js';
+import { accountKind, accountState, accountUsage, auditAction, freezeWarning, mib } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -145,18 +145,66 @@ const signInScreen = (note?: string): void => {
   app.replaceChildren(form);
 };
 
-const accountRow = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
-  const card = el(
-    'div',
-    { className: 'card' },
-    el('strong', { textContent: a.login }),
-    el('div', { className: 'muted', textContent: describeAccount(a) }),
-  );
-  // A console account holds no key and owns no vault (#115), so it has no quota to change —
-  // and an invitation is not an account yet. Neither gets the control, rather than getting one
-  // that refuses.
-  if (a.role !== 'admin' && a.state !== 'provisioned') card.append(quotaControl(a, done, report));
-  return card;
+/**
+ * The accounts, as a table (#123).
+ *
+ * A card each was readable at three accounts and stopped being readable at thirty: every row
+ * carried a quota field and a Save button whether or not anybody was changing that account,
+ * so a screen for **looking** at who exists was mostly a stack of forms for changing them.
+ * Scanning is the ordinary act here; editing is the rare one, and the layout had them the
+ * other way round.
+ *
+ * So the columns are what an operator scans for — who, what kind, how it stands, what it is
+ * storing — and the act is a link that opens an editor under the row it belongs to. One at a
+ * time, because two open editors are two half-finished decisions.
+ */
+const accountsTable = (rows: readonly AccountRow[], done: () => Promise<void>, report: Report): HTMLElement => {
+  const table = el('table', { className: 'rows' });
+  const head = el('tr', {});
+  for (const h of ['Login', 'Kind', 'State', 'Storing', '']) head.append(el('th', { textContent: h }));
+  table.append(el('thead', {}, head));
+
+  const body = el('tbody', {});
+  for (const a of rows) {
+    const row = el('tr', {});
+    row.append(
+      el('td', {}, el('strong', { textContent: a.login })),
+      el('td', { className: 'muted', textContent: accountKind(a) }),
+      el('td', { className: 'muted', textContent: accountState(a) }),
+      el('td', { className: a.frozenAt ? 'bad' : 'muted', textContent: accountUsage(a) }),
+    );
+
+    const act = el('td', {});
+    row.append(act);
+    body.append(row);
+
+    // A console account holds no key and owns no vault (#115), so it has no quota to change —
+    // and an invitation is not an account yet. Neither gets the control, rather than getting
+    // one that refuses.
+    if (a.role === 'admin' || a.state === 'provisioned') continue;
+
+    // The editor lives in a row of its own, spanning the table, so opening it moves nothing
+    // sideways and the account it belongs to stays directly above it.
+    const drawer = el('tr', { className: 'drawer' });
+    const cell = el('td', {});
+    cell.colSpan = 5;
+    drawer.append(cell);
+    drawer.hidden = true;
+    body.append(drawer);
+
+    const open = el('button', { className: 'link', textContent: 'Quota…' });
+    open.onclick = (): void => {
+      // One at a time: another row's open editor is a decision somebody started and left, and
+      // two of them on screen invite finishing the wrong one.
+      body.querySelectorAll('tr.drawer').forEach((other) => ((other as HTMLElement).hidden = true));
+      cell.replaceChildren(quotaControl(a, done, report, () => (drawer.hidden = true)));
+      drawer.hidden = false;
+    };
+    act.append(open);
+  }
+
+  table.append(body);
+  return table;
 };
 
 /**
@@ -179,7 +227,13 @@ type Report = (message: string, bad?: boolean) => void;
  * have decided (SH-20). The sentence is `freezeWarning`'s, so what is shown and what is tested
  * are the same string.
  */
-const quotaControl = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
+const quotaControl = (
+  a: AccountRow,
+  done: () => Promise<void>,
+  report: Report,
+  /** Shut the drawer. A person who opened an editor to look must be able to leave without acting. */
+  close: () => void,
+): HTMLElement => {
   const box = el('div', {});
   const quota = field('Quota in MiB');
   quota.input.value = String(Math.round(Number(a.quotaBytes) / (1024 * 1024)));
@@ -199,6 +253,10 @@ const quotaControl = (a: AccountRow, done: () => Promise<void>, report: Report):
     );
     await done();
   };
+
+  const cancel = el('button', { className: 'link', textContent: 'Cancel' });
+  cancel.onclick = close;
+  box.append(cancel);
 
   submits(save, box, async () => {
     const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
@@ -251,7 +309,7 @@ const accountsScreen = (): void => {
 
   const fill = async (): Promise<void> => {
     const out = await accounts();
-    list.replaceChildren(...out.accounts.map((a) => accountRow(a, fill, report)));
+    list.replaceChildren(accountsTable(out.accounts, fill, report));
   };
 
   const toBackups = el('button', { textContent: 'Backups' });
@@ -285,9 +343,9 @@ const auditScreen = (): void => {
   const fill = async (): Promise<void> => {
     const out = await audit();
     list.replaceChildren(
-      ...(out.entries.length === 0
-        ? [el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })]
-        : out.entries.map(auditRow)),
+      out.entries.length === 0
+        ? el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })
+        : auditTable(out.entries),
     );
   };
 
@@ -295,13 +353,40 @@ const auditScreen = (): void => {
   loads(list, fill);
 };
 
-const auditRow = (e: AuditRow): HTMLElement =>
-  el(
-    'div',
-    { className: 'card' },
-    el('strong', { textContent: describeAudit(e) }),
-    el('div', { className: 'muted', textContent: when(e.at) }),
-  );
+/**
+ * The audit log, as a table (#123).
+ *
+ * A sentence per row — "quota changed — oleh, by admin" — read well at seven entries and
+ * stopped reading at seventy: five near-identical acts seconds apart became five paragraphs a
+ * person had to compare word by word. The parts somebody scans a log for are one actor, one
+ * target, one action, and a sentence buries each of them in a different position.
+ *
+ * Newest first, which is the server's order (#87, #94) and not this screen's to choose.
+ */
+const auditTable = (entries: readonly AuditRow[]): HTMLElement => {
+  const table = el('table', { className: 'rows' });
+  const head = el('tr', {});
+  for (const h of ['When', 'Action', 'Account', 'By']) head.append(el('th', { textContent: h }));
+  table.append(el('thead', {}, head));
+
+  const body = el('tbody', {});
+  for (const e of entries) {
+    body.append(
+      el(
+        'tr',
+        {},
+        el('td', { className: 'muted', textContent: when(e.at) }),
+        el('td', {}, el('strong', { textContent: auditAction(e) })),
+        // A dash rather than a blank: some acts have no target — confirming a restore is done
+        // to the server, not to somebody — and an empty cell reads as missing data.
+        el('td', { textContent: e.targetLogin ?? '—' }),
+        el('td', { className: 'muted', textContent: e.actorLogin }),
+      ),
+    );
+  }
+  table.append(body);
+  return table;
+};
 
 /** When a run happened, as a person reads a table. */
 const when = (iso: string | null): string =>

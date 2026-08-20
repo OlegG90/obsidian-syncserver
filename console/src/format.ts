@@ -33,23 +33,44 @@ export const mib = (bytes: string | null): string =>
   bytes === null ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
 /**
- * One line describing what an account is and how it is doing.
+ * What kind of thing this row is.
  *
- * **Usage is omitted for a console account and for an invitation**, and not because it would
- * look untidy: a console account owns no vault and holds a zero quota (#115), so "0.0 MiB of
- * 0.0 MiB" would be a true statement that reads as a broken one, and an invitation has not
- * become an account yet.
+ * Three, not two, and the third is the one that matters: **an invitation is not an account
+ * yet** (#115). It has a login and a quota and nothing else — no keys, no vault, nobody has
+ * claimed it — so calling it an account in the kind column would be the table asserting
+ * something the row does not support.
  */
-export const describeAccount = (a: AccountLine): string => {
-  const what =
-    a.state === 'provisioned'
-      ? `invitation${a.inviteExpiresAt ? `, expires ${new Date(a.inviteExpiresAt).toLocaleDateString()}` : ''}`
-      : `${a.role === 'admin' ? 'console' : 'vault'} account · ${a.state}`;
+export const accountKind = (a: AccountLine): string =>
+  a.state === 'provisioned' ? 'invitation' : a.role === 'admin' ? 'console account' : 'vault account';
 
-  const storing = a.role !== 'admin' && a.state !== 'provisioned';
-  const usage = storing ? ` · ${mib(a.usedBytes)} of ${mib(a.quotaBytes)}` : '';
+/**
+ * Where this row stands, in the words the state means rather than the enum's spelling.
+ *
+ * An invitation reports what an operator actually wants to know about one — whether it can
+ * still be redeemed — because `provisioned` describes the row and the date describes the
+ * decision.
+ */
+export const accountState = (a: AccountLine): string => {
+  if (a.state !== 'provisioned') return a.state;
+  return a.inviteExpiresAt ? `expires ${new Date(a.inviteExpiresAt).toLocaleDateString()}` : 'unclaimed';
+};
 
-  return `${what}${usage}${a.frozenAt ? ' · over its limit' : ''}`;
+/**
+ * What this account is storing, or a dash where the question does not apply.
+ *
+ * **Omitted for a console account and for an invitation**, and not because it would look
+ * untidy: a console account owns no vault and holds a zero quota (#115), so "0.0 MiB of
+ * 0.0 MiB" would be a true statement that reads as a broken one, and an invitation has not
+ * become an account yet. A dash says "not a question about this row"; a zero says "this row
+ * answered, and the answer is nothing".
+ *
+ * The freeze rides here rather than in the state column because it is a statement ABOUT the
+ * number — over WHAT limit — and a column of states that sometimes means storage and
+ * sometimes means the account is switched off would make an operator read twice.
+ */
+export const accountUsage = (a: AccountLine): string => {
+  if (a.role === 'admin' || a.state === 'provisioned') return '—';
+  return `${mib(a.usedBytes)} of ${mib(a.quotaBytes)}${a.frozenAt ? ' · over its limit' : ''}`;
 };
 
 /**
@@ -77,18 +98,20 @@ export const freezeWarning = (newQuotaBytes: string, usedBytes: string): string 
 };
 
 /**
- * One line of the audit log as a person reads it.
+ * What was done, as a person reads it.
  *
  * The action is a dotted machine name (`quota.change`), which is right for a column that gets
  * filtered and wrong for one that gets read, so it is spelled out. An action this build does
  * not recognise is still shown under its own name — the log is append-only and older than any
  * particular console, so hiding an entry because the word is unfamiliar would be the one
  * failure a log must not have.
+ *
+ * Only the verb. Who did it and to whom are columns of their own now (#123): a sentence per
+ * row read well at seven rows and stopped reading at seventy, and the parts a person scans a
+ * log for — one actor, one target, one action — are exactly the parts a sentence buries in
+ * the middle of itself.
  */
-export const describeAudit = (entry: AuditLine): string => {
-  const target = entry.targetLogin ? ` — ${entry.targetLogin}` : '';
-  return `${ACTIONS[entry.action] ?? entry.action}${target}, by ${entry.actorLogin}`;
-};
+export const auditAction = (entry: AuditLine): string => ACTIONS[entry.action] ?? entry.action;
 
 /**
  * The audit fields this file reads, picked from the wire shape rather than restated.

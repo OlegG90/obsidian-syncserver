@@ -24,6 +24,29 @@
       button:disabled { opacity: 0.5; cursor: default; }
       .bad { color: #c0392b; }
       .ok { color: #1e8449; }
+
+      /* Tables, because scanning is the ordinary act on both list screens and a stack of
+         cards made the rare act — editing — the one the layout was built around. */
+      table.rows { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1.5rem; }
+      table.rows th {
+        text-align: left; font-weight: 600; font-size: 0.85em; opacity: 0.6;
+        padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--edge);
+      }
+      table.rows td { padding: 0.5rem 0.6rem 0.5rem 0; border-bottom: 1px solid var(--edge);
+                      vertical-align: top; }
+      /* The last column holds the row's actions and should take only what they need. */
+      table.rows th:last-child, table.rows td:last-child { width: 1%; white-space: nowrap; text-align: right; }
+      /* The editor a row opens: set apart, so it reads as belonging to the row above rather
+         than as another row of the table. */
+      tr.drawer > td { background: #8881; padding: 0.25rem 0.75rem 1rem; }
+
+      /* An action inside a row is not a form's submit button, and should not look like one:
+         no border, no top margin, no block of its own. */
+      button.link {
+        margin: 0; padding: 0; border: none; background: none; color: inherit;
+        font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+      }
+      button.link:hover { opacity: 0.75; }
     </style>
   </head>
   <body>
