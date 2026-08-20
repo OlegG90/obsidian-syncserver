@@ -364,6 +364,61 @@ describe('verifying a backup', () => {
       `SELECT verified_at AS verified FROM backup_runs WHERE id = $1`, [id]);
     assert.ok(row!.verified, 'verified_at is written');
   });
+
+  it('does NOT mark a run verified when it just found blobs missing', async () => {
+    // `verified_at` was stamped unconditionally, so a run this very function had found an
+    // incomplete copy for was listed in the console as verified — the check wearing the badge
+    // of the thing that would have caught it. Worse than not checking: it answers the question
+    // wrongly rather than not at all.
+    const { sha } = await seedWorld();
+    const id = await runId();
+
+    const out = await verifyBackup(db, present(new Set([absentKey(sha)])), id);
+
+    assert.ok(out.missing.includes(sha), 'the fixture really is missing a blob');
+    const row = await db.one<{ verified: string | null }>(
+      `SELECT verified_at AS verified FROM backup_runs WHERE id = $1`, [id]);
+    assert.equal(row!.verified, null, 'checked and found wanting is not verified');
+  });
+});
+
+describe('which backup the rehearsal reaches for', () => {
+  /** A finished run with a destination, so the rehearsal has something it could open. */
+  const finishedRun = async (destination: string, status: 'ok' | 'failed'): Promise<void> => {
+    await db.query(
+      `INSERT INTO backup_runs (window_opened_at, db_done_at, blobs_done_at, window_closed_at,
+                                finished_at, status, destination, error)
+       VALUES (now(), now(), now(), now(), now(), $1, $2, $3)`,
+      [status, destination, status === 'failed' ? 'something broke' : null],
+    );
+  };
+
+  it('reaches for the newest SUCCESSFUL run, not the newest run', async () => {
+    // One failed run at the head made `listBackups(db, 1).find(ok)` match nothing — one row
+    // fetched, then filtered — and the caller read that as "nothing to rehearse". So the last
+    // good copy, the one that would actually be restored from, was never checked again:
+    // silently, and indistinguishably from a healthy installation with nothing to do.
+    await db.query(`DELETE FROM backup_runs`);
+    await finishedRun('/backups/good', 'ok');
+    await new Promise((r) => setTimeout(r, 5));
+    await finishedRun('/backups/failed-after', 'failed');
+
+    const out = await verifyLatestBackup(db, '/backups', () => ({ size: async () => 1 }));
+
+    assert.ok(out, 'a failed run at the head does not hide the good one behind it');
+    assert.equal(out!.whole, true);
+  });
+
+  it('says there is nothing to rehearse only when nothing has ever succeeded', async () => {
+    await db.query(`DELETE FROM backup_runs`);
+    await finishedRun('/backups/only-failure', 'failed');
+
+    assert.equal(
+      await verifyLatestBackup(db, '/backups', () => ({ size: async () => 1 })),
+      undefined,
+      'which is a different silence from the one above',
+    );
+  });
 });
 
 describe('listing backups', () => {
