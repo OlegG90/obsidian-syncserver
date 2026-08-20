@@ -34,12 +34,21 @@ export DOCKER_CONFIG="${DOCKER_CONFIG:-$root/.docker}"
 mkdir -p "$DOCKER_CONFIG"
 
 say "directories"
-mkdir -p "$root/db" "$root/blobs"
+mkdir -p "$root/db" "$root/blobs" "$root/backups" "$root/state"
 # chmod rather than chown: the container runs as a group the administrator usually already
 # belongs to, so group-write is enough — and chown needs root, which is often not available.
 chmod 775 "$root/blobs" || echo "  could not chmod blobs; uploads may fail with EACCES"
+# The same treatment for the backup destination, and for the same reason: the container
+# writes it as the RUN_AS user, and a directory it cannot write turns the first backup into a
+# failed run rather than a copy.
+chmod 775 "$root/backups" || echo "  could not chmod backups; a backup may fail with EACCES"
+# And the restore epoch's home. Same reason again, with a sharper edge: the server writes it
+# as RUN_AS at every successful start, and the guard runs before it listens — so a directory
+# it cannot write is not a degraded backup, it is a server that does not boot.
+chmod 775 "$root/state" || echo "  could not chmod state; the server may fail to start with EACCES"
 # The database directory is not ours to arrange: the image takes it over as its own user.
-printf '  db:    %s\n  blobs: %s\n' "$root/db" "$root/blobs"
+printf '  db:      %s\n  blobs:   %s\n  backups: %s\n  state:   %s\n' \
+    "$root/db" "$root/blobs" "$root/backups" "$root/state"
 
 say "configuration"
 # The real file lives BESIDE the checkout, not inside it.
@@ -80,7 +89,19 @@ else
         # The server image, pinned to this deployment's version. `latest` is not used — a
         # server must be able to say what it is running, and to go back (docs/13). The
         # version comes from VERSION, which pack.sh wrote into the archive.
-        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$(cat VERSION 2>/dev/null || echo 0.4.0)"
+        #
+        # Read from the CHECKOUT, and this line was wrong until the first real release found
+        # it: the block above does `cd "$root"`, and VERSION lives in `$checkout`. So `cat
+        # VERSION` failed every time, silently, and the `|| echo` handed back a hardcoded
+        # version instead — every deployment pinned whatever that string said. It surfaces as
+        # `manifest unknown` from a pull, naming a version nothing in the archive mentions.
+        #
+        # No fallback now. A deployment that cannot say which version it is has nothing safe
+        # to guess: pinning to the wrong one is worse than stopping, because it starts, serves,
+        # and is not the code anybody thinks it is.
+        version="$(cat "$checkout/VERSION" 2>/dev/null || true)"
+        [ -n "$version" ] || { echo "no VERSION in $checkout — re-pack the archive" >&2; exit 1; }
+        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$version"
         # The uid:gid the container runs as, taken from the user running this script —
         # because that is the user creating and owning the data directories below.
         # `.env.example` carries a plausible pair and cannot carry a correct one: on a NAS
@@ -90,6 +111,13 @@ else
         printf 'RUN_AS=%s:%s\n' "$(id -u)" "$(id -g)"
         printf 'DB_DIR=%s\n' "$root/db"
         printf 'BLOB_DIR=%s\n' "$root/blobs"
+        # Where a backup lands on THIS machine. `/backups` is where the container sees it,
+        # and `BACKUP_DESTINATION` names that side — the same split as BLOB_DIR and
+        # /data/blobs. Written whether or not backups are switched on, because the mount
+        # exists either way and an empty directory costs nothing.
+        printf 'BACKUP_DIR=%s\n' "$root/backups"
+        # The restore epoch's directory on this machine; /state is the container's view.
+        printf 'STATE_DIR=%s\n' "$root/state"
         printf 'PUBLISH_PORT=%s\n' "$port"
     } >> .env
     chmod 600 .env

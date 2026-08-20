@@ -167,12 +167,24 @@ export const loadConfig = (): Config => {
   const destination = process.env['BACKUP_DESTINATION'];
   const dumpCommand = process.env['BACKUP_DB_COMMAND'];
   const blobSource = process.env['BACKUP_BLOB_SOURCE'];
-  if (destination || dumpCommand || blobSource) {
-    // All or none: a backup with a destination but no dump command is a backup that cannot
-    // be taken, and "configured" is the one thing the console's button asks.
-    if (!(destination && dumpCommand && blobSource)) {
+  // **The DESTINATION is the switch**, not "any of the three". It used to be any of them,
+  // which was right while all three were empty by default and stopped being right the moment
+  // `BACKUP_DB_COMMAND` got a working one: with `pg_dump` in the image there is a sensible
+  // default for HOW to dump, so that variable is now always set — and "any of the three"
+  // then read every unconfigured deployment as a half-configured one and refused to boot.
+  //
+  // Found by deploying, not by a test: nothing here starts a server from `.env.example`.
+  //
+  // Where to put a copy is the part only this installation knows, so it is the part that
+  // decides. Unset destination means backups are not configured, the console's button says
+  // so, and nothing is scheduled — which is what the documents promised all along.
+  if (destination) {
+    // With a destination named, the rest must be answerable: a run that cannot find the
+    // blobs it is meant to copy is a backup that fails halfway, having already opened a
+    // window. `dumpCommand` has a default and `blobSource` does not.
+    if (!(dumpCommand && blobSource)) {
       throw new Error(
-        'BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE must be set together — ' +
+        'BACKUP_DESTINATION is set, so BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE must be too — ' +
           'a partial backup configuration would start a run that cannot finish',
       );
     }
