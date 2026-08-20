@@ -2,9 +2,10 @@
  * The console's half of the protocol, and deliberately a thin one.
  *
  * M4 put every decision behind the API — who may act, what a refusal means, what a quota
- * change will do — so this reads and calls and decides nothing. The one thing it owns is the
- * access token, which lives in memory: a console session that survived a closed tab would be
- * a session nobody chose to keep.
+ * change will do — so this reads and calls almost nothing of its own. What it owns is the
+ * **session**: both tokens, in memory, and the rule for spending one to replace the other.
+ * A session that survived a closed tab would be a session nobody chose to keep, so nothing is
+ * written down — and because nothing is written down, a reload is a fresh sign-in.
  *
  * **No key material passes through here, ever.** A console account has none (#115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
@@ -25,16 +26,62 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Both halves of the session, in memory, for as long as the tab is open (#102).
+ *
+ * The access token expires in fifteen minutes; the refresh token is what buys another one. The
+ * server has minted both from `/auth/console` since M4 and this file kept only the first — so
+ * a console left open stopped working after a quarter of an hour, and the comment above
+ * describing a session that lives and dies with its tab described something nothing
+ * implemented. The lifetime was not chosen; it was what remained after throwing half of it
+ * away.
+ *
+ * **Still nothing persisted.** That is the guarantee, and it is unchanged: no storage, no
+ * cookie, no `localStorage`. Closing the tab ends the session, and so does a reload — which
+ * is consistent with this console's one structural promise, that a reload is never wrong.
+ *
+ * The refresh token is worth more than the access token, because it lasts longer, and it sits
+ * in the same place under the same access: anything running script in this tab already holds
+ * the access token. What it buys is bounded by the console device row, which is one row an
+ * administrator can revoke (#90).
+ */
 let access: string | undefined;
+let refresh: string | undefined;
 
 export const signedIn = (): boolean => access !== undefined;
 
-/** Forget the token. The server keeps the device row; ending it properly is a later screen. */
+/** Forget the session — both halves. The server keeps the device row; ending it is a later screen. */
 export const forgetSession = (): void => {
   access = undefined;
+  refresh = undefined;
 };
 
-const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+/**
+ * Trade the refresh token for a new access token. Answers whether it worked.
+ *
+ * Never retried and never queued: a refresh that is refused means the device was revoked or
+ * the token is spent, and asking again is asking the same question. The caller's next move is
+ * the sign-in screen, which is #101's.
+ */
+const renew = async (): Promise<boolean> => {
+  if (refresh === undefined) return false;
+  try {
+    const res = await fetch('/auth/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh }),
+    });
+    if (!res.ok) return false;
+    access = ((await res.json()) as { access: string }).access;
+    return true;
+  } catch {
+    // A network fault is not a dead session. Say no, let the original refusal surface as
+    // itself, and leave the tokens alone so the next call can try again.
+    return false;
+  }
+};
+
+const call = async <T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> => {
   const res = await fetch(path, {
     method,
     headers: {
@@ -58,6 +105,17 @@ const call = async <T>(method: string, path: string, body?: unknown): Promise<T>
     } catch {
       detail = text || undefined;
     }
+
+    // An expired access token, once. `unauthenticated` is the server's word for "this token
+    // is no good" and nothing else — a wrong password is `invalid_credentials`, a forbidden
+    // act is `forbidden` — so it is the one refusal a fresh token can answer.
+    //
+    // Once, and tracked by a parameter rather than by a counter: a renewed call that is
+    // refused again has been refused for a reason a third token will not change, and a
+    // request that could retry itself indefinitely is a page that hangs instead of saying so.
+    if (code === 'unauthenticated' && !renewed && (await renew())) {
+      return call<T>(method, path, body, true);
+    }
     throw new ApiError(res.status, code, detail);
   }
   return (text ? JSON.parse(text) : undefined) as T;
@@ -71,8 +129,11 @@ export const bootstrap = (password: string): Promise<{ login: string }> =>
   call('POST', '/auth/bootstrap', { password });
 
 export const signIn = async (login: string, password: string): Promise<void> => {
-  const out = await call<{ access: string }>('POST', '/auth/console', { login, password });
+  // Both halves. The server has answered with both since M4; keeping only the access token is
+  // what made a console session fifteen minutes long instead of tab-long (#102).
+  const out = await call<{ access: string; refresh: string }>('POST', '/auth/console', { login, password });
   access = out.access;
+  refresh = out.refresh;
 };
 
 export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '/admin/accounts');

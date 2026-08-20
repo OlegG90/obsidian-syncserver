@@ -53,8 +53,8 @@ const endedSession = (e: unknown): boolean => {
   if (!sessionEnded(e)) return false;
   forgetSession();
   signInScreen(
-    'Your session ended. The console keeps its token in memory only and never refreshes it, ' +
-      'so a tab left open eventually needs signing in again.',
+    'Your session ended. Nothing about it is written down, so a reload or a closed tab means ' +
+      'signing in again — and so does an administrator revoking this console.',
   );
   return true;
 };
