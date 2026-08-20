@@ -13,6 +13,7 @@
  * path table the caller has already resolved.
  */
 import { decryptName } from './crypto/scope.js';
+import type { VaultScopes } from './share-keys.js';
 import type { PlannedItem } from './sharing.js';
 
 /** One row of the replica, as the server reports it (`GET /shares/:id/replica`). */
@@ -26,15 +27,6 @@ export interface ReplicaRow {
   needs_vault_material: boolean;
   /** Superseded blobs of the same node that still owe an envelope; no tag is possible. */
   history_needing_material: string[];
-}
-
-/**
- * The key-opening half of `VaultScopes`, structurally — a real scopes value satisfies it,
- * and a test can fake it without opening a vault.
- */
-export interface DepartureScopes {
-  /** The key for a name this departure must be able to read, or a throw. */
-  keyFor(nameKeyId: string | null | undefined): Uint8Array;
 }
 
 /**
@@ -52,7 +44,7 @@ export interface DepartureScopes {
  */
 export const replicaForLeave = (
   rows: readonly ReplicaRow[],
-  scopes: DepartureScopes,
+  scopes: Pick<VaultScopes, 'keyFor'>,
   pathOfNode: ReadonlyMap<string, string>,
 ): PlannedItem[] =>
   rows.map((n) => {

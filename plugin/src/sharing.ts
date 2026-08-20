@@ -379,8 +379,14 @@ export interface LeaveDeps {
  * "(name unavailable)" under their own vault key: a wrong name rather than a missing one,
  * with nothing downstream able to tell.
  *
- * Structurally typed rather than taking `VaultScopes`, because `share-keys` imports this
- * module and the dependency may not run both ways.
+ * **The one seam that hand-writes the shape instead of picking it** (#86). Every other caller
+ * says `Pick<VaultScopes, …>`, so that renaming a method fails at the seam itself. This one
+ * cannot: `share-keys` imports this module, so importing back would close a cycle, and the
+ * shape has to be spelled out.
+ *
+ * Renaming `keyIfOpenable` still fails to compile — at whoever passes a real `VaultScopes`,
+ * naming that file instead of this line. So this is where to look when the error points
+ * somewhere that reads like it has nothing to do with it.
  */
 export const requireEveryNameReadable = (
   rows: readonly { name_enc: string | null; name_key_id: string | null }[],

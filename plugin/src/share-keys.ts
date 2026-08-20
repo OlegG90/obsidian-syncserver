@@ -174,6 +174,27 @@ export const UNREADABLE_NAME = '(name unavailable)';
  *
  * Not cached across operations: a share can be ended by somebody else between two syncs, and
  * a key kept from before would be offered for a scope nothing is named under any more.
+ *
+ * **How a seam asks for it** (#86). A function that needs the scopes takes exactly the
+ * methods it uses — `Pick<VaultScopes, 'keyFor'>`, `Pick<VaultScopes, 'readName'>` — rather
+ * than the whole class. Narrow, so a caller supplies nothing it does not use and a test can
+ * satisfy it without opening a vault; anchored to this type, so the seam names the domain term
+ * and renaming a method here fails **at the seam** rather than only at whoever passes a real
+ * value. Three call sites in one milestone each chose a different shape, which is one shape
+ * too many for a term `CONTEXT.md` defines.
+ *
+ * A hand-written `{ keyFor }` is not unsafe — rename the method and the caller passing a real
+ * `VaultScopes` still stops compiling. It is worse in two smaller ways: the error lands on the
+ * caller and names the wrong file, and a seam whose every caller is a fake stops being checked
+ * at all.
+ *
+ * The exception is a module this one imports, which therefore cannot import back —
+ * `sharing.ts` is the only case, and it says so where it hand-writes the shape.
+ *
+ * **Only the caller that OPENS a vault holds the whole value.** That is where the guarantee
+ * CONTEXT.md describes lives: scopes can be born no other way. Below that point the provenance
+ * is already established, and a mapping function asking for a class it will call one method on
+ * is asking for a guarantee somebody else has already made.
  */
 export class VaultScopes {
   private constructor(

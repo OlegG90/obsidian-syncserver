@@ -20,8 +20,19 @@ is the failure, carried by the return type rather than by an argument:
 - **lenient**, for a caller that can carry on without one: list the row anyway, skip the
   subtree, sync the rest of the vault.
 
+**A seam asks for the methods it uses, not for the class**: `Pick<VaultScopes, 'keyFor'>`,
+`Pick<VaultScopes, 'readName'>`. Narrow enough that a caller supplies nothing it does not use
+and a test can satisfy it without opening a vault, and still anchored to the type, so the seam
+names this term and renaming a method fails **at the seam** rather than only at whoever passes
+a real value. A hand-written `{ keyFor }` is not unsafe — that caller still stops compiling —
+but the error lands on the wrong file, and a seam whose every caller is a fake stops being
+checked at all. It is used only where an import cycle forbids the import, with a note saying so
+at that site.
+
 It can only come from opening a vault, which is what makes "one vault, opened once per
-operation" a type instead of a habit. It is deliberately **not** cached across operations: a
+operation" a type instead of a habit — and that guarantee belongs to the caller that opens one.
+Below that point the provenance is already established, which is why a mapping function asks
+for a method rather than for proof somebody else has already given. It is deliberately **not** cached across operations: a
 share can end between two syncs, and a key kept from before would be offered for a scope
 nothing is named under any more.
 
