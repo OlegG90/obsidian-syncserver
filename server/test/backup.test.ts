@@ -506,6 +506,86 @@ describe('the backup self-check', () => {
   });
 });
 
+describe('what a refusal window leaves in the log', () => {
+  // The live walk that produced this: a backup was taken from the console, the copy landed,
+  // the row was right, and `docker logs` had one line in it — the schedule announcing itself
+  // at boot. Every sentence about an outcome was composed by the schedule wrapper, so the
+  // trigger that had existed since M5 said nothing at all.
+  //
+  // The window is why it matters rather than being a nicety. It is the only thing in this
+  // server that stops writes being accepted, and a run that hangs inside one is an outage
+  // whose cause is unreadable unless something said a backup had begun.
+  const good: Legs = {
+    assertReady: async () => {},
+    dumpDatabase: async () => ({ bytes: 1 }),
+    copyBlobs: async () => ({ bytes: 1, count: 2 }),
+  };
+
+  it('says the window opened, and says how it closed', async () => {
+    const said: string[] = [];
+
+    const out = await runBackup(db, good, '/backups/logged', {
+      log: (m) => said.push(m),
+      warn: (m) => said.push(m),
+      openCopy: () => ({ size: async () => 1 }),
+    });
+
+    assert.equal(out.status, 'ok');
+    assert.ok(
+      said.some((m) => /started/.test(m) && /refused/.test(m) && /backups\/logged/.test(m)),
+      `the window opening, and what it costs: ${said.join(' | ')}`,
+    );
+    assert.ok(
+      said.some((m) => /ok in/.test(m) && /2 blobs/.test(m) && /verified whole/.test(m)),
+      `and how it settled: ${said.join(' | ')}`,
+    );
+  });
+
+  it('does not claim a copy was verified when nothing checked it', async () => {
+    // "Not checked" and "checked and whole" are different claims about the same run, and a
+    // log that ran them together would let an unverified copy read as a verified one.
+    const said: string[] = [];
+
+    await runBackup(db, good, '/backups/unchecked', { log: (m) => said.push(m) });
+
+    assert.ok(said.some((m) => /not checked/.test(m)), `said which it was: ${said.join(' | ')}`);
+  });
+
+  it('says a failed run failed, and how long the window was open for it', async () => {
+    const said: string[] = [];
+    const breaks: Legs = { ...good, copyBlobs: async () => { throw new Error('the mount went away'); } };
+
+    const out = await runBackup(db, breaks, '/backups/broken', { warn: (m) => said.push(m) });
+
+    assert.equal(out.status, 'failed');
+    assert.ok(
+      said.some((m) => /FAILED/.test(m) && /the mount went away/.test(m) && /ms/.test(m)),
+      `warned: ${said.join(' | ')}`,
+    );
+  });
+
+  it('logs for a caller that wired nothing, because that caller is the one that forgot', async () => {
+    // The regression, exactly. `runBackup` had one caller wrapping its outcomes and one caller
+    // wrapping nothing, and the silent one was the button a person presses. A logger that has
+    // to be remembered is a logger the next caller will forget, so the default is the console
+    // rather than silence.
+    const said: string[] = [];
+    const log = console.log;
+    const warn = console.warn;
+    console.log = (m: unknown) => said.push(String(m));
+    console.warn = (m: unknown) => said.push(String(m));
+    try {
+      await runBackup(db, good, '/backups/unwired');
+    } finally {
+      console.log = log;
+      console.warn = warn;
+    }
+
+    assert.ok(said.some((m) => /started/.test(m)), `it announced itself: ${said.join(' | ')}`);
+    assert.ok(said.some((m) => /ok in/.test(m)), `and settled: ${said.join(' | ')}`);
+  });
+});
+
 describe('the restore rehearsal', () => {
   it('is silent when no backup exists yet', async () => {
     await db.query(`DELETE FROM backup_runs`);
