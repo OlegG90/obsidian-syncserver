@@ -80,7 +80,19 @@ else
         # The server image, pinned to this deployment's version. `latest` is not used — a
         # server must be able to say what it is running, and to go back (docs/13). The
         # version comes from VERSION, which pack.sh wrote into the archive.
-        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$(cat VERSION 2>/dev/null || echo 0.4.0)"
+        #
+        # Read from the CHECKOUT, and this line was wrong until the first real release found
+        # it: the block above does `cd "$root"`, and VERSION lives in `$checkout`. So `cat
+        # VERSION` failed every time, silently, and the `|| echo` handed back a hardcoded
+        # version instead — every deployment pinned whatever that string said. It surfaces as
+        # `manifest unknown` from a pull, naming a version nothing in the archive mentions.
+        #
+        # No fallback now. A deployment that cannot say which version it is has nothing safe
+        # to guess: pinning to the wrong one is worse than stopping, because it starts, serves,
+        # and is not the code anybody thinks it is.
+        version="$(cat "$checkout/VERSION" 2>/dev/null || true)"
+        [ -n "$version" ] || { echo "no VERSION in $checkout — re-pack the archive" >&2; exit 1; }
+        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$version"
         # The uid:gid the container runs as, taken from the user running this script —
         # because that is the user creating and owning the data directories below.
         # `.env.example` carries a plausible pair and cannot carry a correct one: on a NAS
