@@ -109,7 +109,7 @@ const signInScreen = (): void => {
   app.replaceChildren(form);
 };
 
-const accountRow = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+const accountRow = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
   const card = el(
     'div',
     { className: 'card' },
@@ -119,7 +119,7 @@ const accountRow = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
   // A console account holds no key and owns no vault (#115), so it has no quota to change —
   // and an invitation is not an account yet. Neither gets the control, rather than getting one
   // that refuses.
-  if (a.role !== 'admin' && a.state !== 'provisioned') card.append(quotaControl(a, done));
+  if (a.role !== 'admin' && a.state !== 'provisioned') card.append(quotaControl(a, done, report));
   return card;
 };
 
@@ -132,7 +132,18 @@ const accountRow = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
  * have decided (SH-20). The sentence is `freezeWarning`'s, so what is shown and what is tested
  * are the same string.
  */
-const quotaControl = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+/**
+ * Where an outcome goes so that it survives being acted upon.
+ *
+ * The result of changing a quota used to be appended to the account's own card, and the
+ * refresh that follows the change replaces every card in the list — so the sentence rendered
+ * and vanished in the same instant. A live walk caught it: "a green message flashes and
+ * disappears, I cannot read it". Anything a person is meant to READ has to be written
+ * somewhere the reload does not own.
+ */
+type Report = (message: string, bad?: boolean) => void;
+
+const quotaControl = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
   const box = el('div', {});
   const quota = field('Quota in MiB');
   quota.input.value = String(Math.round(Number(a.quotaBytes) / (1024 * 1024)));
@@ -142,13 +153,13 @@ const quotaControl = (a: AccountRow, done: () => Promise<void>): HTMLElement => 
   const apply = async (): Promise<void> => {
     const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
     const out = await setQuota(a.id, bytes);
-    box.append(
-      say(
-        out.freezes
-          ? `${a.login} now stores more than its limit and is frozen; deleting is the way out.`
-          : `${a.login} may now store ${mib(bytes)}.`,
-        out.freezes,
-      ),
+    // Reported before the refresh and OUTSIDE the list, because `done()` replaces every card
+    // — including the one this control is drawn in.
+    report(
+      out.freezes
+        ? `${a.login} now stores more than its limit and is frozen; deleting is the way out.`
+        : `${a.login} may now store ${mib(bytes)}.`,
+      out.freezes,
     );
     await done();
   };
@@ -171,6 +182,11 @@ const quotaControl = (a: AccountRow, done: () => Promise<void>): HTMLElement => 
 
 const accountsScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Accounts' }));
+  // Outcomes live here rather than in the cards, because the cards are replaced by the very
+  // refresh that follows an act. One line at a time: the last thing done is the thing worth
+  // reading, and a column of them is a log nobody asked this screen for.
+  const notices = el('div', {});
+  const report: Report = (message, bad = false) => notices.replaceChildren(say(message, bad));
   const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
 
   const inviteCard = el('div', { className: 'card' });
@@ -199,7 +215,7 @@ const accountsScreen = (): void => {
 
   const fill = async (): Promise<void> => {
     const out = await accounts();
-    list.replaceChildren(...out.accounts.map((a) => accountRow(a, fill)));
+    list.replaceChildren(...out.accounts.map((a) => accountRow(a, fill, report)));
   };
 
   const toBackups = el('button', { textContent: 'Backups' });
@@ -207,7 +223,7 @@ const accountsScreen = (): void => {
   const toAudit = el('button', { textContent: 'Audit log' });
   toAudit.onclick = () => auditScreen();
 
-  app.replaceChildren(el('nav', {}, toBackups, toAudit), page, list, inviteCard);
+  app.replaceChildren(el('nav', {}, toBackups, toAudit), page, notices, list, inviteCard);
   void attempt(page, fill);
 };
 
