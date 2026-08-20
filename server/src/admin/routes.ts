@@ -177,6 +177,10 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
       // nobody can restore from is flagged on the row instead of at restore time (docs/10).
       openCopy: (dest) => openStore(join(dest, 'blobs')),
     });
+    // Refused is not failed and not busy: nothing ran, so there is no row and nothing to
+    // retry until the deployment is fixed. 503, like `unconfigured` — the same family of
+    // answer, "this installation cannot do this yet", with the sentence that says what to fix.
+    if (out.status === 'refused') return reply.code(503).send({ error: 'backup_not_ready', detail: out.error });
     if (out.status === 'skipped') return reply.code(409).send({ error: 'backup_in_progress', detail: out.error });
     if (out.status === 'failed') return reply.code(500).send({ error: 'backup_failed', detail: out.error });
     return {

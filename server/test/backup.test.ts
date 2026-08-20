@@ -17,7 +17,7 @@ import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, verifyLatestBackup, type Legs } from '../src/backup.js';
-import { assertPgDumpMatches, pgMajor } from '../src/backup-legs.js';
+import { assertPgDumpMatches, backupLegs, pgMajor } from '../src/backup-legs.js';
 
 let db: Db;
 
@@ -32,6 +32,7 @@ after(async () => {
 
 /** Legs that record the order they were called in, and report plausible sizes. */
 const recording = (order: string[]): Legs => ({
+  assertReady: async () => {},
   dumpDatabase: async () => {
     order.push('database');
     return { bytes: 1024 };
@@ -76,6 +77,7 @@ describe('the window a backup takes', () => {
     const out = await runBackup(
       db,
       {
+        assertReady: async () => {},
         dumpDatabase: async () => {
           insideWindow = backupInProgress();
           return { bytes: 1 };
@@ -96,6 +98,7 @@ describe('the window a backup takes', () => {
     const out = await runBackup(
       db,
       {
+        assertReady: async () => {},
         dumpDatabase: async () => {
           throw new Error('pg_dump: server version mismatch');
         },
@@ -127,6 +130,7 @@ describe('the window a backup takes', () => {
     const first = runBackup(
       db,
       {
+        assertReady: async () => {},
         dumpDatabase: async () => {
           await new Promise((r) => setTimeout(r, 60));
           return { bytes: 1 };
@@ -158,6 +162,7 @@ describe('the window a backup takes', () => {
     const held = runBackup(
       db,
       {
+        assertReady: async () => {},
         dumpDatabase: async () => {
           await new Promise((r) => setTimeout(r, 300));
           return { bytes: 1 };
@@ -173,6 +178,67 @@ describe('the window a backup takes', () => {
     assert.equal(gaveUp.id, undefined, 'nothing ran, so there is no run to point at');
     assert.match(gaveUp.error!, /still held/);
     assert.equal((await held).status, 'ok');
+  });
+});
+
+describe('what has to be true before a window is worth opening', () => {
+  it('refuses without taking the lock, inserting a row or opening the window', async () => {
+    // #73's failure, one layer in: the pg_dump major check lived at the top of `dumpDatabase`,
+    // which reads as "before the work" and is not — by then the collector's lock is held, a
+    // `backup_runs` row exists and the server is refusing writes. A mismatched binary
+    // announced itself with the window already open, which is the thing the check replaced
+    // rather than relocated.
+    const before = await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM backup_runs`);
+    let legsRan = false;
+
+    const out = await runBackup(
+      db,
+      {
+        assertReady: async () => {
+          throw new Error('pg_dump is major 17 but the server’s PostgreSQL is major 18');
+        },
+        dumpDatabase: async () => {
+          legsRan = true;
+          return { bytes: 1 };
+        },
+        copyBlobs: async () => {
+          legsRan = true;
+          return { bytes: 1, count: 0 };
+        },
+      },
+      '/backups/not-ready',
+    );
+
+    assert.equal(out.status, 'refused', 'not `failed` — nothing was attempted');
+    assert.match(out.error!, /major 17/, 'and it carries the sentence that says what to fix');
+    assert.equal(out.id, undefined, 'no run to point at');
+    assert.equal(legsRan, false, 'neither leg ran');
+    assert.equal(backupInProgress(), false, 'and no window was ever opened');
+
+    const after = await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM backup_runs`);
+    assert.equal(after!.n, before!.n, 'the history gained no row for a backup nobody took');
+  });
+
+  it('is the real legs’ assertReady that catches a mismatched pg_dump, not the dump itself', async () => {
+    // The test above proves `runBackup` asks early. This one proves the production legs put
+    // the pg_dump check in the thing it asks — without it, moving the check back to the first
+    // line of `dumpDatabase` passes every other test in this file, which is exactly the state
+    // #78 was opened about.
+    //
+    // A real `pg_dump` against a fabricated server line: the binary is whatever this machine
+    // has, and 99 is a major no server will ever report, so the mismatch is the assertion and
+    // not an accident of the environment.
+    const legs = backupLegs('/nonexistent', ['pg_dump'], '/nonexistent', 'run', 'PostgreSQL 99.0 on x86_64');
+
+    await assert.rejects(() => legs.assertReady(), /major/, 'assertReady is where the mismatch is found');
+  });
+
+  it('runs the legs when the precondition holds', async () => {
+    const order: string[] = [];
+    const out = await runBackup(db, recording(order), '/backups');
+
+    assert.equal(out.status, 'ok');
+    assert.deepEqual(order, ['database', 'blobs'], 'and in the order #114 forces');
   });
 });
 
@@ -353,6 +419,7 @@ describe('the backup self-check', () => {
     const out = await runBackup(
       db,
       {
+        assertReady: async () => {},
         dumpDatabase: async () => ({ bytes: 1 }),
         copyBlobs: async () => ({ bytes: 1, count: 0 }),
       },
@@ -374,7 +441,7 @@ describe('the backup self-check', () => {
   it('says nothing on the row when the copy is whole', async () => {
     const out = await runBackup(
       db,
-      { dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
+      { assertReady: async () => {}, dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
       '/backups/whole',
       { openCopy: () => ({ size: async () => 1 }) }, // every blob present
     );
@@ -395,7 +462,7 @@ describe('the restore rehearsal', () => {
     await db.query(`DELETE FROM backup_runs`);
     const r = await runBackup(
       db,
-      { dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
+      { assertReady: async () => {}, dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
       '/backups/rehearsal',
     );
     assert.equal(r.status, 'ok');
