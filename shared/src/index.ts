@@ -329,18 +329,6 @@ export type AccountRow = {
 };
 
 /**
- * One row of `/admin/backups` — the shape the server builds and the console renders.
- *
- * Here rather than in either side because both touch it, exactly as `AccountRow` is: the
- * server's SQL aliases columns to these names, and the console's history table reads them.
- * They were declared twice (the server called it `BackupRunRow`, the console `BackupRun`)
- * and a field renamed in the query would have reached the screen as `undefined` on a side
- * that still compiled.
- *
- * The byte figures are strings on purpose: they cross a JSON boundary, and a `bigint`
- * would round above 2^53.
- */
-/**
  * One line of the administrative audit log, as both sides read it.
  *
  * Here for the reason `AccountRow` is: the server writes it and the console renders it, so a
@@ -362,6 +350,18 @@ export type AuditRow = {
   details: Record<string, unknown>;
 };
 
+/**
+ * One row of `/admin/backups` — the shape the server builds and the console renders.
+ *
+ * Here rather than in either side because both touch it, exactly as `AccountRow` is: the
+ * server's SQL aliases columns to these names, and the console's history table reads them.
+ * They were declared twice (the server called it `BackupRunRow`, the console `BackupRun`)
+ * and a field renamed in the query would have reached the screen as `undefined` on a side
+ * that still compiled.
+ *
+ * The byte figures are strings on purpose: they cross a JSON boundary, and a `bigint`
+ * would round above 2^53.
+ */
 export type BackupRun = {
   id: string;
   startedAt: string;

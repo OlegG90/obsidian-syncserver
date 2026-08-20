@@ -43,6 +43,9 @@ jobs:
       # docs/13 promises it says.
       - run: node scripts/check-version.mjs
       - run: node scripts/check-compose.mjs
+      # Prose is load-bearing here, so a docblock that has drifted off its function is wrong
+      # in the way a reader trusts rather than merely untidy (#84).
+      - run: node scripts/check-docblocks.mjs
 
   # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
   # only proves two numbers agree in two files; whether the pinned package actually exists in

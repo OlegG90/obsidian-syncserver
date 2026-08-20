@@ -556,12 +556,6 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The sharing coordinator, bound to this vault's session.
-   *
-   * Every one of these needs the vault key, so every one needs an open session — the
-   * passphrase is asked for exactly as a sync asks, and once, before the first request.
-   */
-  /**
    * The trash and the version list, bound to this vault's session.
    *
    * Every one of these needs the vault key: the listing's names are ciphertext, and a
@@ -605,6 +599,12 @@ export default class SyncServerPlugin extends Plugin {
     });
   }
 
+  /**
+   * The sharing coordinator, bound to this vault's session.
+   *
+   * Every one of these needs the vault key, so every one needs an open session — the
+   * passphrase is asked for exactly as a sync asks, and once, before the first request.
+   */
   sharing(): ShareFlow {
     return openShareFlow({
       gate: this.gate,

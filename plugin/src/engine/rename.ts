@@ -72,6 +72,9 @@ export const basePath = (path: string): string => {
  * - **not already claimed.** Callers consume the entry, so a second file with the same
  *   bytes cannot claim the same source.
  *
+ * Failing any of them is not a failure. It falls through to delete-and-create, and the blob
+ * deduplicates, so the cost of being conservative here is metadata.
+ *
  * Consumption is the caller's, deliberately: this module decides, and a decision that
  * quietly mutated its own input could not be asked the same question twice in a test.
  */

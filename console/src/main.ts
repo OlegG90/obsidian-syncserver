@@ -160,15 +160,6 @@ const accountRow = (a: AccountRow, done: () => Promise<void>, report: Report): H
 };
 
 /**
- * Change one account's limit, explaining a freeze **before** applying it.
- *
- * Two presses when it would freeze them, one when it would not. The confirmation is not
- * ceremony: an operator lowering a limit usually expects the account to be trimmed, and what
- * actually happens is that nothing is deleted and writes stop — which is a different thing to
- * have decided (SH-20). The sentence is `freezeWarning`'s, so what is shown and what is tested
- * are the same string.
- */
-/**
  * Where an outcome goes so that it survives being acted upon.
  *
  * The result of changing a quota used to be appended to the account's own card, and the
@@ -179,6 +170,15 @@ const accountRow = (a: AccountRow, done: () => Promise<void>, report: Report): H
  */
 type Report = (message: string, bad?: boolean) => void;
 
+/**
+ * Change one account's limit, explaining a freeze **before** applying it.
+ *
+ * Two presses when it would freeze them, one when it would not. The confirmation is not
+ * ceremony: an operator lowering a limit usually expects the account to be trimmed, and what
+ * actually happens is that nothing is deleted and writes stop — which is a different thing to
+ * have decided (SH-20). The sentence is `freezeWarning`'s, so what is shown and what is tested
+ * are the same string.
+ */
 const quotaControl = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
   const box = el('div', {});
   const quota = field('Quota in MiB');

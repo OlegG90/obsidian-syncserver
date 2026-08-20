@@ -431,14 +431,6 @@ export class SyncServerSettings extends PluginSettingTab {
   }
 
   /**
-   * Leaving the server, and saying what it will take to come back (#113).
-   *
-   * Last on the screen, and behind a confirmation, because for an account whose only device
-   * this is, disconnect and recovery are the same door in opposite directions: the way back
-   * is the passphrase, and somebody who does not have it should learn that here rather than
-   * afterwards.
-   */
-  /**
    * The trash, the history behind each row, and the only button in the product that frees
    * space.
    *
@@ -536,6 +528,14 @@ export class SyncServerSettings extends PluginSettingTab {
     });
   }
 
+  /**
+   * Leaving the server, and saying what it will take to come back (#113).
+   *
+   * Last on the screen, and behind a confirmation, because for an account whose only device
+   * this is, disconnect and recovery are the same door in opposite directions: the way back
+   * is the passphrase, and somebody who does not have it should learn that here rather than
+   * afterwards.
+   */
   private disconnectSection(containerEl: HTMLElement): void {
     containerEl.createEl('h3', { text: 'Disconnect' });
     containerEl.createEl('p', {

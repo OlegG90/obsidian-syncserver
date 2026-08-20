@@ -617,12 +617,11 @@ export class SyncClient {
   // ---- blobs -------------------------------------------------------------------
 
   /**
+   * Upload a sealed blob, by whichever of the two paths its size calls for (docs/04).
+   *
    * There is deliberately no "do you already have this" call before this one (#46): the
    * server never short-circuits, because answering "already have it" would turn the address
    * into an existence oracle. Sending twice is correct and costs the bytes.
-   */
-  /**
-   * Upload a sealed blob, by whichever of the two paths its size calls for (docs/04).
    *
    * A note is a few kilobytes and an attachment is not. One `POST` is right for the first
    * and wrong for the second: a connection that dies at 90% of a large file costs the whole
@@ -909,15 +908,6 @@ export class SyncClient {
 }
 
 /**
- * The most informative thing the body actually says.
- *
- * This server's own refusals are `{error: "over_quota"}` and that is the whole answer. But an
- * unhandled exception comes back in Fastify's default shape, where `error` is the generic
- * status name — "Internal Server Error" — and the sentence that identifies the fault is in
- * `message`. Reading only `error` turns every server bug into the same four useless words,
- * which is exactly what it did the first time one appeared.
- */
-/**
  * A comparison against a code `shared` declares, rather than against a string literal.
  *
  * These are the codes this client acts on — refreshes a token, waits for an approval,
@@ -936,6 +926,15 @@ const parsedBody = (text: string): { error?: string; message?: string } => {
   }
 };
 
+/**
+ * The most informative thing the body actually says.
+ *
+ * This server's own refusals are `{error: "over_quota"}` and that is the whole answer. But an
+ * unhandled exception comes back in Fastify's default shape, where `error` is the generic
+ * status name — "Internal Server Error" — and the sentence that identifies the fault is in
+ * `message`. Reading only `error` turns every server bug into the same four useless words,
+ * which is exactly what it did the first time one appeared.
+ */
 const errorCode = (text: string): string => {
   const body = parsedBody(text);
   if (body.error && body.error !== 'Internal Server Error') return body.error;
