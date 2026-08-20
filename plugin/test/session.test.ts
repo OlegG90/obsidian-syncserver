@@ -19,7 +19,7 @@ import { authSecret, createAccount, deriveKek, kekVerifier, openAccount, vaultKe
 import { randomBytes, toBase64 } from '../src/crypto/bytes.js';
 import { seal } from '../src/crypto/sealed.js';
 import { encryptName } from '../src/crypto/scope.js';
-import { Session, forTests, type Connection, type Derivation } from '../src/session/index.js';
+import { Session, forTests, type AskVault, type Connection, type Derivation } from '../src/session/index.js';
 import type { Transport, HttpRequest, HttpResponse } from '../src/api/transport.js';
 
 /** A fixed seed, so `authSecret(seed)` is a known value the test can assert. */
@@ -527,7 +527,7 @@ describe('Session.recover — the last device is gone', () => {
   });
 });
 
-describe('the vault a device binds to is confirmed, not assumed (#117)', () => {
+describe('which vault a device binds to (#117, #116)', () => {
   // The same recover harness as above, because the branch under test is shared: `chooseVault`
   // is reached identically from pairing and from recovery, and recovery is the one with a
   // complete fake already built.
@@ -536,8 +536,9 @@ describe('the vault a device binds to is confirmed, not assumed (#117)', () => {
   const RSALT = randomBytes(16);
   const ENVELOPE = seal(deriveKek(PHRASE, RSALT, FAST), SEED);
   const VAULT = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '22222222-2222-4222-8222-222222222222';
 
-  const answers = (nameEnc: string) => ({
+  const answers = (vaults: { id: string; name_enc: string }[], extra: Record<string, unknown> = {}) => ({
     'GET /auth/kdf': { status: 200, body: { account_salt: toBase64(RSALT), kdf_params: FAST } },
     'POST /auth/recover': {
       status: 200,
@@ -552,54 +553,126 @@ describe('the vault a device binds to is confirmed, not assumed (#117)', () => {
       },
     },
     'POST /auth/login': { status: 200, body: { access: 'acc-1', refresh: 'ref-1' } },
-    'GET /vaults': { status: 200, body: [{ id: VAULT, name_enc: nameEnc }] },
+    'GET /vaults': { status: 200, body: vaults },
+    ...extra,
   });
 
-  /** The label as the server holds it: encrypted under this vault's own KV. */
-  const labelled = (name: string) => encryptName(vaultKey(SEED, VAULT), name);
+  /** A label as the server holds it: encrypted under that vault own scope key. */
+  const labelled = (id: string, name: string) => ({ id, name_enc: encryptName(vaultKey(SEED, id), name) });
 
-  const run = (nameEnc: string, confirmVault: (v: { id: string; name: string }) => Promise<boolean>) =>
+  const run = (
+    vaults: { id: string; name_enc: string }[],
+    askVault: AskVault,
+    extra: Record<string, unknown> = {},
+  ) =>
     Session.recover(
-      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE, confirmVault },
-      { derivation: realDerivationForTests, transport: fakeTransport(answers(nameEnc)) },
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE, askVault },
+      { derivation: realDerivationForTests, transport: fakeTransport(answers(vaults, extra)) },
     );
 
-  it('puts the vault NAME to the person, not its id', async () => {
+  it('puts the vault NAMES to the person, not their ids', async () => {
     // The whole reason for asking is that they recognise the answer, and nobody recognises a
-    // UUID — which is what the connected screen has shown since M1. The label is encrypted
-    // under KV, so this also pins that the seed is what reads it.
-    const asked: { id: string; name: string }[] = [];
-    await run(labelled('Work notes'), async (v) => (asked.push(v), true));
+    // UUID — which is what the connected screen has shown since M1. The labels are encrypted
+    // under each vault own key, so this also pins that the seed is what reads them.
+    const asked: { id: string; name: string }[][] = [];
+    await run([labelled(VAULT, 'Work notes'), labelled(OTHER, 'Recipes')], async (v) => {
+      asked.push(v);
+      return { kind: 'use', id: OTHER };
+    });
 
     assert.equal(asked.length, 1, 'asked exactly once');
-    assert.equal(asked[0]!.name, 'Work notes');
-    assert.equal(asked[0]!.id, VAULT, 'and the id travels too, for a caller that wants it');
+    assert.deepEqual(
+      asked[0]!.map((v) => v.name),
+      ['Work notes', 'Recipes'],
+    );
+    assert.deepEqual(
+      asked[0]!.map((v) => v.id),
+      [VAULT, OTHER],
+      'and the ids travel too',
+    );
   });
 
-  it('connects nothing when the answer is no', async () => {
+  it('binds to the one that was chosen, when several are offered', async () => {
+    // #116 point: two vaults on one account used to be an error message listing UUIDs with
+    // nowhere to type one. The choice is now an answer.
+    const s = await run([labelled(VAULT, 'Work notes'), labelled(OTHER, 'Recipes')], async () => ({
+      kind: 'use',
+      id: OTHER,
+    }));
+
+    assert.equal(s.connection.vaultId, OTHER);
+  });
+
+  it('connects nothing when the answer is cancel', async () => {
     // Declining has to leave both sides exactly as they were: this is the branch that used to
-    // merge two vaults without asking, so a "no" that still connected would be worse than
-    // never having asked.
+    // merge two vaults without asking, so a no that still connected would be worse than never
+    // having asked.
     await assert.rejects(
-      () => run(labelled('Work notes'), async () => false),
+      () => run([labelled(VAULT, 'Work notes')], async () => ({ kind: 'cancel' })),
       (e: unknown) => e instanceof Error && /cancelled/i.test(e.message) && /nothing was changed/i.test(e.message),
     );
   });
 
-  it('goes on to a normal open session when the answer is yes', async () => {
-    const s = await run(labelled('Work notes'), async () => true);
+  it('goes on to a normal open session when one is chosen', async () => {
+    const s = await run([labelled(VAULT, 'Work notes')], async () => ({ kind: 'use', id: VAULT }));
 
     assert.equal(s.state, 'open');
     assert.equal(s.connection.vaultId, VAULT);
   });
 
-  it('still asks when the label will not open, rather than refusing to connect', async () => {
+  it('makes a new vault when that is the answer, naming it under its OWN key', async () => {
+    // `KV = HKDF(seed, id)`, so the id has to exist before the label can be encrypted — which
+    // is why the client chooses it (docs/03). A server-assigned id would mean a name sealed
+    // under a key nobody had yet.
+    const s = await run([labelled(VAULT, 'Work notes')], async () => ({ kind: 'create', name: 'Recipes' }), {
+      'POST /vaults': { status: 201, body: { id: 'ignored', root_node_id: 'root-1' } },
+    });
+
+    assert.notEqual(s.connection.vaultId, VAULT, 'a fresh vault, not the existing one');
+    assert.match(s.connection.vaultId, /^[0-9a-f-]{36}$/, 'and a real uuid the client minted');
+  });
+
+  it('refuses an answer naming a vault that was never offered', async () => {
+    // A caller returning something outside the list is a defect in the caller, and binding to
+    // an id nobody listed would produce a device syncing something the person never saw named.
+    await assert.rejects(
+      () => run([labelled(VAULT, 'Work notes')], async () => ({ kind: 'use', id: OTHER })),
+      (e: unknown) => e instanceof Error && /no such vault/i.test(e.message),
+    );
+  });
+
+  it('still asks when a label will not open, rather than refusing to connect', async () => {
     // Being unable to read a name is not a reason to refuse: the id is a worse answer to
-    // "which one", not an absent one. Throwing here would strand a device over a label.
+    // "which one", not an absent one. Throwing here would strand a device over a string.
     const asked: string[] = [];
-    const s = await run('not-a-real-envelope', async (v) => (asked.push(v.name), true));
+    const s = await run([{ id: VAULT, name_enc: 'not-a-real-envelope' }], async (v) => {
+      asked.push(v[0]!.name);
+      return { kind: 'use', id: VAULT };
+    });
 
     assert.match(asked[0]!, /unreadable|unnamed/, `said so instead of throwing: ${asked[0]}`);
     assert.equal(s.state, 'open', 'and connecting still worked');
+  });
+
+  it('asks nothing when no caller can ask, and keeps the old behaviour', async () => {
+    // The seam is optional on purpose. A flow with no UI takes one vault silently and throws
+    // on several — which is what every test that does not care about this relies on.
+    const s = await Session.recover(
+      { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+      { derivation: realDerivationForTests, transport: fakeTransport(answers([labelled(VAULT, 'Work notes')])) },
+    );
+    assert.equal(s.connection.vaultId, VAULT);
+
+    await assert.rejects(
+      () =>
+        Session.recover(
+          { serverUrl: 'http://x.test', login: 'alice', passphrase: PHRASE },
+          {
+            derivation: realDerivationForTests,
+            transport: fakeTransport(answers([labelled(VAULT, 'a'), labelled(OTHER, 'b')])),
+          },
+        ),
+      (e: unknown) => e instanceof Error && /has 2 vaults/.test(e.message),
+    );
   });
 });

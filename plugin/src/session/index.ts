@@ -25,7 +25,7 @@ import {
   type RecoverArgs,
 } from './session.js';
 
-export type { Connection, ConnectArgs, Derivation, Handle, PairArgs, RecoverArgs } from './session.js';
+export type { AskVault, Connection, ConnectArgs, Derivation, Handle, PairArgs, RecoverArgs, VaultChoice } from './session.js';
 export { Session };
 
 const realDerivation: Derivation = {

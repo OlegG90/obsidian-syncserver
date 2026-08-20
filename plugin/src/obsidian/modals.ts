@@ -10,6 +10,7 @@
  * resolves `undefined` when dismissed — a person closing a box is an answer, not a hang.
  */
 import { App, Modal, Setting } from 'obsidian';
+import type { VaultChoice } from '../session/index.js';
 
 /** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
 /**
@@ -238,3 +239,79 @@ export class StatusModal extends Modal {
     this.contentEl.empty();
   }
 }
+/**
+ * Which vault on the account this device should sync, and what each answer will do (#116).
+ *
+ * **One screen that reads two ways.** With one vault it is a confirmation with a way out —
+ * the ordinary "second laptop, same notes" case, still one press (#117). With several it is
+ * a list. Two dialogues for one question would drift, and the person is asking the same
+ * thing either way: which of these, or none of them.
+ *
+ * **Each option carries its own consequence**, because they are opposites and a single
+ * sentence at the top could only be true of one. Joining an existing vault MERGES what is
+ * already in this Obsidian vault with what is in that one; making a new vault merges nothing
+ * and uploads what is here. Somebody who reads only the button they are about to press still
+ * reads the right thing.
+ *
+ * A dismissal is `cancel`, for `askConfirmation`'s reason: closing a dialogue is not consent,
+ * and a promise that never settled would strand the pairing that is waiting on it.
+ */
+export const askVaultChoice = (
+  app: App,
+  here: string,
+  vaults: { id: string; name: string }[],
+): Promise<VaultChoice> =>
+  new Promise((resolve) => {
+    let answer: VaultChoice = { kind: 'cancel' };
+    const modal = new Modal(app);
+
+    modal.onOpen = (): void => {
+      modal.titleEl.setText('Which vault should this connect to?');
+      modal.contentEl.createEl('p', {
+        text:
+          vaults.length === 0
+            ? `This account has no vaults yet. Name the one to create from “${here}”.`
+            : `This Obsidian vault is “${here}”. Choose what it syncs with on the account.`,
+      });
+
+      const settle = (choice: VaultChoice): void => {
+        answer = choice;
+        modal.close();
+      };
+
+      for (const v of vaults) {
+        new Setting(modal.contentEl)
+          .setName(v.name)
+          .setDesc(
+            'Merges with what is here: identical files join up, different ones become conflict ' +
+              'files, and nothing is deleted on either side.',
+          )
+          .addButton((b) => b.setButtonText('Connect').setCta().onClick(() => settle({ kind: 'use', id: v.id })));
+      }
+
+      const name = modal.contentEl.createEl('input', { type: 'text' });
+      name.style.width = '100%';
+      name.value = here;
+      new Setting(modal.contentEl)
+        .setName('Make a new vault')
+        .setDesc('Uploads what is here as a vault of its own. Nothing is merged, and nothing else is touched.')
+        .addButton((b) =>
+          b.setButtonText('Create').onClick(() => {
+            const chosen = name.value.trim();
+            if (chosen) settle({ kind: 'create', name: chosen });
+          }),
+        );
+
+      new Setting(modal.contentEl).addButton((b) => b.setButtonText('Cancel').onClick(() => modal.close()));
+    };
+
+    const close = modal.onClose.bind(modal);
+    // Settled on the way out, reading what a button recorded on the way in — the same shape
+    // `askConfirmation` uses, and for the same reason it had to.
+    modal.onClose = (): void => {
+      close();
+      modal.contentEl.empty();
+      resolve(answer);
+    };
+    modal.open();
+  });
