@@ -7,17 +7,26 @@
  * say it is over its limit. Those are the parts worth a test, and they are pure.
  */
 
-/** An account as the admin API reports it — the fields this file reads. */
-export interface AccountLine {
-  // Both are `string` rather than unions of the enum's values, because that is what arrives:
-  // widening them here would be this file claiming to have validated JSON it only read.
-  role: string;
-  state: string;
-  quotaBytes: string;
-  usedBytes: string;
-  frozenAt?: string | null;
-  inviteExpiresAt?: string | null;
-}
+import type { AccountRow, AuditRow } from '@syncserver/shared';
+
+/**
+ * An account as the admin API reports it — the fields this file reads (#89).
+ *
+ * Picked from the shared row rather than re-declared. It was a field-for-field copy, in the
+ * same milestone that moved `AccountRow` into `shared/` *because* the console depended on that
+ * package and imported nothing from it. A copy compiles perfectly while the server renames a
+ * column underneath it, and the value arrives as `undefined` in a table.
+ *
+ * Still a `Pick` and not the whole row: which fields this file's judgement rests on is worth
+ * saying, and saying it this way means a rename breaks the pick instead of a screen.
+ *
+ * `role` and `state` stay `string`, which is what the shared row already says — widening JSON
+ * into a union here would be this file claiming to have validated what it only read.
+ */
+export type AccountLine = Pick<
+  AccountRow,
+  'role' | 'state' | 'quotaBytes' | 'usedBytes' | 'frozenAt' | 'inviteExpiresAt'
+>;
 
 /** Bytes as something a person reads. Mebibytes, because quotas are set in them. A `null` is "no number", drawn as a dash. */
 export const mib = (bytes: string | null): string =>
@@ -81,12 +90,13 @@ export const describeAudit = (entry: AuditLine): string => {
   return `${ACTIONS[entry.action] ?? entry.action}${target}, by ${entry.actorLogin}`;
 };
 
-/** The audit fields this file reads; the wire shape is `AuditRow` in `shared/`. */
-export interface AuditLine {
-  action: string;
-  actorLogin: string;
-  targetLogin: string | null;
-}
+/**
+ * The audit fields this file reads, picked from the wire shape rather than restated.
+ *
+ * The docblock here already said the shape "is `AuditRow` in `shared/`" — a comment doing the
+ * work a type could, and the same copy `AccountLine` was.
+ */
+export type AuditLine = Pick<AuditRow, 'action' | 'actorLogin' | 'targetLogin'>;
 
 /**
  * Every action the server records today, spelled out. Taken from the `record()` call sites
