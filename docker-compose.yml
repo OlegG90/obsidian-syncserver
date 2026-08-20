@@ -105,7 +105,7 @@ services:
       BACKUP_EVERY_SECONDS: ${BACKUP_EVERY_SECONDS:-}
       # Where the restore epoch lives — must survive a restore, so it is a host path, not
       # inside the database or the blobs.
-      RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/data/restore.epoch}
+      RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/state/restore.epoch}
     volumes:
       - ${BLOB_DIR:-./data/blobs}:/data/blobs
       # Where a backup can actually land. Without this the destination could only be a path
@@ -118,5 +118,12 @@ services:
       # (/backups); `BACKUP_DIR` is where that is on this machine — the same split as
       # `BLOB_DIR` and /data/blobs.
       - ${BACKUP_DIR:-./data/backups}:/backups
+      # The restore epoch, which has to outlive the database it describes AND the container
+      # that wrote it — that is the whole of what it is for (#92, docs/11). It defaulted to
+      # `/data/restore.epoch`, and only `/data/blobs` is mounted: unwritable on any host whose
+      # RUN_AS is not the image's own uid, and ephemeral even where it was writable. A guard
+      # whose memory is thrown away with the container cannot detect a database that went
+      # backwards across a restart, which is the one thing it exists to detect.
+      - ${STATE_DIR:-./data/state}:/state
     ports:
       - "${PUBLISH_PORT:-8080}:8080"

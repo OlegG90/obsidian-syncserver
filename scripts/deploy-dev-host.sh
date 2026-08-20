@@ -34,7 +34,7 @@ export DOCKER_CONFIG="${DOCKER_CONFIG:-$root/.docker}"
 mkdir -p "$DOCKER_CONFIG"
 
 say "directories"
-mkdir -p "$root/db" "$root/blobs" "$root/backups"
+mkdir -p "$root/db" "$root/blobs" "$root/backups" "$root/state"
 # chmod rather than chown: the container runs as a group the administrator usually already
 # belongs to, so group-write is enough — and chown needs root, which is often not available.
 chmod 775 "$root/blobs" || echo "  could not chmod blobs; uploads may fail with EACCES"
@@ -42,8 +42,13 @@ chmod 775 "$root/blobs" || echo "  could not chmod blobs; uploads may fail with 
 # writes it as the RUN_AS user, and a directory it cannot write turns the first backup into a
 # failed run rather than a copy.
 chmod 775 "$root/backups" || echo "  could not chmod backups; a backup may fail with EACCES"
+# And the restore epoch's home. Same reason again, with a sharper edge: the server writes it
+# as RUN_AS at every successful start, and the guard runs before it listens — so a directory
+# it cannot write is not a degraded backup, it is a server that does not boot.
+chmod 775 "$root/state" || echo "  could not chmod state; the server may fail to start with EACCES"
 # The database directory is not ours to arrange: the image takes it over as its own user.
-printf '  db:      %s\n  blobs:   %s\n  backups: %s\n' "$root/db" "$root/blobs" "$root/backups"
+printf '  db:      %s\n  blobs:   %s\n  backups: %s\n  state:   %s\n' \
+    "$root/db" "$root/blobs" "$root/backups" "$root/state"
 
 say "configuration"
 # The real file lives BESIDE the checkout, not inside it.
@@ -111,6 +116,8 @@ else
         # /data/blobs. Written whether or not backups are switched on, because the mount
         # exists either way and an empty directory costs nothing.
         printf 'BACKUP_DIR=%s\n' "$root/backups"
+        # The restore epoch's directory on this machine; /state is the container's view.
+        printf 'STATE_DIR=%s\n' "$root/state"
         printf 'PUBLISH_PORT=%s\n' "$port"
     } >> .env
     chmod 600 .env

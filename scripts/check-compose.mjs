@@ -49,6 +49,9 @@ check(mounts(server).includes('/data/blobs'), 'server must mount the blob direct
 // A backup with nowhere on the host to land writes into the container's writable layer and
 // disappears with the next pull. The mount is what makes BACKUP_DESTINATION mean anything.
 check(mounts(server).includes('/backups'), 'server must mount a backup destination');
+// The restore epoch has to outlive the container that wrote it, or the guard cannot notice a
+// database that went backwards across a restart — which is the only thing it is for.
+check(mounts(server).includes('/state'), 'server must mount somewhere durable for the restore epoch');
 
 // Every value that differs between installations comes from .env, so a deployment is a
 // .env and never an edit to the compose file.
