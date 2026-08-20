@@ -18,6 +18,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, verifyLatestBackup, type Legs } from '../src/backup.js';
 import { assertPgDumpMatches, backupLegs, pgMajor } from '../src/backup-legs.js';
+import { startBackupSchedule, takeScheduledBackup } from '../src/backup-schedule.js';
 
 let db: Db;
 
@@ -42,6 +43,62 @@ const recording = (order: string[]): Legs => ({
     return { bytes: 2048, count: 3 };
   },
 });
+
+/** A vault with one file node referencing one blob — the minimal world a verify checks. */
+const seedWorld = async (): Promise<{ vaultId: string; sha: string }> => {
+  const userId = randomUUID();
+  await db.query(
+    `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
+                        enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
+     VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 1048576)`,
+    [userId, `backup-verify-${randomUUID()}`],
+  );
+  const vaultId = randomUUID();
+  const rootId = randomUUID();
+  const keyId = randomUUID();
+  // Content-addressed: a blob IS its sha256, so each seeded world needs its own bytes.
+  const sha = randomBytes(32).toString('hex');
+  await db.query(`INSERT INTO key_scopes (id, kind) VALUES ($1, 'vault')`, [keyId]);
+  await db.tx(async (c) => {
+    await c.query(
+      `INSERT INTO vaults (id, user_id, name_enc, root_node_id, vault_key_id, vault_key_scope_kind)
+       VALUES ($1, $2, '\\x00', $3, $4, 'vault')`,
+      [vaultId, userId, rootId, keyId],
+    );
+    await c.query(
+      `INSERT INTO nodes (vault_id, id, parent_id, type, mtime, rev, ancestry)
+       VALUES ($1, $2, NULL, 'folder', now(), 1, ARRAY[]::uuid[])`,
+      [vaultId, rootId],
+    );
+    await c.query(`UPDATE vaults SET head_rev = 1 WHERE id = $1`, [vaultId]);
+    await c.query(
+      `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+       VALUES (decode($1,'hex'), 1, $1, 'xchacha20-poly1305', $2)`,
+      [sha, keyId],
+    );
+    // The schema demands a file node's blob carry its envelope and dedup tag under the
+    // vault scope — the same material a real client would have produced.
+    await c.query(
+      `INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
+       VALUES (decode($1,'hex'), $2, '\\xbeef')`,
+      [sha, keyId],
+    );
+    await c.query(
+      `INSERT INTO dedup_index (scope_id, content_tag, sha256)
+       VALUES ($1, decode($2,'hex'), decode($3,'hex'))`,
+      [keyId, 'ab'.repeat(32), sha],
+    );
+    await c.query(
+      `INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type,
+                          sha256, size, mtime, rev, ancestry)
+       VALUES ($1, $2, $3, '\\x00', decode($4,'hex'), $5, 'file', decode($6,'hex'), 1, now(), 2, ARRAY[$3]::uuid[])`,
+      [vaultId, randomUUID(), rootId, '00'.repeat(32), keyId, sha],
+    );
+    await c.query(`UPDATE vaults SET head_rev = 2 WHERE id = $1`, [vaultId]);
+  });
+  return { vaultId, sha };
+};
 
 describe('the window a backup takes', () => {
   it('dumps the database first and copies the blobs second (#114)', async () => {
@@ -282,62 +339,6 @@ describe('verifying a backup', () => {
 
   const absentKey = (sha: string): string => `${sha.slice(0, 2)}/${sha.slice(2, 4)}/${sha}`;
 
-  /** A vault with one file node referencing one blob — the minimal world a verify checks. */
-  const seedWorld = async (): Promise<{ vaultId: string; sha: string }> => {
-    const userId = randomUUID();
-    await db.query(
-      `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
-                          enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 1048576)`,
-      [userId, `backup-verify-${randomUUID()}`],
-    );
-    const vaultId = randomUUID();
-    const rootId = randomUUID();
-    const keyId = randomUUID();
-    // Content-addressed: a blob IS its sha256, so each seeded world needs its own bytes.
-    const sha = randomBytes(32).toString('hex');
-    await db.query(`INSERT INTO key_scopes (id, kind) VALUES ($1, 'vault')`, [keyId]);
-    await db.tx(async (c) => {
-      await c.query(
-        `INSERT INTO vaults (id, user_id, name_enc, root_node_id, vault_key_id, vault_key_scope_kind)
-         VALUES ($1, $2, '\\x00', $3, $4, 'vault')`,
-        [vaultId, userId, rootId, keyId],
-      );
-      await c.query(
-        `INSERT INTO nodes (vault_id, id, parent_id, type, mtime, rev, ancestry)
-         VALUES ($1, $2, NULL, 'folder', now(), 1, ARRAY[]::uuid[])`,
-        [vaultId, rootId],
-      );
-      await c.query(`UPDATE vaults SET head_rev = 1 WHERE id = $1`, [vaultId]);
-      await c.query(
-        `INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
-         VALUES (decode($1,'hex'), 1, $1, 'xchacha20-poly1305', $2)`,
-        [sha, keyId],
-      );
-      // The schema demands a file node's blob carry its envelope and dedup tag under the
-      // vault scope — the same material a real client would have produced.
-      await c.query(
-        `INSERT INTO blob_keys (sha256, scope_id, wrapped_key)
-         VALUES (decode($1,'hex'), $2, '\\xbeef')`,
-        [sha, keyId],
-      );
-      await c.query(
-        `INSERT INTO dedup_index (scope_id, content_tag, sha256)
-         VALUES ($1, decode($2,'hex'), decode($3,'hex'))`,
-        [keyId, 'ab'.repeat(32), sha],
-      );
-      await c.query(
-        `INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type,
-                            sha256, size, mtime, rev, ancestry)
-         VALUES ($1, $2, $3, '\\x00', decode($4,'hex'), $5, 'file', decode($6,'hex'), 1, now(), 2, ARRAY[$3]::uuid[])`,
-        [vaultId, randomUUID(), rootId, '00'.repeat(32), keyId, sha],
-      );
-      await c.query(`UPDATE vaults SET head_rev = 2 WHERE id = $1`, [vaultId]);
-    });
-    return { vaultId, sha };
-  };
-
   it('reports a backup whole when every referenced blob is present', async () => {
     await seedWorld();
     const id = await runId();
@@ -469,5 +470,117 @@ describe('the restore rehearsal', () => {
     const out = await verifyLatestBackup(db, '/backups/rehearsal', () => ({ size: async () => 1 }));
     assert.ok(out, 'the latest run is found');
     assert.equal(out!.whole, true);
+  });
+});
+
+describe('the schedule that presses the button', () => {
+  const backup = { destination: '/backups/scheduled', dumpCommand: ['pg_dump'], blobSource: '/data/blobs' };
+
+  /** Legs that succeed, and record that they were asked. */
+  const workingLegs = (ran: string[]): Legs => ({
+    assertReady: async () => {},
+    dumpDatabase: async () => {
+      ran.push('database');
+      return { bytes: 1 };
+    },
+    copyBlobs: async () => {
+      ran.push('blobs');
+      return { bytes: 1, count: 0 };
+    },
+  });
+
+  it('takes a run into its own directory and verifies the copy it just wrote', async () => {
+    // The self-check of #74: the moment a copy is written is the cheapest moment to learn it
+    // is not restorable. The alternative is learning at restore time, which is the one time
+    // nothing can be done about it.
+    const ran: string[] = [];
+    const said: string[] = [];
+
+    await takeScheduledBackup(
+      db, backup, () => workingLegs(ran), '2026-08-20T03-00-00-000Z',
+      (m) => said.push(m), (m) => said.push(m),
+      () => ({ size: async () => 1 }),
+    );
+
+    assert.deepEqual(ran, ['database', 'blobs'], 'both legs, in the order #114 forces');
+    const row = await db.one<{ destination: string; status: string; verified: string | null }>(
+      `SELECT destination, status::text AS status, verified_at AS verified
+         FROM backup_runs ORDER BY started_at DESC LIMIT 1`,
+    );
+    assert.match(row!.destination, /backup-2026-08-20T03-00-00-000Z$/, 'its own directory, named by the stamp');
+    assert.equal(row!.status, 'ok');
+    assert.ok(row!.verified, 'and the run it just took was verified');
+    assert.ok(said.some((m) => /verified whole/.test(m)), `said so: ${said.join(' | ')}`);
+  });
+
+  it('says so loudly when the run it just took is not restorable', async () => {
+    // An `ok` run whose self-check found blobs missing is the case nobody is watching for on
+    // an unattended box: the backup completed, the row looks fine, and the copy is not one.
+    const said: string[] = [];
+    await seedWorld();
+
+    await takeScheduledBackup(
+      db, backup, () => workingLegs([]), 'broken-run',
+      (m) => said.push(m), (m) => said.push(m),
+      // Nothing is where the copy should be — which is what a blob store that was never
+      // written looks like from the check's side.
+      () => ({ size: async () => undefined }),
+    );
+
+    assert.ok(said.some((m) => /NOT restorable/.test(m)), `warned: ${said.join(' | ')}`);
+  });
+
+  it('says so when a run is refused before it starts, rather than passing over it', async () => {
+    // A schedule that silently does nothing is not a schedule. `refused` means the deployment
+    // cannot back up at all — the loudest of the three, because it will keep being true.
+    const said: string[] = [];
+    const notReady: Legs = {
+      assertReady: async () => {
+        throw new Error('pg_dump is major 17 but the server’s PostgreSQL is major 18');
+      },
+      dumpDatabase: async () => ({ bytes: 0 }),
+      copyBlobs: async () => ({ bytes: 0, count: 0 }),
+    };
+
+    await takeScheduledBackup(
+      db, backup, () => notReady, 'refused-run',
+      (m) => said.push(m), (m) => said.push(m),
+      () => ({ size: async () => 1 }),
+    );
+
+    assert.ok(said.some((m) => /did not start/.test(m) && /major 17/.test(m)), `warned: ${said.join(' | ')}`);
+  });
+
+  it('is off when no backup is configured, and off at an interval of zero', async () => {
+    // "Off" is a schedule too, and the caller should not have to ask which case it is in.
+    const said: string[] = [];
+    const cfg = loadConfig();
+
+    const noBackup = startBackupSchedule(db, { ...cfg, backup: undefined }, () => workingLegs([]), (m) => said.push(m));
+    const zero = startBackupSchedule(
+      db,
+      { ...cfg, backup, backupEverySeconds: 0 },
+      () => workingLegs([]),
+      (m) => said.push(m),
+    );
+
+    assert.deepEqual(said, [], 'neither announced a schedule');
+    noBackup();
+    zero();
+  });
+
+  it('announces the schedule when it is on, so a boot log says whether backups will happen', () => {
+    const said: string[] = [];
+    const cfg = loadConfig();
+
+    const stop = startBackupSchedule(
+      db,
+      { ...cfg, backup, backupEverySeconds: 3600 },
+      () => workingLegs([]),
+      (m) => said.push(m),
+    );
+
+    assert.ok(said.some((m) => /scheduled every 3600s/.test(m)), `said: ${said.join(' | ')}`);
+    stop();
   });
 });

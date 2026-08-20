@@ -93,6 +93,20 @@ export interface Config {
    */
   backupVerifyIntervalSeconds: number;
   /**
+   * How often a backup is TAKEN, when one is configured at all (docs/10).
+   *
+   * Defaulted ON rather than off, and the reason is what configuring a backup means: nobody
+   * sets a destination, a dump command and a blob source in order to press a button by hand
+   * for ever. The opt-in already happened when those three were set — this only decides how
+   * often, and an unattended NAS with backups configured and none being taken is the failure
+   * this milestone is about.
+   *
+   * `0` turns it off for a deployment that drives backups from outside — cron on the host, or
+   * a storage appliance's own snapshotting — where a second schedule would be two windows
+   * where the operator asked for one.
+   */
+  backupEverySeconds: number;
+  /**
    * Where backups go, and how they are taken. All three are deployment facts, not protocol:
    * a destination directory, the `pg_dump` invocation (or whatever this deployment calls
    * it), and the blob store to copy. Absent until configured — a server without them can
@@ -146,6 +160,7 @@ export const loadConfig = (): Config => {
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
     backupVerifyIntervalSeconds: int('BACKUP_VERIFY_INTERVAL_SECONDS', 24 * 60 * 60),
+    backupEverySeconds: int('BACKUP_EVERY_SECONDS', 24 * 60 * 60),
     restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
   };
 

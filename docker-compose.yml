@@ -100,6 +100,9 @@ services:
       # what still makes the trio "not configured".
       BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-pg_dump --format=custom}
       BACKUP_BLOB_SOURCE: ${BACKUP_BLOB_SOURCE:-}
+      # How often one is taken, once the three above are set. 0 turns the schedule off for a
+      # deployment that drives backups from outside.
+      BACKUP_EVERY_SECONDS: ${BACKUP_EVERY_SECONDS:-}
       # Where the restore epoch lives — must survive a restore, so it is a host path, not
       # inside the database or the blobs.
       RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/data/restore.epoch}
