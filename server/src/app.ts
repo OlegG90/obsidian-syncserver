@@ -95,9 +95,9 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
           destination: cfg.backup.destination,
           // The legs are built per run, so each backup lands in its own subdirectory and
           // two runs never write into each other. The server's PostgreSQL version is read
-          // once, so a dump whose major disagrees is refused before the window opens
-          // (docs/10 — the check exists precisely because the mismatch is silent until the
-          // first real backup).
+          // once, here, and carried into every run's `assertReady` — which `runBackup` calls
+          // before the lock, the row and the window, so a dump whose major disagrees is
+          // refused with none of them taken (docs/10, #73).
           makeLegs: (runDir: string) =>
             backupLegs(
               cfg.backup!.destination,

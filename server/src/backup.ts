@@ -34,6 +34,23 @@ import type { BackupRun } from '@syncserver/shared';
 
 /** What each leg reports, so the run can record what it actually produced. */
 export interface Legs {
+  /**
+   * Everything that must already be true before a window is worth opening.
+   *
+   * **Runs before the lock, before the row, before `windowOpen`** — which is the whole point
+   * of its existing separately from the legs it guards. The `pg_dump` major check lived inside
+   * `dumpDatabase`, so a mismatched binary was discovered with writes already being refused
+   * and a `backup_runs` row already inserted: the exact failure #73 was opened to prevent,
+   * reproduced one layer further in. A precondition that can only be checked by starting the
+   * work is not a precondition.
+   *
+   * Required rather than optional, because a leg set that forgets it is silent and the thing
+   * it forgets is the thing that makes a backup a backup. A set with genuinely nothing to
+   * check says so with an empty body.
+   *
+   * @throws with a sentence naming what is wrong and what to fix.
+   */
+  assertReady(): Promise<void>;
   /** `pg_dump`, or whatever this deployment calls it. */
   dumpDatabase(): Promise<{ bytes: number }>;
   /** A copy of the blob store, taken AFTER the dump (#114). */
@@ -47,7 +64,13 @@ export interface BackupResult {
    * without ever being told it means "none".
    */
   id?: string;
-  status: 'ok' | 'failed' | 'skipped';
+  /**
+   * `refused` is not `failed`: nothing ran, no window opened, no row exists. A deployment
+   * whose dump binary cannot read its own database has a configuration problem, not a broken
+   * backup, and recording it as a failed run would put a row in the history for a backup that
+   * was never attempted.
+   */
+  status: 'ok' | 'failed' | 'skipped' | 'refused';
   bytes?: number;
   blobCount?: number;
   error?: string;
@@ -100,8 +123,19 @@ export const runBackup = async (
      */
     openCopy?: (runDestination: string) => CopyReader;
   } = {},
-): Promise<BackupResult> =>
-  db.session(async (lock) => {
+): Promise<BackupResult> => {
+  // **Before the connection, the lock, the row and the window.** Everything below this line
+  // costs something to undo: a lock other work waits on, a row in the backup history, and a
+  // server that has stopped accepting writes. A precondition checked after any of them is not
+  // protecting the thing it was written to protect — which is exactly how the `pg_dump` major
+  // check came to run with the window already open.
+  try {
+    await legs.assertReady();
+  } catch (e) {
+    return { status: 'refused' as const, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  return db.session(async (lock) => {
     const { triggeredBy, lockWaitMs = LOCK_WAIT_MS, openCopy } = opts;
     // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
     // for a collector pass already running, so the window is clean from the moment the lock
@@ -190,6 +224,7 @@ export const runBackup = async (
       await lock.query('SELECT pg_advisory_unlock($1)', [COLLECTOR_LOCK_ID]);
     }
   });
+};
 
 /**
  * Settle any run that a restart interrupted.

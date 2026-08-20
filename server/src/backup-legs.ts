@@ -91,10 +91,21 @@ export const backupLegs = (
   runDir: string,
   serverVersionLine: string,
 ): Legs => ({
-  async dumpDatabase() {
-    // Before the window's work begins: a dump taken with the wrong major is not a backup,
-    // and starting it under the refusal window would both fail and look like it succeeded.
+  /**
+   * The one thing that has to be true before a window is worth opening: this `pg_dump` can
+   * read this server.
+   *
+   * It used to be the first line of `dumpDatabase`, which reads as "before the work" and is
+   * not: by then `runBackup` had taken the collector's lock, inserted a `backup_runs` row and
+   * set the server refusing writes. So a mismatched binary — the case #73 exists for —
+   * announced itself with the window already open, which is the failure it was meant to
+   * replace rather than relocate.
+   */
+  async assertReady() {
     assertPgDumpMatches(await pgDumpVersion(dumpCommand), serverVersionLine);
+  },
+
+  async dumpDatabase() {
     await mkdir(join(destination, runDir), { recursive: true });
     const [cmd, ...args] = dumpCommand;
     const file = join(destination, runDir, 'database.dump');

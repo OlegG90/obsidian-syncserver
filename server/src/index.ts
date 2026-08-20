@@ -56,10 +56,15 @@ if (interrupted > 0) {
   );
 }
 
-// A backup whose dump cannot read this server's PostgreSQL is a backup that will fail the
-// moment it is asked — checked at startup (docs/10) so the operator learns it here rather
-// than on the first real run, when the window is already open. Not fatal: the server still
-// serves, but the console's backup button will refuse until the versions agree.
+// A backup whose dump cannot read this server's PostgreSQL is a backup that cannot be taken
+// — checked at startup (docs/10) so the operator learns it here, at boot, rather than the
+// first time somebody needs a copy.
+//
+// Advisory, and deliberately so: the ENFORCEMENT is `assertReady`, which every run calls
+// before it takes the lock, inserts a row or opens the window, so the button refuses with
+// nothing started whether or not anybody read this line. Warning here and refusing there is
+// not two checks disagreeing — it is the difference between telling somebody early and
+// stopping the thing that would go wrong.
 if (cfg.backup) {
   const serverLine = (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? '';
   try {
