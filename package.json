@@ -19,6 +19,7 @@
     "test": "npm run check:version && npm run test --workspaces --if-present",
     "check:compose": "node scripts/check-compose.mjs",
     "check:version": "node scripts/check-version.mjs",
+    "check:docblocks": "node scripts/check-docblocks.mjs",
     "pack": "./scripts/pack.sh",
     "test:live": "SYNCSERVER_DB=syncserver_plugin ./scripts/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin"
   },

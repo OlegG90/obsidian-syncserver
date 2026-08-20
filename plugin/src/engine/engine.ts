@@ -412,13 +412,6 @@ export class SyncEngine {
   }
 
   /**
-   * The server's tree, with paths reconstructed on this side.
-   *
-   * The server holds `parent_id` and an encrypted name and nothing else — it has no paths at
-   * all (docs/03) — so a path exists only once a client has decrypted every name on the way
-   * down. `list` returns nodes shallowest-first, which is what makes one pass enough.
-   */
-  /**
    * The server's tree as paths, for a caller that is not a sync.
    *
    * Sharing a folder needs exactly this and nothing else about the engine: a share is
@@ -433,6 +426,10 @@ export class SyncEngine {
 
   /**
    * Every node the server holds, as paths — skipping any subtree this device cannot read.
+   *
+   * The server holds `parent_id` and an encrypted name and nothing else — it has no paths at
+   * all (docs/03) — so a path exists only once a client has decrypted every name on the way
+   * down. `list` returns nodes shallowest-first, which is what makes one pass enough.
    *
    * **The one read that must survive a missing key.** Every other use of a scope key is about
    * to write something, so a missing key there is a defect worth refusing. This one is a
@@ -588,19 +585,6 @@ export class SyncEngine {
     await this.pushNew(file, m, ctx);
   }
 
-  /**
-   * The one vanished path this file plausibly came from, or nothing.
-   *
-   * Deliberately narrow, in the terms docs/04 sets. **Unique**: two candidates with the same
-   * content give no way to tell which moved where, and picking one is a coin toss with
-   * somebody's file. **Large enough**: below a few hundred bytes a hash match carries almost
-   * no information — empty notes and repeated stubs collide constantly. **Still where it
-   * was**: if the server's tree no longer has a node at the old path, there is nothing to
-   * move and this is an ordinary create.
-   *
-   * Failing any of these is not a failure. It falls through to delete-and-create, and the
-   * blob deduplicates, so the cost of being conservative here is metadata.
-   */
   /**
    * The decision is `rename.ts`'s; consuming the candidate is this pass's.
    *

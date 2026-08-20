@@ -52,17 +52,6 @@ export const beginPairing = async (
 };
 
 /**
- * An authorised device seals the seed to the waiting public key and leaves the envelope.
- *
- * Two conditions, and they are separate on purpose. The **caller** must be an authorised
- * device of the account being bound — checked by the route, from the token. The **secret**
- * must match, which is what proves the human is looking at the new device's screen rather
- * than approving a pairing somebody else started.
- *
- * Returns the public key it approved against, so the caller can see what it sealed to
- * rather than trusting that the id it was given still means what it meant.
- */
-/**
  * What key to seal to — the step that has to come before approval, because sealing needs
  * the key and the key is what the waiting device registered.
  *
@@ -91,6 +80,17 @@ export const lookupPairing = async (
   return { devicePubkey: row.pubkey };
 };
 
+/**
+ * An authorised device seals the seed to the waiting public key and leaves the envelope.
+ *
+ * Two conditions, and they are separate on purpose. The **caller** must be an authorised
+ * device of the account being bound — checked by the route, from the token. The **secret**
+ * must match, which is what proves the human is looking at the new device's screen rather
+ * than approving a pairing somebody else started.
+ *
+ * Returns the public key it approved against, so the caller can see what it sealed to
+ * rather than trusting that the id it was given still means what it meant.
+ */
 export const approvePairing = async (
   db: Db,
   input: { pairingSecret: string; seedEnvelope: Buffer; userId: string },

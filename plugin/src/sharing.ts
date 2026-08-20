@@ -165,7 +165,6 @@ export const shareFolder = async (
   return { shareId, shareKey, scopeId };
 };
 
-/** One node's conversion: its name under `KS`, and for a file its key and tag as well. */
 /**
  * A node moved from one key scope to another: its name, and for a file its content key and
  * dedup tag.
@@ -369,30 +368,6 @@ export interface LeaveDeps {
 }
 
 /**
- * Leave a share, converting this device's replica back to private files.
- *
- * **The copy is kept** (SH-05). That is the promise replication exists to make, and it is
- * why leaving is a metadata pass rather than a deletion: the files do not move and the bytes
- * are not re-encrypted. Only the naming changes, so the folder keeps working once `KS` stops
- * being shared with anybody.
- *
- * Two steps, and the order is the whole safety of it. `leave/begin` stops propagation
- * immediately, so nothing new arrives while the conversion runs; only then is the replica
- * converted and the departure recorded. A device that dies in between has stopped receiving
- * and has not yet left — it can finish later, which is exactly the state a revoked offline
- * device is in.
- *
- * **All of it in one request.** Unlike preparation, which is resumable batches, finalization
- * is checked for completeness: the server refuses a pass that misses a live node. A
- * half-converted replica is a folder whose files its owner can no longer open — silent,
- * permanent, and discovered long after the share is gone — so a partial finish is worse than
- * no finish at all.
- *
- * @param shareKey the `KS` this replica's interior is named under.
- * @param nodes every live node of the replica, the root included.
- * @returns whether this departure ended the share for everybody.
- */
-/**
  * Refuse to start leaving unless every name in the replica can be read.
  *
  * **A precondition, not a filter.** Finalization is checked for completeness — the server
@@ -424,6 +399,30 @@ export const requireEveryNameReadable = (
   );
 };
 
+/**
+ * Leave a share, converting this device's replica back to private files.
+ *
+ * **The copy is kept** (SH-05). That is the promise replication exists to make, and it is
+ * why leaving is a metadata pass rather than a deletion: the files do not move and the bytes
+ * are not re-encrypted. Only the naming changes, so the folder keeps working once `KS` stops
+ * being shared with anybody.
+ *
+ * Two steps, and the order is the whole safety of it. `leave/begin` stops propagation
+ * immediately, so nothing new arrives while the conversion runs; only then is the replica
+ * converted and the departure recorded. A device that dies in between has stopped receiving
+ * and has not yet left — it can finish later, which is exactly the state a revoked offline
+ * device is in.
+ *
+ * **All of it in one request.** Unlike preparation, which is resumable batches, finalization
+ * is checked for completeness: the server refuses a pass that misses a live node. A
+ * half-converted replica is a folder whose files its owner can no longer open — silent,
+ * permanent, and discovered long after the share is gone — so a partial finish is worse than
+ * no finish at all.
+ *
+ * @param shareKey the `KS` this replica's interior is named under.
+ * @param nodes every live node of the replica, the root included.
+ * @returns whether this departure ended the share for everybody.
+ */
 export const leaveShare = async (
   deps: LeaveDeps,
   shareId: string,

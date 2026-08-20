@@ -820,19 +820,6 @@ export const joinShare = async (
 };
 
 /**
- * Stop propagation and begin leaving.
- *
- * Leaving, revocation and dissolution are one operation seen from three sides (docs/05).
- * All three stop propagation immediately and hand the copy to the affected client, because
- * only it holds the `KV` and the plaintext names its replica must be converted back to.
- * The server cannot finish any of them.
- *
- * **A departure ends the share, never a head count.** Two departures do it:
- * the initiator's (SH-17) and the last joined participant's other than them (SH-07). A
- * share of one that nobody has left is alive and waiting — which is the ordinary state
- * while preparing, after activation before anybody accepts, and again after a decline.
- */
-/**
  * One departure, whichever door it came through.
  *
  * Leaving and being revoked are the same state (SH-22): propagation stops, the copy stays,
@@ -847,15 +834,12 @@ export const joinShare = async (
  * nobody. That is why a share of one survives its three ordinary moments — preparing,
  * activated before anyone accepts, and after a decline.
  *
+ * **Exported**, because deleting an account has to dissolve every share it is in (#55) and
+ * the question "who is left, and does this end it" must have one answer: a second
+ * implementation of it would decide differently the first time the rule moved.
+ *
  * @param leaving the member going, whether by their own act or the initiator's.
  * @returns whether this closed the share for everybody.
- */
-/**
- * One member's departure, and whether it ends the share.
- *
- * Exported because deleting an account has to dissolve every share it is in (#55), and the
- * question "who is left, and does this end it" must have one answer: a second
- * implementation of it would decide differently the first time the rule moved.
  */
 export const departMember = async (
   c: PoolClient,
@@ -906,6 +890,19 @@ export const departMember = async (
   return ends;
 };
 
+/**
+ * Stop propagation and begin leaving.
+ *
+ * Leaving, revocation and dissolution are one operation seen from three sides (docs/05).
+ * All three stop propagation immediately and hand the copy to the affected client, because
+ * only it holds the `KV` and the plaintext names its replica must be converted back to.
+ * The server cannot finish any of them.
+ *
+ * **A departure ends the share, never a head count.** Two departures do it:
+ * the initiator's (SH-17) and the last joined participant's other than them (SH-07). A
+ * share of one that nobody has left is alive and waiting — which is the ordinary state
+ * while preparing, after activation before anybody accepts, and again after a decline.
+ */
 export const leaveShare = async (
   db: Db,
   userId: string,
