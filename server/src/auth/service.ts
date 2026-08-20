@@ -71,29 +71,43 @@ export type Account = {
  * The `state = 'provisioned'` in the `WHERE` is the whole of the once-only guarantee: the
  * same statement that sets the password moves the row out of the state it matches on, so a
  * second call finds nothing. No separate check, and no window between checking and writing.
+ * A concurrent second call blocks on the row and then re-reads it as `active`, so the
+ * guarantee survives being wrapped in a transaction — which it now is (#88).
+ *
+ * **One transaction: the password and its audit row commit together, or neither does.** They
+ * were two, and the audit entry was wrapped in a `db.tx` of its own — the one shape that looks
+ * careful and is not. A crash in between left an administrator existing with nothing saying it
+ * had been created, on the single account whose creation is the most interesting line the log
+ * will ever hold. `confirmRestore` had already written the rule down for exactly this case.
+ *
+ * **Hashed before the transaction opens, deliberately.** Argon2id at the 64 MiB floor (#62)
+ * takes real time, and computing it inside would pin a pool connection for the whole
+ * derivation — on the one request a fresh server is certain to receive.
  */
 export const setFirstPassword = async (
   db: Db,
   password: string,
 ): Promise<{ userId: string; login: string } | undefined> => {
-  const done = await db.query<{ id: string; login: string }>(
-    `UPDATE users SET state = 'active', password_hash = $1
-      WHERE id = '00000000-0000-0000-0000-000000000001'
-        AND role = 'admin' AND state = 'provisioned'
-      RETURNING id, login`,
-    [hashPassword(password)],
-  );
-  const row = done[0];
-  if (!row) return undefined;
+  const hash = hashPassword(password);
 
-  await db.tx(async (c) => {
+  return db.tx(async (c) => {
+    const done = await c.query<{ id: string; login: string }>(
+      `UPDATE users SET state = 'active', password_hash = $1
+        WHERE id = '00000000-0000-0000-0000-000000000001'
+          AND role = 'admin' AND state = 'provisioned'
+        RETURNING id, login`,
+      [hash],
+    );
+    const row = done.rows[0];
+    if (!row) return undefined;
+
     await record(c, {
       actor: { id: row.id, login: row.login },
       action: 'account.bootstrap',
       target: { id: row.id, login: row.login },
     });
+    return { userId: row.id, login: row.login };
   });
-  return { userId: row.id, login: row.login };
 };
 
 /**
