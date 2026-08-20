@@ -54,28 +54,17 @@ export const takeScheduledBackup = async (
 
   // The self-check, on the copy this run just wrote (#74). Same reader the console's trigger
   // uses by default, so a scheduled backup is checked exactly as a hand-pressed one is.
-  const out = await runBackup(db, makeLegs(runDir), runDestination, { openCopy });
-
-  // Said at the level the outcome deserves, because on an unattended box the log IS the
-  // surface — there is nobody with the console open to notice a row.
-  switch (out.status) {
-    case 'ok':
-      // `error` on an `ok` run is the self-check's complaint: the backup completed and the
-      // copy is not whole, which is a warning about a run that otherwise looks fine.
-      if (out.error) warn(`scheduled backup ${runDestination} completed but is NOT restorable: ${out.error}`);
-      else log(`scheduled backup ${runDestination}: ${out.blobCount ?? 0} blobs, verified whole`);
-      return;
-    case 'refused':
-      warn(`scheduled backup did not start: ${out.error}`);
-      return;
-    case 'skipped':
-      // Another backup held the lock past the timeout. Worth saying rather than passing over:
-      // a schedule that silently skips is a schedule that stops being one.
-      warn(`scheduled backup skipped: ${out.error}`);
-      return;
-    default:
-      warn(`scheduled backup FAILED: ${out.error}`);
-  }
+  //
+  // **The outcome is `runBackup`'s to describe, and this only says whose run it was.** It used
+  // to be the other way round — a `switch` here composing a sentence per status — which meant
+  // the console's trigger, which wraps nothing, produced no line at all: a refusal window
+  // opened and closed with nothing in the log to show for it. One writer, one set of
+  // sentences, and every trigger says the same things about the same window.
+  await runBackup(db, makeLegs(runDir), runDestination, {
+    openCopy,
+    log: (m) => log(`scheduled ${m}`),
+    warn: (m) => warn(`scheduled ${m}`),
+  });
 };
 
 /**

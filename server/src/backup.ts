@@ -115,6 +115,22 @@ export const runBackup = async (
     triggeredBy?: string;
     lockWaitMs?: number;
     /**
+     * Where this run says what it is doing. **Defaulted to the console rather than to
+     * silence**, because silence is the defect this was added for: the schedule wrapped its
+     * own outcomes in log lines, the console's trigger wrapped nothing, and a hand-pressed
+     * backup therefore opened a refusal window and closed it leaving no trace anywhere but a
+     * row nobody was looking at. A logger a caller must remember to pass is a logger the next
+     * caller will forget.
+     *
+     * The window is the reason this is not merely nice to have. It is the only thing in the
+     * server that stops writes being accepted, and a run that hangs inside one is an outage
+     * whose cause is unreadable unless something said it had begun — `settleInterruptedRuns`
+     * exists precisely because a run can outlive its process, and until now the log had
+     * nothing to say about the run it was cleaning up after.
+     */
+    log?: (message: string) => void;
+    warn?: (message: string) => void;
+    /**
      * A reader over the blob copy this run just wrote, when the caller wants it verified
      * on the spot (the "nightly self-check" of docs/10). Called after the legs, before the
      * row is settled as `ok`; a copy with missing blobs is still a completed backup, but a
@@ -129,10 +145,15 @@ export const runBackup = async (
   // server that has stopped accepting writes. A precondition checked after any of them is not
   // protecting the thing it was written to protect — which is exactly how the `pg_dump` major
   // check came to run with the window already open.
+  const { log = console.log, warn = console.warn } = opts;
   try {
     await legs.assertReady();
   } catch (e) {
-    return { status: 'refused' as const, error: e instanceof Error ? e.message : String(e) };
+    const error = e instanceof Error ? e.message : String(e);
+    // The loudest of the outcomes, because it is the one that will still be true tomorrow:
+    // nothing ran, nothing will run, and no row records the fact.
+    warn(`backup did not start: ${error}`);
+    return { status: 'refused' as const, error };
   }
 
   return db.session(async (lock) => {
@@ -152,10 +173,10 @@ export const runBackup = async (
     try {
       await lock.query('SELECT pg_advisory_lock($1)', [COLLECTOR_LOCK_ID]);
     } catch {
-      return {
-        status: 'skipped' as const,
-        error: `the collector lock was still held after ${lockWaitMs}ms; another backup is probably running`,
-      };
+      const error = `the collector lock was still held after ${lockWaitMs}ms; another backup is probably running`;
+      // A schedule that silently skips is a schedule that has stopped being one.
+      warn(`backup skipped: ${error}`);
+      return { status: 'skipped' as const, error };
     } finally {
       // This connection goes back to the pool, and a lock_timeout left on it would apply to
       // whatever runs there next.
@@ -169,6 +190,10 @@ export const runBackup = async (
     );
     const id = started!.id;
     windowOpen = true;
+    // Said as the window opens rather than after it closes: a run that never reaches its
+    // settle line is exactly the run somebody needs to read about.
+    const openedAt = Date.now();
+    log(`backup ${id} started, writes refused until it finishes → ${destination}`);
 
     try {
       // The database FIRST (#114). Reversing these two is the one mistake in this file that
@@ -202,6 +227,14 @@ export const runBackup = async (
           WHERE id = $1`,
         [id, dumped.bytes + blobs.bytes, blobs.count, selfCheckError ?? null],
       );
+      const held = `${Date.now() - openedAt}ms`;
+      if (selfCheckError) warn(`backup ${id} completed but is NOT restorable: ${selfCheckError} (${held})`);
+      else {
+        // "Not checked" and "checked and whole" are different claims, and a log that ran them
+        // together would let an unverified copy read as a verified one.
+        const checked = openCopy ? 'verified whole' : 'not checked';
+        log(`backup ${id} ok in ${held}: ${blobs.count} blobs, ${dumped.bytes + blobs.bytes} bytes, ${checked}`);
+      }
       const out: BackupResult = {
         id,
         status: 'ok',
@@ -212,6 +245,7 @@ export const runBackup = async (
       return out;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      warn(`backup ${id} FAILED after ${Date.now() - openedAt}ms: ${message}`);
       await db.query(
         `UPDATE backup_runs
             SET window_closed_at = now(), finished_at = now(), status = 'failed', error = $2
