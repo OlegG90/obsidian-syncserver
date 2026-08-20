@@ -25,7 +25,34 @@ export type SyncPhase =
   | { kind: 'syncing' }
   | { kind: 'failed'; message: string; at: number };
 
+/**
+ * An account state the server keeps repeating, if the last pass carried one.
+ *
+ * These are STATES, not events (docs/04): recomputed on every delta from what is true now,
+ * repeated until they stop being true, and never a log. So they belong on a surface that is
+ * always there — a person who never opens the settings has the status bar and the ribbon, and
+ * nothing else.
+ *
+ * They used to be told once, as a twenty-second notice, beside a comment saying these were
+ * "the two things nothing else on any screen would tell somebody". A live walk landed exactly
+ * where that leads: an account went over its limit, said so once, and then every surface read
+ * "up to date" while every write was being refused. The notice stays — the first time it is
+ * news — and this is what makes it a state rather than a moment.
+ *
+ * Outranks every sync outcome, because it is the reason for them: files stopped moving because
+ * the account stopped accepting them, and a status bar reporting "3 failed" is answering a
+ * smaller question than the one the person has.
+ */
+const accountState = (phase: SyncPhase): string | undefined => {
+  const events = phase.kind === 'idle' ? phase.report?.events : undefined;
+  if (events?.some((e) => e.type === 'account_frozen')) return 'over your limit — nothing new is accepted';
+  if (events?.some((e) => e.type === 'share_ended')) return 'a shared folder ended — open settings to finish';
+  return undefined;
+};
+
 export const shortStatus = (phase: SyncPhase): string => {
+  const state = accountState(phase);
+  if (state) return `Sync: ${state}`;
   switch (phase.kind) {
     case 'disconnected':
       return 'Sync: not connected';
@@ -77,6 +104,9 @@ export const shortStatus = (phase: SyncPhase): string => {
  * ribbon they are one thing: something needs you.
  */
 export const phaseIcon = (phase: SyncPhase): string => {
+  // The same precedence the words use: a frozen account is not a healthy tick, whatever the
+  // pass that discovered it managed to move.
+  if (accountState(phase)) return 'alert-triangle';
   switch (phase.kind) {
     case 'disconnected':
       return 'cloud-off';

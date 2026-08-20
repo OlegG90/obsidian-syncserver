@@ -204,3 +204,42 @@ describe('phaseIcon — the surface that renders on a phone', () => {
     assert.notEqual(conflict, phaseIcon({ kind: 'idle', report: report({ scanned: 3 }) }), 'and not as "fine"');
   });
 });
+
+describe('an account state the server keeps repeating', () => {
+  // The live walk that produced this: a vault went over its limit, the plugin said so once in
+  // a twenty-second notice, and every surface then read "up to date" while the server refused
+  // every write. A state is not a moment, and the surfaces a person actually has are the
+  // status bar and the ribbon.
+  const frozen = report({ events: [{ type: 'account_frozen', at: '2026-08-20T00:00:00Z' }] });
+
+  it('holds the status bar for as long as the server keeps sending it', () => {
+    assert.match(shortStatus({ kind: 'idle', report: frozen }), /over your limit/);
+  });
+
+  it('outranks a clean pass, because it is the reason the pass was clean', () => {
+    // Nothing moved and nothing failed — which reads as "up to date" and is the opposite of
+    // what is true: nothing moved because nothing was accepted.
+    assert.ok(!/up to date/.test(shortStatus({ kind: 'idle', report: frozen })));
+  });
+
+  it('outranks the outcomes too, which answer a smaller question', () => {
+    const alsoFailed = report({
+      errors: [{ path: 'a.md', message: 'over_quota' }],
+      events: [{ type: 'account_frozen', at: '2026-08-20T00:00:00Z' }],
+    });
+
+    assert.match(shortStatus({ kind: 'idle', report: alsoFailed }), /over your limit/);
+    assert.equal(phaseIcon({ kind: 'idle', report: alsoFailed }), 'alert-triangle');
+  });
+
+  it('shows an ended share the same way, since it also waits on a person', () => {
+    const ended = report({ events: [{ type: 'share_ended', share_id: 's', at: '2026-08-20T00:00:00Z' }] });
+    assert.match(shortStatus({ kind: 'idle', report: ended }), /shared folder ended/);
+  });
+
+  it('says nothing extra when the server reports no state at all', () => {
+    const quiet = report({ scanned: 3 });
+    assert.match(shortStatus({ kind: 'idle', report: quiet }), /up to date/);
+    assert.equal(phaseIcon({ kind: 'idle', report: quiet }), 'check-circle');
+  });
+});
