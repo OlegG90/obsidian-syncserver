@@ -17,7 +17,7 @@
  * and share at once, with reads and deletions still working — so the answer says how much
  * they are using, and the caller can say that out loud before doing it rather than after.
  */
-import type { AccountRow } from '@syncserver/shared';
+import type { AccountRow, AuditRow } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import type { Db } from '../db.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
@@ -247,15 +247,6 @@ export const storage = async (db: Db): Promise<{
     blobs: row?.blobs ?? '0',
     quarantined: row?.quarantined ?? '0',
   };
-};
-
-export type AuditRow = {
-  id: string;
-  at: string;
-  actorLogin: string;
-  action: string;
-  targetLogin: string | null;
-  details: Record<string, unknown>;
 };
 
 /** The log, newest first. Filterable by who it was about, which is how it is actually read. */
