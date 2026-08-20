@@ -327,11 +327,14 @@ just `docker compose pull` again.
 - **not exposed publicly.** It publishes on the host and nothing terminates TLS in front of it.
   Public exposure stays out of scope until authentication has had a review of its own
   ([02](02-architecture.md)). Reaching it from elsewhere is a VPN's job, not this compose file's;
-- **not backed up.** The two bind mounts hold everything and nothing copies them anywhere. The
-  procedure that would — one refusal window, database dumped first and blobs copied second
-  inside it (#114) — is [08](08-backup-restore.md),
-  and it is not wired up. Note that the collector must be held off during that window, which is
-  what its advisory lock is for;
+- **not backed up by itself.** The procedure exists and is wired up — one refusal window,
+  database dumped first and blobs copied second inside it (#114), described in
+  [08](08-backup-restore.md) — and the console has a button that runs it. What is missing is
+  anything that presses the button: no schedule, so an installation nobody touches for a month
+  has no copies from that month. `pg_dump` is in the image at the database's own major, so
+  `BACKUP_DB_COMMAND` has a working default; **`BACKUP_DESTINATION` is still the operator's to
+  choose**, and while it is unset the trio is "not configured" and the button says so. Note that
+  the collector must be held off during the window, which is what its advisory lock is for;
 - **not upgradable in place.** `schema.sql` runs once, on an empty data directory. There is no
   migration tool yet, deliberately (see the repository README), so a schema change means
   discarding the database and starting again. That is fine while nothing in it matters, and it is

@@ -44,6 +44,34 @@ jobs:
       - run: node scripts/check-version.mjs
       - run: node scripts/check-compose.mjs
 
+  # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
+  # only proves two numbers agree in two files; whether the pinned package actually exists in
+  # the pinned Alpine release is a fact only a build knows, and learning it at `v*` tag time —
+  # or on the NAS — is learning it too late. `postgresql18-client` is in Alpine 3.23 and not in
+  # 3.22, which is exactly the kind of thing that moves.
+  image:
+    name: the runtime image, and the pg_dump in it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: build the runtime stage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: syncserver:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: pg_dump is present, and is the major the compose file runs
+        run: |
+          set -euo pipefail
+          want=$(grep -oP 'image:\s*postgres:\K\d+' docker-compose.yml)
+          got=$(docker run --rm --entrypoint pg_dump syncserver:ci --version | grep -oP '\d+' | head -1)
+          echo "compose runs postgres $want; the image carries pg_dump $got"
+          [ "$want" = "$got" ] || { echo "::error::pg_dump $got cannot back up postgres $want"; exit 1; }
+
   server:
     name: server + schema
     runs-on: ubuntu-latest

@@ -95,7 +95,10 @@ services:
       # Backups, all-or-nothing: leaving these unset means the console's backup button
       # answers "not configured", which is a truthful and safe answer.
       BACKUP_DESTINATION: ${BACKUP_DESTINATION:-}
-      BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-}
+      # `pg_dump` is in the image at the database's own major, so this one has a working
+      # default; the destination and the blob source stay empty, and an unset destination is
+      # what still makes the trio "not configured".
+      BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-pg_dump --format=custom}
       BACKUP_BLOB_SOURCE: ${BACKUP_BLOB_SOURCE:-}
       # Where the restore epoch lives — must survive a restore, so it is a host path, not
       # inside the database or the blobs.
