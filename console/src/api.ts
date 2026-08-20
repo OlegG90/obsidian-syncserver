@@ -9,11 +9,11 @@
  * **No key material passes through here, ever.** A console account has none (#115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { AccountRow, BackupRun, HealthResponse, RestoreStatus } from '@syncserver/shared';
+import type { AccountRow, AuditRow, BackupRun, HealthResponse, RestoreStatus } from '@syncserver/shared';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, BackupRun, HealthResponse, RestoreStatus };
+export type { AccountRow, AuditRow, BackupRun, HealthResponse, RestoreStatus };
 
 export class ApiError extends Error {
   constructor(
@@ -79,6 +79,20 @@ export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '
 
 export const invite = (login: string, quotaBytes: string): Promise<{ user_id: string; token: string }> =>
   call('POST', '/admin/invitations', { login, quota_bytes: quotaBytes });
+
+/**
+ * Change what an account may store.
+ *
+ * Answers with the account's CURRENT usage and whether this limit freezes it — the server
+ * computes both inside the same transaction that writes the change, so the number cannot be
+ * stale by the time it is read. Lowering a limit below usage deletes nothing (SH-20).
+ */
+export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_bytes: string; freezes: boolean }> =>
+  call('PUT', `/admin/accounts/${userId}/quota`, { quota_bytes: quotaBytes });
+
+/** The administrative log, newest first (#87, #94). Append-only on the server; read-only here. */
+export const audit = (limit = 100): Promise<{ entries: AuditRow[] }> =>
+  call('GET', `/admin/audit?limit=${limit}`);
 
 /** Start a backup now. Refused with `backup_not_configured` when the server has none. */
 export const runBackup = (): Promise<{ id?: string; status: string; bytes?: number; blob_count?: number }> =>

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { describeAccount, mib, type AccountLine } from '../src/format.js';
+import { describeAccount, describeAudit, freezeWarning, mib, type AccountLine } from '../src/format.js';
 
 const line = (over: Partial<AccountLine> = {}): AccountLine => ({
   role: 'user',
@@ -54,5 +54,51 @@ describe('a line under a login', () => {
     // A backup run that failed before either leg ran has no bytes; "0.0 MiB" would be a
     // true statement that reads as a broken one.
     assert.equal(mib(null), '—');
+  });
+});
+
+describe('what lowering a limit will do, said before it is done', () => {
+  const MiB = 1024 * 1024;
+
+  it('says nothing when the new limit is at or above what is stored', () => {
+    // Silence is the answer, not an empty string: the caller branches on it to decide whether
+    // a confirmation is owed at all.
+    assert.equal(freezeWarning(String(10 * MiB), String(2 * MiB)), undefined);
+    assert.equal(freezeWarning(String(2 * MiB), String(2 * MiB)), undefined, 'exactly at the limit is not over it');
+  });
+
+  it('explains the freeze, and that nothing is deleted', () => {
+    // The part operators assume wrongly. Lowering a limit reads like trimming an account, and
+    // what actually happens is that the files stay and writes stop (SH-20) — so the sentence
+    // has to carry both halves, and the way out.
+    const warning = freezeWarning(String(1 * MiB), String(5 * MiB))!;
+
+    assert.match(warning, /5\.0 MiB/, 'what is stored');
+    assert.match(warning, /1\.0 MiB/, 'and what it is being lowered to');
+    assert.match(warning, /Nothing is deleted/);
+    assert.match(warning, /reading and deleting keep working/, 'and the way out');
+  });
+});
+
+describe('one line of the audit log', () => {
+  const line = (over: Partial<Parameters<typeof describeAudit>[0]> = {}) => ({
+    action: 'quota.change',
+    actorLogin: 'admin',
+    targetLogin: 'alice',
+    ...over,
+  });
+
+  it('spells the dotted action out, and names both parties', () => {
+    assert.equal(describeAudit(line()), 'quota changed — alice, by admin');
+  });
+
+  it('leaves the target out when an act was about nobody in particular', () => {
+    assert.equal(describeAudit(line({ action: 'restore.confirm', targetLogin: null })), 'restore confirmed, by admin');
+  });
+
+  it('shows an action it does not recognise under its own name', () => {
+    // The log is append-only and outlives any particular console build. Hiding an entry
+    // because the word is unfamiliar is the one failure a log must not have.
+    assert.equal(describeAudit(line({ action: 'something.new' })), 'something.new — alice, by admin');
   });
 });

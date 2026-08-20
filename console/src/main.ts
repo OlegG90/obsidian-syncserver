@@ -1,5 +1,6 @@
 /**
- * The console, as three screens: the first run, signing in, and the accounts.
+ * The console: the first run, signing in, the accounts, the backups, the audit log, and the
+ * restore-confirm surface.
  *
  * No framework, and the reason is not taste. Almost every decision this surface could make
  * was made by the API in M4 — who may act, what a refusal means, what lowering a quota will
@@ -11,8 +12,8 @@
  * third. A reload is therefore never wrong, which is the cheapest correctness a web page can
  * have.
  */
-import { accounts, backups, bootstrap, confirmRestore, health, invite, restoreStatus, runBackup, signedIn, signIn, verify, type AccountRow, type BackupRun } from './api.js';
-import { describeAccount, mib } from './format.js';
+import { accounts, audit, backups, bootstrap, confirmRestore, health, invite, restoreStatus, runBackup, setQuota, signedIn, signIn, verify, type AccountRow, type AuditRow, type BackupRun } from './api.js';
+import { describeAccount, describeAudit, freezeWarning, mib } from './format.js';
 import { chooseScreen, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -108,13 +109,65 @@ const signInScreen = (): void => {
   app.replaceChildren(form);
 };
 
-const accountRow = (a: AccountRow): HTMLElement =>
-  el(
+const accountRow = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+  const card = el(
     'div',
     { className: 'card' },
     el('strong', { textContent: a.login }),
     el('div', { className: 'muted', textContent: describeAccount(a) }),
   );
+  // A console account holds no key and owns no vault (#115), so it has no quota to change —
+  // and an invitation is not an account yet. Neither gets the control, rather than getting one
+  // that refuses.
+  if (a.role !== 'admin' && a.state !== 'provisioned') card.append(quotaControl(a, done));
+  return card;
+};
+
+/**
+ * Change one account's limit, explaining a freeze **before** applying it.
+ *
+ * Two presses when it would freeze them, one when it would not. The confirmation is not
+ * ceremony: an operator lowering a limit usually expects the account to be trimmed, and what
+ * actually happens is that nothing is deleted and writes stop — which is a different thing to
+ * have decided (SH-20). The sentence is `freezeWarning`'s, so what is shown and what is tested
+ * are the same string.
+ */
+const quotaControl = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+  const box = el('div', {});
+  const quota = field('Quota in MiB');
+  quota.input.value = String(Math.round(Number(a.quotaBytes) / (1024 * 1024)));
+  const save = el('button', { textContent: 'Save' });
+  box.append(quota.row, save);
+
+  const apply = async (): Promise<void> => {
+    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+    const out = await setQuota(a.id, bytes);
+    box.append(
+      say(
+        out.freezes
+          ? `${a.login} now stores more than its limit and is frozen; deleting is the way out.`
+          : `${a.login} may now store ${mib(bytes)}.`,
+        out.freezes,
+      ),
+    );
+    await done();
+  };
+
+  submits(save, box, async () => {
+    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+    const warning = freezeWarning(bytes, a.usedBytes);
+    if (!warning) return apply();
+
+    // Said once, and replaced by the act rather than stacking: pressing Save twice with the
+    // same number should not grow a column of identical warnings.
+    save.remove();
+    const anyway = el('button', { textContent: 'Lower it anyway' });
+    box.append(say(warning, true), anyway);
+    submits(anyway, box, apply);
+  });
+
+  return box;
+};
 
 const accountsScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Accounts' }));
@@ -146,15 +199,57 @@ const accountsScreen = (): void => {
 
   const fill = async (): Promise<void> => {
     const out = await accounts();
-    list.replaceChildren(...out.accounts.map(accountRow));
+    list.replaceChildren(...out.accounts.map((a) => accountRow(a, fill)));
   };
 
-  const backupsCard = el('button', { textContent: 'Backups' });
-  backupsCard.onclick = () => backupsScreen();
+  const toBackups = el('button', { textContent: 'Backups' });
+  toBackups.onclick = () => backupsScreen();
+  const toAudit = el('button', { textContent: 'Audit log' });
+  toAudit.onclick = () => auditScreen();
 
-  app.replaceChildren(el('nav', {}, backupsCard), page, list, inviteCard);
+  app.replaceChildren(el('nav', {}, toBackups, toAudit), page, list, inviteCard);
   void attempt(page, fill);
 };
+
+/**
+ * The audit log, newest first (#87, #94).
+ *
+ * Read-only, and there is nothing here that could make it otherwise: the table refuses updates
+ * and deletes at the schema level, so this screen has no button because there is no act. What
+ * it shows is the answer to "who did what to whom", which is the whole reason a log with no
+ * foreign keys keeps snapshot logins (#93) — an entry naming an account that has since been
+ * deleted is still the answer.
+ *
+ * **Nothing here reaches a vault's contents.** A console account holds no key (#115); the log
+ * records administrative acts, and administrative acts never touch a note.
+ */
+const auditScreen = (): void => {
+  const page = el('div', {}, el('h1', { textContent: 'Audit log' }));
+  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+
+  const back = el('button', { textContent: 'Accounts' });
+  back.onclick = () => accountsScreen();
+
+  const fill = async (): Promise<void> => {
+    const out = await audit();
+    list.replaceChildren(
+      ...(out.entries.length === 0
+        ? [el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })]
+        : out.entries.map(auditRow)),
+    );
+  };
+
+  app.replaceChildren(el('nav', {}, back), page, list);
+  void attempt(page, fill);
+};
+
+const auditRow = (e: AuditRow): HTMLElement =>
+  el(
+    'div',
+    { className: 'card' },
+    el('strong', { textContent: describeAudit(e) }),
+    el('div', { className: 'muted', textContent: when(e.at) }),
+  );
 
 /** When a run happened, as a person reads a table. */
 const when = (iso: string | null): string =>

@@ -340,6 +340,28 @@ export type AccountRow = {
  * The byte figures are strings on purpose: they cross a JSON boundary, and a `bigint`
  * would round above 2^53.
  */
+/**
+ * One line of the administrative audit log, as both sides read it.
+ *
+ * Here for the reason `AccountRow` is: the server writes it and the console renders it, so a
+ * column renamed on one side has to fail on the other at compile time rather than arrive as
+ * `undefined` in a table.
+ *
+ * **The logins are snapshots, not references** (#93). The row survives — and keeps naming —
+ * an account that was later renamed or deleted, which is the whole point of a log that only
+ * grows: "quota raised by an administrator who no longer exists" is still the answer to what
+ * happened.
+ */
+export type AuditRow = {
+  id: string;
+  at: string;
+  actorLogin: string;
+  /** A dotted name: `account.invite`, `account.disable`, `quota.change`. */
+  action: string;
+  targetLogin: string | null;
+  details: Record<string, unknown>;
+};
+
 export type BackupRun = {
   id: string;
   startedAt: string;
