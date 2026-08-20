@@ -105,6 +105,22 @@ export interface Derivation {
 }
 
 /** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
+/**
+ * What a caller may answer when asked which vault a device is for (#116).
+ *
+ * Three answers because there are three things a person can mean, and collapsing any two of
+ * them would put the decision back where it was: `use` is "that one", `create` is "none of
+ * those", and `cancel` is a person who has realised they are on the wrong screen — which must
+ * connect nothing rather than fall through to a default.
+ */
+export type VaultChoice =
+  | { kind: 'use'; id: string }
+  | { kind: 'create'; name: string }
+  | { kind: 'cancel' };
+
+/** Put the account's vaults, by name, to whoever can ask. */
+export type AskVault = (vaults: { id: string; name: string }[]) => Promise<VaultChoice>;
+
 export interface PairArgs {
   serverUrl: string;
   login: string;
@@ -113,14 +129,13 @@ export interface PairArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Confirm the vault this device is about to bind to, by name (#117).
+   * Ask which vault this device is for, by name (#117, #116).
    *
-   * Optional, and the shape is a question rather than a flag: a caller with no way to ask —
-   * a test, a headless flow — passes nothing and keeps the old silent behaviour, while one
-   * with a screen gets to put the vault in front of the person before adoption merges
-   * anything. Returning `false` connects nothing and changes nothing.
+   * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
+   * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
+   * a screen puts the vaults in front of the person before adoption merges anything.
    */
-  confirmVault?: (vault: { id: string; name: string }) => Promise<boolean>;
+  askVault?: AskVault;
   deviceName?: string;
   devicePlatform?: string;
 }
@@ -133,14 +148,13 @@ export interface RecoverArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Confirm the vault this device is about to bind to, by name (#117).
+   * Ask which vault this device is for, by name (#117, #116).
    *
-   * Optional, and the shape is a question rather than a flag: a caller with no way to ask —
-   * a test, a headless flow — passes nothing and keeps the old silent behaviour, while one
-   * with a screen gets to put the vault in front of the person before adoption merges
-   * anything. Returning `false` connects nothing and changes nothing.
+   * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
+   * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
+   * a screen puts the vaults in front of the person before adoption merges anything.
    */
-  confirmVault?: (vault: { id: string; name: string }) => Promise<boolean>;
+  askVault?: AskVault;
   deviceName?: string;
   devicePlatform?: string;
 }
@@ -271,43 +285,58 @@ export class Session {
   /**
    * Which vault this device is for, when the account may hold several (AC-10).
    *
-   * One is the ordinary case and choosing it silently is right; several without being told
-   * is a question, not a default — and the question is the caller's, since only they know
-   * what this device is being set up to do. `purpose` is in the message because "name the
-   * one to sync" and "name the one to recover into" are asked at different moments, and a
-   * person reading it is in the middle of one of them.
+   * **One question with three answers, not two questions.** #117 gave this a yes/no for the
+   * single-vault case; the moment an account can hold two, that same moment is also when
+   * somebody might want a third. Asking "is it this one?" and then, separately, "or which of
+   * these?" would be two callbacks with overlapping duty — the shape #86 was opened about.
+   * So the caller is handed the vaults and answers with what it wants done.
    *
-   * **The single-vault case is confirmed, not assumed** (#117). Binding to the only vault
-   * there is, is right when a device is joining the vault it means to join — a second laptop
-   * for the same notes — and wrong when it is being set up for a different one. Those are two
-   * intents and this had no way to tell them apart, so it picked. What followed was adoption:
-   * the existing vault materialising into whatever was already on disk, merging two vaults
-   * into one with nothing on any screen having said so. The default was never the bug; the
-   * bug was a default standing in for a question nobody asked.
+   * The single-vault case is still ONE press: a list of one, plus the way to make another.
+   * That is #117's "one confirmation, not a form" — what makes a form is fields to fill in,
+   * not an option declined.
    *
-   * `confirm` is optional so that the caller which cannot ask — a flow with no UI, and every
-   * test — keeps the old behaviour. A caller that CAN ask, does.
+   * **`ask` is optional, and its absence is the old behaviour**: one vault is taken silently,
+   * anything else throws with the ids. That is what a flow with no UI does, and what every
+   * test that does not care about this does. With `ask` supplied the throw is unreachable,
+   * because an account with none or many is a question this can now put rather than a
+   * sentence it has to compose.
    */
   private static async chooseVault(
     client: SyncClient,
     seed: Uint8Array,
     wanted: string | undefined,
     purpose: string,
-    confirm?: (vault: { id: string; name: string }) => Promise<boolean>,
+    ask?: AskVault,
   ): Promise<string> {
-    const vaults = await client.listVaults();
+    const rows = await client.listVaults();
     // Already decided by the caller: they named one, so there is nothing to ask about.
     if (wanted) return wanted;
-    if (vaults.length !== 1) {
+
+    if (!ask) {
+      if (rows.length === 1) return rows[0]!.id;
       throw new Error(
-        `this account has ${vaults.length} vaults; name the one to ${purpose}: ${vaults.map((v) => v.id).join(', ')}`,
+        `this account has ${rows.length} vaults; name the one to ${purpose}: ${rows.map((v) => v.id).join(', ')}`,
       );
     }
 
-    const only = vaults[0]!;
-    if (!confirm) return only.id;
-    if (await confirm({ id: only.id, name: Session.vaultLabel(seed, only) })) return only.id;
-    throw new Error('cancelled: this device was not connected to that vault, and nothing was changed.');
+    const choice = await ask(rows.map((v) => ({ id: v.id, name: Session.vaultLabel(seed, v) })));
+    if (choice.kind === 'cancel') {
+      throw new Error('cancelled: this device was not connected to any vault, and nothing was changed.');
+    }
+    if (choice.kind === 'use') {
+      // The answer has to name a vault that was offered. A caller returning anything else is
+      // a defect in the caller, and binding to an id nobody listed would produce a device
+      // syncing something the person never saw named.
+      if (!rows.some((v) => v.id === choice.id)) throw new Error(`no such vault on this account: ${choice.id}`);
+      return choice.id;
+    }
+
+    // A new one. The id is the CLIENT's to choose and must exist before the label can be
+    // encrypted, because `KV = HKDF(seed, id)` — the key is derived from the id, so a
+    // server-assigned id would mean a name encrypted under a key nobody had yet (docs/03).
+    const id = crypto.randomUUID();
+    await client.createVault(id, encryptName(vaultKey(seed, id), choice.name));
+    return id;
   }
 
   /**
@@ -544,7 +573,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'sync', args.confirmVault);
+    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'sync', args.askVault);
 
     return Session.finishBootstrap(
       {
@@ -622,7 +651,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.confirmVault);
+    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.askVault);
 
     return Session.finishBootstrap(
       {

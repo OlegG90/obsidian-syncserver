@@ -24,10 +24,10 @@ import { PushListener } from './obsidian/push.js';
 import { newPairingCode } from './crypto/pairing-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport } from './obsidian/net.js';
-import { askConfirmation, askFolderName, askPassphrase, StatusModal } from './obsidian/modals.js';
+import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
 
-import { session, type Connection, type Handle, type Session } from './session/index.js';
+import { session, type Connection, type Handle, type Session, type VaultChoice } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
@@ -331,29 +331,19 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The question a device answers before it binds to a vault (#117).
+   * The question a device answers before it binds to a vault (#117, #116).
    *
-   * Named, because the point is that the person recognises it — the connected screen has
-   * shown a raw `vaultId` since M1 and nobody has ever recognised one of those. And it says
-   * what happens next rather than only what is about to be joined: the first sync is
-   * ADOPTION, so files already sitting in this Obsidian vault are about to be reconciled
-   * against that one. Somebody expecting an empty start needs to know that before it runs,
-   * not from the conflict files afterwards.
+   * Named vaults, because the point is that the person recognises the answer — the connected
+   * screen has shown a raw `vaultId` since M1 and nobody has ever recognised one of those.
+   * And the choice includes making a new one, which is the only route there is: the vault an
+   * account starts with is made at redeem, and an invitation is one-time and spent.
    *
-   * Not titled "this cannot be undone", because it can: nothing has been written yet, and
-   * declining leaves both sides exactly as they were. What is hard to undo is the merge on
-   * the other side of the yes, which is why the sentence describes that and not this.
+   * The Obsidian vault's own name is offered as the suggestion, since that is what somebody
+   * setting up a second vault almost always means to call it, and the two ending up with the
+   * same name is a feature rather than a collision — nothing keys on it.
    */
-  private confirmVault(vault: { id: string; name: string }): Promise<boolean> {
-    const here = this.app.vault.getName();
-    return askConfirmation(
-      this.app,
-      `This device will sync the vault “${vault.name}” on that account, into the Obsidian vault ` +
-        `“${here}”. Files already here are merged with what is there: identical files join up, ` +
-        `different ones become conflict files, and nothing is deleted on either side.`,
-      'Connect',
-      'Which vault this connects to',
-    );
+  private askVault(vaults: { id: string; name: string }[]): Promise<VaultChoice> {
+    return askVaultChoice(this.app, this.app.vault.getName(), vaults);
   }
 
   /**
@@ -373,7 +363,7 @@ export default class SyncServerPlugin extends Plugin {
         // The same hazard as pairing, through the same branch: recovering into an Obsidian
         // vault other than the original merges the two. #117 names pairing; the code path is
         // one, and asking here costs a caller nothing.
-        confirmVault: (v) => this.confirmVault(v),
+        askVault: (v) => this.askVault(v),
       },
       transport,
     );
@@ -404,7 +394,7 @@ export default class SyncServerPlugin extends Plugin {
         ...args,
         deviceName: 'obsidian',
         devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
-        confirmVault: (v) => this.confirmVault(v),
+        askVault: (v) => this.askVault(v),
       },
       transport,
       waiting,
