@@ -38,6 +38,25 @@ the moment either changes, and the failure lands on the far side where it is lea
 to diagnose. `scripts/pack.sh` names what goes in explicitly and **fails here** if any of it is
 absent.
 
+**The archive is built from the repository, not from the working tree** (#106). The `<sha>` in
+its name is a claim about what is inside, and tarring files where they lie cannot back that
+claim: an editor wrote CRLF into `deploy-dev-host.sh`, git normalised it on commit — see
+`.gitattributes` — and the archive shipped the working copy. `#!/usr/bin/env bash` with a
+carriage return names a program called `bash\r`, so the deployment died on the NAS with
+`env: can't execute 'bash'` while `bash` sat on its PATH. Every check in this repository reads
+the committed content, which was correct throughout.
+
+So packing refuses when the files it ships have uncommitted changes. To deploy something not
+yet on `main` — a fix under test, an older release — name the point instead:
+
+```bash
+PACK_REF=fix/some-branch npm run pack
+PACK_REF=0.5.0-a npm run pack
+```
+
+Committing first costs one command and makes what ran identifiable afterwards, which is the
+whole reason the name carries a hash.
+
 It contains the compose file, `.env.example`, the schema, the deploy script, and the sources
 that get built *if* a deployment chooses the local-build override — the default path pulls the
 published image instead. The plugin's source is deliberately not in it — a different program
