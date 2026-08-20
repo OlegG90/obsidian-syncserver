@@ -19,7 +19,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { confirmRestore, restoreStatus } from '../src/restore.js';
+import { checkRestoreState, confirmRestore, restoreStatus } from '../src/restore.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -95,6 +95,12 @@ describe('confirming a restore', () => {
 describe('the halt after an unconfirmed restore', () => {
   it('answers restore_pending to ordinary endpoints, and keeps the confirm reachable', async () => {
     await writeFile(stateFile, '9', 'utf8'); // db is 6 from the previous confirm → pending
+    // What a start does, and the only thing that can raise the halt (#87). Writing the file
+    // under a running server is how a test says "a restore happened"; a real one replaces the
+    // database while the server is stopped, so noticing is a boot-time act. Held in memory
+    // afterwards rather than re-read per request, which was a query and a `readFile` for an
+    // answer that could not have changed.
+    await checkRestoreState(db, stateFile);
 
     const blocked = await app.inject({ method: 'GET', url: '/admin/accounts', headers: admin() });
     assert.equal(blocked.statusCode, 503);
@@ -108,5 +114,24 @@ describe('the halt after an unconfirmed restore', () => {
 
     const status = await app.inject({ method: 'GET', url: '/admin/restore', headers: admin() });
     assert.equal(status.json().pending, false);
+  });
+
+  it('lets the server go back to work the moment it is confirmed, without a restart', async () => {
+    // The half nothing was watching. The test above confirms and then asks `/admin/restore`,
+    // which is open during the halt and answers either way — so removing the line that lifts
+    // the halt changed no result. The question is whether an ORDINARY endpoint works again.
+    //
+    // It has to be immediate. Confirming is done from a screen the halt deliberately leaves
+    // reachable, and an operator who has just been told "this is the way out" and still cannot
+    // use the server has been told something untrue.
+    await writeFile(stateFile, '20', 'utf8');
+    await checkRestoreState(db, stateFile);
+    const halted = await app.inject({ method: 'GET', url: '/admin/accounts', headers: admin() });
+    assert.equal(halted.statusCode, 503, 'halted first, or this proves nothing');
+
+    await app.inject({ method: 'POST', url: '/admin/restore/confirm', headers: admin() });
+
+    const working = await app.inject({ method: 'GET', url: '/admin/accounts', headers: admin() });
+    assert.equal(working.statusCode, 200, 'confirming lifted the halt in this process');
   });
 });

@@ -17,7 +17,7 @@ import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes, CONSOLE_PATHS } from './console.js';
 import { backupInProgress } from './backup.js';
 import { backupLegs } from './backup-legs.js';
-import { restoreStatus } from './restore.js';
+import { checkRestoreState, restoreHalted } from './restore.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
 import { hasActiveAdministrator, registerBootstrapGuard } from './bootstrap.js';
@@ -116,12 +116,19 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   // epoch exists to prevent would otherwise begin. Everything except the health check, the
   // console (which carries the confirm screen) and the restore endpoints answers
   // `restore_pending`, so the one way out stays reachable.
+  //
+  // Established here and held, not asked per request (#87). It was a database round-trip plus
+  // a `readFile` on every call, to learn something that changes once — and could not have
+  // changed in between, since a restore replaces the database under a STOPPED server. The
+  // check belongs to this function rather than to the boot script because an app carrying the
+  // hook is the app that has to know whether it is halted; left to a caller, the default is
+  // "fine" and the halt is one forgotten line away from never happening.
+  await checkRestoreState(db, cfg.restoreStateFile);
   const RESTORE_OPEN = new Set(['/health', '/auth/console', '/admin/restore', '/admin/restore/confirm', ...CONSOLE_PATHS]);
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? '';
     if (RESTORE_OPEN.has(path)) return;
-    const status = await restoreStatus(db, cfg.restoreStateFile);
-    if (!status.pending) return;
+    if (!restoreHalted()) return;
     return reply.code(503).send({
       error: 'restore_pending',
       message:

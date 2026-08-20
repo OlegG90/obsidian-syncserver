@@ -115,6 +115,11 @@ if (!(await hasActiveAdministrator(db))) {
 // epoch is detectable. When the database is BEHIND the file, the app's hooks will answer
 // `restore_pending` to everything but the confirm path — say so here, because a server
 // that answers only one endpoint is not a broken one.
+//
+// `buildApp` has already established whether this server is halted (#87); this read is for
+// the two things only a boot does — telling the operator, and bringing the file up. Both need
+// the numbers rather than the yes/no, so it asks for them rather than reusing a flag that
+// cannot answer.
 const restore = await restoreStatus(db, cfg.restoreStateFile);
 if (restore.pending) {
   console.warn(
