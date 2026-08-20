@@ -234,7 +234,7 @@ the postgres image takes that directory over as its own user, so create it and l
 A fresh instance answers:
 
 ```json
-{"status":"ok","bootstrap_pending":true,"version":"0.4.0"}
+{"status":"ok","bootstrap_pending":true,"version":"0.5.0-a"}
 ```
 
 `bootstrap_pending` is the whole first-run state: the database has been created and seeded, and
@@ -300,7 +300,7 @@ The server image is built and pushed from CI, on a `v*` tag — one image per re
 matching the single version across six manifests (#111). Each run also tags by commit, so a
 running container can be traced to a build:
 
-- `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.4.0`;
+- `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.5.0-a`;
 - `ghcr.io/<owner>/syncserver:sha-<short-commit>`.
 
 The registry is GitHub's, and the image is **public** — a server pulls it with no credential,
