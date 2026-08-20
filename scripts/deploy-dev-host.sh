@@ -66,8 +66,44 @@ if [ -f .env ] && [ ! -L .env ]; then
     mv .env "$root/.env"
     echo "  moved .env beside the checkout, where re-extracting cannot reach it"
 fi
+# The version this archive carries, which is the one thing in .env that MUST follow the
+# checkout rather than the installation.
+#
+# Read here rather than inside the branch below, because both paths need it now: a first
+# install writes it beside the secrets, and a redeploy rewrites it over whatever the last one
+# pinned. No fallback on either path — this line was wrong until the first real release found
+# it. A deployment that cannot say which version it is has nothing safe to guess: pinning to
+# the wrong one is worse than stopping, because it starts, serves, and is not the code
+# anybody thinks it is.
+version="$(cat "$checkout/VERSION" 2>/dev/null || true)"
+[ -n "$version" ] || { echo "no VERSION in $checkout — re-pack the archive" >&2; exit 1; }
+image="${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}:$version"
+
 if [ -f "$root/.env" ]; then
-    echo "  $root/.env exists, left untouched"
+    echo "  $root/.env exists, secrets and paths left untouched"
+    # **Except the image.** This file says it is the redeploy procedure as much as the
+    # first-install one, and it was not: `SERVER_IMAGE` was written only when .env was
+    # created, so every re-run pulled the version the installation started life on. A redeploy
+    # that will not run the new build is not a redeploy — it is a `docker compose up` with
+    # extra steps, and it looks like it worked.
+    #
+    # Rewritten rather than appended. Later assignments win in an env file, so appending would
+    # also work and would leave a column of dead SERVER_IMAGE lines, one per deploy, with the
+    # truth at the bottom — a file nobody can read to answer "what is this running". The
+    # secrets are untouched by this: they are what the database was initialised with, while
+    # the image is what the archive brought.
+    was="$(sed -n 's/^SERVER_IMAGE=//p' "$root/.env" | tail -1)"
+    if [ "$was" = "$image" ]; then
+        echo "  SERVER_IMAGE already $image"
+    else
+        # A temp file beside the target, then mv: `sed -i` is not portable to every NAS
+        # userland, and a half-written .env is an installation that cannot start.
+        grep -v '^SERVER_IMAGE=' "$root/.env" > "$root/.env.new"
+        printf 'SERVER_IMAGE=%s\n' "$image" >> "$root/.env.new"
+        chmod 600 "$root/.env.new"
+        mv "$root/.env.new" "$root/.env"
+        echo "  SERVER_IMAGE ${was:-unset} -> $image"
+    fi
 else
     cd "$root"
     # Hex, not base64: these end up in an env file and, historically, in a connection
@@ -86,22 +122,10 @@ else
     {
         printf 'POSTGRES_PASSWORD=%s\n' "$(secret)"
         printf 'SERVER_SECRET=%s\n' "$(secret)"
-        # The server image, pinned to this deployment's version. `latest` is not used — a
-        # server must be able to say what it is running, and to go back (docs/13). The
-        # version comes from VERSION, which pack.sh wrote into the archive.
-        #
-        # Read from the CHECKOUT, and this line was wrong until the first real release found
-        # it: the block above does `cd "$root"`, and VERSION lives in `$checkout`. So `cat
-        # VERSION` failed every time, silently, and the `|| echo` handed back a hardcoded
-        # version instead — every deployment pinned whatever that string said. It surfaces as
-        # `manifest unknown` from a pull, naming a version nothing in the archive mentions.
-        #
-        # No fallback now. A deployment that cannot say which version it is has nothing safe
-        # to guess: pinning to the wrong one is worse than stopping, because it starts, serves,
-        # and is not the code anybody thinks it is.
-        version="$(cat "$checkout/VERSION" 2>/dev/null || true)"
-        [ -n "$version" ] || { echo "no VERSION in $checkout — re-pack the archive" >&2; exit 1; }
-        printf 'SERVER_IMAGE=%s:%s\n' "${SERVER_IMAGE_BASE:-ghcr.io/olegg90/syncserver}" "$version"
+        # The server image, pinned to this deployment's version — read above, because a
+        # redeploy needs it too. `latest` is not used: a server must be able to say what it
+        # is running, and to go back (docs/13).
+        printf 'SERVER_IMAGE=%s\n' "$image"
         # The uid:gid the container runs as, taken from the user running this script —
         # because that is the user creating and owning the data directories below.
         # `.env.example` carries a plausible pair and cannot carry a correct one: on a NAS
