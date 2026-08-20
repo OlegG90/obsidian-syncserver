@@ -339,6 +339,44 @@ just to build what it runs.
 to pull it, which is a credential added to a machine in exchange for hiding source that is already public.
 If the repository ever stops being public, this decision comes back with it.
 
+### What M5 also absorbed, which was not an operator feature at all
+
+Five server and plugin refactors landed inside this milestone without a line above asking for them. They
+came from an architecture review rather than from the operator's list, and they are recorded here because
+a milestone that does not say what it contained is a milestone nobody can read back. Two of them fixed
+live defects, which is the reason the list is not simply tidying.
+
+- [x] **One module deletes nodes deepest-first.** `parent_id` is `ON DELETE RESTRICT`, and that fact was
+      restated in four modules that never import each other — the retention sweep, the purge, account
+      deletion and a reset, each with its own grouping and its own paragraph explaining the same
+      constraint. `nodes/remove.ts` owns the ordering as its invariant rather than as a rule four callers
+      have to remember; each caller keeps only the predicate that decides what is doomed.
+- [x] **The share fan-out has a seam.** Four write families each restated by hand what a write must be
+      for it to travel, and the four disagreed in shape where they agreed in intent. `fanOut(c, event)` is
+      the whole interface now: the write path describes what happened to one node, and the share domain
+      decides whether that fans out and to whom. `nodes` stops knowing about shares. The atomicity
+      contract also gained the tests it never had — only `create` had one.
+- [x] **Membership state has an owner** — and this one was a defect, not a duplication. A membership's
+      position in `invited → joined → finalizing → left` was spelled out in ten SQL predicates across five
+      modules, and two had diverged for real: `catchup.ts`'s `sourceOf` omitted the frozen-account check
+      that fan-out carries. A frozen member's replica is behind **by construction**, because propagation
+      skipped it (SH-20) — so a catch-up could read from one and inherit the gap instead of closing it.
+- [x] **Join and catch-up share the walk they always were.** Both order the source parents-first, find or
+      create each counterpart, and bring the history behind it with the people who wrote it.
+      `materialise.ts` owns that, and names the difference as a mode rather than a flag one caller passes
+      to make the other behave differently: `renumber` for a join, whose head is the highest revision by
+      construction — the invariant `retention.ts` reads — and `keep` for a catch-up, which absorbs a
+      collision and is therefore idempotent.
+- [x] **Pairing's `cancel()` has an address**, and this was the second live defect. The settings tab
+      rebuilt a flow per `display()` and discarded it on the same line, so the wait could never be stopped
+      and the re-entry guard went with the discarded instance: navigating away and back started a
+      **second** live pairing while the first still polled. The flow is now held for the plugin's
+      lifetime, and the code survives a rebuilt tab.
+
+**None of this belonged to M5 by right.** It is here because it happened here, and the alternative —
+leaving five refactors and two defect fixes unmentioned because no checklist line predicted them — makes
+the record worse than the sprawl does.
+
 ## M7 — the recovery code
 
 The last row of the loss table in [06](06-key-model.md): every other way of losing access already has an
