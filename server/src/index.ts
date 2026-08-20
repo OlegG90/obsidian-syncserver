@@ -1,6 +1,6 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns, verifyLatestBackup } from './backup.js';
-import { assertPgDumpMatches, backupLegs, pgDumpVersion } from './backup-legs.js';
+import { assertPgDumpMatches, backupLegs, pgDumpVersion, serverVersionLine } from './backup-legs.js';
 import { startBackupSchedule } from './backup-schedule.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
@@ -19,11 +19,10 @@ const app = await buildApp(db, cfg, events);
 const collectorStore = openStore(cfg.blobStorePath);
 const stopCollector = startCollector(db, collectorStore, cfg);
 
-// The PostgreSQL major a dump must match (docs/10). Read once at boot, and used by both the
-// things that need it: the legs the schedule builds, and the advisory check below.
-const serverVersionLine = cfg.backup
-  ? (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? ''
-  : '';
+// The PostgreSQL major a dump must match (docs/10), used by both the things here that need it:
+// the legs the schedule builds, and the advisory check below. Through the reader that owns the
+// fact — `buildApp` needs the same string, and this used to ask for it a second time (#89).
+const versionLine = cfg.backup ? await serverVersionLine(db) : '';
 
 // The periodic restore rehearsal (docs/10): reopen the latest backup and confirm it is
 // whole, on its own rare interval rather than the collector's. Lives here rather than in
@@ -61,7 +60,7 @@ const stopBackupSchedule = startBackupSchedule(db, cfg, (runDir) =>
     cfg.backup!.dumpCommand,
     cfg.backup!.blobSource,
     runDir,
-    serverVersionLine,
+    versionLine,
   ),
 );
 
@@ -88,7 +87,7 @@ if (interrupted > 0) {
 // stopping the thing that would go wrong.
 if (cfg.backup) {
   try {
-    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), serverVersionLine);
+    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), versionLine);
   } catch (e) {
     console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
   }

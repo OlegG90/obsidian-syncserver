@@ -7,7 +7,7 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { join } from 'node:path';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
@@ -46,18 +46,21 @@ const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 /**
  * The one sentence a missing configuration answers with, wherever it is asked.
  *
- * `backup_not_configured` and `restore_not_configured` are the same refusal at four call
- * sites, and the details drifted while the meaning did not. Both spellings live here so the
- * routes only have to know *whether* the thing is configured, not how to say it is not.
+ * The same refusal at four call sites, and the details drifted while the meaning did not. So
+ * the prose lives here — and so does the **code**, which is the half that was still leaking:
+ * the routes passed `'backup_not_configured'` as a string and this branched on it to choose a
+ * sentence, which is the caller knowing the spelling AND this knowing the caller. The docblock
+ * already claimed the routes "only have to know whether the thing is configured, not how to
+ * say it is not"; two named refusals make that true (#89).
  */
-const unconfigured = (reply: { code(n: number): { send(b: object): unknown } }, error: string): unknown =>
+const noBackup = (reply: FastifyReply): unknown =>
   reply.code(503).send({
-    error,
-    detail:
-      error === 'backup_not_configured'
-        ? 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups'
-        : 'no restore state file configured',
+    error: 'backup_not_configured',
+    detail: 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups',
   });
+
+const noRestoreFile = (reply: FastifyReply): unknown =>
+  reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file configured' });
 
 export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps = {}): void => {
   const admin = { preHandler: requireAdmin(db) };
@@ -166,7 +169,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // because they only look — a poll that moved the state would make watching a backup
   // indistinguishable from driving one.
   app.post('/admin/backups', admin, async (req, reply) => {
-    if (!backup.makeLegs || !backup.destination) return unconfigured(reply, 'backup_not_configured');
+    if (!backup.makeLegs || !backup.destination) return noBackup(reply);
     const runDir = backupRunDir(new Date().toISOString().replace(/[:.]/g, '-'));
     // The destination recorded on the row is THIS run's directory, so verify knows where
     // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
@@ -196,7 +199,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));
 
   app.post<{ Params: { id: string } }>('/admin/backups/:id/verify', admin, async (req, reply) => {
-    if (!backup.destination) return unconfigured(reply, 'backup_not_configured');
+    if (!backup.destination) return noBackup(reply);
     const run = await db.one<{ destination: string }>(
       `SELECT destination FROM backup_runs WHERE id = $1`, [req.params.id]);
     if (!run?.destination) return reply.code(404).send({ error: 'not_found' });
@@ -212,12 +215,12 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // reachable even in the halt state, because a restore nobody can confirm is a restore
   // nobody can leave.
   app.get('/admin/restore', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) return unconfigured(reply, 'restore_not_configured');
+    if (!backup.restoreStateFile) return noRestoreFile(reply);
     return restoreStatus(db, backup.restoreStateFile);
   });
 
   app.post('/admin/restore/confirm', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) return unconfigured(reply, 'restore_not_configured');
+    if (!backup.restoreStateFile) return noRestoreFile(reply);
     // Refuse to confirm when nothing is pending: the act is audited and irreversible, and
     // there is nothing to resolve.
     const status = await restoreStatus(db, backup.restoreStateFile);

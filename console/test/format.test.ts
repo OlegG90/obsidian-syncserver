@@ -10,11 +10,17 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { describeAccount, describeAudit, freezeWarning, mib, type AccountLine } from '../src/format.js';
 
+// Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
+// (#89) and the server always sends them. Leaving them out built a shape no response has —
+// which compiled while they were optional here and stopped compiling when the type stopped
+// being a copy.
 const line = (over: Partial<AccountLine> = {}): AccountLine => ({
   role: 'user',
   state: 'active',
   quotaBytes: String(10 * 1024 * 1024),
   usedBytes: String(2 * 1024 * 1024),
+  frozenAt: null,
+  inviteExpiresAt: null,
   ...over,
 });
 

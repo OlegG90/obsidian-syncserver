@@ -16,7 +16,7 @@ import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes, CONSOLE_PATHS } from './console.js';
 import { backupInProgress } from './backup.js';
-import { backupLegs } from './backup-legs.js';
+import { backupLegs, serverVersionLine } from './backup-legs.js';
 import { checkRestoreState, restoreHalted } from './restore.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
@@ -83,11 +83,9 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerVaultRoutes(app, db);
   registerShareRoutes(app, db, cfg);
 
-  // The PostgreSQL major a backup's dump must match (docs/10). Read once, only when backups
-  // are configured — the `SELECT version()` is a single startup row, not a per-request cost.
-  const serverVersionLine = cfg.backup
-    ? (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? ''
-    : '';
+  // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
+  // that owns the fact, so this and `index.ts` cannot ask separately and disagree (#89).
+  const versionLine = cfg.backup ? await serverVersionLine(db) : '';
   registerAdminRoutes(app, db, {
     restoreStateFile: cfg.restoreStateFile,
     ...(cfg.backup
@@ -104,7 +102,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
               cfg.backup!.dumpCommand,
               cfg.backup!.blobSource,
               runDir,
-              serverVersionLine,
+              versionLine,
             ),
         }
       : {}),

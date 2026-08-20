@@ -14,6 +14,7 @@
 import { execFile } from 'node:child_process';
 import { cp, mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Db } from './db.js';
 import type { Legs } from './backup.js';
 
 /** `pg_dump`, awaited, and rejected when it exits non-zero. */
@@ -21,6 +22,29 @@ const run = (cmd: string, args: string[]): Promise<void> =>
   new Promise((resolve, reject) => {
     execFile(cmd, args, (err) => (err ? reject(err) : resolve()));
   });
+
+/**
+ * What `SELECT version()` says about the database this server is talking to, read once (#89).
+ *
+ * One fact, and it was two queries at two sites: `app.ts` baked it into the legs the admin
+ * routes build, and `index.ts` asked again at boot for `assertPgDumpMatches`. Neither was
+ * wrong and together they were a fact with no owner — the shape that lets two copies of an
+ * answer drift while both look correct.
+ *
+ * Held for the life of the process, because that is how long it is true for. A PostgreSQL that
+ * restarted into a different major underneath a running pool would invalidate it — and would
+ * invalidate rather more than this, so the honest place for that worry is a restart, not a
+ * cache line.
+ *
+ * Only ever asked when backups are configured. A deployment that takes none has no dump whose
+ * major must match, so the query is not merely cheap, it is not run.
+ */
+let versionLine: string | undefined;
+
+export const serverVersionLine = async (db: Db): Promise<string> => {
+  versionLine ??= (await db.one<{ version: string }>('SELECT version() AS version'))?.version ?? '';
+  return versionLine;
+};
 
 /**
  * The major version a `pg_dump` (or `pg_dump --version`, or `SELECT version()`) line reports.
