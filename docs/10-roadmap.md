@@ -265,10 +265,23 @@ somebody ask.
 Everything the person running the server does that is not synchronising a note. Two halves are
 specified elsewhere and are not restated here: the console is [11](11-management-console.md), and backup
 operations are [08](08-backup-restore.md) plus the `backup_runs` table that has held their constraints
-since M0 and is written by nothing.
+since M0 — and which, at the start of this milestone, nothing wrote a row to.
 
 The third half is specified nowhere, because it has never been a feature — it has been a procedure in
 [13](13-deployment.md).
+
+**Every box below is ticked, and the milestone row above is not.** That is deliberate, and it is the same
+rule M0, M3 and M4 were closed under: a milestone is closed by a walk, not by a suite. What is missing here
+is precisely the walk. No commit in M5 has met a real deployment — the machine this was written on has no
+Docker — so `pg_dump` writing to a real destination inside a real window, the schedule firing on its own,
+and the two new console screens rendering in a browser are all unproven. The parts that could be checked
+here were: the leg order, the precondition, what a verification may claim, which run the rehearsal reaches
+for, and the two pure decisions behind the quota and audit screens. The rest is what a walk is for, and M5
+stays open until one happens.
+
+M5 also carried a set of defects that only a review found, listed with the boxes below rather than
+separately: a version check inside the window it was meant to precede, a `verified_at` stamped on copies
+found incomplete, a rehearsal that stopped for ever after one failed run, and a backup nothing ever took.
 
 ### Where the console lives, and what it may not assume
 
@@ -295,23 +308,46 @@ The third half is specified nowhere, because it has never been a feature — it 
 - [x] **The password gets a slow hash on the server** (#108, #115), which nothing else here needs: every
       other verifier is at least 128 bits of CSPRNG and a person's password is not. `@noble/hashes` is
       already in the tree.
+- [x] **It does what [11](11-management-console.md) says it does.** That document opens by naming four
+      things — accounts invited, quotas changed, backups run, the audit log read — and for a while two of
+      them had endpoints and no screen. A review found it rather than a person using it, which is the
+      cheaper way round but not the one to rely on: a surface is not built until the thing it promises
+      can be pressed. Lowering a quota below what an account stores explains itself **before** it is
+      applied, because nothing is deleted and writes stop (SH-20), and that is a different act from the
+      one an operator usually expects.
 
 ### Backup, as the thing that runs it
 
-- [ ] **In-process**, because the advisory lock the window needs is already this process's — the collector
+- [x] **In-process**, because the advisory lock the window needs is already this process's — the collector
       takes it and skips a pass while it is held, which is half of the machinery. `pg_dump` therefore
       lives in the runtime image, and its **major version must match the server's** or the first real
-      backup fails on a production database: pinned explicitly, and checked at startup rather than
-      discovered.
+      backup fails on a production database: pinned explicitly (`postgresql18-client`, against the
+      `postgres:18-alpine` compose runs; `check-compose.mjs` compares the two and CI builds the image
+      and asks the binary), and checked **before the window opens** rather than discovered.
+      That last word changed in the doing. The check first landed on the first line of `dumpDatabase`,
+      which reads as "before the work" and is not — the lock was held, the row inserted and writes
+      already refused. `assertReady` is a precondition of the run rather than a step in it; the startup
+      check stayed, as the thing that tells an operator early, and enforcement is the one before the
+      window.
 - [x] **Database first, blobs second** (#114). Not interchangeable here: the window refuses new writes and
       does not reach the ones in flight, so blobs-first can copy a blob store that is missing a file the
       dump references — a restore that completes, looks whole, and cannot open a note.
 - [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
       refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
-- [~] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
+- [x] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
       periodic restore rehearsal, and whatever runs it nightly. Written once — `verifyBackup` in
-      `backup.ts`, which the console's Verify button calls. The rehearsal and the nightly self-check
-      are the two callers that do not exist yet.
+      `backup.ts` — and all three now call it: the Verify button, `verifyLatestBackup` on its own rare
+      interval, and every scheduled run checking the copy it just wrote (`backup-schedule.ts`).
+      Two things it was willing to claim had to stop first. `verified_at` was stamped unconditionally,
+      so a copy the check had just found incomplete was listed as verified; and the rehearsal fetched
+      one row and then filtered it for `ok`, so a single failed run at the head meant the last good
+      copy was never rehearsed again.
+- [x] **Something presses the button.** `runBackup` had one caller — the console — so a backup happened
+      when a person remembered, which for an unattended NAS means an installation nobody touches for a
+      month has no copies from that month. A schedule takes one every `BACKUP_EVERY_SECONDS`, on by
+      default once a destination is configured, and `0` turns it off for a deployment driving backups
+      from cron on the host. Nothing runs at boot: a server in a restart loop would otherwise take a
+      backup per restart, each opening a refusal window.
 
 ### The image is pulled, not built on the server
 
