@@ -61,12 +61,35 @@ them takes a few seconds and is meant to — it is what makes a guessable passph
 
 For an account that already exists **and still has a working device**.
 
-1. On the **new** device, press **Show pairing code**. A short code appears.
-2. On a device that is **already connected**, open Settings → SyncServer → **Add another device**, type
+1. On the **new** device, press **Show pairing code**. A short code appears, with **Copy** beside it.
+2. On a device that is **already connected**, open Settings → SyncServer → **Add another device**, enter
    the code, and press **Approve**.
 
 The connected device seals your account key to the new one. The server relays the sealed envelope and
-cannot open it. Case and dashes in the code do not matter. A pairing lasts ten minutes.
+cannot open it. Case, dashes and stray whitespace do not matter — type it or paste it. A pairing lasts
+ten minutes.
+
+Then the new device asks **which vault** it should sync, which is the next section.
+
+### Which vault — and a second one
+
+Once a device is admitted to the account, it asks what it is syncing. That is a question and not a
+default, because the two answers do opposite things:
+
+| you choose | what happens |
+|---|---|
+| **an existing vault**, by name | its contents and this Obsidian vault are **merged** — identical files join up, different ones become conflict files, nothing is deleted on either side |
+| **Make a new vault** | what is here is uploaded as a vault of its own. **Nothing is merged**, and no other vault is touched |
+
+One account can hold **several vaults**, and that is how you sync two different Obsidian vaults under
+one login: pair the second one, then choose *Make a new vault*. The name is suggested from the Obsidian
+vault you are in, which is usually what you want it called.
+
+The vaults never mix. Each has its own key, so the same note in two vaults is stored under two
+different addresses — one vault can learn nothing about another, not even that they hold the same file.
+
+**Your quota is per account, not per vault**: everything you store across all of them counts against
+one limit.
 
 ### Recover this account — when no device is left
 

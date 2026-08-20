@@ -444,16 +444,39 @@ export default class SyncServerPlugin extends Plugin {
     return this.pairingFlow;
   }
 
-  /** The code, plus a button that can actually stop the wait it starts. */
+  /** The code, a way to carry it, and a button that can actually stop the wait it starts. */
   private renderPairingCode(code: string): void {
     const target = this.pairingTarget;
     if (!target) return;
     target.empty();
-    target.createEl('p', { text: 'Type this on the device that is already connected:' });
-    // Set apart rather than left in a paragraph: it is read off one screen and typed
+    target.createEl('p', { text: 'Enter this on the device that is already connected:' });
+    // Set apart rather than left in a paragraph: it is read off one screen and entered
     // into another, and 26 characters are hard enough to follow without prose around
     // them.
     target.createEl('pre', { text: code });
+
+    /**
+     * Copy, because the second screen is not always a second device.
+     *
+     * This flow was written for a person walking between two machines, and typing was the
+     * only way a code could cross that gap. #116 made the ordinary case something else: two
+     * Obsidian vaults on ONE computer, where the approving window is a keystroke away and
+     * transcribing 26 characters by hand is friction the situation does not call for. The
+     * feature created the need, and a live walk was where it showed.
+     *
+     * The button stays either way — it costs a person on a phone nothing, and it says what
+     * happened rather than silently succeeding.
+     */
+    const copy = target.createEl('button', { text: 'Copy' });
+    copy.addEventListener('click', () => {
+      void navigator.clipboard
+        .writeText(code)
+        .then(() => new Notice('SyncServer: pairing code copied.'))
+        // A refused clipboard is not a failed pairing: the code is still on screen and still
+        // typable, so this says so rather than looking like the pairing broke.
+        .catch(() => new Notice('SyncServer: could not reach the clipboard — the code above still works.', 8000));
+    });
+
     // The whole reason the flow is held: a cancel only exists if something can reach it.
     target.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.pairingFlow?.cancel());
   }

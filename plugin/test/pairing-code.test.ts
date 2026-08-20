@@ -28,6 +28,13 @@ describe('the code a human carries between two devices', () => {
     assert.equal(normalisePairingCode(code.toLowerCase()), canonical, 'case');
     assert.equal(normalisePairingCode(code.replace(/-/g, '')), canonical, 'without the dashes');
     assert.equal(normalisePairingCode(` ${code} `), canonical, 'with stray spaces');
+    // Or pasted rather than typed. A copied code can arrive carrying the line it sat on, and
+    // a paste that read as "wrong code" would be the one failure a person cannot act on —
+    // they did not type it, so there is nothing to look at again.
+    assert.equal(normalisePairingCode(`${code}
+`), canonical, 'pasted, with the newline it came with');
+    assert.equal(normalisePairingCode(`
+${code}	`), canonical, 'and whatever else a clipboard adds');
   });
 
   it('never contains a character it would then have to guess about', () => {
