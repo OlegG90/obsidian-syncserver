@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { chooseScreen, type Screen, type ScreenDeps } from '../src/screen.js';
+import { chooseScreen, sessionEnded, type Screen, type ScreenDeps } from '../src/screen.js';
 
 const harness = (over: Partial<ScreenDeps> = {}) => {
   const calls: string[] = [];
@@ -54,5 +54,40 @@ describe('choosing the console screen', () => {
     const { deps, calls } = harness();
     assert.equal(await chooseScreen(deps), 'signIn');
     assert.deepEqual(calls, ['health']);
+  });
+});
+
+describe('a session that has ended rather than an act that was refused', () => {
+  // The live walk: Audit log, then Accounts, and the page went to "unauthenticated" above a
+  // "Loading…" that was never going to resolve. The console holds its token in memory and asks
+  // for no refresh, so a tab left open outlives it — which is a change of screen, not a
+  // sentence to read.
+  class ApiError extends Error {
+    constructor(readonly status: number, readonly code: string) {
+      super(code);
+    }
+  }
+
+  it('reads the token being no good as the session being over', () => {
+    assert.equal(sessionEnded(new ApiError(401, 'unauthenticated')), true);
+  });
+
+  it('does not read a mistyped password that way', () => {
+    // Same status, different word, and the server picks it deliberately: sending this person
+    // to the sign-in screen would be sending them where they already are, told their session
+    // had ended when they had never had one.
+    assert.equal(sessionEnded(new ApiError(401, 'invalid_credentials')), false);
+  });
+
+  it('does not read a refusal to act that way', () => {
+    // A demoted or disabled administrator is authenticated and is being told no. Signing in
+    // again changes nothing about it.
+    assert.equal(sessionEnded(new ApiError(403, 'forbidden')), false);
+  });
+
+  it('is unbothered by anything that is not a refusal at all', () => {
+    assert.equal(sessionEnded(new TypeError('failed to fetch')), false);
+    assert.equal(sessionEnded(undefined), false);
+    assert.equal(sessionEnded('unauthenticated'), false);
   });
 });
