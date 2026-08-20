@@ -293,7 +293,15 @@ export const verifyBackup = async (
     if ((await copy.size(key)) === undefined) missing.push(sha256);
   }
 
-  await db.query(`UPDATE backup_runs SET verified_at = now() WHERE id = $1`, [runId]);
+  // **Only when it is whole.** `verified_at` was stamped unconditionally, so a copy this very
+  // function had just found blobs missing from was listed in the console as verified — the
+  // check wearing the badge of the thing that would have caught it, which is worse than not
+  // checking at all. A run that was checked and failed is left unstamped, so "verified" and
+  // "not verified" keep meaning what an operator reads them to mean; the missing addresses go
+  // back to the caller, which is where the console gets its sentence from.
+  if (missing.length === 0) {
+    await db.query(`UPDATE backup_runs SET verified_at = now() WHERE id = $1`, [runId]);
+  }
   return { missing, checked: addresses.length };
 };
 
@@ -314,8 +322,23 @@ export const verifyLatestBackup = async (
   destination: string,
   openCopy: (runDestination: string) => CopyReader = (d) => openStore(join(d, 'blobs')),
 ): Promise<{ whole: boolean; checked: number; missing: number } | undefined> => {
-  const runs = await listBackups(db, 1);
-  const latest = runs.find((r) => r.status === 'ok' && r.destination);
+  // The latest run that SUCCEEDED, not the latest run. `listBackups(db, 1)` fetched exactly one
+  // row and then filtered it, so a single failed run at the head made the `find` match nothing
+  // and the rehearsal read that as "nothing to rehearse" — silently, and for ever after. The
+  // last good copy, the one that would actually be restored from, was never checked again, and
+  // the silence was indistinguishable from a healthy installation with nothing to do.
+  //
+  // Filtered in SQL rather than by fetching more rows and picking: "the newest usable one" is
+  // one question, and answering it in two steps is what produced the bug.
+  const [latest] = await db.query<BackupRun>(
+    `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
+            status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
+            verified_at AS "verifiedAt", error, destination
+       FROM backup_runs
+      WHERE status = 'ok' AND destination IS NOT NULL
+      ORDER BY started_at DESC
+      LIMIT 1`,
+  );
   if (!latest) return undefined;
   const copy = openCopy(latest.destination!);
   const out = await verifyBackup(db, copy, latest.id);
