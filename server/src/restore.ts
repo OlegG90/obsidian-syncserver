@@ -26,11 +26,6 @@ import type { Db } from './db.js';
 import { record, type Actor } from './admin/audit.js';
 import type { RestoreStatus } from '@syncserver/shared';
 
-/** Where a path to the state file is required, but a deployment may not have one configured. */
-export interface RestoreConfig {
-  stateFile: string;
-}
-
 /** The newest epoch this server ever ran with, from its state file. */
 export const readFileEpoch = async (stateFile: string): Promise<number | null> => {
   try {

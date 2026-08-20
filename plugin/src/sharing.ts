@@ -300,9 +300,6 @@ export const inviteTo = async (
 export const shareEnvelopeAad = (shareId: string, recipientUserId: string): Uint8Array =>
   concat(new Uint8Array([WRAP_VERSION]), utf8(shareId), utf8(recipientUserId));
 
-/** Who holds a copy of this folder, and who has not answered yet. */
-export type Members = ShareMember[];
-
 /** What accepting needs: where the copy lands, and what this device calls it. */
 export interface AcceptDeps {
   client: Pick<SyncClient, 'joinShare'>;

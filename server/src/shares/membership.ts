@@ -1,10 +1,20 @@
 /**
  * Membership as a state: who is in a share, and what each asks of it.
  *
- * A membership row travels `invited → joined → finalizing → left`, and the queries that
- * need "the members who mean X" used to spell the columns out by hand — ten predicates,
- * five modules, and the differences were load-bearing and invisible. Two of them diverged
- * for real:
+ * A membership row travels `invited → joined → finalizing → left`, and the columns are what
+ * say which it is in: **invited** is a row with no `joined_at`, an invitation nobody
+ * answered (docs/05); **joined** has one, with finalization not begun and `left_at` unset;
+ * **finalizing** means the departure pass has started and the replica is being converted
+ * back; **left** is `left_at` set, the pass finished, and the share over for them.
+ *
+ * Said here as prose because it cannot honestly be said as a type. It was one — a
+ * `MemberState` union that nothing referenced, because no row ever carries a state field to
+ * be checked against: the columns are the truth, which is the whole premise of this module,
+ * and a union spelling them again would be the second place the rule lived.
+ *
+ * The queries that need "the members who mean X" used to spell those columns out by hand —
+ * ten predicates, five modules, and the differences were load-bearing and invisible. Two of
+ * them diverged for real:
  *
  * - **who a catch-up may read from** forgot the frozen check that **who a write fans out to**
  *   carries, so a thawed member could be served the stale copy of a member still frozen —
@@ -21,12 +31,6 @@
  * whether a frozen account counts: the frozen check is a statement about the *account*, and
  * only the callers that mean "can receive a write" pay for the join.
  */
-export type MemberState =
-  | 'invited' // a row with no joined_at: an invitation nobody answered (docs/05)
-  | 'joined' // joined_at set, finalization not begun, left_at not set: a live participant
-  | 'finalizing' // the departure pass started; the replica is being converted back
-  | 'left'; // left_at set: the pass finished and this share is over for them
-
 /**
  * Not left. The broadest "still in the share": includes outstanding invitations and members
  * mid-finalization, because both still hold a row the rest of the system has to respect.
