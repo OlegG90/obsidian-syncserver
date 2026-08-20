@@ -294,13 +294,20 @@ of the API answers.
 > the server, not a way to start using it. To connect the plugin instead, leave the invitation
 > unclaimed and let it redeem.
 
-## Publishing the image
+## Releasing
 
-The server image is built and pushed from CI, on a `v*` tag — one image per released version,
-matching the single version across six manifests (#111). Each run also tags by commit, so a
-running container can be traced to a build:
+One tag releases both halves, and the tag **is** the version — `0.5.0-b`, with no `v` on the
+front. That is BRAT's rule rather than a preference; see the plugin below. The publish workflow
+refuses a tag that disagrees with `package.json`, because a release named after code it does
+not contain is the same quiet failure #111 was opened about, one layer out.
 
-- `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.5.0-a`;
+### The image
+
+Built and pushed from CI — one image per released version, matching the single version across
+six manifests (#111). Each run also tags by commit, so a running container can be traced to a
+build:
+
+- `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.5.0-b`;
 - `ghcr.io/<owner>/syncserver:sha-<short-commit>`.
 
 The registry is GitHub's, and the image is **public** — a server pulls it with no credential,
@@ -311,6 +318,33 @@ server, a credential added to a machine in exchange for hiding source that is al
 `package.json` — never `latest`. A server updated a few times a year must be able to say what
 it is running, and to go back; `latest` names a moving target that a specific installation
 cannot be rolled back to.
+
+### The plugin, which is installed with BRAT
+
+**There is no plugin in the image, and there never will be.** The server holds no key and the
+plugin holds every one of them; they are installed by different people onto different machines,
+and a bundle riding along inside a server image would suggest otherwise.
+
+Obsidian's own plugin list is not the route yet — that is a submission with its own review — so
+the route is [BRAT](https://github.com/TfTHacker/obsidian42-brat), which installs a plugin from
+a repository's GitHub releases. Install BRAT from Obsidian's community plugins, then *Add beta
+plugin* and give it this repository. It offers updates from then on.
+
+BRAT's contract is narrow, and the release job is shaped by it rather than the other way round:
+
+- it reads `manifest.json` out of the **release assets**, not out of the repository, so the
+  assets are the deliverable — `main.js` and `manifest.json`, built by `plugin/esbuild.mjs
+  --out`;
+- Obsidian requires the release **tag**, the release **name** and the **version inside that
+  manifest** to be one string, which is why the tag carries no `v`. The job checks the bundled
+  manifest against the tag before it creates the release, so the three cannot drift apart;
+- it skips anything GitHub marks as a **prerelease** unless the person installing has turned
+  that on, so these are ordinary releases whatever the version string says about how finished
+  they are.
+
+The plugin release is created **after** the image, deliberately: a release is an announcement,
+and announcing a version whose server could not be built would send somebody to install half of
+one.
 
 To run the source instead of the release — development, or a change not yet tagged — compose
 merges the local-build override over the deployment file:

@@ -9,7 +9,7 @@
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
-| **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☐ |
+| **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
 | **M6** | WebDAV gateway | ☐ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
 
@@ -270,14 +270,37 @@ since M0 — and which, at the start of this milestone, nothing wrote a row to.
 The third half is specified nowhere, because it has never been a feature — it has been a procedure in
 [13](13-deployment.md).
 
-**Every box below is ticked, and the milestone row above is not.** That is deliberate, and it is the same
-rule M0, M3 and M4 were closed under: a milestone is closed by a walk, not by a suite. What is missing here
-is precisely the walk. No commit in M5 has met a real deployment — the machine this was written on has no
-Docker — so `pg_dump` writing to a real destination inside a real window, the schedule firing on its own,
-and the two new console screens rendering in a browser are all unproven. The parts that could be checked
-here were: the leg order, the precondition, what a verification may claim, which run the rehearsal reaches
-for, and the two pure decisions behind the quota and audit screens. The rest is what a walk is for, and M5
-stays open until one happens.
+**Walked, and it holds.** Every box below was ticked while the milestone row stayed open, under the same
+rule M0, M3 and M4 were closed by: a milestone is closed by a walk, not by a suite. What was missing was
+precisely the walk — no commit in M5 had met a real deployment, because the machine this was written on has
+no Docker. It has met one now. A published image was pulled onto a home server, an administrator was
+created, a vault synchronised, a quota was lowered under a live account, and `pg_dump` ran inside a real
+refusal window: 657 milliseconds, a custom-format archive holding all seventeen tables, four blobs in the
+copy against four in the store, and `verified_at` stamped before the row was settled — the self-check
+working for the first time outside a fixture.
+
+The walk found **nine defects, in five pull requests, that a green suite had no opinion about** — the ratio
+M3 and M4 both produced, and the reason this row waited for a person. Four of them meant the deployment did
+not work at all, and every one was a mount or a path: a deploy script that silently invented the version it
+pinned, because `cat VERSION` ran in the wrong directory and a `|| echo` beside it answered `0.4.0`; a
+default given to `BACKUP_DB_COMMAND` that turned every *unconfigured* server into a restart loop, since the
+backup trio was all-or-none and one of the three was now always set; a backup destination that could only
+name a path inside the container, so a copy was written to the writable layer and went with the next pull;
+and the restore epoch in the same place, which additionally could not be written at all under a `RUN_AS`
+that is not the image's own uid — `EACCES` before the server listens.
+
+The other five were surfaces telling somebody something they could not read. A quota outcome appended to
+the card that the following refresh replaced, so the sentence was rendered and destroyed by the same act. A
+frozen account announced once, as a twenty-second notice, after which every surface read "up to date" while
+the server refused every write — a state told as a moment. A console session that simply expired, leaving
+the word `unauthenticated` on the page and a "Loading…" underneath it that was never going to resolve; and
+that placeholder itself, a promise no failure path kept. And the last one the walk's own final step
+produced: a backup taken by hand opened a refusal window and closed it leaving **nothing in the log** —
+every sentence about an outcome belonged to the schedule wrapper, and the button a person presses wrapped
+none of them.
+
+Three of the nine were regressions introduced by earlier pull requests in the same sitting, which is its
+own argument for walking: the suite that reviewed them was written by whoever wrote them.
 
 M5 also carried a set of defects that only a review found, listed with the boxes below rather than
 separately: a version check inside the window it was meant to precede, a `verified_at` stamped on copies
