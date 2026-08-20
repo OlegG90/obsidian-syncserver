@@ -45,7 +45,10 @@ export interface TrashRow {
  * `readName` is lenient on purpose: a missing key must not turn a discardable row into an
  * invisible one. The result is never written back, so the stand-in is safe to show.
  */
-export const trashRows = (entries: readonly TrashEntryRow[], scopes: VaultScopes): TrashRow[] =>
+export const trashRows = (
+  entries: readonly TrashEntryRow[],
+  scopes: Pick<VaultScopes, 'readName'>,
+): TrashRow[] =>
   entries.map((n) => ({
     nodeId: n.node_id,
     name: scopes.readName(n.name_key_id, n.name_enc),
