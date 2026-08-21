@@ -207,6 +207,56 @@ describe('first run', () => {
     assert.equal(logged!.n, '1', 'exactly one — the refused second attempt records nothing');
   });
 
+  it('lets the first run NAME the administrator, and defaults it when nobody does (#123)', async () => {
+    // The seeded login was `admin` on every installation ever deployed — written in the
+    // schema, repeated in the docs, and rate-limited against by name. Half a credential,
+    // given away. It stays the default because most operators will take it; what changed is
+    // that it can be something else.
+    // Putting the seeded row back to `provisioned` needs a stand-in first: the schema refuses
+    // to leave the server with no active administrator, and it is right to — that guardrail is
+    // the reason `deleteAccount` cannot strand an installation either. So a second admin holds
+    // the post while the first one is re-run.
+    const stand = await db.one<{ id: string }>(
+      `INSERT INTO users (login, role, state, quota_bytes, password_hash)
+       VALUES ('standin', 'admin', 'active', 0, '$argon2id$test') RETURNING id`,
+    );
+    await db.query(
+      `UPDATE users SET state = 'provisioned', password_hash = NULL, login = 'admin'
+        WHERE id = '00000000-0000-0000-0000-000000000001'`,
+    );
+
+    const named = await app.inject({
+      method: 'POST',
+      url: '/auth/bootstrap',
+      payload: { login: 'oleh.admin', password: 'a console password' },
+    });
+    assert.equal(named.statusCode, 201, named.body);
+    assert.equal(named.json().login, 'oleh.admin', 'the name it was given, not the seeded one');
+
+    const row = await db.one<{ login: string; state: string }>(
+      `SELECT login, state::text AS state FROM users WHERE id = '00000000-0000-0000-0000-000000000001'`,
+    );
+    assert.equal(row!.login, 'oleh.admin');
+    assert.equal(row!.state, 'active', 'and it is still what brings the account to life');
+
+    // Put the file back as the next test expects it, stand-in included.
+    await db.query(`UPDATE users SET login = 'admin' WHERE id = '00000000-0000-0000-0000-000000000001'`);
+    // Through `deleting`, because the schema refuses to remove an account that never entered
+    // it — the same rule that makes deletion a procedure rather than a DELETE (#55).
+    await db.query(`UPDATE users SET state = 'deleting' WHERE id = $1`, [stand!.id]);
+    await db.query(`DELETE FROM users WHERE id = $1`, [stand!.id]);
+  });
+
+  it('refuses a login shaped like something else, before it reaches the database', async () => {
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/auth/bootstrap',
+      payload: { login: 'has a space', password: 'a console password' },
+    });
+    assert.equal(bad.statusCode, 400);
+    assert.equal(bad.json().error, 'login_invalid');
+  });
+
   it('signs the administrator in to the console on ONE device row, however often', async () => {
     // A device row exists so a session can be revoked one at a time (#90) — it stands for
     // something somebody installed. A browser is not that: it signs in, closes, signs in

@@ -33,23 +33,96 @@ export const mib = (bytes: string | null): string =>
   bytes === null ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
 /**
- * One line describing what an account is and how it is doing.
+ * Bytes at whatever scale makes them readable.
  *
- * **Usage is omitted for a console account and for an invitation**, and not because it would
- * look untidy: a console account owns no vault and holds a zero quota (#115), so "0.0 MiB of
- * 0.0 MiB" would be a true statement that reads as a broken one, and an invitation has not
- * become an account yet.
+ * Separate from `mib`, which stays: the quota FIELD is in mebibytes because that is the unit
+ * an operator types, and a field that showed "9.3 GiB" and expected a number back would be
+ * asking a question in one unit and reading the answer in another. Display picks the unit;
+ * input does not get to.
  */
-export const describeAccount = (a: AccountLine): string => {
-  const what =
-    a.state === 'provisioned'
-      ? `invitation${a.inviteExpiresAt ? `, expires ${new Date(a.inviteExpiresAt).toLocaleDateString()}` : ''}`
-      : `${a.role === 'admin' ? 'console' : 'vault'} account · ${a.state}`;
+export const human = (bytes: string | null): string => {
+  if (bytes === null) return '—';
+  const n = Number(bytes);
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
+};
 
-  const storing = a.role !== 'admin' && a.state !== 'provisioned';
-  const usage = storing ? ` · ${mib(a.usedBytes)} of ${mib(a.quotaBytes)}` : '';
+/**
+ * How full this account is, as a fraction for the bar — **capped at one**.
+ *
+ * Over the limit is drawn as full-and-red, not as a bar running past the edge of its card: a
+ * bar overflowing its track reads as a rendering fault, and the thing being communicated is
+ * an account, not a broken screen. The number beside it is uncapped and says the truth.
+ *
+ * A zero quota answers zero rather than dividing by it — that is the console account, which
+ * has no limit to be a fraction of.
+ */
+export const usageFraction = (a: AccountLine): number => {
+  const quota = Number(a.quotaBytes);
+  if (!(quota > 0)) return 0;
+  return Math.min(1, Number(a.usedBytes) / quota);
+};
 
-  return `${what}${usage}${a.frozenAt ? ' · over its limit' : ''}`;
+/**
+ * The badge under a login: what to write in it, and which of three tones it takes.
+ *
+ * `frozen` outranks the state, because it is the one that changes what the account can DO —
+ * a disabled account and a frozen one are both "not working right now" for different reasons,
+ * and the reason is the useful half.
+ */
+export const accountBadge = (a: AccountLine): { text: string; tone: 'active' | 'frozen' | 'neutral' } => {
+  if (a.state === 'provisioned') return { text: 'invitation', tone: 'neutral' };
+  if (a.role === 'admin') return { text: 'console', tone: 'neutral' };
+  if (a.frozenAt) return { text: 'frozen', tone: 'frozen' };
+  return { text: a.state, tone: a.state === 'active' ? 'active' : 'neutral' };
+};
+
+/**
+ * What kind of thing this row is.
+ *
+ * Three, not two, and the third is the one that matters: **an invitation is not an account
+ * yet** (#115). It has a login and a quota and nothing else — no keys, no vault, nobody has
+ * claimed it — so calling it an account in the kind column would be the table asserting
+ * something the row does not support.
+ */
+export const accountKind = (a: AccountLine): string =>
+  a.state === 'provisioned' ? 'invitation' : a.role === 'admin' ? 'console account' : 'vault account';
+
+/**
+ * Where this row stands, in the words the state means rather than the enum's spelling.
+ *
+ * An invitation reports what an operator actually wants to know about one — whether it can
+ * still be redeemed — because `provisioned` describes the row and the date describes the
+ * decision.
+ */
+export const accountState = (a: AccountLine): string => {
+  if (a.state !== 'provisioned') return a.state;
+  return a.inviteExpiresAt ? `expires ${new Date(a.inviteExpiresAt).toLocaleDateString()}` : 'unclaimed';
+};
+
+/**
+ * What this account is storing, or a dash where the question does not apply.
+ *
+ * **Omitted for a console account and for an invitation**, and not because it would look
+ * untidy: a console account owns no vault and holds a zero quota (#115), so "0.0 MiB of
+ * 0.0 MiB" would be a true statement that reads as a broken one, and an invitation has not
+ * become an account yet. A dash says "not a question about this row"; a zero says "this row
+ * answered, and the answer is nothing".
+ *
+ * **Just the two numbers.** Being over the limit is said by the bar and by the marker beside
+ * it (#123), and this used to append it as well — so a frozen account read "over its limit"
+ * twice on one line, in two different weights, which makes a reader look for the difference
+ * between them. There is none. One fact, one place.
+ */
+export const accountUsage = (a: AccountLine): string => {
+  if (a.role === 'admin' || a.state === 'provisioned') return '—';
+  return `${mib(a.usedBytes)} of ${mib(a.quotaBytes)}`;
 };
 
 /**
@@ -77,18 +150,20 @@ export const freezeWarning = (newQuotaBytes: string, usedBytes: string): string 
 };
 
 /**
- * One line of the audit log as a person reads it.
+ * What was done, as a person reads it.
  *
  * The action is a dotted machine name (`quota.change`), which is right for a column that gets
  * filtered and wrong for one that gets read, so it is spelled out. An action this build does
  * not recognise is still shown under its own name — the log is append-only and older than any
  * particular console, so hiding an entry because the word is unfamiliar would be the one
  * failure a log must not have.
+ *
+ * Only the verb. Who did it and to whom are columns of their own now (#123): a sentence per
+ * row read well at seven rows and stopped reading at seventy, and the parts a person scans a
+ * log for — one actor, one target, one action — are exactly the parts a sentence buries in
+ * the middle of itself.
  */
-export const describeAudit = (entry: AuditLine): string => {
-  const target = entry.targetLogin ? ` — ${entry.targetLogin}` : '';
-  return `${ACTIONS[entry.action] ?? entry.action}${target}, by ${entry.actorLogin}`;
-};
+export const auditAction = (entry: AuditLine): string => ACTIONS[entry.action] ?? entry.action;
 
 /**
  * The audit fields this file reads, picked from the wire shape rather than restated.

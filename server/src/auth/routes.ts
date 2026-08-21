@@ -57,7 +57,7 @@ export const registerAuthRoutes = (
    * is simply no longer the first run, and saying so is what stops somebody hunting for a
    * typo in their request.
    */
-  app.post<{ Body: { password: string } }>('/auth/bootstrap', async (req, reply) => {
+  app.post<{ Body: { login?: string; password: string } }>('/auth/bootstrap', async (req, reply) => {
     const password = req.body?.password;
     if (typeof password !== 'string' || password.length < 12) {
       return reply.code(400).send({
@@ -66,7 +66,22 @@ export const registerAuthRoutes = (
       });
     }
 
-    const out = await setFirstPassword(db, password);
+    // Defaulted rather than required (#123): most operators will keep `admin`, and forcing a
+    // choice on the first screen of a fresh server is a decision nobody asked to make. What
+    // matters is that it CAN be chosen, so the most privileged account on every installation
+    // is not named the same thing.
+    const login = (req.body?.login ?? 'admin').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/.test(login)) {
+      return reply.code(400).send({
+        error: 'login_invalid',
+        detail: 'letters, digits, dot, dash or underscore; up to 63 characters, starting with a letter or digit',
+      });
+    }
+
+    const out = await setFirstPassword(db, login, password);
+    if (out === 'login_taken') {
+      return reply.code(409).send({ error: 'login_taken', detail: `${login} is already in use on this server` });
+    }
     if (!out) return reply.code(409).send({ error: 'already_bootstrapped' });
     return reply.code(201).send({ login: out.login });
   });

@@ -6,24 +6,118 @@
     <title>SyncServer</title>
     <style>
       /* No stylesheet pipeline, for the same reason there is no framework: the console is
-         thin, and a build step earns its place by removing work rather than by existing. */
-      :root { color-scheme: light dark; --edge: #8884; }
-      body {
-        margin: 0; padding: 2rem 1.25rem; font: 15px/1.5 system-ui, sans-serif;
-        max-width: 46rem; margin-inline: auto;
+         thin, and a build step earns its place by removing work rather than by existing.
+
+         The palette and the shape come from the mockups (#123). Two rules carry most of it:
+         a login is monospace because it is an identifier somebody types and compares, and
+         every quantity that can be over a limit is drawn as a bar as well as a number —
+         "9.1 of 7.5" needs arithmetic, a bar past its end does not. */
+      :root {
+        color-scheme: light dark;
+        --edge: #8884;
+        --accent: #0f9d76;
+        --accent-soft: #0f9d7622;
+        --danger: #c0392b;
+        --danger-soft: #c0392b22;
+        --muted: #8888;
+        --panel: #8880c;
       }
-      h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
-      .muted { opacity: 0.7; font-size: 0.9em; }
-      .card { border: 1px solid var(--edge); border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 "IBM Plex Sans", system-ui, sans-serif;
+        display: flex; min-height: 100vh;
+      }
+      code, .mono, input { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+      /* ---- the shell: a sidebar that says where you are and who you are ---- */
+      nav.side {
+        width: 13rem; flex: none; padding: 1.5rem 1rem;
+        border-right: 1px solid var(--edge); display: flex; flex-direction: column; gap: 0.25rem;
+        /* Pinned to the viewport, not to the page: who you are signed in as sits at the bottom
+           of this column, and on a long list of accounts a column as tall as the document puts
+           the way out somewhere nobody scrolls to. */
+        position: sticky; top: 0; height: 100vh;
+      }
+      nav.side .brand { font-weight: 600; margin: 0 0.5rem 1.5rem; }
+      nav.side button {
+        display: block; width: 100%; text-align: left; margin: 0;
+        padding: 0.45rem 0.75rem; border: none; border-radius: 8px;
+        background: none; color: inherit; font: inherit; cursor: pointer;
+      }
+      nav.side button:hover { background: #8881; }
+      nav.side button[aria-current='page'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+      /* Pinned to the bottom, because who you are signed in as is context, not a destination. */
+      nav.side .who { margin-top: auto; padding: 1rem 0.75rem 0; border-top: 1px solid var(--edge); font-size: 0.9em; }
+
+      main { flex: 1; padding: 2rem 2rem 4rem; max-width: 56rem; }
+      h1 { font-size: 1.4rem; margin: 0 0 1.25rem; }
+      h2 { font-size: 1rem; margin: 2rem 0 0.5rem; }
+      .muted { opacity: 0.65; font-size: 0.9em; }
+      .bad { color: var(--danger); }
+      .ok { color: var(--accent); }
+
+      /* ---- the totals only the server can count ---- */
+      .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+      .tile { border: 1px solid var(--edge); border-radius: 10px; padding: 0.75rem 1rem; }
+      .tile .label { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.6; }
+      .tile .value { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 1.35rem; }
+
+      /* ---- one account, one card ---- */
+      .card { border: 1px solid var(--edge); border-radius: 10px; padding: 0.9rem 1rem; margin: 0.6rem 0; }
+      .card .top { display: flex; align-items: center; gap: 0.6rem; }
+      .card .login { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 600; }
+      .card .acts { margin-left: auto; display: flex; gap: 0.5rem; }
+
+      .badge { font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px; background: #8882; }
+      .badge.is-active { background: var(--accent-soft); color: var(--accent); }
+      .badge.is-frozen { background: var(--danger-soft); color: var(--danger); }
+
+      /* The bar is the point of the redesign: a limit you can be past is easier to see than
+         to compute. It is capped at 100% so "over" reads as full-and-red rather than as a bar
+         running off the card, which would say "broken" instead of "too much". */
+      .bar { height: 4px; border-radius: 2px; background: #8883; margin: 0.7rem 0 0.35rem; overflow: hidden; }
+      /* A minimum sliver, so that "stores something" never draws as "stores nothing": 2.3 MiB
+         against a 2 GiB limit is 0.1% and rounds to an empty track, which is the one thing the
+         bar must not say about an account that is using space. */
+      .bar > span { display: block; height: 100%; min-width: 2px; background: var(--accent); }
+      .bar > span[style*='width: 0.0%'] { min-width: 0; }
+      .bar.over > span { background: var(--danger); }
+      .usage { display: flex; font-size: 0.9em; }
+      .usage .right { margin-left: auto; }
+
+      /* ---- the audit log: one line each, the time in a column of its own ---- */
+      .log { border: 1px solid var(--edge); border-radius: 10px; }
+      .log .entry { display: flex; gap: 1rem; align-items: baseline; padding: 0.6rem 1rem; border-bottom: 1px solid var(--edge); }
+      .log .entry:last-child { border-bottom: none; }
+      .log .when { margin-left: auto; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85em; opacity: 0.6; white-space: nowrap; }
+
+      /* ---- forms and buttons ---- */
       label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.9em; }
       input { width: 100%; padding: 0.5rem; border: 1px solid var(--edge); border-radius: 6px;
-              background: transparent; color: inherit; font: inherit; }
-      button { margin-top: 1rem; padding: 0.5rem 1rem; border: 1px solid var(--edge);
-               border-radius: 6px; background: transparent; color: inherit; font: inherit;
-               cursor: pointer; }
+              background: transparent; color: inherit; font-size: inherit; }
+      button { margin-top: 1rem; padding: 0.45rem 0.9rem; border: 1px solid var(--edge);
+               border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+      button:hover:not(:disabled) { border-color: var(--accent); }
       button:disabled { opacity: 0.5; cursor: default; }
-      .bad { color: #c0392b; }
-      .ok { color: #1e8449; }
+      button.cta { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+      /* An action inside a row is not a form's submit button and must not look like one. */
+      button.row { margin: 0; font-size: 0.9em; }
+      button.link { margin: 0; padding: 0; border: none; background: none; color: var(--accent);
+                    font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+
+      /* What a card opens under itself: set apart, so it belongs to the card rather than
+         being the next one. */
+      .drawer { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px dashed var(--edge); }
+
+      .centred { margin: 4rem auto; max-width: 26rem; }
+      @media (max-width: 40rem) {
+        body { flex-direction: column; }
+        nav.side { width: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--edge); }
+        nav.side .brand, nav.side .who { display: none; }
+        main { padding: 1.25rem; }
+      }
     </style>
   </head>
   <body>
