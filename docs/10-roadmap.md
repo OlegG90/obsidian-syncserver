@@ -10,8 +10,12 @@
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
-| **M6** | WebDAV gateway | ☐ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
+
+**There is no M6.** It was a WebDAV gateway, and it is dropped rather than deferred: the vault is reached
+through the plugin, and a second protocol into the same data is a second place for the key model to be got
+wrong — for a way in nobody here needs. The number is left as a gap on purpose. Renumbering M7 would silently
+rewrite every reference to it in the issues and in this file, to save one integer.
 
 E2EE is not a milestone: it is day one, in every milestone above (AC-08).
 
@@ -439,10 +443,9 @@ the record worse than the sprawl does.
 ## M7 — the recovery code
 
 The last row of the loss table in [06](06-key-model.md): every other way of losing access already has an
-answer, and a **forgotten passphrase** has none. It is placed after M6 rather than earlier because the loss
-it answers is the only one the user can prevent on their own, and because the mechanism is small enough that
-its position in the queue costs nothing to change — the endpoint was built to take a second proof from the
-day it was written.
+answer, and a **forgotten passphrase** has none. It was placed last because the loss it answers is the only
+one the user can prevent on their own — and with the WebDAV gateway dropped, it is what remains. The
+mechanism is small: the endpoint was built to take a second proof from the day it was written.
 
 Mechanically it is a second wrapping of the **same seed**: nothing is re-encrypted, and `recovery_key` sits
 beside `wrapped_seed` exactly as `enc_privkey` sits beside both. The columns and their paired `CHECK` have
