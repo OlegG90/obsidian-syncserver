@@ -10,11 +10,11 @@
  * **No key material passes through here, ever.** A console account has none (#115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { AccountRow, AuditRow, BackupRun, HealthResponse, RestoreStatus } from '@syncserver/shared';
+import type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, AuditRow, BackupRun, HealthResponse, RestoreStatus };
+export type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals };
 
 export class ApiError extends Error {
   constructor(
@@ -47,13 +47,19 @@ export class ApiError extends Error {
  */
 let access: string | undefined;
 let refresh: string | undefined;
+/** Who this session belongs to, for the one place that says so out loud (#123). */
+let who: string | undefined;
 
 export const signedIn = (): boolean => access !== undefined;
+
+/** The login this console signed in as. Empty before it has. */
+export const currentLogin = (): string => who ?? '';
 
 /** Forget the session — both halves. The server keeps the device row; ending it is a later screen. */
 export const forgetSession = (): void => {
   access = undefined;
   refresh = undefined;
+  who = undefined;
 };
 
 /**
@@ -124,9 +130,15 @@ const call = async <T>(method: string, path: string, body?: unknown, renewed = f
 /** Open before authentication and before an administrator exists — which is when it is needed. */
 export const health = (): Promise<HealthResponse> => call('GET', '/health');
 
-/** The first run: creates the password rather than replacing one (#107). */
-export const bootstrap = (password: string): Promise<{ login: string }> =>
-  call('POST', '/auth/bootstrap', { password });
+/**
+ * The first run: creates the administrator rather than replacing one (#107, #123).
+ *
+ * The login travels with the password because naming the account is part of creating it — and
+ * because a server whose most privileged login is the same word on every installation has given
+ * away half a credential before anybody attacked it.
+ */
+export const bootstrap = (login: string, password: string): Promise<{ login: string }> =>
+  call('POST', '/auth/bootstrap', { login, password });
 
 export const signIn = async (login: string, password: string): Promise<void> => {
   // Both halves. The server has answered with both since M4; keeping only the access token is
@@ -134,6 +146,7 @@ export const signIn = async (login: string, password: string): Promise<void> => 
   const out = await call<{ access: string; refresh: string }>('POST', '/auth/console', { login, password });
   access = out.access;
   refresh = out.refresh;
+  who = login;
 };
 
 export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '/admin/accounts');
@@ -150,6 +163,46 @@ export const invite = (login: string, quotaBytes: string): Promise<{ user_id: st
  */
 export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_bytes: string; freezes: boolean }> =>
   call('PUT', `/admin/accounts/${userId}/quota`, { quota_bytes: quotaBytes });
+
+/**
+ * Switch an account off, or back on.
+ *
+ * Reversible, and that is the whole reason it exists beside deletion: an account somebody has
+ * stopped using and an account that must be erased are different decisions, and the first one
+ * should not be spelled with the second one (#55).
+ */
+export const setEnabled = (userId: string, enabled: boolean): Promise<void> =>
+  call('POST', `/admin/accounts/${userId}/enabled`, { enabled });
+
+/** Mint a fresh token for an invitation nobody redeemed — the answer to a token that got lost. */
+export const reissue = (userId: string): Promise<{ token: string; expires_at: string }> =>
+  call('POST', `/admin/invitations/${userId}`, {});
+
+/** Withdraw an invitation. Only ever an unclaimed one; the server refuses anything else. */
+export const revokeInvitation = (userId: string): Promise<void> =>
+  call('DELETE', `/admin/invitations/${userId}`);
+
+/**
+ * Push the deletion procedure as far as it can go right now, and say what is outstanding.
+ *
+ * Idempotent (#55): the operator's only handle on a wait is to ask again, so a second "begin"
+ * that refused because the first had succeeded would make the honest thing to do look like a
+ * mistake.
+ */
+export const beginDeletion = (userId: string): Promise<DeletionProgress> =>
+  call('POST', `/admin/accounts/${userId}/deletion`, {});
+
+/**
+ * Look at a deletion without moving it.
+ *
+ * A separate verb from the one that advances it, deliberately — a poll that pushed the state
+ * would make watching a deletion indistinguishable from driving one.
+ */
+export const deletionProgress = (userId: string): Promise<DeletionProgress> =>
+  call('GET', `/admin/accounts/${userId}/deletion`);
+
+/** What the server holds, as only the server can count it: stored once, charged per account. */
+export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage');
 
 /** The administrative log, newest first (#87, #94). Append-only on the server; read-only here. */
 export const audit = (limit = 100): Promise<{ entries: AuditRow[] }> =>

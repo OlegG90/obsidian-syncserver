@@ -12,8 +12,13 @@
  * third. A reload is therefore never wrong, which is the cheapest correctness a web page can
  * have.
  */
-import { accounts, audit, backups, bootstrap, confirmRestore, forgetSession, health, invite, restoreStatus, runBackup, setQuota, signedIn, signIn, verify, type AccountRow, type AuditRow, type BackupRun } from './api.js';
-import { accountKind, accountState, accountUsage, auditAction, freezeWarning, mib } from './format.js';
+import {
+  accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
+  forgetSession, health, invite, reissue, restoreStatus, revokeInvitation, runBackup, setEnabled, setQuota,
+  signedIn, signIn, storage, verify,
+  type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
+} from './api.js';
+import { accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, mib, usageFraction } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -96,35 +101,111 @@ const submits = (button: HTMLButtonElement, card: HTMLElement, run: () => Promis
 };
 
 /**
+ * The frame every signed-in screen sits in: where you are, and who you are (#123).
+ *
+ * A sidebar rather than a row of buttons above the heading, for the reason the mockups give
+ * and a stack of cards made obvious: the navigation was competing with the content for the
+ * top of the page, so the first thing a person read was three destinations rather than the
+ * thing they had opened.
+ *
+ * **`#app` is the `<main>`**; the nav is its sibling, created once and reused. Redrawing the
+ * navigation on every screen change would make the current-page marker flicker on the one
+ * element whose job is to not move.
+ *
+ * The screens that are not part of the shell — the first run, signing in, a pending restore —
+ * take it away entirely. Each is the only thing the server will talk about at that moment, and
+ * a sidebar offering three destinations that all answer `restore_pending` is an offer the
+ * server will refuse.
+ */
+type Where = 'accounts' | 'backups' | 'audit';
+
+let side: HTMLElement | undefined;
+
+const shell = (current: Where, login: string, ...content: Node[]): void => {
+  side ??= el('nav', { className: 'side' });
+  app.before(side);
+  side.replaceChildren(el('div', { className: 'brand', textContent: 'SyncServer' }));
+
+  const destinations: [Where, string, () => void][] = [
+    ['accounts', 'Accounts', accountsScreen],
+    ['backups', 'Backups', backupsScreen],
+    ['audit', 'Audit log', auditScreen],
+  ];
+  for (const [key, label, go] of destinations) {
+    const b = el('button', { textContent: label });
+    if (key === current) b.setAttribute('aria-current', 'page');
+    b.onclick = go;
+    side.append(b);
+  }
+
+  // Who, and the way out. `forgetSession` has existed since M4 with nothing calling it (#123):
+  // a console that can be signed into and not out of leaves a session on a shared machine with
+  // no way to end it but closing the tab and hoping.
+  const who = el('div', { className: 'who' });
+  who.append(el('div', { className: 'muted', textContent: `Signed in as ${login}` }));
+  const out = el('button', { className: 'link', textContent: 'Sign out' });
+  out.onclick = (): void => {
+    forgetSession();
+    side?.remove();
+    signInScreen();
+  };
+  who.append(out);
+  side.append(who);
+
+  app.replaceChildren(...content);
+};
+
+/** A screen with nothing else on it: the first run, signing in, a halt nobody can leave yet. */
+const alone = (...content: Node[]): void => {
+  side?.remove();
+  app.replaceChildren(el('div', { className: 'centred' }, ...content));
+};
+
+/**
  * The first run, and the only screen a fresh server has.
  *
- * It **creates** a password rather than changing one (#107): there is no default here to be
- * left in place by somebody who never got round to it, which is why the wording says so
+ * It **creates** the administrator rather than changing one (#107): there is no default here
+ * to be left in place by somebody who never got round to it, which is why the wording says so
  * instead of asking for "a new password".
+ *
+ * **And it names it** (#123). The schema seeds the row as `admin`, which meant the login of
+ * the most privileged account was the same word on every installation of this server — in the
+ * schema, in the docs, and in whatever an attacker would try first. Offered rather than
+ * demanded: the field arrives filled in with `admin`, because most operators will keep it and
+ * a forced choice on the first screen of a fresh server is a decision nobody asked to make.
  */
 const firstRun = (): void => {
   const form = el('div', { className: 'card' });
-  const password = field('Choose a password for the administrator', 'password');
-  const button = el('button', { textContent: 'Set it' });
+  const login = field('Name for the administrator');
+  login.input.value = 'admin';
+  const password = field('Choose a password for it', 'password');
+  const button = el('button', { className: 'cta', textContent: 'Create it' });
 
   form.append(
     el('h1', { textContent: 'First run' }),
     el('p', {
       className: 'muted',
       textContent:
-        'This server has no administrator yet. Setting this password is what creates one — ' +
-        'there is no default, and nothing else is served until it exists.',
+        'This server has no administrator yet. What you set here is what creates one — there ' +
+        'is no default password, and nothing else is served until it exists.',
+    }),
+    login.row,
+    el('p', {
+      className: 'muted',
+      textContent:
+        'The name is yours to choose. Keeping “admin” is fine; changing it means the login of ' +
+        'this server’s most privileged account is not the one everybody guesses first.',
     }),
     password.row,
     button,
   );
 
   submits(button, form, async () => {
-    await bootstrap(password.input.value);
+    await bootstrap(login.input.value.trim(), password.input.value);
     render();
   });
 
-  app.replaceChildren(form);
+  alone(form);
 };
 
 const signInScreen = (note?: string): void => {
@@ -133,6 +214,7 @@ const signInScreen = (note?: string): void => {
   const password = field('Password', 'password');
   const button = el('button', { textContent: 'Sign in' });
 
+  button.className = 'cta';
   form.append(el('h1', { textContent: 'SyncServer' }));
   if (note) form.append(el('p', { className: 'muted', textContent: note }));
   form.append(login.row, password.row, button);
@@ -142,69 +224,248 @@ const signInScreen = (note?: string): void => {
     render();
   });
 
-  app.replaceChildren(form);
+  alone(form);
 };
 
 /**
- * The accounts, as a table (#123).
+ * One account, as a card (#123).
  *
- * A card each was readable at three accounts and stopped being readable at thirty: every row
- * carried a quota field and a Save button whether or not anybody was changing that account,
- * so a screen for **looking** at who exists was mostly a stack of forms for changing them.
- * Scanning is the ordinary act here; editing is the rare one, and the layout had them the
- * other way round.
+ * A row of a table said everything in the same weight; a card gives the login the top line and
+ * the storage a **bar**, which is the point of the redesign. "9.1 GiB of 7.5 GiB" needs
+ * arithmetic to read as trouble; a full red bar does not.
  *
- * So the columns are what an operator scans for — who, what kind, how it stands, what it is
- * storing — and the act is a link that opens an editor under the row it belongs to. One at a
- * time, because two open editors are two half-finished decisions.
+ * The actions live on the card and open under it, so a decision about one account never
+ * appears next to a different one.
  */
-const accountsTable = (rows: readonly AccountRow[], done: () => Promise<void>, report: Report): HTMLElement => {
-  const table = el('table', { className: 'rows' });
-  const head = el('tr', {});
-  for (const h of ['Login', 'Kind', 'State', 'Storing', '']) head.append(el('th', { textContent: h }));
-  table.append(el('thead', {}, head));
+const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
+  const card = el('div', { className: 'card' });
+  const badge = accountBadge(a);
+  const top = el(
+    'div',
+    { className: 'top' },
+    el('span', { className: 'login', textContent: a.login }),
+    el('span', { className: `badge is-${badge.tone}`, textContent: badge.text }),
+  );
+  const acts = el('div', { className: 'acts' });
+  top.append(acts);
+  card.append(top);
 
-  const body = el('tbody', {});
-  for (const a of rows) {
-    const row = el('tr', {});
-    row.append(
-      el('td', {}, el('strong', { textContent: a.login })),
-      el('td', { className: 'muted', textContent: accountKind(a) }),
-      el('td', { className: 'muted', textContent: accountState(a) }),
-      el('td', { className: a.frozenAt ? 'bad' : 'muted', textContent: accountUsage(a) }),
+  // Where an action draws its form. One at a time per card, and empty means nothing is open.
+  const drawer = el('div', {});
+  const opens = (build: () => HTMLElement) => (): void => {
+    // A second press on the same action closes it: an operator who opened a form to look at it
+    // needs a way back that is not filling it in.
+    if (drawer.firstChild) return drawer.replaceChildren();
+    drawer.replaceChildren(el('div', { className: 'drawer' }, build()));
+  };
+
+  const storing = a.role !== 'admin' && a.state !== 'provisioned';
+  if (storing) {
+    const over = a.frozenAt !== null;
+    const bar = el('div', { className: over ? 'bar over' : 'bar' });
+    const fill = el('span', {});
+    fill.style.width = `${(usageFraction(a) * 100).toFixed(1)}%`;
+    bar.append(fill);
+    const line = el('div', { className: 'usage' }, el('span', { textContent: accountUsage(a) }));
+    if (over) line.append(el('span', { className: 'right bad', textContent: 'over its limit' }));
+    card.append(bar, line);
+  } else {
+    // Said rather than left blank, because "no bar" and "a bar at zero" mean different things
+    // and only one of them is true here (#115).
+    card.append(
+      el('div', {
+        className: 'muted',
+        textContent: a.state === 'provisioned' ? accountState(a) : 'holds no key, no vault',
+      }),
     );
-
-    const act = el('td', {});
-    row.append(act);
-    body.append(row);
-
-    // A console account holds no key and owns no vault (#115), so it has no quota to change —
-    // and an invitation is not an account yet. Neither gets the control, rather than getting
-    // one that refuses.
-    if (a.role === 'admin' || a.state === 'provisioned') continue;
-
-    // The editor lives in a row of its own, spanning the table, so opening it moves nothing
-    // sideways and the account it belongs to stays directly above it.
-    const drawer = el('tr', { className: 'drawer' });
-    const cell = el('td', {});
-    cell.colSpan = 5;
-    drawer.append(cell);
-    drawer.hidden = true;
-    body.append(drawer);
-
-    const open = el('button', { className: 'link', textContent: 'Quota…' });
-    open.onclick = (): void => {
-      // One at a time: another row's open editor is a decision somebody started and left, and
-      // two of them on screen invite finishing the wrong one.
-      body.querySelectorAll('tr.drawer').forEach((other) => ((other as HTMLElement).hidden = true));
-      cell.replaceChildren(quotaControl(a, done, report, () => (drawer.hidden = true)));
-      drawer.hidden = false;
-    };
-    act.append(open);
   }
 
-  table.append(body);
-  return table;
+  const act = (label: string, onClick: () => void, danger = false): void => {
+    const b = el('button', { className: danger ? 'row danger' : 'row', textContent: label });
+    b.onclick = onClick;
+    acts.append(b);
+  };
+
+  if (a.state === 'provisioned') {
+    // An invitation nobody claimed: the two things an operator actually does with one. The
+    // token is shown once and never stored, so reissuing is the only answer to a lost one.
+    act('Reissue', opens(() => reissueForm(a, done)));
+    act(
+      'Revoke',
+      opens(() =>
+        confirmForm(
+          `Withdraw the invitation for ${a.login}? The token stops working and the account is never created.`,
+          'Revoke',
+          async () => {
+            await revokeInvitation(a.id);
+            report(`The invitation for ${a.login} was withdrawn.`);
+            await done();
+          },
+        ),
+      ),
+      true,
+    );
+  } else if (a.role !== 'admin') {
+    act('Change quota', opens(() => quotaControl(a, done, report, () => drawer.replaceChildren())));
+    act(a.state === 'disabled' ? 'Enable' : 'Disable', opens(() => enableForm(a, done, report)));
+    act('Delete…', opens(() => deletionForm(a, done, report)), true);
+  }
+
+  card.append(drawer);
+  return card;
+};
+
+/** A fresh token for an invitation nobody redeemed — shown once here, exactly as the first was. */
+const reissueForm = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+  const box = el('div', {});
+  const go = el('button', { textContent: 'Reissue the token' });
+  box.append(
+    el('p', {
+      className: 'muted',
+      textContent: `A new token for ${a.login}. The old one stops working, and this one is shown once.`,
+    }),
+    go,
+  );
+  submits(go, box, async () => {
+    const out = await reissue(a.id);
+    box.append(say(`Token: ${out.token}`));
+    await done();
+  });
+  return box;
+};
+
+/**
+ * Switch an account off, or back on — the reversible neighbour of deletion.
+ *
+ * Worth its own sentence because the two are confused constantly: disabling stops the account
+ * working and keeps everything, and it is undone by pressing the other one.
+ */
+const enableForm = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
+  const off = a.state !== 'disabled';
+  return confirmForm(
+    off
+      ? `Disable ${a.login}? Its devices stop syncing at once and every file is kept, here and on their machines. You can enable it again.`
+      : `Enable ${a.login} again? Its devices resume syncing on their next attempt.`,
+    off ? 'Disable' : 'Enable',
+    async () => {
+      await setEnabled(a.id, !off);
+      report(`${a.login} is now ${off ? 'disabled' : 'active'}.`);
+      await done();
+    },
+  );
+};
+
+/**
+ * Deleting an account, which is a **procedure and not a button** (#55).
+ *
+ * It dissolves the shares this account started and then waits: only each participant's own
+ * client holds the key to convert their copy back to private files, so the server cannot
+ * finish on their behalf. That wait is why this draws a progress surface rather than a
+ * dialogue that closes and claims success.
+ *
+ * The confirmation names the part that reaches other people, because that is the half nobody
+ * expects: deleting one account ends shared folders for everybody in them. And it says what
+ * survives — the audit log keeps naming this account, by design (#93), since a history that
+ * forgets who did what is worse than one naming somebody who has gone.
+ */
+const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
+  const box = el('div', {});
+  const progress = el('div', {});
+
+  const draw = (p: DeletionProgress): void => {
+    if (p.finished) {
+      progress.replaceChildren(say(`${a.login} and everything it held are gone.`));
+      return;
+    }
+    const lines: HTMLElement[] = [el('p', { textContent: `Deletion is ${p.state}.` })];
+    if (p.awaiting.length === 0) {
+      lines.push(el('p', { className: 'muted', textContent: 'Nothing is outstanding; press again to carry on.' }));
+    } else {
+      // Named, not counted. "Waiting on 3" is a number somebody can do nothing with; a list of
+      // logins is a list of people to ask.
+      lines.push(
+        el('p', {
+          className: 'muted',
+          textContent: 'Waiting for these people to finish converting their copy of a shared folder:',
+        }),
+        el('ul', {}, ...p.awaiting.map((w) => el('li', { textContent: w.login }))),
+      );
+    }
+    progress.replaceChildren(...lines);
+  };
+
+  const advance = el('button', { className: 'danger', textContent: 'Delete this account' });
+  const look = el('button', { textContent: 'Check again' });
+
+  box.append(
+    el('p', {
+      className: 'bad',
+      textContent:
+        `Delete ${a.login}? This cannot be undone. Every vault it owns is removed, and any folder ` +
+        'it shared is ended for everybody in it — their copies stay, and stop receiving.',
+    }),
+    el('p', {
+      className: 'muted',
+      textContent:
+        'The audit log keeps naming this account afterwards, deliberately: a history that forgets ' +
+        'who did what is worse than one naming somebody who is gone.',
+    }),
+    advance,
+    look,
+    progress,
+  );
+
+  submits(advance, box, async () => {
+    const p = await beginDeletion(a.id);
+    draw(p);
+    report(p.finished ? `${a.login} was deleted.` : `Deletion of ${a.login} has begun.`, !p.finished);
+    await done();
+  });
+  submits(look, box, async () => draw(await deletionProgress(a.id)));
+  return box;
+};
+
+/** A sentence, a verb, and the act — the shape every irreversible answer on this screen takes. */
+const confirmForm = (question: string, verb: string, run: () => Promise<void>): HTMLElement => {
+  const box = el('div', {});
+  const go = el('button', { className: 'danger', textContent: verb });
+  box.append(el('p', { textContent: question }), go);
+  submits(go, box, run);
+  return box;
+};
+
+/**
+ * The totals only the server can count (#123).
+ *
+ * `GET /admin/storage` exists and was never called. **Stored and charged are different
+ * numbers**: a blob two accounts reference is stored once and charged twice, so a console
+ * summing its own rows could produce one of them and would be quietly reporting the other.
+ */
+const tiles = (rows: readonly AccountRow[], totals: StorageTotals): HTMLElement => {
+  const saved = Number(totals.chargedBytes) - Number(totals.storedBytes);
+  const shown: [string, string][] = [
+    ['Accounts', String(rows.filter((a) => a.state !== 'provisioned').length)],
+    ['On disk', human(totals.storedBytes)],
+    ['Frozen', String(rows.filter((a) => a.frozenAt).length)],
+    ['Pending invites', String(rows.filter((a) => a.state === 'provisioned').length)],
+  ];
+  // Only when there is something to say: on a fresh server the answer is zero, and a tile
+  // reading "0 B saved" is a fact nobody asked for.
+  if (saved > 0) shown.push(['Saved by dedup', human(String(saved))]);
+  if (Number(totals.quarantined) > 0) shown.push(['Quarantined', totals.quarantined]);
+
+  return el(
+    'div',
+    { className: 'tiles' },
+    ...shown.map(([label, value]) =>
+      el(
+        'div',
+        { className: 'tile' },
+        el('div', { className: 'label', textContent: label }),
+        el('div', { className: 'value', textContent: value }),
+      ),
+    ),
+  );
 };
 
 /**
@@ -283,41 +544,62 @@ const accountsScreen = (): void => {
   const report: Report = (message, bad = false) => notices.replaceChildren(say(message, bad));
   const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
 
-  const inviteCard = el('div', { className: 'card' });
-  const login = field('Login for the new account');
-  const quota = field('Quota in MiB');
-  const button = el('button', { textContent: 'Invite' });
-  inviteCard.append(
-    el('h1', { textContent: 'Invite somebody' }),
-    el('p', {
-      className: 'muted',
-      textContent:
-        'They redeem this in Obsidian, where their keys are made. The token appears once and ' +
-        'is not stored — reissue if it is lost.',
-    }),
-    login.row,
-    quota.row,
-    button,
-  );
+  /**
+   * Inviting somebody, folded away until it is wanted (#123).
+   *
+   * It was a form standing open under every list of accounts — two fields and a button, always
+   * there, on the screen an operator opens to LOOK at who exists. Inviting is the rare act and
+   * reading the list is the ordinary one, and the page was laid out the other way round.
+   *
+   * A link rather than a modal: the form belongs to this screen, and it lands where the link
+   * was, so pressing it moves nothing that was already on the page.
+   */
+  const inviteCard = el('div', {});
+  const open = el('button', { className: 'link', textContent: '+ Invite somebody' });
+  inviteCard.append(open);
 
-  submits(button, inviteCard, async () => {
-    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
-    const out = await invite(login.input.value, bytes);
-    inviteCard.append(say(`Invitation for ${login.input.value}. Token: ${out.token}`));
-    await fill();
-  });
+  open.onclick = (): void => {
+    const form = el('div', { className: 'card' });
+    const login = field('Login for the new account');
+    const quota = field('Quota in MiB');
+    const button = el('button', { className: 'cta', textContent: 'Invite' });
+    const cancel = el('button', { textContent: 'Cancel' });
+    cancel.onclick = (): void => inviteCard.replaceChildren(open);
 
-  const fill = async (): Promise<void> => {
-    const out = await accounts();
-    list.replaceChildren(accountsTable(out.accounts, fill, report));
+    form.append(
+      el('p', {
+        className: 'muted',
+        textContent:
+          'They redeem this in Obsidian, where their keys are made. The token appears once and ' +
+          'is not stored — reissue if it is lost.',
+      }),
+      login.row,
+      quota.row,
+      button,
+      cancel,
+    );
+    inviteCard.replaceChildren(form);
+    login.input.focus();
+
+    submits(button, form, async () => {
+      const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+      const out = await invite(login.input.value, bytes);
+      // The token stays where it was produced, and the form stays open behind it: this is the
+      // one value in the console that is shown once and never again, so a screen that tidied
+      // itself away on success would take it with it.
+      form.append(say(`Invitation for ${login.input.value}. Token: ${out.token}`));
+      await fill();
+    });
   };
 
-  const toBackups = el('button', { textContent: 'Backups' });
-  toBackups.onclick = () => backupsScreen();
-  const toAudit = el('button', { textContent: 'Audit log' });
-  toAudit.onclick = () => auditScreen();
+  const fill = async (): Promise<void> => {
+    // Both, together: the tiles describe the same moment the cards do, and two fetches drawn as
+    // they arrived would show an account that the totals had not counted yet.
+    const [out, totals] = await Promise.all([accounts(), storage()]);
+    list.replaceChildren(tiles(out.accounts, totals), ...out.accounts.map((a) => accountCard(a, fill, report)));
+  };
 
-  app.replaceChildren(el('nav', {}, toBackups, toAudit), page, notices, list, inviteCard);
+  shell('accounts', currentLogin(), page, notices, list, inviteCard);
   loads(list, fill);
 };
 
@@ -337,55 +619,44 @@ const auditScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Audit log' }));
   const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
 
-  const back = el('button', { textContent: 'Accounts' });
-  back.onclick = () => accountsScreen();
 
   const fill = async (): Promise<void> => {
     const out = await audit();
     list.replaceChildren(
       out.entries.length === 0
         ? el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })
-        : auditTable(out.entries),
+        : auditLog(out.entries),
     );
   };
 
-  app.replaceChildren(el('nav', {}, back), page, list);
+  shell('audit', currentLogin(), page, list);
   loads(list, fill);
 };
 
 /**
- * The audit log, as a table (#123).
+ * The audit log: one line each, the time in a column of its own (#123).
  *
- * A sentence per row — "quota changed — oleh, by admin" — read well at seven entries and
- * stopped reading at seventy: five near-identical acts seconds apart became five paragraphs a
- * person had to compare word by word. The parts somebody scans a log for are one actor, one
- * target, one action, and a sentence buries each of them in a different position.
+ * A card per entry read well at seven and stopped reading at seventy — five near-identical
+ * acts seconds apart became five paragraphs to compare word by word. What a person scans a log
+ * for is one actor, one target, one action, and a sentence buries each in a different place.
  *
- * Newest first, which is the server's order (#87, #94) and not this screen's to choose.
+ * The action is bold and the rest is not, because the action is what the eye is looking for
+ * and the actor is what it checks once it has found one.
+ *
+ * Newest first, which is the server order (#87, #94) and not this screen to choose.
  */
-const auditTable = (entries: readonly AuditRow[]): HTMLElement => {
-  const table = el('table', { className: 'rows' });
-  const head = el('tr', {});
-  for (const h of ['When', 'Action', 'Account', 'By']) head.append(el('th', { textContent: h }));
-  table.append(el('thead', {}, head));
-
-  const body = el('tbody', {});
+const auditLog = (entries: readonly AuditRow[]): HTMLElement => {
+  const list = el('div', { className: 'log' });
   for (const e of entries) {
-    body.append(
-      el(
-        'tr',
-        {},
-        el('td', { className: 'muted', textContent: when(e.at) }),
-        el('td', {}, el('strong', { textContent: auditAction(e) })),
-        // A dash rather than a blank: some acts have no target — confirming a restore is done
-        // to the server, not to somebody — and an empty cell reads as missing data.
-        el('td', { textContent: e.targetLogin ?? '—' }),
-        el('td', { className: 'muted', textContent: e.actorLogin }),
-      ),
-    );
+    const line = el('div', { className: 'entry' });
+    line.append(el('strong', { textContent: auditAction(e) }));
+    // The target belongs to the action and reads as part of it; the actor is a separate fact.
+    if (e.targetLogin) line.append(el('span', { textContent: `— ${e.targetLogin}` }));
+    line.append(el('span', { className: 'muted', textContent: `by ${e.actorLogin}` }));
+    line.append(el('span', { className: 'when', textContent: when(e.at) }));
+    list.append(line);
   }
-  table.append(body);
-  return table;
+  return list;
 };
 
 /** When a run happened, as a person reads a table. */
@@ -452,10 +723,7 @@ const backupsScreen = (): void => {
     list.replaceChildren(...out.backups.map(backupRow));
   };
 
-  const accountsCard = el('button', { textContent: 'Accounts' });
-  accountsCard.onclick = () => accountsScreen();
-
-  app.replaceChildren(el('nav', {}, accountsCard), page, list, runCard);
+  shell('backups', currentLogin(), page, list, runCard);
   loads(list, fill);
 };
 
@@ -496,7 +764,7 @@ const restoreScreen = (): void => {
     );
   });
 
-  app.replaceChildren(page);
+  alone(page);
   loads(status, fill);
 };
 

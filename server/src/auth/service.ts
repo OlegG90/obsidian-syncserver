@@ -68,6 +68,17 @@ export type Account = {
  * works, which a seeded password would have left behind for anybody who never got round to
  * it. While it is unset the server answers nothing else, so the window is the first run.
  *
+ * **It names the administrator too** (#123). The schema seeds the row as `admin`, and that
+ * meant every installation of this server shipped with the login of its most privileged
+ * account already known — written in `schema.sql`, repeated in the docs, and identical
+ * everywhere. Half a credential, given away. `attempts.check` rate-limits by login, so a
+ * fixed one is also the half an attacker never has to guess. #107 already says that setting
+ * the password is what CREATES the administrator; naming it is part of creating it.
+ *
+ * The seeded `admin` stays as the default the console offers, because most operators will
+ * take it and a forced choice on the first screen of a fresh server is a decision nobody
+ * asked to make.
+ *
  * The `state = 'provisioned'` in the `WHERE` is the whole of the once-only guarantee: the
  * same statement that sets the password moves the row out of the state it matches on, so a
  * second call finds nothing. No separate check, and no window between checking and writing.
@@ -86,18 +97,26 @@ export type Account = {
  */
 export const setFirstPassword = async (
   db: Db,
+  login: string,
   password: string,
-): Promise<{ userId: string; login: string } | undefined> => {
+): Promise<{ userId: string; login: string } | 'login_taken' | undefined> => {
   const hash = hashPassword(password);
 
   return db.tx(async (c) => {
     const done = await c.query<{ id: string; login: string }>(
-      `UPDATE users SET state = 'active', password_hash = $1
+      `UPDATE users SET state = 'active', password_hash = $1, login = $2
         WHERE id = '00000000-0000-0000-0000-000000000001'
           AND role = 'admin' AND state = 'provisioned'
         RETURNING id, login`,
-      [hash],
-    );
+      [hash, login],
+    ).catch((e: unknown) => {
+      // `login` is UNIQUE, and a fresh server already holds one other row: the tombstone
+      // (`deleted`). Picking that name is the one collision possible here, and it has to
+      // answer with what is wrong rather than a 500 on a constraint nobody can see.
+      if (e instanceof Error && /users_login_key|unique/i.test(e.message)) return undefined;
+      throw e;
+    });
+    if (!done) return 'login_taken';
     const row = done.rows[0];
     if (!row) return undefined;
 

@@ -329,6 +329,41 @@ export type AccountRow = {
 };
 
 /**
+ * What `GET /admin/storage` answers — the totals only the server can compute (#123).
+ *
+ * `stored` and `charged` differ, and the difference is the point: a blob referenced by two
+ * accounts is stored once and charged twice, so summing what the accounts report would
+ * overstate the disk and summing the disk would understate the quotas. Neither number is the
+ * other one, and a console adding up its own rows could produce only one of them, wrongly.
+ *
+ * Strings for the same reason every byte figure here is: they cross a JSON boundary, and a
+ * `bigint` would round above 2^53.
+ */
+export type StorageTotals = {
+  /** On disk, counted once per distinct blob. */
+  storedBytes: string;
+  /** Against quotas, counted once per account that references it. */
+  chargedBytes: string;
+  blobs: string;
+  /** Marked for collection and not yet unlinked — space that is going, not gone. */
+  quarantined: string;
+};
+
+/**
+ * How far a deletion has got, and what it is waiting on (#55, #123).
+ *
+ * Deletion is a state and not a button: it dissolves the shares the account initiated and then
+ * WAITS for each participant to finalize their own copy, because only their client holds the
+ * key to convert it. `awaiting` is that list, and it is what turns "nothing is happening" into
+ * "this is what it is happening to".
+ */
+export type DeletionProgress = {
+  state: string;
+  awaiting: { shareId: string; login: string }[];
+  finished: boolean;
+};
+
+/**
  * One line of the administrative audit log, as both sides read it.
  *
  * Here for the reason `AccountRow` is: the server writes it and the console renders it, so a

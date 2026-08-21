@@ -33,6 +33,57 @@ export const mib = (bytes: string | null): string =>
   bytes === null ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
 /**
+ * Bytes at whatever scale makes them readable.
+ *
+ * Separate from `mib`, which stays: the quota FIELD is in mebibytes because that is the unit
+ * an operator types, and a field that showed "9.3 GiB" and expected a number back would be
+ * asking a question in one unit and reading the answer in another. Display picks the unit;
+ * input does not get to.
+ */
+export const human = (bytes: string | null): string => {
+  if (bytes === null) return '—';
+  const n = Number(bytes);
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
+};
+
+/**
+ * How full this account is, as a fraction for the bar — **capped at one**.
+ *
+ * Over the limit is drawn as full-and-red, not as a bar running past the edge of its card: a
+ * bar overflowing its track reads as a rendering fault, and the thing being communicated is
+ * an account, not a broken screen. The number beside it is uncapped and says the truth.
+ *
+ * A zero quota answers zero rather than dividing by it — that is the console account, which
+ * has no limit to be a fraction of.
+ */
+export const usageFraction = (a: AccountLine): number => {
+  const quota = Number(a.quotaBytes);
+  if (!(quota > 0)) return 0;
+  return Math.min(1, Number(a.usedBytes) / quota);
+};
+
+/**
+ * The badge under a login: what to write in it, and which of three tones it takes.
+ *
+ * `frozen` outranks the state, because it is the one that changes what the account can DO —
+ * a disabled account and a frozen one are both "not working right now" for different reasons,
+ * and the reason is the useful half.
+ */
+export const accountBadge = (a: AccountLine): { text: string; tone: 'active' | 'frozen' | 'neutral' } => {
+  if (a.state === 'provisioned') return { text: 'invitation', tone: 'neutral' };
+  if (a.role === 'admin') return { text: 'console', tone: 'neutral' };
+  if (a.frozenAt) return { text: 'frozen', tone: 'frozen' };
+  return { text: a.state, tone: a.state === 'active' ? 'active' : 'neutral' };
+};
+
+/**
  * What kind of thing this row is.
  *
  * Three, not two, and the third is the one that matters: **an invitation is not an account
@@ -64,13 +115,14 @@ export const accountState = (a: AccountLine): string => {
  * become an account yet. A dash says "not a question about this row"; a zero says "this row
  * answered, and the answer is nothing".
  *
- * The freeze rides here rather than in the state column because it is a statement ABOUT the
- * number — over WHAT limit — and a column of states that sometimes means storage and
- * sometimes means the account is switched off would make an operator read twice.
+ * **Just the two numbers.** Being over the limit is said by the bar and by the marker beside
+ * it (#123), and this used to append it as well — so a frozen account read "over its limit"
+ * twice on one line, in two different weights, which makes a reader look for the difference
+ * between them. There is none. One fact, one place.
  */
 export const accountUsage = (a: AccountLine): string => {
   if (a.role === 'admin' || a.state === 'provisioned') return '—';
-  return `${mib(a.usedBytes)} of ${mib(a.quotaBytes)}${a.frozenAt ? ' · over its limit' : ''}`;
+  return `${mib(a.usedBytes)} of ${mib(a.quotaBytes)}`;
 };
 
 /**

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { accountKind, accountState, accountUsage, auditAction, freezeWarning, mib, type AccountLine } from '../src/format.js';
+import { accountBadge, accountKind, accountState, accountUsage, auditAction, freezeWarning, human, mib, usageFraction, type AccountLine } from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (#89) and the server always sends them. Leaving them out built a shape no response has —
@@ -51,11 +51,29 @@ describe('what a row of the accounts table says', () => {
     assert.equal(accountUsage(line()), '2.0 MiB of 10.0 MiB');
   });
 
-  it('marks an account that is over its limit, on the number it is over', () => {
-    // In the storage column and not the state column: it is a statement about the number, and
-    // a state column that sometimes meant storage would have to be read twice.
-    assert.match(accountUsage(line({ frozenAt: '2026-08-17T00:00:00Z' })), / · over its limit$/);
-    assert.equal(accountState(line({ frozenAt: '2026-08-17T00:00:00Z' })), 'active');
+  it('says the two numbers and nothing about being over them', () => {
+    // The card draws a red bar and a marker for that (#123); saying it here as well printed
+    // "over its limit" twice on one line, in two weights, inviting a reader to look for a
+    // difference that is not there.
+    const frozen = line({ frozenAt: '2026-08-17T00:00:00Z' });
+    assert.equal(accountUsage(frozen), '2.0 MiB of 10.0 MiB');
+    assert.equal(accountState(frozen), 'active', 'and the state stays the state');
+  });
+
+  it('badges a frozen account as frozen, which is what changed about it', () => {
+    // The badge carries it instead, and outranks the state: disabled and frozen are both "not
+    // working now" for different reasons, and the reason is the useful half.
+    assert.deepEqual(accountBadge(line({ frozenAt: '2026-08-17T00:00:00Z' })), { text: 'frozen', tone: 'frozen' });
+    assert.deepEqual(accountBadge(line()), { text: 'active', tone: 'active' });
+    assert.deepEqual(accountBadge(line({ state: 'provisioned' })), { text: 'invitation', tone: 'neutral' });
+    assert.deepEqual(accountBadge(line({ role: 'admin' })), { text: 'console', tone: 'neutral' });
+  });
+
+  it('caps the bar at full rather than letting it run off the card', () => {
+    // A bar overflowing its track reads as a rendering fault; the thing being communicated is
+    // an account, not a broken screen. The number beside it stays uncapped and true.
+    assert.equal(usageFraction(line({ usedBytes: String(20 * 1024 * 1024) })), 1);
+    assert.equal(usageFraction(line({ role: 'admin', quotaBytes: '0' })), 0, 'no limit is not a division');
   });
 
   it('tells an operator what they want to know about an invitation, not the enum', () => {
