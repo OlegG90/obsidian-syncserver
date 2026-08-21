@@ -11,6 +11,7 @@
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☑ |
+| **M8** | **the bad day**: the operations that only matter once something has gone wrong — restoring, revoking a device that is gone, seeing and removing a vault, starting a reset — every one of them today either prose or unreachable. Scope below | ☐ |
 
 **There is no M6.** It was a WebDAV gateway, and it is dropped rather than deferred: the vault is reached
 through the plugin, and a second protocol into the same data is a second place for the key model to be got
@@ -439,6 +440,59 @@ live defects, which is the reason the list is not simply tidying.
 **None of this belonged to M5 by right.** It is here because it happened here, and the alternative —
 leaving five refactors and two defect fixes unmentioned because no checklist line predicted them — makes
 the record worse than the sprawl does.
+
+## M8 — the bad day
+
+Every milestone so far built something a person uses when things are going well. This one is about the
+morning they are not: a disk that died, a phone left in a taxi, a vault that has to be thrown away and
+re-uploaded. Those paths exist in this system — they are argued in the documents and half of them are
+implemented on the server — and **not one of them can be walked**.
+
+Found by looking, not by remembering: each item below is a capability the code has, or a decision a
+document records, with no caller and no screen.
+
+### The theme, and what it excludes
+
+An operation that only runs on a bad day is the one most likely to be broken, because nothing exercises
+it. So the measure of this milestone is not that the code exists — it is that a person can **walk it**,
+and that what they meet says what happened.
+
+Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it needs no milestone.
+
+- [ ] **Restoring, as something the server helps with rather than describes** (#155). `pg_restore` appears
+      nowhere in this repository — not in the code, not in the scripts, not in the documents. The manual's
+      restore is three sentences of prose with no commands, and everything built around it is what happens
+      *after*: the epoch guard, the halt, the console's confirmation. What is missing is the act itself and
+      the **report [08](08-backup-restore.md) chose and nobody wrote**: the list of blobs the restored
+      database references and the store does not have. That decision is on the page — *"an honest report of
+      '13 files not restored' beats a store that never frees space"* — and today the only verification is
+      over a backup **copy**, not over a restore.
+- [ ] **Devices that can be seen and revoked** (#156). `POST /auth/devices` creates one and
+      `DELETE /auth/devices/:id` revokes one; **nothing lists them**. So the only device anybody can revoke
+      is the one they are sitting at, which is what disconnect does — and a phone left in a taxi stays
+      authorised for ever, for its owner and for the operator alike. It is also why the plugin's Devices
+      section is summarised by its *act*: there is no list to summarise (#130).
+- [ ] **Removing one vault** (#157). An account holds many (AC-10) and `DELETE /vaults/:id` is implemented
+      — with no caller anywhere. Today the only way to remove a vault is to delete the account that owns
+      it, which is the whole-server answer to a single-room question.
+- [ ] **Starting a reset** (#158). The half that *receives* one is built and walked: a client meeting `410`
+      resyncs and quarantines whatever it displaced. The half that *begins* one — "my client is right,
+      take this tree" ([07](07-onboarding.md)) — has a method in the plugin's API client and **no caller**.
+- [ ] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
+      never been restored is not a backup, and prescribes a quarterly rehearsal by hand. The automatic one
+      checks that the copy's blobs are all present — which is worth having and is not the same claim. A
+      rehearsal that restores the dump into a scratch database and reports is the one that would have
+      caught a dump nobody can read.
+- [ ] **The vaults an account has, shown to the person who owns them** (#161). `GET /vaults` is called in
+      exactly one place — inside `chooseVault`, at pairing or recovery, to ask which vault this device is
+      for. Once connected nothing lists them again, so somebody with three vaults sees the id of the one
+      this window is and nothing about the other two. Which is also how a vault created **by mistake**
+      stays invisible: #117 exists because a pairing silently made a second one. The names are readable
+      here — they are encrypted under each vault's own key and this device holds the seed, which is what
+      `vaultLabel()` already does for the chooser.
+- [ ] **A policy for the audit log** (#160). `retention.ts` thins versions, empties spent trash and drops
+      spent claims. The audit log is in none of it and grows for ever. That may well be right — it is the
+      one record of who did what — but it is currently a decision nobody made.
 
 ## M7 — the recovery code
 
