@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { ApiError } from '../src/api/client.js';
 import { openPairingFlow, type PairingFlowDeps } from '../src/pairing-flow.js';
 import type { PairArgs } from '../src/session/index.js';
 
@@ -210,5 +211,91 @@ describe('approving from the connected device', () => {
     await h.flow.approve('AAAA');
 
     assert.match(h.notices[0]!, /already_settled/);
+  });
+});
+
+describe('approving a code from the connected device (#131)', () => {
+  it('sends one approval when the button is pressed twice', async () => {
+    // `running` guarded the join and nothing guarded this, so two presses sent two
+    // approvals. The server refuses the second — but a person who pressed twice would read
+    // that refusal as something having gone wrong, when nothing had.
+    // Only the FIRST call hangs. A fake that also hung on the second would make a missing
+    // guard show up as a test that never finishes, which is not a failure anybody can read.
+    let release: (() => void) | undefined;
+    const sent: string[] = [];
+    const h = harness({
+      approve: async (code) => {
+        sent.push(code);
+        if (sent.length === 1) await new Promise<void>((r) => (release = r));
+      },
+    });
+
+    const first = h.flow.approve('AAAA-BBBB');
+    await h.flow.approve('AAAA-BBBB');
+
+    assert.deepEqual(sent, ['AAAA-BBBB'], 'the second press reached nothing');
+    assert.match(h.notices.at(-1)!, /already under way/);
+    release!();
+    await first;
+  });
+
+  it('lets the next approval through once the first has finished', async () => {
+    const h = harness();
+    await h.flow.approve('AAAA-BBBB');
+    await h.flow.approve('CCCC-DDDD');
+    assert.deepEqual(h.approved, ['AAAA-BBBB', 'CCCC-DDDD']);
+  });
+
+  it('releases the flag when the approval fails', async () => {
+    // A refusal must not leave this device unable to approve anything for the rest of the
+    // session — the code on the other screen is expiring while it waits.
+    let fail = true;
+    const h = harness({
+      approve: async () => {
+        if (fail) throw new ApiError(409, 'already_settled', '{}');
+      },
+    });
+    await h.flow.approve('AAAA-BBBB');
+    fail = false;
+    await h.flow.approve('AAAA-BBBB');
+    // The second call got through, which is the point: a refusal must not leave this device
+    // unable to approve for the rest of the session.
+    assert.match(h.notices.at(-1)!, /approved\. The other device/);
+  });
+
+  it('says what a settled pairing means, not "409 already_settled"', async () => {
+    const h = harness({
+      approve: async () => {
+        throw new ApiError(409, 'already_settled', '{}');
+      },
+    });
+    await h.flow.approve('AAAA-BBBB');
+    assert.match(h.notices.at(-1)!, /already been approved/);
+    assert.ok(!/409/.test(h.notices.at(-1)!), 'a status code is not a sentence');
+  });
+
+  it('names all three causes of not_found, because the server will not separate them', async () => {
+    // No such code, a mistyped one, and an expired one answer identically on purpose
+    // (docs/06). A message that picked one would be guessing.
+    const h = harness({
+      approve: async () => {
+        throw new ApiError(404, 'not_found', '{}');
+      },
+    });
+    await h.flow.approve('AAAA-BBBB');
+    const said = h.notices.at(-1)!;
+    assert.match(said, /Check it against the other screen/);
+    assert.match(said, /ten minutes/);
+    assert.match(said, /expired/);
+  });
+
+  it('passes anything else through as it is', async () => {
+    const h = harness({
+      approve: async () => {
+        throw new Error('the network is down');
+      },
+    });
+    await h.flow.approve('AAAA-BBBB');
+    assert.match(h.notices.at(-1)!, /the network is down/);
   });
 });
