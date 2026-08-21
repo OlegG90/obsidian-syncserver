@@ -88,7 +88,10 @@ describe('one operation at a time', () => {
     await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
 
     assert.equal(peak, 1, 'discarding is irreversible; a queue of them is not a feature');
-    assert.ok(said.some((s) => /already running/.test(s)), `expected a busy notice: ${said.join(' | ')}`);
+    assert.ok(
+      said.some((s) => /Waiting for a discard/.test(s)),
+      `the refusal names what is running: ${said.join(' | ')}`,
+    );
   });
 });
 
@@ -150,7 +153,7 @@ describe('the screen asks for several things at once', () => {
     const flow = openHistoryFlow(d);
     await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
     assert.equal(peak, 1);
-    assert.ok(said.some((s) => /already running/.test(s)));
+    assert.ok(said.some((s) => /Waiting for a discard/.test(s)));
   });
 });
 

@@ -223,6 +223,21 @@ export default class SyncServerPlugin extends Plugin {
     await this.saveData(this.data);
   }
 
+  /**
+   * What is holding the one-at-a-time gate, and how to hear it change (#125).
+   *
+   * Exposed so the settings tab can disable what the gate would refuse and say why, rather
+   * than letting somebody press Invite and learn afterwards that a sync was running. The
+   * gate itself stays private: a screen may watch it, and may not take it.
+   */
+  busyWith(): string | undefined {
+    return this.gate.holding();
+  }
+
+  watchBusy(listener: (holding: string | undefined) => void): () => void {
+    return this.gate.watch(listener);
+  }
+
   /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
   syncNow(): Promise<void> {
     return this.sync?.run() ?? Promise.resolve();

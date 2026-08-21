@@ -20,7 +20,7 @@
  *   the share for everybody, and "you left" would be the wrong sentence for it.
  */
 import { ApiError, type ShareMember } from './api/client.js';
-import type { Gate } from './gate.js';
+import { busyLine, type Gate } from './gate.js';
 import { holdsSynced, nothingToShare, shareableFolders } from './shareable-folders.js';
 
 /** A share as the person sees it in the list. */
@@ -126,8 +126,8 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
     // The shared gate, taken synchronously before any await, for the reason `sync.ts`
     // gives: two presses arrive as two calls before either has reached the network. It is
     // the SAME gate a sync takes, so a departure cannot start mid-pass or vice versa.
-    if (!deps.gate.tryBegin()) {
-      deps.notify('SyncServer: another operation is already running.');
+    if (!deps.gate.tryBegin(what)) {
+      deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
       return undefined;
     }
     try {

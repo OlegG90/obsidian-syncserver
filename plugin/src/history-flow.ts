@@ -25,7 +25,7 @@
  *   enough to lift a freeze — because making room is usually why anybody asked.
  */
 import { ApiError } from './api/client.js';
-import type { Gate } from './gate.js';
+import { busyLine, type Gate } from './gate.js';
 
 /** One node in the trash, as the person sees it. */
 export interface TrashRow {
@@ -125,9 +125,12 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
    * The gate is the shared one — the same a sync and a share operation take — so a
    * discard cannot interleave with a pass that is reading what is about to be removed.
    */
-  const once = async <T>(what: string, run: () => Promise<T>): Promise<T | undefined> => {
-    if (!deps.gate.tryBegin()) {
-      deps.notify('SyncServer: another operation is already running.');
+  const once = async <T>(what: string, doing: string, run: () => Promise<T>): Promise<T | undefined> => {
+    // Two phrasings of the same act, because they sit in different sentences: `what` completes
+    // "could not …" and `doing` completes "waiting for … to finish". One string cannot be both
+    // without one of the two reading like a fault in the software.
+    if (!deps.gate.tryBegin(doing)) {
+      deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
       return undefined;
     }
     try {
@@ -143,7 +146,7 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
     versions: (nodeId) => attempt('read the history', () => deps.versions(nodeId)),
 
     restore: async (nodeId, rev) => {
-      const out = await once('restore', async () => {
+      const out = await once('restore', 'a restore', async () => {
         await deps.restore(nodeId, rev);
         return true;
       });
@@ -159,7 +162,7 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
       // agrees to by reflex.
       if (!(await deps.confirm(`Discard “${name}” and its history for good? This cannot be undone.`))) return;
 
-      const out = await once('discard it', () => deps.discard(nodeId));
+      const out = await once('discard it', 'a discard', () => deps.discard(nodeId));
       if (!out) return;
       deps.notify(said(out));
       deps.done();
@@ -179,7 +182,7 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
         return;
       }
 
-      const out = await once('empty the trash', () => deps.discard());
+      const out = await once('empty the trash', 'emptying the trash', () => deps.discard());
       if (!out) return;
       deps.notify(said(out));
       deps.done();
