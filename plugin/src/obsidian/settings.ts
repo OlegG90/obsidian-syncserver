@@ -21,6 +21,7 @@ import { newPairingCode } from '../crypto/pairing-code.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from '../version.js';
 import { ConfirmModal } from './modals.js';
 import type SyncServerPlugin from '../main.js';
+import type { ShareFlow, ShareRow } from '../share-flow.js';
 
 /** Bytes as something a person reads. Mebibytes throughout, because quotas are set in them. */
 const mib = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
@@ -358,29 +359,19 @@ export class SyncServerSettings extends PluginSettingTab {
     list.createEl('p', { text: 'Loading…' });
 
     const flow = this.plugin.sharing();
-    let folder = '';
-
-    new Setting(containerEl)
-      .setName('Share a folder')
-      .setDesc('Its contents are re-keyed so participants can read them. The folder must be synced first.')
-      .addText((t) => t.setPlaceholder('Folder/path').onChange((v) => (folder = v.trim())))
-      .addButton((b) =>
-        b.setButtonText('Share').onClick(async () => {
-          b.setDisabled(true);
-          try {
-            await flow.share(folder);
-          } finally {
-            b.setDisabled(false);
-          }
-        }),
-      );
+    // Filled in once the share list has answered, because what may be shared depends on what
+    // already is — and drawn above that list, where it was.
+    const offer = containerEl.createEl('div');
 
     void flow.list().then((out) => {
       list.empty();
       if (!out) {
         list.createEl('p', { text: 'The share list could not be read.' });
+        // No offer either: without knowing what is already shared, every folder here would be
+        // a guess, and the one that overlaps fails inside a database trigger.
         return;
       }
+      this.shareControl(offer, flow, out.joined);
       if (out.joined.length === 0 && out.invitations.length === 0) {
         list.createEl('p', { text: 'No shared folders yet.' });
       }
@@ -450,6 +441,54 @@ export class SyncServerSettings extends PluginSettingTab {
         });
       }
     });
+  }
+
+  /**
+   * Choosing the folder to share, from the ones that could be.
+   *
+   * It was a text field, `Folder/path`, which made a misspelling and a real refusal read the
+   * same — "the server does not know that folder yet" — with nothing to tell a person which
+   * of the two had happened to them (#125). A list has no spelling.
+   *
+   * It also enforces, by omission, a rule the screen had no way to express: **a share may not
+   * overlap another in either direction.** `nodes_check_share_membership` refuses a marked
+   * node whose parent belongs to a different share, and refuses one whose child carries a
+   * different mark — so a folder inside a share cannot start one, and neither can a folder
+   * containing one. That refusal arrives as a check violation from a trigger, which is the
+   * worst place a person can meet a rule.
+   *
+   * Folders of shares that have **ended** are held back too, and that is not an oversight:
+   * their nodes keep the mark until leaving is finalized, so the folder is not free yet.
+   */
+  private shareControl(host: HTMLElement, flow: ShareFlow, joined: readonly ShareRow[]): void {
+    host.empty();
+    const { offered, reason } = flow.shareable(joined.flatMap((s) => (s.folder ? [s.folder] : [])));
+
+    const setting = new Setting(host).setName('Share a folder');
+    if (offered.length === 0) {
+      // The reason, not an empty dropdown. A control with nothing in it and no sentence beside
+      // it reads as a broken screen rather than as an answer.
+      setting.setDesc(reason ?? 'There is no folder to share.');
+      return;
+    }
+
+    let folder = offered[0]!;
+    setting
+      .setDesc('Its contents are re-keyed so participants can read them. Synced folders only.')
+      .addDropdown((d) => {
+        for (const f of offered) d.addOption(f, f);
+        d.setValue(folder).onChange((v) => (folder = v));
+      })
+      .addButton((b) =>
+        b.setButtonText('Share').onClick(async () => {
+          b.setDisabled(true);
+          try {
+            await flow.share(folder);
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
+      );
   }
 
   /**
