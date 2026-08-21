@@ -39,6 +39,7 @@ import {
 } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openGate } from './gate.js';
+import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
@@ -91,6 +92,8 @@ export default class SyncServerPlugin extends Plugin {
   private gate = openGate();
   /** Which local folder each share is, and the badge that says so — see `shared-folder-marks.ts`. */
   private marks: SharedFolderMarks | undefined;
+  /** The last thing said to the person, with when — rendered by the settings header (#130). */
+  private lastSaid: Action | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
@@ -148,7 +151,7 @@ export default class SyncServerPlugin extends Plugin {
         return report;
       },
       setPhase: (phase) => this.setPhase(phase),
-      notify: (message, durationMs) => new Notice(message, durationMs),
+      notify: (message, durationMs) => this.say(message, durationMs),
     });
 
     // Desktop only — Obsidian does not render a status bar on a phone (docs/02), which is
@@ -238,7 +241,32 @@ export default class SyncServerPlugin extends Plugin {
     return this.gate.watch(listener);
   }
 
-  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
+  /**
+   * Everything the four coordinators say, raised as a notice **and** kept (#130).
+   *
+   * One place, because a notice is gone by the time somebody looks up and the question they
+   * are left with — "did that work?" — has no surface to answer it. The settings screen shows
+   * the most recent one with a clock time.
+   *
+   * It does not replace the notices: several are long on purpose, and a phone has no other
+   * surface for them at all (docs/02). This records what was said, it is not the saying.
+   */
+  private say(message: string, durationMs?: number): void {
+    this.lastSaid = { at: Date.now(), message };
+    new Notice(message, durationMs);
+  }
+
+  /** The last thing this plugin said, for the settings header. */
+  lastAction(): Action | undefined {
+    return this.lastSaid;
+  }
+
+  /** What the sync is doing, for the settings header — the same phase the ribbon renders. */
+  phaseNow(): SyncPhase {
+    return this.phase;
+  }
+
+  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
   syncNow(): Promise<void> {
     return this.sync?.run() ?? Promise.resolve();
   }
@@ -483,7 +511,7 @@ export default class SyncServerPlugin extends Plugin {
       approve: (code) => this.approvePairing(code),
       showCode: (code) => this.renderPairingCode(code),
       setStatus: (text) => this.renderPairingStatus(text),
-      notify: (message, durationMs) => new Notice(message, durationMs),
+      notify: (message, durationMs) => this.say(message, durationMs),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       done: () => this.settingsTab?.display(),
     });
@@ -689,7 +717,7 @@ export default class SyncServerPlugin extends Plugin {
       usage: () => this.withSession((h) => h.client.usage()),
 
       confirm: (question) => askConfirmation(this.app, question),
-      notify: (message, durationMs) => new Notice(message, durationMs),
+      notify: (message, durationMs) => this.say(message, durationMs),
       done: () => this.settingsTab?.display(),
     });
   }
@@ -844,7 +872,7 @@ export default class SyncServerPlugin extends Plugin {
       syncedPaths: () => Object.keys(this.data.state?.nodes ?? {}),
       folders: () => this.app.vault.getAllFolders().map((f) => f.path),
 
-      notify: (message, durationMs) => new Notice(message, durationMs),
+      notify: (message, durationMs) => this.say(message, durationMs),
       done: () => this.settingsTab?.display(),
     });
   }

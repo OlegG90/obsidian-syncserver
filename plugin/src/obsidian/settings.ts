@@ -12,8 +12,12 @@
  * screen, and this screen imports nothing back.
  */
 import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
-import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
+import { whatIsMissing, type ConnectDraft, type Route } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
+import { lastActionLine } from '../last-action.js';
+import { matching, showing } from '../trash-filter.js';
+import { deviceLabel } from './device.js';
+import { shortStatus } from './status.js';
 import { busyLine } from '../gate.js';
 import { recoveryRow } from '../recovery-row.js';
 import { wayBack, whatIsWrong, type PassphraseDraft } from '../passphrase-form.js';
@@ -98,7 +102,23 @@ export class SyncServerSettings extends PluginSettingTab {
       this.busyNote.style.display = 'none';
       this.busyNote.style.color = 'var(--text-accent)';
       this.busyNote.style.fontSize = 'var(--font-ui-smaller)';
-      const list = containerEl.createEl('dl');
+      this.statusHeader(containerEl, conn);
+
+      /**
+       * Everything about the connection that is not an act — where, who, and the two
+       * switches — behind one closed row (#130).
+       *
+       * Closed by default and summarised on its own row, because it is read once and then
+       * never again: an address is set when a server moves, and `.obsidian/` is decided once.
+       * The screen opens on what somebody came to do instead.
+       */
+      const options = this.section(
+        containerEl,
+        'Server and sync options',
+        `${conn.serverUrl} · .obsidian ${this.plugin.data.syncObsidian === true ? 'on' : 'off'}`,
+      );
+
+      const list = options.createEl('dl');
       const rows: [string, string][] = [
         ['Login', conn.login],
         ['Vault', conn.vaultId],
@@ -108,7 +128,7 @@ export class SyncServerSettings extends PluginSettingTab {
         list.createEl('dt', { text: label });
         list.createEl('dd', { text: value });
       }
-      containerEl.createEl('p', {
+      options.createEl('p', {
         text: 'The passphrase is not stored. It is asked for once per session, the first time a sync runs.',
       });
 
@@ -117,7 +137,7 @@ export class SyncServerSettings extends PluginSettingTab {
       // connect again — would cost a full bootstrap to undo, since the invitation that made
       // this account is one-time and spent.
       let url = conn.serverUrl;
-      new Setting(containerEl)
+      new Setting(options)
         .setName('Server address')
         .setDesc('An IP, a host name, a tunnel — only where this device talks. Changing it locks the session.')
         .addText((t) => t.setValue(conn.serverUrl).onChange((v) => (url = v.trim())))
@@ -130,20 +150,7 @@ export class SyncServerSettings extends PluginSettingTab {
           }),
         );
 
-      // A button, because the command palette is not somewhere a person looks for the one
-      // thing this plugin does. The ribbon icon syncs too; this is where someone who has
-      // just finished connecting is already standing.
-      new Setting(containerEl)
-        .setName('Sync now')
-        .setDesc('Also on the ribbon icon, and in the command palette.')
-        .addButton((b) =>
-          this.waits(b)
-            .setButtonText('Sync now')
-            .setCta()
-            .onClick(() => void this.plugin.syncNow()),
-        );
-
-      new Setting(containerEl)
+      new Setting(options)
         .setName('Synchronise .obsidian/ configuration')
         .setDesc(
           'Plugins and appearance, not per-device state: workspace layout, the graph view and plugin caches stay on this device (docs/01). Off by default.',
@@ -219,25 +226,6 @@ export class SyncServerSettings extends PluginSettingTab {
         }),
     );
 
-    /**
-     * The second field, which exists for one route and is drawn for all of them.
-     *
-     * Beside the first, because that is where a person proofreads: putting it inside the claim
-     * row would separate the two halves of one act by the width of the other two routes. It
-     * says whose question it is, so nobody pairing a phone wonders whether they have to.
-     */
-    new Setting(containerEl)
-      .setName('Passphrase again')
-      .setDesc(
-        'For a new account, and when recovering with a code: in both cases what you type BECOMES the ' +
-          'passphrase, so there is nothing to check it against.',
-      )
-      .addText((t) => {
-        t.inputEl.type = 'password';
-        secrets.push(t.inputEl);
-        t.onChange((v) => (draft.again = v));
-      });
-
     /** A transport failure names a category, never an address — and the address is the likeliest mistake. */
     const explain = (e: unknown): string => {
       const reason = e instanceof Error ? e.message : String(e);
@@ -246,139 +234,122 @@ export class SyncServerSettings extends PluginSettingTab {
         : reason;
     };
 
-    containerEl.createEl('h3', { text: 'Then one of these' });
+    /**
+     * One route at a time, chosen before anything is filled in (#130).
+     *
+     * It was four headings down one page, each with its own button, and the fields they all
+     * share sitting above the lot. Which meant the answer to "what do I press" was four
+     * paragraphs long, and two of the four — the recoveries — read almost identically at a
+     * glance, where choosing wrong costs an attempt against a rate-limited endpoint.
+     *
+     * Segmented, so the four are visibly ONE choice, and only the chosen one's extra field and
+     * button are on screen. The shared fields stay above: they are the same details in all
+     * four cases, which is the reason they were merged in the first place.
+     */
+    containerEl.createEl('h3', { text: 'What this vault is doing' });
 
-    // 1 — a brand-new account, the only case that needs a token.
-    new Setting(containerEl)
-      .setName('Claim an invitation')
-      .setDesc('A new account on this server. Its keys are generated here, from the passphrase above.')
-      .addText((t) =>
-        t.setPlaceholder('invitation token').onChange((v) => (draft.token = v.trim())),
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('Connect')
-          .setCta()
-          .onClick(async () => {
-            const need = whatIsMissing(draft, 'claim');
-            if (need) return void new Notice(`SyncServer: ${need}`, 10000);
-            try {
-              b.setDisabled(true);
-              new Notice('SyncServer: deriving keys…');
-              await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase);
-              new Notice('SyncServer: connected.');
-              this.display();
-            } catch (e) {
-              new Notice(`SyncServer: ${explain(e)}`, 12000);
-              b.setDisabled(false);
-            }
-          }),
-      );
+    const routes: { key: Route; label: string; desc: string }[] = [
+      {
+        key: 'claim',
+        label: 'New account',
+        desc: 'A new account on this server, from an invitation. Its keys are generated here, from the passphrase above.',
+      },
+      {
+        key: 'pair',
+        label: 'Add this device',
+        desc: 'Shows a code to type on a device that is already connected. It seals the account key to this one.',
+      },
+      {
+        key: 'recover',
+        label: 'Re-connect',
+        desc: 'No device left to pair with, and you still have the passphrase. It proves itself to the server, which returns the account key it has always held sealed.',
+      },
+      {
+        key: 'code',
+        label: 'Recovery code',
+        desc: 'The passphrase itself is what was lost. The code opens the account key, and the passphrase above becomes this account’s from now on.',
+      },
+    ];
 
-    // 2 — an account that exists, and a device of it that still works to approve this one.
-    const shown = containerEl.createEl('div');
-    // Re-bind the held pairing flow to THIS element on every display: the tab was rebuilt,
-    // and a live pairing's code and cancel button must be drawn back in (pairing-flow is
-    // held by the plugin precisely so a rebuild does not orphan the wait it began).
-    this.plugin.pairing(shown);
-    new Setting(containerEl)
-      .setName('Add this device to an account')
-      .setDesc('Shows a code to type on a device that is already connected. It seals the account key to this one.')
-      .addButton((b) =>
-        b.setButtonText('Show pairing code').onClick(async () => {
-          const need = whatIsMissing(draft, 'pair');
-          if (need) return void new Notice(`SyncServer: ${need}`, 8000);
+    const picker = containerEl.createEl('div');
+    picker.style.display = 'flex';
+    picker.style.gap = '0.25rem';
+    picker.style.flexWrap = 'wrap';
+    const panel = containerEl.createEl('div');
+    // Held here rather than inside the pairing panel: the flow is the plugin's for the tab's
+    // lifetime, and the element it draws into has to survive a route being re-chosen.
+    const pairingTarget = containerEl.createEl('div');
+    // Re-bound on every rebuild, which is what makes a live pairing survive one: the flow is
+    // held by the plugin precisely so the wait it began outlives the element it drew into.
+    this.plugin.pairing(pairingTarget);
+
+    let chosen: Route = 'claim';
+
+    const drawPanel = (): void => {
+      panel.empty();
+      // Hidden with the route, EXCEPT while it holds something: a pairing already waiting must
+      // not be hidden by a rebuild that reset the chosen route to the first one — its code is
+      // on the other device's screen and the person is walking back with it.
+      pairingTarget.style.display =
+        chosen === 'pair' || pairingTarget.childElementCount > 0 ? '' : 'none';
+      const route = routes.find((r) => r.key === chosen)!;
+      panel.createEl('p', { text: route.desc, cls: 'setting-item-description' });
+
+      // The second passphrase field, on the two routes where what is typed BECOMES the key:
+      // claiming an account, and recovering with a code. On the other two it is proved against
+      // something that exists, so a typo fails loudly and costs one retry (#126).
+      if (chosen === 'claim' || chosen === 'code') {
+        new Setting(panel)
+          .setName('Passphrase again')
+          .setDesc('Nothing checks it afterwards, so it is checked here.')
+          .addText((t) => {
+            t.inputEl.type = 'password';
+            secrets.push(t.inputEl);
+            t.setValue(draft.again).onChange((v) => (draft.again = v));
+          });
+      }
+
+      if (chosen === 'claim') {
+        new Setting(panel)
+          .setName('Invitation token')
+          .addText((t) => t.setValue(draft.token).setPlaceholder('invitation token').onChange((v) => (draft.token = v.trim())));
+      }
+      if (chosen === 'code') {
+        new Setting(panel)
+          .setName('Recovery code')
+          .addText((t) => t.setValue(draft.code).setPlaceholder('recovery code').onChange((v) => (draft.code = v)));
+      }
+
+      new Setting(panel).addButton((b) => {
+        b.setButtonText(chosen === 'pair' ? 'Show pairing code' : 'Connect');
+        if (chosen === 'claim' || chosen === 'pair') b.setCta();
+        else b.setWarning();
+        b.onClick(async () => {
+          const need = whatIsMissing(draft, chosen);
+          if (need) return void new Notice(`SyncServer: ${need}`, 10000);
           b.setDisabled(true);
           try {
-            await this.plugin.pairing(shown).join({
-              serverUrl: draft.serverUrl,
-              login: draft.login,
-              passphrase: draft.passphrase,
-            });
+            await this.attemptRoute(chosen, draft, pairingTarget);
+          } catch (e) {
+            new Notice(`SyncServer: ${explain(e)}`, 12000);
           } finally {
             b.setDisabled(false);
           }
-        }),
-      );
+        });
+      });
+    };
 
-    // 3 — an account that exists with no device left to ask.
-    //
-    // Named for what the person still HAS, not for the mechanism, because the route below it
-    // is also a recovery and the two buttons read alike on a screen where choosing wrong is a
-    // wasted attempt. This one is "I know the passphrase", the other is "I do not" — so this
-    // one is re-connecting a vault and that one is recovering an account.
-    new Setting(containerEl)
-      .setName('Re-connect this vault with the passphrase')
-      .setDesc(
-        'When no device is left to pair with, and you still have the passphrase. It proves itself to the ' +
-          'server, which returns the account key it has always held sealed — it cannot read it, and never ' +
-          'sees the passphrase.',
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('Re-connect')
-          .setWarning()
-          .onClick(async () => {
-            const need = whatIsMissing(draft, 'recover');
-            if (need) return void new Notice(`SyncServer: ${need}`, 8000);
-            b.setDisabled(true);
-            try {
-              new Notice('SyncServer: deriving keys…');
-              await this.plugin.recover({
-                serverUrl: draft.serverUrl,
-                login: draft.login,
-                passphrase: draft.passphrase,
-              });
-              new Notice('Recovered. Sync to bring the vault down.', 8000);
-              this.display();
-            } catch (e) {
-              new Notice(`SyncServer: recovery failed — ${explain(e)}`, 12000);
-            } finally {
-              b.setDisabled(false);
-            }
-          }),
-      );
-
-    // 4 — an account that exists, whose passphrase is gone. The other half of the same door.
-    new Setting(containerEl)
-      .setName('Recover this account with a recovery code')
-      .setDesc(
-        'When the passphrase itself is what was lost. The code opens the account key the server has ' +
-          'always held sealed, and the passphrase above becomes this account’s passphrase from now on.',
-      )
-      .addText((t) => t.setPlaceholder('recovery code').onChange((v) => (draft.code = v)))
-      .addButton((b) =>
-        b
-          .setButtonText('Recover')
-          .setWarning()
-          .onClick(async () => {
-            const need = whatIsMissing(draft, 'code');
-            if (need) return void new Notice(`SyncServer: ${need}`, 8000);
-            b.setDisabled(true);
-            try {
-              new Notice('SyncServer: deriving keys…');
-              await this.plugin.recoverWithCode({
-                serverUrl: draft.serverUrl,
-                login: draft.login,
-                code: draft.code,
-                passphrase: draft.passphrase,
-              });
-              // Said here and nowhere else, because nothing later has a reason to mention it:
-              // the code still opens this account. It was not spent, and it has now been out
-              // of wherever it was kept.
-              new Notice(
-                'Recovered, and the passphrase you typed is now this account’s. That recovery code still ' +
-                  'works — replace it in the settings if it has been anywhere it should not stay.',
-                15000,
-              );
-              this.display();
-            } catch (e) {
-              new Notice(`SyncServer: recovery failed — ${explain(e)}`, 12000);
-            } finally {
-              b.setDisabled(false);
-            }
-          }),
-      );
+    for (const route of routes) {
+      const button = picker.createEl('button', { text: route.label });
+      button.onclick = (): void => {
+        chosen = route.key;
+        for (const el of Array.from(picker.children)) el.removeClass('mod-cta');
+        button.addClass('mod-cta');
+        drawPanel();
+      };
+      if (route.key === chosen) button.addClass('mod-cta');
+    }
+    drawPanel();
 
     this.versionSection(containerEl);
   }
@@ -433,8 +404,11 @@ export class SyncServerSettings extends PluginSettingTab {
    * This is the half of pairing that needs the seed, which is why it lives only here and
    * why it may ask for the passphrase — the same question a sync asks, for the same reason.
    */
-  private approveSection(containerEl: HTMLElement): void {
-    containerEl.createEl('h3', { text: 'Add another device' });
+  private approveSection(host: HTMLElement): void {
+    // Summarised by what it is FOR rather than by what is in it: this device cannot list the
+    // account's other devices (nothing asks the server for them), and a summary that promised
+    // "mbp-14, iphone" would be inventing it. What it can say is the act.
+    const containerEl = this.section(host, 'Devices', 'add another device to this account');
     containerEl.createEl('p', {
       text:
         'On the other device, choose “Join an existing account” and read the code it shows. ' +
@@ -459,6 +433,155 @@ export class SyncServerSettings extends PluginSettingTab {
     );
   }
 
+
+  /**
+   * What each route actually does, once the form has agreed it has what it needs.
+   *
+   * Separate from the button so the four are one list rather than four copies of
+   * disable-try-notice-enable, and so the differences between them are the only thing on
+   * screen here: what they take, and what they say afterwards.
+   */
+  private async attemptRoute(route: Route, draft: ConnectDraft, pairingTarget: HTMLElement): Promise<void> {
+    if (route === 'pair') {
+      // The held flow, re-bound to this element: the tab is rebuilt constantly and a live
+      // pairing's code and cancel button have to be drawn back into the fresh one.
+      await this.plugin.pairing(pairingTarget).join({
+        serverUrl: draft.serverUrl,
+        login: draft.login,
+        passphrase: draft.passphrase,
+      });
+      return;
+    }
+
+    new Notice('SyncServer: deriving keys…');
+    if (route === 'claim') {
+      await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase);
+      new Notice('SyncServer: connected.');
+    } else if (route === 'recover') {
+      await this.plugin.recover({ serverUrl: draft.serverUrl, login: draft.login, passphrase: draft.passphrase });
+      new Notice('Recovered. Sync to bring the vault down.', 8000);
+    } else {
+      await this.plugin.recoverWithCode({
+        serverUrl: draft.serverUrl,
+        login: draft.login,
+        code: draft.code,
+        passphrase: draft.passphrase,
+      });
+      // Said here and nowhere else, because nothing later has a reason to mention it: the code
+      // still opens this account. It was not spent, and it has now been out of wherever it was
+      // kept.
+      new Notice(
+        'Recovered, and the passphrase you typed is now this account’s. That recovery code still ' +
+          'works — replace it in the settings if it has been anywhere it should not stay.',
+        15000,
+      );
+    }
+    this.display();
+  }
+
+  /**
+   * A section that opens when somebody wants it, summarised on its closed row (#130).
+   *
+   * `<details>` rather than a toggle this file implements: it is what the platform gives, it
+   * survives a rebuilt tab without state to keep in step, and it is what a keyboard and a
+   * screen reader already know how to work.
+   *
+   * **The summary is the point, not the collapsing.** A closed row that says only "Devices"
+   * makes somebody open it to find out whether they need to; one that says "mbp-14, iphone ·
+   * add another" has already answered. A section whose summary cannot say anything useful
+   * should not be a section.
+   */
+  private section(containerEl: HTMLElement, title: string, summary: string, open = false): HTMLElement {
+    const details = containerEl.createEl('details');
+    if (open) details.setAttribute('open', '');
+    const line = details.createEl('summary');
+    line.createEl('strong', { text: title });
+    line.createEl('span', { text: ` — ${summary}` }).style.opacity = '0.7';
+    details.style.margin = '0.75rem 0';
+    const body = details.createEl('div');
+    body.style.margin = '0.5rem 0 0 0.5rem';
+    return body;
+  }
+
+  /**
+   * The block at the top: what the sync is doing, what it last said, and how full the account
+   * is (#130).
+   *
+   * Three facts in one place because they are asked as one question — "is this working?" —
+   * and they were three separate rows down three separate parts of the screen. The usage bar
+   * is drawn rather than written because "how close am I" is the only thing anybody wants
+   * from it, and a percentage makes that a subtraction.
+   */
+  private statusHeader(containerEl: HTMLElement, conn: { login: string; vaultId: string; deviceId: string }): void {
+    const header = containerEl.createEl('div');
+    header.style.margin = '0 0 1rem';
+
+    const phase = header.createEl('p', { text: shortStatus(this.plugin.phaseNow()) });
+    phase.style.fontWeight = 'bold';
+    phase.style.margin = '0 0 0.25rem';
+
+    // The last thing said, with the time. A notice has gone by the time somebody looks up, and
+    // "did that work?" is the question it leaves behind (#130).
+    const said = lastActionLine(this.plugin.lastAction());
+    if (said) {
+      const line = header.createEl('p', { text: said });
+      line.style.fontSize = 'var(--font-ui-smaller)';
+      line.style.opacity = '0.8';
+      line.style.margin = '0 0 0.5rem';
+    }
+
+    // Identity as one line rather than a three-row table: it is a thing to recognise, not to
+    // read. The vault id is shortened for the same reason — nobody compares 36 characters.
+    const who = header.createEl('p', {
+      text: `${conn.login} · vault ${conn.vaultId.slice(0, 4)}…${conn.vaultId.slice(-3)} · this device ${deviceLabel()}`,
+    });
+    who.style.fontSize = 'var(--font-ui-smaller)';
+    who.style.opacity = '0.7';
+    who.style.margin = '0 0 0.5rem';
+
+    const bar = header.createEl('div');
+    bar.style.height = '6px';
+    bar.style.borderRadius = '3px';
+    bar.style.background = 'var(--background-modifier-border)';
+    bar.style.overflow = 'hidden';
+    const fill = bar.createEl('div');
+    fill.style.height = '100%';
+    fill.style.width = '0%';
+    fill.style.background = 'var(--interactive-accent)';
+    const usage = header.createEl('p');
+    usage.style.fontSize = 'var(--font-ui-smaller)';
+    usage.style.opacity = '0.8';
+    usage.style.margin = '0.25rem 0 0';
+
+    void this.plugin
+      .history()
+      .usage()
+      .then((u) => {
+        if (!u) return;
+        const share = u.quota > 0 ? Math.min(1, u.used / u.quota) : 0;
+        fill.style.width = `${Math.round(share * 100)}%`;
+        // Over the limit is not the same as frozen, and the difference cost a live walk: an
+        // account syncing on its own can sit at 210% with `frozen` false for ever.
+        const over = u.used > u.quota;
+        if (over) fill.style.background = 'var(--text-error)';
+        usage.setText(
+          `${mib(u.used)} of ${mib(u.quota)}` +
+            (over ? ' — over the limit. Discarding from the trash is what frees space.' : ''),
+        );
+        if (over) usage.style.color = 'var(--text-error)';
+      })
+      .catch(() => usage.setText('The account’s usage could not be read.'));
+
+    new Setting(containerEl)
+      .setName('Sync now')
+      .setDesc('Also on the ribbon icon, and in the command palette.')
+      .addButton((b) =>
+        this.waits(b)
+          .setButtonText('Sync now')
+          .setCta()
+          .onClick(() => void this.plugin.syncNow()),
+      );
+  }
 
   /**
    * Changing the passphrase, and catching up with a change made on another device (#138).
@@ -874,28 +997,18 @@ export class SyncServerSettings extends PluginSettingTab {
    */
   private trashSection(containerEl: HTMLElement): void {
     containerEl.createEl('h3', { text: 'Trash and history' });
+
+    // The filter is drawn before the listing arrives and stays put while it does: a control
+    // that appears when the data does is one somebody has already started typing past.
+    let query = '';
+    const search = new Setting(containerEl)
+      .setName('Find')
+      .setDesc('Searches what this page carried, which is the most recently deleted — not the whole trash.');
+
     const list = containerEl.createEl('div');
     list.createEl('p', { text: 'Loading…' });
 
     const flow = this.plugin.history();
-
-    const usage = containerEl.createEl('p');
-    usage.style.fontSize = 'var(--font-ui-smaller)';
-    void flow.usage().then((u) => {
-      if (!u) return;
-      const pct = u.quota > 0 ? Math.round((u.used / u.quota) * 100) : 0;
-      // Marked on being OVER the limit, not on being frozen. They are not the same state and
-      // the difference cost a live walk: the freeze flag is raised where somebody else's
-      // write crosses your boundary, so an account syncing on its own can sit at 210% with
-      // `frozen` false for ever. A number that says 210% and looks like every other line
-      // tells a person nothing is wrong.
-      const over = u.used > u.quota;
-      usage.setText(
-        `Using ${mib(u.used)} of ${mib(u.quota)} (${pct}%)` +
-          (over ? ' — over the limit. Discarding from the trash is what frees space.' : ''),
-      );
-      if (over) usage.style.color = 'var(--text-error)';
-    });
 
     void flow.trash().then((page) => {
       list.empty();
@@ -903,12 +1016,40 @@ export class SyncServerSettings extends PluginSettingTab {
         list.createEl('p', { text: 'The trash could not be read.' });
         return;
       }
-      const rows = page.rows;
       if (page.total === 0) {
         list.createEl('p', { text: 'Nothing has been deleted.' });
         return;
       }
 
+      // Wired only now, because until the page is here there is nothing to filter — and a box
+      // that accepts typing and does nothing is worse than one that is not there yet.
+      search.addText((t) =>
+        t.setPlaceholder('part of a name').onChange((v) => {
+          query = v;
+          draw();
+        }),
+      );
+
+      const draw = (): void => {
+        list.empty();
+        const rows = matching(page.rows, query);
+        if (rows.length === 0) {
+          // Says which kind of nothing it is: the file may be absent, or merely not on this
+          // page, and those have different next steps.
+          list.createEl('p', {
+            text: `Nothing here matches “${query.trim()}”.`,
+          });
+        }
+        render(rows);
+        const line = showing(rows.length, page.rows.length, page.total);
+        if (line) {
+          const p = list.createEl('p', { text: line });
+          p.style.fontSize = 'var(--font-ui-smaller)';
+        }
+        list.append(emptyRow);
+      };
+
+      const render = (rows: typeof page.rows): void => {
       for (const row of rows) {
         const setting = new Setting(list)
           .setName(row.name)
@@ -979,21 +1120,23 @@ export class SyncServerSettings extends PluginSettingTab {
         );
       }
 
-      // Said rather than left to be inferred: the list is a page, and the button below it is
-      // not. A screen that showed 200 rows and then discarded 3,000 would be telling the
-      // truth twice and lying once.
-      if (page.total > rows.length) {
-        const more = list.createEl('p', {
-          text: `Showing the ${rows.length} most recently deleted of ${page.total}.`,
-        });
-        more.style.fontSize = 'var(--font-ui-smaller)';
-      }
+      };
 
-      new Setting(list)
+      /**
+       * Built once and re-appended, not rebuilt with the rows.
+       *
+       * It discards **everything the server holds**, not what is on screen — and a filtered
+       * list is the one moment somebody could read it as "empty these". Keeping it out of the
+       * redraw is also what keeps its count honest: `page.total`, never the rows in front of
+       * it (the screen that showed 200 rows and discarded 3,000 was telling the truth twice
+       * and lying once).
+       */
+      const emptyRow = createEl('div');
+      new Setting(emptyRow)
         .setName('Empty the trash')
         .setDesc(
-          'Discards every deleted file and all of its history, for good. This is the only ' +
-            'action that lowers what the account is using.',
+          'Discards every deleted file and all of its history, for good — the whole trash, not ' +
+            'the rows shown. This is the only action that lowers what the account is using.',
         )
         .addButton((b) =>
           this.waits(b)
@@ -1001,6 +1144,8 @@ export class SyncServerSettings extends PluginSettingTab {
             .setWarning()
             .onClick(() => void flow.empty(page.total)),
         );
+
+      draw();
     });
   }
 
@@ -1012,8 +1157,8 @@ export class SyncServerSettings extends PluginSettingTab {
    * is the passphrase, and somebody who does not have it should learn that here rather than
    * afterwards.
    */
-  private disconnectSection(containerEl: HTMLElement): void {
-    containerEl.createEl('h3', { text: 'Disconnect' });
+  private disconnectSection(host: HTMLElement): void {
+    const containerEl = this.section(host, 'Disconnect', 'files stay, here and on the server');
     containerEl.createEl('p', {
       text:
         'Stops this device syncing and forgets the connection. Every file stays — here and ' +
