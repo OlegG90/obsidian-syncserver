@@ -91,7 +91,7 @@ each one holds is written down. [`docs/02`](docs/02-architecture.md) is the shor
 | 12 | [Sharing scenarios](docs/12-sharing-scenarios.md) | the conditions 05 implements — one situation, one outcome, permanent ids |
 | 13 | [Deployment and quick start](docs/13-deployment.md) | building the image, running it on a home server, claiming the first administrator |
 | 14 | [Using SyncServer](docs/14-user-manual.md) | **the user manual**: installing the plugin, connecting a vault, syncing, sharing, space |
-| 15 | [Running a SyncServer](docs/15-operator-manual.md) | **the operator manual**: install, accounts, backups, restore, upgrade — as a procedure |
+| 15 | [Running a SyncServer](docs/15-operator-manual.md) | **the operator manual**: a copy-paste quick start with `docker compose`, then accounts, backups, restore and upgrading — as a procedure |
 
 Decision ids are shared by these documents and by the comments in `db/schema.sql`, so a rule can
 always be traced from the constraint that enforces it back to the sentence that decided it.
