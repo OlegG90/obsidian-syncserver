@@ -458,10 +458,16 @@ is about the server having moved `wrapped_seed` and `kek_verifier_hash` *togethe
 columns are individually valid and the account answers recovery with an envelope its accepted proof cannot
 open. A suite can assert the pair; only a walk proves the account a person is holding is the one that moved.
 
-Unlike M0, M3, M4 and M5, this walk found **no defects** — the first that has not. Worth stating rather than
-leaving as an absence, and worth being unsurprised by: the mechanism is one endpoint and one screen, and the
-live roundtrip that shipped with it exercises the same path end to end. The walks that found nine and
-eighteen were milestones with a dozen moving parts each.
+**It found three defects, and none of them were in the mechanism.** The cryptography and the endpoints did
+what they were written to do; the screen did not know what it had just done. Its row was rendered once from
+the server's answer at page load — so after making a code the line still said the account had none, and the
+button still believed it was creating one. A second press would have taken the *creating* path: no
+confirmation, and the code just written down replaced in silence. The third was naming: two buttons a
+paragraph apart both said "Recover", and only one of them is for somebody who still has the passphrase.
+
+The pattern holds, then, for the sixth time: **what a suite cannot see is the screen's idea of the state it
+is in.** Every one of these lived inside a `PluginSettingTab`, which cannot be constructed outside Obsidian —
+the same gap that produced four of M2's five defects and the reason the coordinators exist at all.
 
 - [x] **Generate, show once, store the hash.** A high-entropy code produced on the client, `recovery_key =
       seal(code, seed)` and `recovery_code_hash` sent up through `PUT /auth/recovery-code`. The code itself

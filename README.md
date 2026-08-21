@@ -171,7 +171,7 @@ Current release: **0.4.0** — see [Versions](#versions).
 | **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | done — walked by a person: a vault at 210% of its limit emptied its trash, the claim went with the row, and the collector unlinked the freed bytes. That pass found **six defects 302 green tests had no opinion about**, the quietest being a login the client stored without the server ever confirming it |
 | **M5** — the operator's milestone: management console, backup operations, and an image pulled from a registry instead of built on the server | done — closed by a live walk that found nine defects, three of them regressions introduced by the fixes for the others |
 | ~~**M6** — WebDAV gateway~~ | **dropped.** The vault is reached through the plugin; a second protocol into the same data is a second place to get the key model wrong |
-| **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | done, and walked: a code made in one vault took the account back in another, and the passphrase it had been living under stopped opening it |
+| **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | done, and walked: a code made in one vault took the account back in another, and the passphrase it had been living under stopped opening it. The walk found three defects, all of them in what the screen believed rather than in what the code did |
 
 M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
 ways, and a real conflict with neither version lost. That pass found **five defects a hundred and fifty
