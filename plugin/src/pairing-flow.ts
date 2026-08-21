@@ -16,11 +16,21 @@
  * - one attempt at a time, because a second would register a second pairing and show a
  *   second code while the first was still live.
  *
+ * **It does not take the shared gate, and that is a decision** (#131). `sync.ts`, `share-flow.ts`
+ * and `history-flow.ts` share one gate so none of them can interleave with another; pairing
+ * keeps a local flag instead. Approving writes one row — the pairing's envelope — and touches
+ * nothing a sync touches, and the server serialises that row itself (`FOR UPDATE`) and refuses
+ * a second approval outright. So the shared gate would buy nothing here and would cost
+ * something real: approving is a person standing at two devices with a code that expires in
+ * ten minutes, and making them wait for a sync to finish is the one moment where waiting is
+ * expensive.
+ *
  * What it deliberately does NOT own: **normalising the code**. `Session` does that at both
  * of its entry points (a code is hashed there, and hashing the displayed form on one device
  * and the typed form on the other is exactly the bug that made pairing fail on real
  * hardware). Doing it here as well would state one rule in two places.
  */
+import { ApiError } from './api/client.js';
 import type { PairArgs } from './session/index.js';
 
 export interface PairingFlowDeps {
@@ -52,6 +62,30 @@ export interface PairingFlow {
   /** Re-draw the live code and status into the current element — a rebuild must not lose them. */
   redraw(): void;
 }
+
+/**
+ * What a pairing refusal means, in the words of the thing a person is doing.
+ *
+ * `409 already_settled` reached the screen exactly as that string. It is what the server says
+ * when the pairing has already been approved or claimed — the ordinary cause being a second
+ * press, or the other device having finished while this one was being read — and none of that
+ * is legible in a status code.
+ *
+ * `not_found` covers three cases deliberately (docs/06): no such code, a mistyped one, and an
+ * expired one. The server will not distinguish them, so neither can this sentence — it names
+ * all three rather than guessing at one.
+ */
+const explain = (e: unknown): string => {
+  if (e instanceof ApiError) {
+    if (e.code === 'already_settled') {
+      return 'that code has already been approved — by this press or an earlier one. The other device should be finishing on its own.';
+    }
+    if (e.code === 'not_found') {
+      return 'no pairing is waiting for that code. Check it against the other screen; codes last ten minutes, and one that has expired reads the same as one that never existed.';
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+};
 
 /** A second: long enough that a person is still walking, short enough not to feel stuck. */
 const BETWEEN_ATTEMPTS_MS = 1000;
@@ -124,11 +158,25 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
         deps.notify('SyncServer: enter the code shown on the other device.');
         return;
       }
+      // The SAME flag a join takes, and it was missing here entirely (#131): `running`
+      // guarded the join and nothing guarded this, so two presses sent two approvals. The
+      // server refuses the second — the row is taken `FOR UPDATE` and answers
+      // `already_settled` — but a person who pressed twice would read that refusal as
+      // something having gone wrong, when nothing did. One pairing act at a time on this
+      // device, and the two halves are never both wanted at once anyway: a device joining an
+      // account has no account to approve for.
+      if (running) {
+        deps.notify('SyncServer: a pairing is already under way on this device.');
+        return;
+      }
+      running = true;
       try {
         await deps.approve(code);
         deps.notify('SyncServer: approved. The other device should finish on its own.');
       } catch (e) {
-        deps.notify(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+        deps.notify(`SyncServer: ${explain(e)}`, 10000);
+      } finally {
+        running = false;
       }
     },
 
