@@ -62,10 +62,20 @@ for (const [name, value] of Object.entries({ ...(db?.environment ?? {}), ...(ser
 
 // The backup variables are all-or-nothing, defaulted to empty so an unset deployment is a
 // truthful "not configured" rather than a secret or a path written here.
-for (const name of ['BACKUP_DESTINATION', 'BACKUP_DB_COMMAND', 'BACKUP_BLOB_SOURCE']) {
+//
+// **Read from `.env.example` rather than listed here**, because a list is what let `BACKUP_KEEP`
+// ship without ever reaching a container: the server read it, the example documented it, the
+// manual explained it — and compose, which is how every real deployment passes environment, did
+// not carry it. A variable documented for an operator and dropped on the way in is worse than
+// one that does not exist, because it looks like it works.
+const documented = new Set(
+  [...readFileSync('.env.example', 'utf8').matchAll(/^#?\s*(BACKUP_[A-Z_]+)=/gm)].map((m) => m[1]),
+);
+check(documented.size > 0, '.env.example must document the backup variables');
+for (const name of documented) {
   check(
     String(server?.environment?.[name] ?? '').startsWith('${'),
-    `${name} must come from the environment, not be written here`,
+    `${name} is documented in .env.example, so compose must pass it through as \${${name}:-…}`,
   );
 }
 
