@@ -188,7 +188,7 @@ export class SyncServerSettings extends PluginSettingTab {
         'cannot recover it — lose it and every vault goes with it.',
     });
 
-    const draft: ConnectDraft = { serverUrl: '', login: '', token: '', passphrase: '', again: '' };
+    const draft: ConnectDraft = { serverUrl: '', login: '', token: '', passphrase: '', again: '', code: '' };
 
     new Setting(containerEl)
       .setName('Server URL')
@@ -225,7 +225,10 @@ export class SyncServerSettings extends PluginSettingTab {
      */
     new Setting(containerEl)
       .setName('Passphrase again')
-      .setDesc('For a new account only: a typo here becomes that account’s passphrase for good, and nobody can reset it.')
+      .setDesc(
+        'For a new account, and when recovering with a code: in both cases what you type BECOMES the ' +
+          'passphrase, so there is nothing to check it against.',
+      )
       .addText((t) => {
         t.inputEl.type = 'password';
         secrets.push(t.inputEl);
@@ -318,6 +321,47 @@ export class SyncServerSettings extends PluginSettingTab {
                 passphrase: draft.passphrase,
               });
               new Notice('Recovered. Sync to bring the vault down.', 8000);
+              this.display();
+            } catch (e) {
+              new Notice(`SyncServer: recovery failed — ${explain(e)}`, 12000);
+            } finally {
+              b.setDisabled(false);
+            }
+          }),
+      );
+
+    // 4 — an account that exists, whose passphrase is gone. The other half of the same door.
+    new Setting(containerEl)
+      .setName('Recover with a recovery code')
+      .setDesc(
+        'When the passphrase is the thing that was lost. The code opens the account key the server has ' +
+          'always held sealed, and the passphrase above becomes this account’s passphrase from now on.',
+      )
+      .addText((t) => t.setPlaceholder('recovery code').onChange((v) => (draft.code = v)))
+      .addButton((b) =>
+        b
+          .setButtonText('Recover')
+          .setWarning()
+          .onClick(async () => {
+            const need = whatIsMissing(draft, 'code');
+            if (need) return void new Notice(`SyncServer: ${need}`, 8000);
+            b.setDisabled(true);
+            try {
+              new Notice('SyncServer: deriving keys…');
+              await this.plugin.recoverWithCode({
+                serverUrl: draft.serverUrl,
+                login: draft.login,
+                code: draft.code,
+                passphrase: draft.passphrase,
+              });
+              // Said here and nowhere else, because nothing later has a reason to mention it:
+              // the code still opens this account. It was not spent, and it has now been out
+              // of wherever it was kept.
+              new Notice(
+                'Recovered, and the passphrase you typed is now this account’s. That recovery code still ' +
+                  'works — replace it in the settings if it has been anywhere it should not stay.',
+                15000,
+              );
               this.display();
             } catch (e) {
               new Notice(`SyncServer: recovery failed — ${explain(e)}`, 12000);

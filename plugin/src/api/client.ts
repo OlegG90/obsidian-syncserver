@@ -383,6 +383,14 @@ export class SyncClient {
   }
 
   /**
+   * Put the account behind a different passphrase: the new envelope and the verifier for the
+   * same KEK, which move together or not at all (#34).
+   */
+  setPassphrase(body: { wrapped_seed: string; kek_verifier: string }): Promise<void> {
+    return this.json('PUT', '/auth/passphrase', body, { expect: [204] });
+  }
+
+  /**
    * Whether this account has a recovery code (M7). A boolean is all there is to ask for —
    * a code the server could show again would be a code the server could use.
    */

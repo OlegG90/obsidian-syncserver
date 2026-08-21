@@ -42,6 +42,7 @@ import {
   kekVerifier,
   recoveryCodeHash,
   unwrapIdentity,
+  unwrapWithRecovery,
   vaultKey,
   wrapForRecovery,
   type Account,
@@ -156,6 +157,26 @@ export interface RecoverArgs {
    * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
    * a screen puts the vaults in front of the person before adoption merges anything.
    */
+  askVault?: AskVault;
+  deviceName?: string;
+  devicePlatform?: string;
+}
+
+/**
+ * What recovering with a **code** needs, which is not what recovering with a passphrase needs.
+ *
+ * `passphrase` here is the one the account is about to get, not one it has: somebody using a
+ * code has none, and an account left under the forgotten phrase would be openable by its code
+ * and nothing else, for ever.
+ */
+export interface RecoverWithCodeArgs {
+  serverUrl: string;
+  login: string;
+  /** As the person kept it. Normalised before it is sent — the server hashes what it is handed. */
+  code: string;
+  /** The passphrase this account will have from now on. */
+  passphrase: string;
+  vaultId?: string;
   askVault?: AskVault;
   deviceName?: string;
   devicePlatform?: string;
@@ -693,6 +714,95 @@ export class Session {
         vaultId,
         // Stored as it arrived: this envelope is already the one this passphrase opens.
         wrappedSeed: recovered.seed_envelope,
+        accountSalt: recovered.account_salt,
+        kdfParams: recovered.kdf_params,
+      },
+      deps,
+      { client, seed, userId: recovered.user_id, encPrivkey: recovered.enc_privkey },
+    );
+  }
+
+  /**
+   * Take the account back with the **recovery code**, and give it a passphrase again (#34).
+   *
+   * The server has accepted a code as the second proof since M3.5 and nothing on the client
+   * ever made the call, so a code created in the settings was redeemable with `curl` and not
+   * from the plugin — the fifth instance of a capability that exists, is tested, and no screen
+   * reaches.
+   *
+   * **It sets a new passphrase, and that is not a convenience.** The code hands back the seed;
+   * it says nothing about the phrase, and the person using it does not know one. An account
+   * left as it was would be openable by its code alone from then on — one key, on paper,
+   * somewhere — which is the opposite of what recovering is for.
+   *
+   * The salt stays. It is an input to the code's own KDF (M7), so a new one would quietly turn
+   * the code the person just used into a string that opens nothing.
+   *
+   * **The code is not spent.** It still opens the account afterwards, because the seed it
+   * wraps has not changed. Whoever built the screen has to say so — a code that has been out
+   * of its envelope and back is a good candidate for replacing.
+   */
+  static async recoverWithCode(
+    args: RecoverWithCodeArgs,
+    deps: { derivation: Derivation; transport: Transport },
+  ): Promise<Session> {
+    const client = new SyncClient(args.serverUrl, deps.transport);
+
+    // Normalised HERE, once, for the reason `approvePairing` gives: the server hashes the
+    // string it is handed and has no opinion about dashes or case, so a code that crossed a
+    // human has to become its canonical form before it is sent OR hashed.
+    const code = normaliseHumanCode(args.code);
+
+    const recovered = await client.recover({
+      login: args.login,
+      recovery_code: code,
+      device_name: args.deviceName ?? 'obsidian',
+      device_platform: args.devicePlatform ?? 'unknown',
+    });
+
+    const accountSalt = fromBase64(recovered.account_salt);
+    let seed: Uint8Array;
+    try {
+      seed = unwrapWithRecovery(recovered.seed_envelope, code, accountSalt);
+    } catch {
+      // The server accepted the code's hash and the envelope still would not open, which means
+      // the two were written by different code paths — not something a person can retry into.
+      throw new Error(
+        'the server accepted that code and the envelope it returned does not open. ' +
+          'Report this rather than retrying: the code is right and something else is wrong.',
+      );
+    }
+
+    // From here the account is open, and the passphrase is the one being SET.
+    const kek = deriveKek(args.passphrase, accountSalt, recovered.kdf_params);
+    const wrappedSeed = seal(kek, seed);
+
+    await loginAndHold(client, {
+      login: args.login,
+      deviceId: recovered.device_id,
+      seed,
+      kek,
+      accountSalt,
+    });
+
+    // Both halves, before anything else is done with the session: until this lands, the
+    // server still holds the envelope of a passphrase nobody knows.
+    await client.setPassphrase({
+      wrapped_seed: wrappedSeed,
+      kek_verifier: kekVerifier(kek, args.login, accountSalt),
+    });
+
+    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.askVault);
+
+    return Session.finishBootstrap(
+      {
+        serverUrl: args.serverUrl,
+        login: args.login,
+        deviceId: recovered.device_id,
+        vaultId,
+        // The envelope this device just made, not the one the code opened: that one is under a
+        // key derived from the code, and `open()` unwraps with a passphrase.
+        wrappedSeed,
         accountSalt: recovered.account_salt,
         kdfParams: recovered.kdf_params,
       },

@@ -18,6 +18,7 @@ const draft = (over: Partial<ConnectDraft> = {}): ConnectDraft => ({
   passphrase: 'correct horse battery staple',
   again: 'correct horse battery staple',
   token: '7f3a-9c21-e04b-88d1',
+  code: 'CODE-KEPT-IN-A-DRAWER',
   ...over,
 });
 
@@ -85,5 +86,50 @@ describe('the claim route asks for the passphrase twice, and the others do not',
   it('wants no token on the routes that are not claiming one', () => {
     assert.equal(whatIsMissing(draft({ token: '' }), 'pair'), undefined);
     assert.equal(whatIsMissing(draft({ token: '' }), 'recover'), undefined);
+  });
+});
+
+describe('the code route: the passphrase is one being set, not one being proved', () => {
+  // It answers a different loss from `recover`. There the passphrase is what proves the
+  // account; here it is what the account will have from now on, because somebody arriving
+  // with a code does not know one.
+
+  it('asks for the code first, because it is what is being proved', () => {
+    // The passphrase below is not a credential on this route, so asking for it before the
+    // thing that actually opens the account would be asking in the wrong order.
+    const need = whatIsMissing(draft({ code: '', passphrase: '' }), 'code');
+    assert.match(need!, /recovery code is needed/);
+  });
+
+  it('says the passphrase is being chosen, not recalled', () => {
+    const need = whatIsMissing(draft({ passphrase: '' }), 'code');
+    assert.match(need!, /passphrase this account will have/);
+  });
+
+  it('asks for it twice, and gives the honest reason', () => {
+    // Weaker than claim's: a typo here is recoverable, because the code is not spent. What
+    // it costs is an evening — the failure surfaces at the next unlock, not now.
+    const need = whatIsMissing(draft({ again: '' }), 'code');
+    assert.match(need!, /second time/);
+    assert.match(need!, /next unlock/);
+    assert.ok(!/cannot be recovered/.test(need!), 'that sentence belongs to claim, where it is true');
+  });
+
+  it('refuses two that differ', () => {
+    assert.match(whatIsMissing(draft({ again: 'something else' }), 'code')!, /different/);
+  });
+
+  it('wants no invitation token', () => {
+    assert.equal(whatIsMissing(draft({ token: '' }), 'code'), undefined);
+  });
+
+  it('lets a complete one through', () => {
+    assert.equal(whatIsMissing(draft(), 'code'), undefined);
+  });
+
+  it('does not ask the OTHER routes for a code', () => {
+    for (const route of ['claim', 'pair', 'recover'] as const) {
+      assert.equal(whatIsMissing(draft({ code: '' }), route), undefined, route);
+    }
   });
 });

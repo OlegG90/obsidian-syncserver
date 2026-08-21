@@ -24,10 +24,13 @@ import { after, before, describe, it } from 'node:test';
 import { ApiError, SyncClient, type CursorRejected, type CursorUnverifiable } from '../src/api/client.js';
 import type { Delta } from '@syncserver/shared';
 import { fetchTransport, type Transport } from '../src/api/transport.js';
-import { authSecret, createAccount, openAccount, unwrapWithRecovery, vaultKey } from '../src/crypto/account.js';
+import {
+  authSecret, createAccount, deriveKek, kekVerifier, openAccount, unwrapWithRecovery, vaultKey,
+} from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
 import { fromBase64, fromUtf8, randomBytes, randomUuid, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { HEADER_BYTES } from '../src/crypto/format.js';
+import { open as openSealed } from '../src/crypto/sealed.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
@@ -161,6 +164,9 @@ after(async () => {
 });
 
 describe('a vault, end to end', () => {
+  /** Made by the M7 test, used by the #34 test below it — the two halves of one mechanism. */
+  let recoveryCode = '';
+
   const passphrase = 'a passphrase the server never sees';
   const plaintext = utf8('# Нотатка\n\nЗміст, якого сервер не побачить.\n');
   const filename = 'Нотатка.md';
@@ -400,6 +406,7 @@ describe('a vault, end to end', () => {
     // be found by somebody who had lost their passphrase, which is the worst possible time.
     if (sess.state !== 'open') assert.equal(await sess.open(passphrase), 'open');
     const { code, replaced } = await sess.createRecoveryCode();
+    recoveryCode = code;
     assert.equal(replaced, false, 'this account had none');
 
     const fresh = new SyncClient(base, fetchTransport);
@@ -511,6 +518,63 @@ describe('a vault, end to end', () => {
     const locked = session.create(sess.connection, fetchTransport);
     await assert.rejects(() => locked.open('not the passphrase'));
     assert.equal(locked.state, 'locked', 'the session stayed locked — no half-open state');
+  });
+
+  /**
+   * Last in this describe on purpose: it changes the account's passphrase, and every test
+   * above it is about the account as it was.
+   */
+  it('takes the account back with the code, and the passphrase it sets is the one that opens it (#34)', async () => {
+    const chosen = 'a phrase chosen on the day it was needed';
+    const taken = await session.recoverWithCode(
+      { serverUrl: base, login: 'roundtrip-user', code: recoveryCode, passphrase: chosen },
+      fetchTransport,
+    );
+    assert.equal(taken.state, 'open', 'a code alone opened the account');
+    await taken.use(async (h) => {
+      assert.deepEqual(h.kv, vaultKey(openAccount(chosen, fromBase64(taken.connection.accountSalt),
+        taken.connection.kdfParams, taken.connection.wrappedSeed).seed, taken.connection.vaultId),
+        'and the envelope it stored is the one the new passphrase opens');
+    });
+
+    // The point of setting a passphrase at all: the account must not be left openable by its
+    // code alone. A locked session built from what this device stored takes the new phrase…
+    const relocked = session.create(taken.connection, fetchTransport);
+    assert.equal(await relocked.open(chosen), 'open');
+
+    // …and not the forgotten one, which is what "recovered" has to mean.
+    const stale = session.create(taken.connection, fetchTransport);
+    await assert.rejects(() => stale.open(passphrase), 'the old passphrase is done');
+
+    // Server-side too, and this is the half a local check cannot see: `wrapped_seed` and
+    // `kek_verifier_hash` moved TOGETHER, so recovery by passphrase now answers to the new
+    // one. Written apart, this call would return an envelope the accepted proof cannot open.
+    const fresh = new SyncClient(base, fetchTransport);
+    const { account_salt, kdf_params } = await fresh.kdf('roundtrip-user');
+    const salt = fromBase64(account_salt);
+    const byPhrase = await fresh.recover({
+      login: 'roundtrip-user',
+      kek_verifier: kekVerifier(deriveKek(chosen, salt, kdf_params), 'roundtrip-user', salt),
+      device_name: 'one more',
+      device_platform: 'linux',
+    });
+    assert.equal(byPhrase.opened_by, 'passphrase');
+    assert.deepEqual(
+      openSealed(deriveKek(chosen, salt, kdf_params), byPhrase.seed_envelope),
+      openAccount(chosen, fromBase64(taken.connection.accountSalt), taken.connection.kdfParams,
+        taken.connection.wrappedSeed).seed,
+      'the envelope the server hands back is the one this device made',
+    );
+
+    // The code is NOT spent: it wraps the seed, and the seed did not change. The screen says
+    // so, because somebody who has just used a code should hear whether it still works.
+    const again = await new SyncClient(base, fetchTransport).recover({
+      login: 'roundtrip-user',
+      recovery_code: normaliseHumanCode(recoveryCode),
+      device_name: 'proof the code still works',
+      device_platform: 'linux',
+    });
+    assert.equal(again.opened_by, 'recovery_code');
   });
 
 });

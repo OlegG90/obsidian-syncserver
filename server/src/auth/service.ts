@@ -370,6 +370,56 @@ export const setRecoveryCode = async (
     return { replaced: user.had };
   });
 
+/**
+ * Put this account behind a different passphrase: a new `wrapped_seed` and the verifier that
+ * proves it, written together.
+ *
+ * **Built for recovery by code** (#34), which cannot work without it. Somebody who recovers
+ * with a code does not know the passphrase — that is why they used the code — so they must set
+ * one, and the account's envelope has to become the one that new passphrase opens. Leaving the
+ * server's copy under the forgotten phrase would mean an account recoverable only by its code,
+ * for ever, which is not what "recovered" means to anybody.
+ *
+ * **The pair moves together or not at all.** `wrapped_seed` and `kek_verifier_hash` describe
+ * the same KEK from two sides; writing one without the other leaves the endpoint answering
+ * with an envelope the accepted proof does not open — a state no constraint can catch, because
+ * both columns are individually valid.
+ *
+ * **`account_salt` is deliberately NOT touched.** Rolling it would be ordinary hygiene and here
+ * it is a trap: the salt is an input to the recovery code's KDF (M7), so a new salt silently
+ * turns a written-down code into a string that opens nothing. The client cannot re-wrap that
+ * envelope — it does not hold the code — so the salt stays for the life of the account.
+ *
+ * The seed itself never changes, which is why this is cheap and why nothing is re-encrypted:
+ * every vault key is `HKDF(seed, vault_id)` and none of them moves (docs/06).
+ */
+export const setPassphrase = async (
+  db: Db,
+  userId: string,
+  input: { wrappedSeed: Buffer; kekVerifier: string },
+): Promise<boolean> =>
+  db.tx(async (c) => {
+    const found = await c.query<{ login: string }>(
+      `SELECT login FROM users WHERE id = $1 AND state = 'active' FOR UPDATE`,
+      [userId],
+    );
+    const user = found.rows[0];
+    if (!user) return false;
+
+    await c.query(`UPDATE users SET wrapped_seed = $2, kek_verifier_hash = $3 WHERE id = $1`, [
+      userId,
+      input.wrappedSeed,
+      hashToken(input.kekVerifier),
+    ]);
+
+    await record(c, {
+      actor: { id: userId, login: user.login },
+      action: 'account.passphrase',
+      target: { id: userId, login: user.login },
+    });
+    return true;
+  });
+
 /** Whether this account has a code at all — the one thing a screen needs to know before offering one. */
 export const hasRecoveryCode = async (db: Db, userId: string): Promise<boolean> => {
   const row = await db.one<{ present: boolean }>(

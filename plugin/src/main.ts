@@ -370,18 +370,50 @@ export default class SyncServerPlugin extends Plugin {
    * which is the same branch a paired device takes.
    */
   async recover(args: { serverUrl: string; login: string; passphrase: string }): Promise<void> {
-    const s = await session.recover(
-      {
-        ...args,
-        deviceName: 'obsidian',
-        devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
-        // The same hazard as pairing, through the same branch: recovering into an Obsidian
-        // vault other than the original merges the two. #117 names pairing; the code path is
-        // one, and asking here costs a caller nothing.
-        askVault: (v) => this.askVault(v),
-      },
-      transport,
+    await this.adopt(
+      await session.recover(
+        {
+          ...args,
+          deviceName: 'obsidian',
+          devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+          // The same hazard as pairing, through the same branch: recovering into an Obsidian
+          // vault other than the original merges the two. #117 names pairing; the code path is
+          // one, and asking here costs a caller nothing.
+          askVault: (v) => this.askVault(v),
+        },
+        transport,
+      ),
     );
+  }
+
+  /**
+   * The other recovery: the code, for an account whose PASSPHRASE is what was lost (#34).
+   *
+   * Identical from here on — a session is a session — which is why both end in `adopt`. The
+   * difference is entirely inside the session: this one sets the account's passphrase on the
+   * way through, because somebody arriving with a code does not have one.
+   */
+  async recoverWithCode(args: {
+    serverUrl: string;
+    login: string;
+    code: string;
+    passphrase: string;
+  }): Promise<void> {
+    await this.adopt(
+      await session.recoverWithCode(
+        {
+          ...args,
+          deviceName: 'obsidian',
+          devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+          askVault: (v) => this.askVault(v),
+        },
+        transport,
+      ),
+    );
+  }
+
+  /** What both recoveries do with the session they end up holding. */
+  private async adopt(s: Session): Promise<void> {
     this.sess = s;
     this.data.connection = s.connection;
     // Empty, so adoption runs: this vault may hold nothing, or an old copy of everything,

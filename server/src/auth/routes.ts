@@ -6,6 +6,7 @@ import {
   findActiveAccount,
   findDeviceByRefresh,
   hasRecoveryCode,
+  setPassphrase,
   setRecoveryCode,
   issueRefreshToken,
   recoverAccount,
@@ -374,6 +375,43 @@ export const registerAuthRoutes = (
       claims.sub,
       hashToken(req.body.kek_verifier),
     ]);
+    return reply.code(204).send();
+  });
+
+  /**
+   * Put the account behind a different passphrase (#34).
+   *
+   * The caller sends the new `wrapped_seed` and the verifier for the same KEK; the server
+   * stores both and reads neither. It exists because **recovery by code has nowhere to land
+   * without it**: a person who recovered with a code has no passphrase, and an account whose
+   * envelope stays under the forgotten one is recoverable only by its code from then on.
+   *
+   * Authenticated, and that is the right proof: reaching here took `auth_secret`, which comes
+   * from the seed — so the caller demonstrably holds what the new envelope wraps. It does not
+   * ask for the old passphrase, and could not: the case this was built for is precisely the
+   * one where nobody has it.
+   *
+   * This is the write half of #138. Changing a passphrase on a working device needs more than
+   * this endpoint — other devices keep their own copy of the envelope and would go on opening
+   * with the old phrase — and that half is still open.
+   */
+  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+
+    const b = req.body ?? {};
+    // Both, always. They describe one KEK from two sides, and a half write leaves the account
+    // answering recovery with an envelope the accepted proof cannot open — a state no
+    // constraint can catch, since each column on its own is perfectly valid.
+    if (!b.wrapped_seed || !b.kek_verifier) {
+      return reply.code(400).send({ error: 'passphrase_pair_incomplete' });
+    }
+
+    const done = await setPassphrase(db, claims.sub, {
+      wrappedSeed: b64(b.wrapped_seed),
+      kekVerifier: b.kek_verifier,
+    });
+    if (!done) return reply.code(404).send({ error: 'not_found' });
     return reply.code(204).send();
   });
 
