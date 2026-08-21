@@ -192,3 +192,21 @@ const ACTIONS: Record<string, string> = {
   'quota.change': 'quota changed',
   'restore.confirm': 'restore confirmed',
 };
+
+/**
+ * The version line under the sign-out button: which server this console is talking to.
+ *
+ * **One number, not two.** The console is served BY the server — its assets are in the same
+ * image — so its own build and the server's are the same string by construction, and printing
+ * both would invite somebody to compare two numbers that cannot differ. That is the opposite
+ * of the plugin's line, which shows both precisely because they can (#111).
+ *
+ * A server too old to report one is not an unknown: `/health` has carried `version` since
+ * 0.1.0, so its absence dates the server rather than hiding it. `undefined` from a failed
+ * request is a different thing and says so — a console that cannot reach `/health` should not
+ * claim the server is ancient.
+ */
+export const serverLine = (version: string | null | undefined, reachable = true): string => {
+  if (!reachable) return 'Server version unknown';
+  return `Server ${version ?? 'before 0.1.0'}`;
+};
