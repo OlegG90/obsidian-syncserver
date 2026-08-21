@@ -1,6 +1,6 @@
 {
   "name": "@syncserver/plugin",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": true,
   "type": "module",
   "description": "Obsidian plugin: one bundle for Electron and the Capacitor WebView. Holds every key; the server holds none",
