@@ -12,6 +12,7 @@
  * screen, and this screen imports nothing back.
  */
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
@@ -124,7 +125,7 @@ export class SyncServerSettings extends PluginSettingTab {
         'cannot recover it — lose it and every vault goes with it.',
     });
 
-    const draft = { serverUrl: '', login: '', token: '', passphrase: '' };
+    const draft: ConnectDraft = { serverUrl: '', login: '', token: '', passphrase: '', again: '' };
 
     new Setting(containerEl)
       .setName('Server URL')
@@ -132,21 +133,41 @@ export class SyncServerSettings extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Login')
       .addText((t) => t.setPlaceholder('your login on that server').onChange((v) => (draft.login = v.trim())));
+    // Revealable, because a passphrase somebody is CHOOSING is one they have to proofread —
+    // and on the claim route, what they type is what the account's keys are made from. Hidden
+    // by default: the ordinary case is typing one they already know, next to somebody.
+    const secrets: HTMLInputElement[] = [];
+    const passphrase = new Setting(containerEl).setName('Passphrase');
+    passphrase.addText((t) => {
+      t.inputEl.type = 'password';
+      secrets.push(t.inputEl);
+      t.onChange((v) => (draft.passphrase = v));
+    });
+    passphrase.addExtraButton((b) =>
+      b
+        .setIcon('eye')
+        .setTooltip('Show the passphrase')
+        .onClick(() => {
+          const hidden = secrets[0]?.type === 'password';
+          for (const input of secrets) input.type = hidden ? 'text' : 'password';
+        }),
+    );
+
+    /**
+     * The second field, which exists for one route and is drawn for all of them.
+     *
+     * Beside the first, because that is where a person proofreads: putting it inside the claim
+     * row would separate the two halves of one act by the width of the other two routes. It
+     * says whose question it is, so nobody pairing a phone wonders whether they have to.
+     */
     new Setting(containerEl)
-      .setName('Passphrase')
+      .setName('Passphrase again')
+      .setDesc('For a new account only: a typo here becomes that account’s passphrase for good, and nobody can reset it.')
       .addText((t) => {
         t.inputEl.type = 'password';
-        t.onChange((v) => (draft.passphrase = v));
+        secrets.push(t.inputEl);
+        t.onChange((v) => (draft.again = v));
       });
-
-    /** Shared by all three: the fields are one form, so their check is one function. */
-    const missing = (needsToken = false): string | undefined => {
-      if (!draft.serverUrl) return 'the server address';
-      if (!draft.login) return 'a login';
-      if (!draft.passphrase) return 'the passphrase';
-      if (needsToken && !draft.token) return 'an invitation token';
-      return undefined;
-    };
 
     /** A transport failure names a category, never an address — and the address is the likeliest mistake. */
     const explain = (e: unknown): string => {
@@ -170,8 +191,8 @@ export class SyncServerSettings extends PluginSettingTab {
           .setButtonText('Connect')
           .setCta()
           .onClick(async () => {
-            const need = missing(true);
-            if (need) return void new Notice(`SyncServer: ${need} is needed to connect.`, 8000);
+            const need = whatIsMissing(draft, 'claim');
+            if (need) return void new Notice(`SyncServer: ${need}`, 10000);
             try {
               b.setDisabled(true);
               new Notice('SyncServer: deriving keys…');
@@ -196,8 +217,8 @@ export class SyncServerSettings extends PluginSettingTab {
       .setDesc('Shows a code to type on a device that is already connected. It seals the account key to this one.')
       .addButton((b) =>
         b.setButtonText('Show pairing code').onClick(async () => {
-          const need = missing();
-          if (need) return void new Notice(`SyncServer: ${need} is needed to pair.`, 8000);
+          const need = whatIsMissing(draft, 'pair');
+          if (need) return void new Notice(`SyncServer: ${need}`, 8000);
           b.setDisabled(true);
           try {
             await this.plugin.pairing(shown).join({
@@ -223,8 +244,8 @@ export class SyncServerSettings extends PluginSettingTab {
           .setButtonText('Recover')
           .setWarning()
           .onClick(async () => {
-            const need = missing();
-            if (need) return void new Notice(`SyncServer: ${need} is needed to recover.`, 8000);
+            const need = whatIsMissing(draft, 'recover');
+            if (need) return void new Notice(`SyncServer: ${need}`, 8000);
             b.setDisabled(true);
             try {
               new Notice('SyncServer: deriving keys…');
