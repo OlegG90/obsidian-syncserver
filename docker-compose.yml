@@ -41,12 +41,14 @@ services:
       # the old layout, so that an upgrade can hard-link across versions instead of
       # crossing a mount boundary. Mounting the inner path is the pre-18 convention and
       # produces a wall of text about pg_ctlcluster rather than "wrong mount point".
-      - ${DB_DIR:-./data/db}:/var/lib/postgresql
-      # Applied once, on an empty data directory — which is also when it seeds the
-      # tombstone and the first administrator's invitation (#107). There is no migration
-      # tool yet (docs/README), so this is the whole of schema management: a schema change
-      # means an empty directory and a fresh start.
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+      - ${DB_DIR:?set DB_DIR in .env — the directory this installation keeps its database in}:/var/lib/postgresql
+      # **No schema mounted here.** It used to be `./db/schema.sql` as an init script, which
+      # made an installation three files instead of two — and the third was the one people
+      # left behind, producing an empty database and a server failing against tables that were
+      # never created. The schema now travels inside the server image, which applies it when
+      # the database is empty and otherwise says in the log what is missing (`schema.ts`).
+      # There is still no migration tool (docs/README): bringing an existing database forward
+      # is a deliberate act, not something a start does to you.
     healthcheck:
       # $$ escapes for compose, not for the shell.
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -108,7 +110,7 @@ services:
       # inside the database or the blobs.
       RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/state/restore.epoch}
     volumes:
-      - ${BLOB_DIR:-./data/blobs}:/data/blobs
+      - ${BLOB_DIR:?set BLOB_DIR in .env — the directory the encrypted files live in}:/data/blobs
       # Where a backup can actually land. Without this the destination could only be a path
       # inside the container, so a copy would live in its writable layer and go with the next
       # `docker compose pull` — which is not a backup, it is a backup-shaped delay.
@@ -118,13 +120,13 @@ services:
       # finds nothing on the host. `BACKUP_DESTINATION` is the path INSIDE the container
       # (/backups); `BACKUP_DIR` is where that is on this machine — the same split as
       # `BLOB_DIR` and /data/blobs.
-      - ${BACKUP_DIR:-./data/backups}:/backups
+      - ${BACKUP_DIR:?set BACKUP_DIR in .env — where a backup copy lands on this host}:/backups
       # The restore epoch, which has to outlive the database it describes AND the container
       # that wrote it — that is the whole of what it is for (#92, docs/11). It defaulted to
       # `/data/restore.epoch`, and only `/data/blobs` is mounted: unwritable on any host whose
       # RUN_AS is not the image's own uid, and ephemeral even where it was writable. A guard
       # whose memory is thrown away with the container cannot detect a database that went
       # backwards across a restart, which is the one thing it exists to detect.
-      - ${STATE_DIR:-./data/state}:/state
+      - ${STATE_DIR:?set STATE_DIR in .env — outside the database and the blobs, so it survives restoring either}:/state
     ports:
       - "${PUBLISH_PORT:-8080}:8080"

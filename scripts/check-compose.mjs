@@ -73,9 +73,14 @@ const documented = new Set(
 );
 check(documented.size > 0, '.env.example must document the backup variables');
 for (const name of documented) {
+  // Referenced ANYWHERE in the file, not in `environment` specifically: some of these are the
+  // container's settings and some are host paths that appear under `volumes`. The property
+  // worth holding is the one `BACKUP_KEEP` broke — a variable documented for an operator that
+  // never reaches the deployment — and being strict about WHERE it is referenced turned that
+  // into a false positive against `BACKUP_DIR` the moment it stopped being a commented example.
   check(
-    String(server?.environment?.[name] ?? '').startsWith('${'),
-    `${name} is documented in .env.example, so compose must pass it through as \${${name}:-…}`,
+    text.includes(`\${${name}`),
+    `${name} is documented in .env.example, so compose must reference it — otherwise setting it does nothing`,
   );
 }
 

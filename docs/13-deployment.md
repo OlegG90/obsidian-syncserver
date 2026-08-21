@@ -395,7 +395,8 @@ just `docker compose pull` again.
   one that then failed. The newest good copy is never removed, and a copy can be removed one at
   a time from the console, which leaves the run in the history with no destination: the log
   keeps saying a backup ran, and the empty destination says its copy is gone;
-- **not upgradable in place.** `schema.sql` runs once, on an empty data directory. There is no
+- **not upgradable in place.** The server applies `schema.sql` — which travels **inside its image**
+  — once, to a database that has none, and afterwards only compares and warns (`schema.ts`). There is no
   migration tool yet, deliberately (see the repository README), so a schema change means
   discarding the database and starting again. That is fine while nothing in it matters, and it is
   exactly what stops being fine on the day something does.

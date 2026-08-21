@@ -9,9 +9,16 @@ import { loadConfig } from './config.js';
 import { connect } from './db.js';
 import { openEventsHub } from './events.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
+import { ensureSchema } from './schema.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
+
+// **First, before anything queries a table.** On a fresh installation there is nothing to query
+// until this has run: the schema travels inside this image now, not as a file the operator has
+// to mount beside the compose file (docs/13). On an existing database it only compares, and
+// says in the log what is missing.
+await ensureSchema(db);
 const events = openEventsHub(db);
 const app = await buildApp(db, cfg, events);
 

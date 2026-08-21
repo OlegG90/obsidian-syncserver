@@ -17,62 +17,67 @@ that argues it: [13](13-deployment.md) for deployment, [08](08-backup-restore.md
 
 - **Docker** with `docker compose` (v2 — the plugin, not the old `docker-compose` script);
 - a **port** the host is not already using. `8080` is taken on most NAS boxes by their own admin panel;
-- a **directory with room** for the vaults, their history, and — if you turn them on — the backups;
+- **four directories, created by you, with room to grow** — and their paths named in `.env`. They have no
+  defaults: compose refuses to start rather than quietly writing an installation's whole state beside its
+  own configuration file, where the next tidy-up would find something that looks like scratch:
+
+  | directory | what it holds | who writes it |
+  |---|---|---|
+  | `DB_DIR` | the database | the postgres image, as its own user — create it and leave it alone |
+  | `BLOB_DIR` | every file anybody has synced, encrypted | the server, as `RUN_AS` |
+  | `BACKUP_DIR` | backup copies, once you turn them on | the server, as `RUN_AS` |
+  | `STATE_DIR` | one small file: the restore epoch | the server, as `RUN_AS` |
+
+  `STATE_DIR` is separate from the other three on purpose. Its file is what notices that a database has
+  been restored — so it must survive restoring the database **and** restoring the blobs, which means it
+  can live in neither;
 - a **private network**. The server publishes on the host and terminates no TLS: a LAN, a VPN or a
   Tailscale tunnel is the boundary, until authentication has had a review of its own ([02](02-architecture.md)).
 
-You do **not** need git, Node, or a checkout of this repository on the server.
+You do **not** need git, Node, a checkout of this repository, or a schema file. **An installation is two
+files**: `docker-compose.yml` and `.env`.
 
 ---
 
 ## Quick start
 
-Five steps, no choices. Everything lands under one directory you pick.
+Five steps, no choices. Two files, four directories, and a working server at the end.
 
-### Step 1 — Get the three files
-
-The version appears twice — in these URLs and in `.env` — and the two must match: the compose file and
-the schema belong to the image they shipped with. Set it once here.
+### Step 1 — Get the two files
 
 ```bash
-V=0.5.4                       # the release to install; the newest is on the repository's releases page
-mkdir -p syncserver/db && cd syncserver
+V=0.5.5                       # the release to install; the newest is on the repository's releases page
+mkdir -p syncserver && cd syncserver
 
 BASE=https://raw.githubusercontent.com/OlegG90/obsidian-syncserver/$V
 curl -fsSL -o docker-compose.yml "$BASE/docker-compose.yml"
-curl -fsSL -o db/schema.sql     "$BASE/db/schema.sql"
 curl -fsSL -o .env              "$BASE/.env.example"
 ```
 
-`db/schema.sql` is the file people miss. Compose mounts it at a path **relative to the compose file**, so
-it has to sit in `db/` beside it. It runs **once**, on an empty database directory, and is ignored for
-ever afterwards.
+That is the whole of it. The database schema travels **inside the server image**, which applies it when
+the database is empty — there is no third file to place, and no way to leave it behind.
 
-**`0.5.4` or newer for this route.** `0.5.2` and `0.5.3` reject the empty `BACKUP_KEEP` that a compose
-file passes when nobody has set it, and refuse to boot — which is why the version in the URL and the
-version in the image have to be the same one.
+**`0.5.5` or newer for this route, and the two versions must be the same one.** Before 0.5.5 the schema
+was a third file mounted into the database container, so a compose file from one release and an image from
+another disagree about who applies it.
 
-### Step 2 — Make the data directories
+### Step 2 — Make the four directories
 
-Left alone, everything lands in `./data`. Docker would create those directories as `root`, and the server
-does not run as root, so make them yourself:
+Pick where the data lives. Anywhere with room, outside anything a future install replaces:
 
 ```bash
-mkdir -p data/{db,blobs,backups,state}
-chmod 775 data/{blobs,backups,state}
+mkdir -p /srv/syncserver/{db,blobs,backups,state}
+chmod 775 /srv/syncserver/{blobs,backups,state}
 ```
 
 `chmod`, not `chown`: `chown` needs root, which a NAS administrator often does not have, and the group is
-usually one both they and the container are in. `data/db` is not yours to arrange — the database image
-takes it over as its own user.
+usually one both they and the container are in. `db` is the exception — the database image takes that
+directory over as its own user, so create it and leave it alone.
 
 ### Step 3 — Fill in `.env`
 
-The file arrives with working values and **three gaps**: the image to run, and the two secrets. Compose
-refuses to start without any of them, which is the point — there is no default secret to leave in place.
-
-Later assignments win in an env file, so this appends rather than edits, and `$V` is still the version
-from Step 1:
+Eight fields, and the file you downloaded lists them at the top. Later assignments win in an env file, so
+this appends rather than edits, and `$V` is still the version from Step 1:
 
 ```bash
 cat >> .env <<EOF
@@ -80,6 +85,11 @@ SERVER_IMAGE=ghcr.io/olegg90/syncserver:$V
 POSTGRES_PASSWORD=$(openssl rand -hex 32)
 SERVER_SECRET=$(openssl rand -hex 32)
 PUBLISH_PORT=8087
+RUN_AS=$(id -u):$(id -g)
+DB_DIR=/srv/syncserver/db
+BLOB_DIR=/srv/syncserver/blobs
+BACKUP_DIR=/srv/syncserver/backups
+STATE_DIR=/srv/syncserver/state
 EOF
 ```
 
@@ -88,15 +98,8 @@ a later start leaves the installation unable to open its own data, while the dat
 healthy. A **version** and never `latest`, because a server has to be able to say what it is running and
 to go back to what it ran yesterday.
 
-Two values already in the file are worth a look:
-
-- **`PUBLISH_PORT`** ships as `8080`, which is why the append above overrides it. On a NAS that port
-  belongs to the box's own admin panel, and the clash surfaces only after the database is already healthy;
-- **`RUN_AS`** ships as `1000:1000` — the first ordinary user on most Linux hosts. It has to be a user that
-  can write the directories from Step 2; `id` tells you yours.
-
-To put the data somewhere other than `./data`, set `DB_DIR`, `BLOB_DIR`, `BACKUP_DIR` and `STATE_DIR` to
-host paths — the host side of four mounts whose container side is fixed.
+`PUBLISH_PORT` ships as `8080`, which is why the append overrides it: on a NAS that port belongs to the
+box's own admin panel, and the clash surfaces only after the database is already healthy.
 
 ### Step 4 — Start it
 
@@ -197,31 +200,29 @@ containers. Users need nothing — BRAT offers them the matching plugin release.
 version number carries the compatibility promise in the **minor** while the major is `0` (#111): `0.5.2`
 to `0.5.4` cannot break a client, `0.5.x` to `0.6.0` announces that it can.
 
-**There is no migration tool, deliberately.** `db/schema.sql` runs once, on an empty data directory, so a
-build whose schema gained something arrives at a database that has never seen it — and the failures are
-quiet: a missing table breaks at the first query, while a missing **trigger** simply never fires. That is
-how one deployment ran for weeks with change notifications inert.
+**There is no migration tool, deliberately.** The server applies the schema **once**, to a database that
+has none; a build whose schema gained something arrives at a database that has never seen the new part, and
+the failures are quiet — a missing table breaks at the first query, while a missing **trigger** simply
+never fires. That is how one deployment ran for weeks with change notifications inert.
 
-So after an upgrade that changed the schema, compare the two. Fetch `db/schema.sql` for the new version
-first, then:
+So the server compares, at every start, and says in its log what is missing:
 
-```bash
-docker compose exec -T db sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "
-     SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = '\''public'\''
-     UNION SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"' | tr -d '\r' | sort -u > /tmp/actual
-sed -n 's/^CREATE FUNCTION \([a-z_][a-z0-9_]*\).*/\1/p;s/^CREATE TRIGGER \([a-z_][a-z0-9_]*\).*/\1/p' \
-  db/schema.sql | sort -u | grep -Fxv -f /tmp/actual
+```
+the database is BEHIND this build's schema. Missing: trigger journal_notify. These are functions and
+triggers, whose absence is silent — a missing trigger does not fail, it simply never fires.
 ```
 
-Anything printed is missing from the database. (The archive route below runs this for you, and stops.)
+A warning and not a refusal: everything that does not touch what is missing works, and a database is not
+something to refuse to serve on a suspicion. `docker compose logs server | grep BEHIND` after an upgrade
+is the whole of the check. Bringing an existing database forward is still a deliberate act by somebody who
+knows what changed.
 
 ---
 
 ## Installing from an archive instead
 
 The route above needs the internet on the server. This one does not, and it does more for you: it creates
-and permits the directories, writes `.env` with generated secrets **only if there is none**, pins the
+and permits the four directories, writes `.env` with generated secrets **only if there is none**, pins the
 image, pulls, starts, waits for health, and compares the schema.
 
 On your own machine, from a checkout of this repository:
@@ -343,7 +344,7 @@ And the ones that are faults, with what each looks like:
 | the port is taken, after the database came up healthy | `PUBLISH_PORT` is the host's admin panel. Pick another |
 | the server starts, and the first upload fails with `EACCES` | the blob directory is not writable by `RUN_AS` |
 | the server does not start at all, on `EACCES` | the state directory is not writable. The restore guard writes there before it listens |
-| the database comes up empty and the server fails on missing tables | `db/schema.sql` was not beside the compose file at first start |
+| the database comes up empty and the server fails on missing tables | a compose file from before 0.5.5 with a 0.5.5+ image: the old one expected a schema file mounted, the new one applies its own. Take both from the same release |
 | `password authentication failed` after an upgrade | `.env` and the database disagree. The database keeps the password it was created with |
 
 The server's own log is the surface on an unattended box. `docker compose logs -f server` is where the
