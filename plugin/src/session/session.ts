@@ -274,6 +274,14 @@ export class Session {
   private handle: Handle | undefined;
   /** How many `use()` callbacks are in flight right now. `lock()` refuses while non-zero. */
   private inFlight = 0;
+  /**
+   * Whether the envelope stored here is behind the account's current passphrase (#138).
+   *
+   * Set from what the login answered, and only ever set to true by a DIFFERENCE — a server
+   * that reports no fingerprint leaves it false, because "the server is old" and "your
+   * passphrase changed" must not look the same to a person.
+   */
+  private stale = false;
 
   /** Private: the real paths come from the factory, which binds the real derivation. */
   private constructor(
@@ -448,6 +456,14 @@ export class Session {
       accountSalt: fromBase64(this.conn.accountSalt),
     });
     this.handle = handleFor(client, account.seed, this.conn.vaultId, session.user_id, session.enc_privkey);
+
+    // Compared to what this device just opened, not to anything remembered: the fingerprint is
+    // a hash of the envelope, so the answer is "is my copy the current one" with no extra
+    // state to keep in step (#138). A server that says nothing leaves this false.
+    this.stale =
+      session.seed_fingerprint !== undefined &&
+      session.seed_fingerprint !== toHex(sha256(fromBase64(this.conn.wrappedSeed)));
+
     return 'open';
   }
 
@@ -481,6 +497,86 @@ export class Session {
     this.handle?.client.setRefreshToken(undefined);
     this.handle = undefined;
     return 'locked';
+  }
+
+  /**
+   * Put this account behind a different passphrase (#138).
+   *
+   * The seed does not change, so **nothing is re-encrypted and no vault key moves**: what is
+   * rewritten is 32 bytes in an envelope, and the verifier that proves the new phrase opens
+   * it. They go up together, because apart they describe two different keys.
+   *
+   * **The current passphrase is checked here, against the local envelope.** The session is
+   * already open, so this proves nothing to the server — it proves the person at the keyboard
+   * is the one who knows the phrase, which an open Obsidian window does not.
+   *
+   * `account_salt` stays. It is an input to the recovery code's own derivation (M7), so a new
+   * one would quietly turn a written-down code into a string that opens nothing.
+   *
+   * **What this does NOT do is reach the account's other devices.** Each holds its own copy of
+   * the envelope and unwraps it locally, so they go on opening with the old phrase until each
+   * one notices (`envelopeIsStale`) and is told the new one. That is the honest shape of the
+   * problem rather than a gap: only a device that is running can be told anything, and this
+   * one cannot speak for the others.
+   */
+  async changePassphrase(current: string, next: string): Promise<void> {
+    if (!this.seed) throw new Error('session is locked');
+    const accountSalt = fromBase64(this.conn.accountSalt);
+
+    try {
+      this.derivation.open(current, accountSalt, this.conn.kdfParams, this.conn.wrappedSeed);
+    } catch {
+      throw new Error('that is not this vault’s current passphrase.');
+    }
+
+    const kek = deriveKek(next, accountSalt, this.conn.kdfParams);
+    const wrappedSeed = seal(kek, this.seed);
+
+    // Server first. A failure here leaves the account behind the phrase it was already behind,
+    // which is a state somebody can act on; the reverse — a device alone on a new phrase —
+    // is one nobody can.
+    await this.use((h) =>
+      h.client.setPassphrase({
+        wrapped_seed: wrappedSeed,
+        kek_verifier: kekVerifier(kek, this.conn.login, accountSalt),
+      }),
+    );
+    this.conn.wrappedSeed = wrappedSeed;
+  }
+
+  /**
+   * Whether the envelope this device holds is the one the account is behind (#138).
+   *
+   * `false` until a login has answered, and `false` against a server too old to say — a device
+   * must not announce a passphrase change because the server has no opinion.
+   */
+  get envelopeIsStale(): boolean {
+    return this.stale;
+  }
+
+  /**
+   * Take the current envelope, for a device left behind by a change made elsewhere (#138).
+   *
+   * Needs the NEW passphrase and proves it: the server hands the envelope to a caller who can
+   * already open it, and to nobody else — a stolen token buys an offline guess at the
+   * passphrase otherwise.
+   *
+   * The seed inside is the same seed, so nothing about this vault changes. What changes is
+   * which phrase opens this device tomorrow morning.
+   */
+  async adoptEnvelope(passphrase: string): Promise<void> {
+    const accountSalt = fromBase64(this.conn.accountSalt);
+    const kek = deriveKek(passphrase, accountSalt, this.conn.kdfParams);
+    const { wrapped_seed } = await this.use((h) =>
+      h.client.seedEnvelope(kekVerifier(kek, this.conn.login, accountSalt)),
+    );
+
+    // Opened before it is stored. The server proved the verifier matches; this proves the
+    // envelope it handed back is one this passphrase actually opens, and a device that stored
+    // an unopenable envelope would be locked out at the next restart with nothing to try.
+    this.derivation.open(passphrase, accountSalt, this.conn.kdfParams, wrapped_seed);
+    this.conn.wrappedSeed = wrapped_seed;
+    this.stale = false;
   }
 
   /**

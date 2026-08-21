@@ -521,6 +521,48 @@ describe('a vault, end to end', () => {
   });
 
   /**
+   * The passphrase change, and the fact that it does not travel (#138).
+   *
+   * Placed before the recovery test that follows, and it hands the account back to the
+   * original phrase before it ends — every test in this describe is about the account as it
+   * was, and one that quietly moved it would be paid for by the next person to add one here.
+   */
+  it('changes the passphrase, and a device left on the old envelope is told so', async () => {
+    const chosen = 'the second passphrase this vault has had';
+    if (sess.state !== 'open') assert.equal(await sess.open(passphrase), 'open');
+
+    // A second device of the same account, opened BEFORE the change. **Its own copy of the
+    // record**, not a reference to this one: a device's connection lives in its own
+    // `data.json`, and sharing the object here made the "stale" device silently follow the
+    // change — which is the one thing this test exists to prove cannot happen.
+    const elsewhere = JSON.parse(JSON.stringify(sess.connection)) as typeof sess.connection;
+    const other = session.create(elsewhere, fetchTransport);
+    assert.equal(await other.open(passphrase), 'open');
+    assert.equal(other.envelopeIsStale, false, 'nothing has changed yet');
+
+    await assert.rejects(() => sess.changePassphrase('not the current one', chosen), /current passphrase/);
+    await sess.changePassphrase(passphrase, chosen);
+
+    // The old phrase is gone from the server, and still present on the device that has not
+    // heard: it unwraps its own copy locally and syncs perfectly, behind a phrase nobody uses.
+    const behind = session.create(JSON.parse(JSON.stringify(other.connection)), fetchTransport);
+    assert.equal(await behind.open(passphrase), 'open', 'the stale device still opens with the old phrase');
+    assert.equal(behind.envelopeIsStale, true, 'and is told that its copy is not the current one');
+
+    // Catching up needs the NEW phrase — the token is not enough, by design.
+    await assert.rejects(() => behind.adoptEnvelope('neither phrase'));
+    await behind.adoptEnvelope(chosen);
+    assert.equal(behind.envelopeIsStale, false);
+
+    const caught = session.create(behind.connection, fetchTransport);
+    assert.equal(await caught.open(chosen), 'open', 'and now opens with the new one');
+    await assert.rejects(() => session.create(behind.connection, fetchTransport).open(passphrase));
+
+    // Put back, so the tests after this one are about the account they were written against.
+    await sess.changePassphrase(chosen, passphrase);
+  });
+
+  /**
    * Last in this describe on purpose: it changes the account's passphrase, and every test
    * above it is about the account as it was.
    */

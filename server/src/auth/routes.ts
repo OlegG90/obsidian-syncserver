@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
-import { fakeAccountSalt, hashToken } from '../crypto.js';
+import { fakeAccountSalt, hashToken, tokenMatches } from '../crypto.js';
 import type { Db } from '../db.js';
 import {
   changePassword,
@@ -263,9 +263,10 @@ export const registerAuthRoutes = (
       // it: an invitation is an HPKE envelope sealed to this account's public key, bound to
       // its id (docs/06). Neither half is a secret — `enc_privkey` is worthless without the
       // seed, which is exactly why the server may hold it and hand it back.
-      const identity = await db.one<{ encPrivkey: string; needsKekVerifier: boolean }>(
+      const identity = await db.one<{ encPrivkey: string; needsKekVerifier: boolean; seedFingerprint: string }>(
         `SELECT encode(enc_privkey, 'base64') AS "encPrivkey",
-                (kek_verifier_hash IS NULL) AS "needsKekVerifier"
+                (kek_verifier_hash IS NULL) AS "needsKekVerifier",
+                encode(sha256(wrapped_seed), 'hex') AS "seedFingerprint"
            FROM users WHERE id = $1`,
         [account.id],
       );
@@ -279,6 +280,20 @@ export const registerAuthRoutes = (
         // verifier and cannot produce one itself: only a client holding the passphrase can.
         // Without this flag such an account would stay unrecoverable forever, silently.
         needs_kek_verifier: identity!.needsKekVerifier,
+        /**
+         * A hash of the envelope this account is behind, so a device can tell whether its own
+         * copy is still the current one (#138).
+         *
+         * Every device holds `wrapped_seed` locally and unwraps it there, so a passphrase
+         * changed on one device leaves every other device opening with the OLD one — working
+         * perfectly, and behind a phrase its owner has stopped using. Nothing on the wire said
+         * so, because nothing needed to until a passphrase could change.
+         *
+         * A hash rather than the envelope: the envelope is an offline target for guessing the
+         * passphrase, and handing it to every login would turn a stolen access token into one.
+         * A hash of ciphertext answers "is yours the current one" and nothing else.
+         */
+        seed_fingerprint: identity!.seedFingerprint,
       };
     },
   );
@@ -371,9 +386,10 @@ export const registerAuthRoutes = (
    * Set this account's recovery verifier — the one thing only a client with the passphrase
    * can compute (#112).
    *
-   * Two callers, one shape: an account that predates recovery, backfilling on its first
-   * unlock, and a passphrase change, which must move the verifier with the KEK or leave it
-   * pointing at a phrase nobody uses.
+   * One caller: an account that predates recovery, backfilling on its first unlock. A
+   * passphrase change does NOT come through here — it moves the verifier and the envelope
+   * together through `PUT /auth/passphrase`, because apart they describe two different keys
+   * (#138). This docblock named that second caller for weeks before one existed.
    *
    * Authenticated, and that is proof enough: reaching here at all took `auth_secret`, which
    * comes from the seed, which comes from the envelope this verifier guards.
@@ -435,6 +451,47 @@ export const registerAuthRoutes = (
     // provisioned. Not a 404: the endpoint is right, this account simply has no password.
     if (out === 'gone') return reply.code(409).send({ error: 'no_password_to_change' });
     return reply.code(204).send();
+  });
+
+  /**
+   * The current seed envelope, for a device whose copy has gone stale (#138).
+   *
+   * Wanted by exactly one caller: a device that logged in, saw a `seed_fingerprint` unlike its
+   * own, and is being brought in line with a passphrase changed somewhere else.
+   *
+   * **Authenticated AND proved**, which is not belt and braces. The token says which account;
+   * the `kek_verifier` says the caller knows the passphrase this envelope is behind — and
+   * without that second half this endpoint would hand a stolen access token an offline target
+   * for guessing the passphrase, which is precisely what the login response refuses to do by
+   * answering with a hash. The proof is the same one `/auth/recover` takes, so a caller who can
+   * satisfy this could already get the envelope there; what it saves is the device row that
+   * recovery would mint for a device the account already has.
+   *
+   * Through the attempt limiter for the same reason recovery is: it is a passphrase guess.
+   */
+  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+    if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
+
+    const allowed = attempts.check(claims.sub);
+    if (!allowed.ok) {
+      return reply.code(429).send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
+    }
+
+    const row = await db.one<{ wrappedSeed: string; hash: string | null }>(
+      `SELECT encode(wrapped_seed, 'base64') AS "wrappedSeed", kek_verifier_hash AS hash
+         FROM users WHERE id = $1 AND state = 'active'`,
+      [claims.sub],
+    );
+    if (!row?.hash || !tokenMatches(req.body.kek_verifier, row.hash)) {
+      attempts.fail(claims.sub);
+      // The same refusal a wrong passphrase gets everywhere else. An account whose verifier is
+      // missing is indistinguishable from a wrong one here, deliberately (#73).
+      return reply.code(401).send({ error: 'invalid_credentials' });
+    }
+    attempts.succeed(claims.sub);
+    return { wrapped_seed: row.wrappedSeed };
   });
 
   /**
