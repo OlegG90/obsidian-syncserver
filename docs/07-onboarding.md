@@ -175,10 +175,24 @@ per login and per source, and each is recorded in the audit log.
 
 **The recovery code is the same door with a different key.** Where the user has forgotten the phrase but kept
 the code, step 2 disappears and step 3 carries the code instead; the server answers with `recovery_key` — the
-seed wrapped under that code — and everything from step 5 is identical. One endpoint, two proofs, and each
-returns only the envelope its proof opens ([06](06-key-model.md)). That half is specified and **not built**:
-it is [M7](10-roadmap.md), and until then an account's recovery columns are **null**, which is the account
-saying honestly that it has no code.
+seed wrapped under that code — and everything from step 6 is identical. One endpoint, two proofs, and each
+returns only the envelope its proof opens ([06](06-key-model.md)).
+
+**With one step that has no counterpart on the passphrase route: it sets a passphrase.** Somebody arriving
+with a code does not know one, so between steps 5 and 6 the client derives a `KEK` from a passphrase the
+person chooses now, re-wraps the same seed under it, and sends the new `wrapped_seed` and its `kek_verifier`
+to `PUT /auth/passphrase` — together, because they describe one key from two sides. Without it the account
+would be openable by its code and nothing else, for ever, which is not what recovering means.
+
+The seed does not change, so **the code still works afterwards**. It has been out of wherever it was kept,
+which is a good reason to replace it, and the screen says so rather than leaving it to be assumed.
+
+`account_salt` stays as it is, here and anywhere else a passphrase is written. It is an input to the recovery
+code's own derivation ([06](06-key-model.md)), so a rolled salt would quietly turn a written-down code into a
+string that opens nothing — and the client could not re-wrap that envelope, having no code.
+
+An account that never had a code has **null** in both columns, which is the account saying honestly that it
+has none.
 
 **What recovery does not do.** It does not survive losing both the phrase and the code, and it does not bring
 back a vault the user deleted from the server. It brings back the account, and with it every vault the server

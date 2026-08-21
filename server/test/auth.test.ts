@@ -683,3 +683,100 @@ describe('the recovery code an account can be given later', () => {
     assert.deepEqual(Object.keys(row!.details), ['replaced']);
   });
 });
+
+/**
+ * Putting the account behind a different passphrase (#34).
+ *
+ * Built because recovery by code has nowhere to land without it: somebody who recovered with a
+ * code has no passphrase, and an account left under the forgotten one would be openable by its
+ * code and nothing else, for ever.
+ */
+describe('the passphrase an account can be given again', () => {
+  const envelope = Buffer.alloc(48, 8).toString('base64');
+  const VERIFIER = 'n'.repeat(43);
+
+  const signIn = async (): Promise<string> => {
+    const device = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    return res.json().access;
+  };
+
+  const put = async (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'PUT',
+      url: '/auth/passphrase',
+      headers: { authorization: `Bearer ${await signIn()}` },
+      payload,
+    });
+
+  it('moves the envelope and the verifier together, so recovery answers the new one', async () => {
+    // The pair is the whole point. Written apart, the endpoint would hand back an envelope
+    // that the proof it just accepted cannot open — a state no constraint can catch, because
+    // each column on its own is valid.
+    assert.equal((await put({ wrapped_seed: envelope, kek_verifier: VERIFIER })).statusCode, 204);
+
+    const back = await app.inject({
+      method: 'POST',
+      url: '/auth/recover',
+      payload: { login: VAULT_LOGIN, kek_verifier: VERIFIER },
+    });
+    assert.equal(back.statusCode, 200, back.body);
+    assert.equal(back.json().seed_envelope, envelope);
+
+    // And the old proof is done, which is what makes this a change rather than a second key.
+    const old = await app.inject({
+      method: 'POST',
+      url: '/auth/recover',
+      payload: { login: VAULT_LOGIN, kek_verifier: KEK_VERIFIER },
+    });
+    assert.equal(old.statusCode, 401);
+  });
+
+  it('leaves account_salt alone, because the recovery code is derived through it', async () => {
+    // Rolling the salt would be ordinary hygiene and here it is a trap: it is an input to the
+    // code's KDF (M7), so a new salt silently turns a written-down code into a string that
+    // opens nothing — and the client cannot re-wrap that envelope, having no code.
+    const before = await db.one<{ salt: string }>(
+      `SELECT encode(account_salt, 'hex') AS salt FROM users WHERE login = $1`,
+      [VAULT_LOGIN],
+    );
+    await put({ wrapped_seed: envelope, kek_verifier: VERIFIER });
+    const after = await db.one<{ salt: string }>(
+      `SELECT encode(account_salt, 'hex') AS salt FROM users WHERE login = $1`,
+      [VAULT_LOGIN],
+    );
+    assert.equal(after!.salt, before!.salt);
+  });
+
+  it('refuses half a pair', async () => {
+    assert.equal((await put({ wrapped_seed: envelope })).statusCode, 400);
+    assert.equal((await put({ kek_verifier: VERIFIER })).statusCode, 400);
+  });
+
+  it('takes nothing from a caller who is not signed in', async () => {
+    const anon = await app.inject({
+      method: 'PUT',
+      url: '/auth/passphrase',
+      payload: { wrapped_seed: envelope, kek_verifier: VERIFIER },
+    });
+    assert.equal(anon.statusCode, 401);
+  });
+
+  it('records it, because it changes what opens the account', async () => {
+    await put({ wrapped_seed: envelope, kek_verifier: VERIFIER });
+    const row = await db.one<{ actor: string; target: string }>(
+      `SELECT actor_login AS actor, target_login AS target FROM audit_log
+        WHERE action = 'account.passphrase' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.equal(row!.actor, VAULT_LOGIN);
+    assert.equal(row!.target, VAULT_LOGIN);
+  });
+});

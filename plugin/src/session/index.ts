@@ -23,9 +23,12 @@ import {
   type Derivation,
   type PairArgs,
   type RecoverArgs,
+  type RecoverWithCodeArgs,
 } from './session.js';
 
-export type { AskVault, Connection, ConnectArgs, Derivation, Handle, PairArgs, RecoverArgs, VaultChoice } from './session.js';
+export type {
+  AskVault, Connection, ConnectArgs, Derivation, Handle, PairArgs, RecoverArgs, RecoverWithCodeArgs, VaultChoice,
+} from './session.js';
 export { Session };
 
 const realDerivation: Derivation = {
@@ -45,6 +48,9 @@ export const session = {
   /** The last device gone: take the account back with the passphrase alone (docs/07). */
   recover: (args: RecoverArgs, transport: Transport) =>
     Session.recover(args, { derivation: realDerivation, transport }),
+  /** The passphrase gone: take it back with the recovery code, and set a new one (#34). */
+  recoverWithCode: (args: RecoverWithCodeArgs, transport: Transport) =>
+    Session.recoverWithCode(args, { derivation: realDerivation, transport }),
 };
 
 /** Tests: a factory the caller binds to fakes. The real path above has no such parameter. */
@@ -53,4 +59,5 @@ export const forTests = (deps: { derivation: Derivation; transport: Transport })
   create: (conn: Connection) => Session.create(conn, deps),
   pair: (args: PairArgs, poll?: () => Promise<boolean>) => Session.pair(args, deps, poll),
   recover: (args: RecoverArgs) => Session.recover(args, deps),
+  recoverWithCode: (args: RecoverWithCodeArgs) => Session.recoverWithCode(args, deps),
 });

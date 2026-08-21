@@ -10,7 +10,7 @@
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
-| **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ◐ — a code can be made; redeeming it from the plugin is #34 |
+| **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☑ |
 
 **There is no M6.** It was a WebDAV gateway, and it is dropped rather than deferred: the vault is reached
 through the plugin, and a second protocol into the same data is a second place for the key model to be got
@@ -467,11 +467,11 @@ been in the schema since M3.5.
 - [x] **A screen that says what it is for**, because the value of this depends entirely on where the user
       puts it. It shows the code and offers to copy it, and it says the one thing that is not obvious: a copy
       kept inside this vault survives forgetting the passphrase and does not survive losing the device.
-- [ ] **Redeeming it** (#34) — the client half of `/auth/recover` with a code instead of a passphrase. The
-      server has answered that call since M3.5 and nothing on the client makes it, so a code created today
-      is redeemable with `curl` and not from the plugin. **Normalising is what that work must not forget**:
-      the server hashes the string it is handed, so a typed code has to be normalised before it is sent, and
-      a roundtrip test asserts the trap rather than describing it.
+- [x] **Redeeming it** (#34) — the client half of `/auth/recover` with a code instead of a passphrase, as a
+      fourth route on the connect screen. It **sets a passphrase on the way through**, because somebody
+      arriving with a code has none and an account left under the forgotten one would be openable by its code
+      alone from then on. That took the one endpoint this milestone did not plan for — `PUT /auth/passphrase`,
+      writing `wrapped_seed` and `kek_verifier_hash` as a pair — which is the write half of #138.
 
 **Offered, never forced.** It is an action in the settings and not a step of registration. A code demanded
 during sign-up lands in the same password manager as the passphrase, where it is a second key to the same
