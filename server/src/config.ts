@@ -14,6 +14,28 @@ const int = (name: string, fallback: number): number => {
   return n;
 };
 
+/**
+ * A whole number the deployment may leave out — where **an empty value is leaving it out**.
+ *
+ * The rule lives beside `int` and `str`, which have always read `''` as absent, because the
+ * one reader that did not was `BACKUP_KEEP` reading `process.env` directly. Compose passes
+ * `${BACKUP_KEEP:-}` as an empty string whenever nobody has set it, so a server with no
+ * retention configured refused to boot — in a restart loop, on a NAS, over a variable its
+ * operator had never touched.
+ *
+ * The rejected value is quoted back. "Must be a whole number" over an invisible string is what
+ * turns a minute into an hour.
+ */
+const count = (name: string): number | undefined => {
+  const raw = process.env[name];
+  const value = raw === undefined ? '' : raw.trim();
+  if (value === '') return undefined;
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`${name} must be a whole number, at least 1 — or unset; got ${JSON.stringify(raw)}`);
+  }
+  return Number(value);
+};
+
 const str = (name: string, fallback?: string): string => {
   const raw = process.env[name];
   if (raw !== undefined && raw !== '') return raw;
@@ -197,15 +219,15 @@ export const loadConfig = (): Config => {
           'a partial backup configuration would start a run that cannot finish',
       );
     }
-    const keep = process.env['BACKUP_KEEP'];
-    if (keep !== undefined && !/^[1-9][0-9]*$/.test(keep)) {
-      throw new Error('BACKUP_KEEP must be a whole number of copies to keep, at least 1 — or unset, to keep all');
-    }
+    // How many copies to keep, or nothing at all — `count` is where "empty means unset" lives,
+    // which is the rule this variable learned the hard way (#136 shipped it reading
+    // `process.env` directly, and a server would not boot).
+    const keep = count('BACKUP_KEEP');
     cfg.backup = {
       destination,
       dumpCommand: dumpCommand.split(/\s+/),
       blobSource,
-      ...(keep === undefined ? {} : { keep: Number(keep) }),
+      ...(keep === undefined ? {} : { keep }),
     };
   }
 
