@@ -554,3 +554,132 @@ describe('recovery — the account comes back to a device that holds nothing', (
     assert.equal(still.statusCode, 200, still.body);
   });
 });
+
+/**
+ * Giving an account a recovery code, and replacing it (M7).
+ *
+ * The redeem path could already carry the pair, and `/auth/recover` could already take a code
+ * as its second proof — both since M3.5. What did not exist was any way to acquire one
+ * afterwards, which is the only way this product offers it: an action in the settings, not a
+ * step of registration (docs/06). Without these endpoints, an account created without a code
+ * could never get one, and one whose code was lost could never replace it.
+ */
+describe('the recovery code an account can be given later', () => {
+  const CODE = 'the-code-a-person-writes-down';
+  const OTHER = 'a-second-code-issued-later';
+  const envelope = Buffer.alloc(48, 5).toString('base64');
+
+  const signIn = async (): Promise<string> => {
+    const device = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    return res.json().access;
+  };
+
+  const put = async (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'PUT',
+      url: '/auth/recovery-code',
+      headers: { authorization: `Bearer ${await signIn()}` },
+      payload,
+    });
+
+  const recover = (payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: '/auth/recover', payload });
+
+  it('files a code on an account that has none, and that code then opens it', async () => {
+    await db.query(`UPDATE users SET recovery_key = NULL, recovery_code_hash = NULL WHERE login = $1`, [VAULT_LOGIN]);
+
+    const set = await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE) });
+    assert.equal(set.statusCode, 200, set.body);
+    assert.equal(set.json().replaced, false, 'there was nothing to replace');
+
+    const back = await recover({ login: VAULT_LOGIN, recovery_code: CODE });
+    assert.equal(back.statusCode, 200, back.body);
+    assert.equal(back.json().seed_envelope, envelope, 'the envelope it filed is the envelope it gets back');
+  });
+
+  it('replacing invalidates the previous code, which is the point of replacing', async () => {
+    // The whole risk this feature carries is a slip of paper from three years ago that still
+    // opens the account. There is deliberately no way to hold two.
+    await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE) });
+    const again = await put({ recovery_key: envelope, recovery_code_hash: sha256hex(OTHER) });
+    assert.equal(again.json().replaced, true, 'and it says so, which the client cannot know on its own');
+
+    assert.equal((await recover({ login: VAULT_LOGIN, recovery_code: CODE })).statusCode, 401);
+    assert.equal((await recover({ login: VAULT_LOGIN, recovery_code: OTHER })).statusCode, 200);
+  });
+
+  it('says whether there is one, and never what it is', async () => {
+    // A code the server could show again would be a code the server could use. It is stored
+    // as a hash precisely so that it cannot.
+    await db.query(`UPDATE users SET recovery_key = NULL, recovery_code_hash = NULL WHERE login = $1`, [VAULT_LOGIN]);
+    const access = await signIn();
+    const ask = () =>
+      app.inject({ method: 'GET', url: '/auth/recovery-code', headers: { authorization: `Bearer ${access}` } });
+
+    assert.deepEqual((await ask()).json(), { present: false });
+    await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE) });
+    assert.deepEqual((await ask()).json(), { present: true }, 'a boolean, and nothing else');
+  });
+
+  it('refuses half a pair rather than letting the schema catch it', async () => {
+    // `recovery_code_is_whole` would refuse it anyway, from inside a transaction. A client
+    // that sent one field should hear a bad request, not a constraint violation.
+    assert.equal((await put({ recovery_key: envelope })).statusCode, 400);
+    assert.equal((await put({ recovery_code_hash: sha256hex(CODE) })).statusCode, 400);
+  });
+
+  it('refuses a hash that is not one — the only check it can make on material it cannot read', async () => {
+    // The envelope is opaque by design. The hash has a shape, and a client sending the wrong
+    // encoding would store a verifier no correct code will ever match — found out years
+    // later, by somebody who did everything right.
+    const bad = await put({ recovery_key: envelope, recovery_code_hash: 'not a sha-256' });
+    assert.equal(bad.statusCode, 400);
+    assert.equal(bad.json().error, 'recovery_code_hash_invalid');
+    assert.equal(
+      (await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE).toUpperCase() })).statusCode,
+      400,
+      'and the encoding is part of the contract (#108), so upper-case hex is not it',
+    );
+  });
+
+  it('takes nothing from a caller who is not signed in', async () => {
+    const anon = await app.inject({
+      method: 'PUT',
+      url: '/auth/recovery-code',
+      payload: { recovery_key: envelope, recovery_code_hash: sha256hex(CODE) },
+    });
+    assert.equal(anon.statusCode, 401);
+    assert.equal((await app.inject({ method: 'GET', url: '/auth/recovery-code' })).statusCode, 401);
+  });
+
+  it('records the change, saying only that it happened', async () => {
+    // It changes what can open the account, which is the class of event this log exists for.
+    // Not the code, obviously — and not the hash either: that is a verifier, and a log is
+    // read by more people than a users table.
+    const before = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM audit_log WHERE action = 'account.recovery_code'`,
+    );
+    await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE) });
+    const row = await db.one<{ details: { replaced: boolean }; actor: string; target: string }>(
+      `SELECT details, actor_login AS actor, target_login AS target FROM audit_log
+        WHERE action = 'account.recovery_code' ORDER BY at DESC LIMIT 1`,
+    );
+    const after = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM audit_log WHERE action = 'account.recovery_code'`,
+    );
+
+    assert.equal(Number(after!.n), Number(before!.n) + 1);
+    assert.equal(row!.actor, VAULT_LOGIN, 'the account acting on itself is both actor and target');
+    assert.equal(row!.target, VAULT_LOGIN);
+    assert.deepEqual(Object.keys(row!.details), ['replaced']);
+  });
+});

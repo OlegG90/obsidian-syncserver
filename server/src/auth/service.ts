@@ -321,6 +321,64 @@ export const findDeviceByRefresh = async (db: Db, refresh: string) =>
     [hashToken(refresh)],
   );
 
+/**
+ * Give this account a recovery code, or replace the one it has (M7).
+ *
+ * **The two columns move together or not at all** — `recovery_code_is_whole` in the schema
+ * refuses a half pair, and this is the statement that would otherwise write one. The envelope
+ * is bytes the server cannot read and does not try to: it holds the same seed as
+ * `wrapped_seed`, wrapped under a key derived from a code that never arrives here.
+ *
+ * **Replacing invalidates the previous code, and that is the point** rather than a side
+ * effect. The whole risk of this feature is a slip of paper from three years ago that still
+ * opens the account, so there is no way to hold two.
+ *
+ * Authenticated calling is proof enough, exactly as for `kek_verifier`: reaching here took
+ * `auth_secret`, which comes from the seed, which is what the new envelope wraps. An account
+ * that cannot open itself cannot file a code for itself.
+ */
+export const setRecoveryCode = async (
+  db: Db,
+  userId: string,
+  input: { recoveryKey: Buffer; recoveryCodeHash: string },
+): Promise<{ replaced: boolean } | undefined> =>
+  db.tx(async (c) => {
+    const found = await c.query<{ login: string; had: boolean }>(
+      `SELECT login, (recovery_code_hash IS NOT NULL) AS had
+         FROM users WHERE id = $1 AND state = 'active' FOR UPDATE`,
+      [userId],
+    );
+    const user = found.rows[0];
+    if (!user) return undefined;
+
+    await c.query(`UPDATE users SET recovery_key = $2, recovery_code_hash = $3 WHERE id = $1`, [
+      userId,
+      input.recoveryKey,
+      input.recoveryCodeHash,
+    ]);
+
+    // Recorded because it changes what can open the account, which is the class of event this
+    // log exists for. `replaced` and not the code, obviously — and not the hash either: it is
+    // a verifier, and a log is read by more people than a users table.
+    await record(c, {
+      actor: { id: userId, login: user.login },
+      action: 'account.recovery_code',
+      target: { id: userId, login: user.login },
+      details: { replaced: user.had },
+    });
+
+    return { replaced: user.had };
+  });
+
+/** Whether this account has a code at all — the one thing a screen needs to know before offering one. */
+export const hasRecoveryCode = async (db: Db, userId: string): Promise<boolean> => {
+  const row = await db.one<{ present: boolean }>(
+    `SELECT (recovery_code_hash IS NOT NULL) AS present FROM users WHERE id = $1 AND state = 'active'`,
+    [userId],
+  );
+  return row?.present ?? false;
+};
+
 /** What recovery gives back: the envelope the proof unlocks, and a device to use it from. */
 export interface Recovered {
   seedEnvelope: string;

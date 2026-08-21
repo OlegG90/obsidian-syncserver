@@ -382,6 +382,23 @@ export class SyncClient {
     return this.json('POST', '/auth/pairings', body, { auth: false });
   }
 
+  /**
+   * Whether this account has a recovery code (M7). A boolean is all there is to ask for —
+   * a code the server could show again would be a code the server could use.
+   */
+  recoveryCodeState(): Promise<{ present: boolean }> {
+    return this.json('GET', '/auth/recovery-code');
+  }
+
+  /**
+   * File a recovery code, or replace the one there is. `replaced` is the half the client
+   * cannot know on its own, and the half a person needs to hear: the old code has stopped
+   * working.
+   */
+  setRecoveryCode(body: { recovery_key: string; recovery_code_hash: string }): Promise<{ replaced: boolean }> {
+    return this.json('PUT', '/auth/recovery-code', body);
+  }
+
   /** What to seal to. Precedes approval, because sealing needs the waiting device's key. */
   lookupPairing(body: { pairing_secret: string }): Promise<{ device_pubkey: string }> {
     return this.json('POST', '/auth/pairings/lookup', body);

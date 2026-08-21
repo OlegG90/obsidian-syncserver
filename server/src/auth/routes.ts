@@ -5,6 +5,8 @@ import type { Db } from '../db.js';
 import {
   findActiveAccount,
   findDeviceByRefresh,
+  hasRecoveryCode,
+  setRecoveryCode,
   issueRefreshToken,
   recoverAccount,
   consoleSignIn,
@@ -374,6 +376,58 @@ export const registerAuthRoutes = (
     ]);
     return reply.code(204).send();
   });
+
+  /**
+   * The account's recovery code (M7): whether it has one, and setting or replacing it.
+   *
+   * **Offered, never demanded**, which is why this is a pair of ordinary endpoints and not a
+   * step of registration. A code demanded during sign-up lands in the same password manager as
+   * the passphrase, where it is a second key to the same door: all of the cost, none of the
+   * protection. It pays only when it lives somewhere else, and that is a choice the product
+   * can explain and must not make on somebody's behalf.
+   *
+   * GET answers a boolean and nothing more. There is no reading a code back — a code the
+   * server could show again would be a code the server could use, and this one is stored as a
+   * hash precisely so that it cannot.
+   */
+  app.get('/auth/recovery-code', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+    return { present: await hasRecoveryCode(db, claims.sub) };
+  });
+
+  app.put<{ Body: { recovery_key?: string; recovery_code_hash?: string } }>(
+    '/auth/recovery-code',
+    async (req, reply) => {
+      const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+      if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+
+      const b = req.body ?? {};
+      // Both or neither, checked here as well as by `recovery_code_is_whole` in the schema:
+      // a half pair is an account that claims a path it does not have (docs/06), and the
+      // client that sent one should hear about it as a bad request rather than as a
+      // constraint violation from inside a transaction.
+      if (!b.recovery_key || !b.recovery_code_hash) {
+        return reply.code(400).send({ error: 'recovery_pair_incomplete' });
+      }
+      // The one thing the server can check about material it cannot read. The envelope is
+      // opaque by design; the hash has a shape, and a client sending the wrong encoding
+      // would otherwise store a verifier that no correct code will ever match — discovered
+      // years later, by somebody who did everything right.
+      if (!/^[0-9a-f]{64}$/.test(b.recovery_code_hash)) {
+        return reply.code(400).send({ error: 'recovery_code_hash_invalid' });
+      }
+
+      const out = await setRecoveryCode(db, claims.sub, {
+        recoveryKey: b64(b.recovery_key),
+        recoveryCodeHash: b.recovery_code_hash,
+      });
+      if (!out) return reply.code(404).send({ error: 'not_found' });
+      // Said back, because "you had one and it no longer works" is the half of this a person
+      // needs to hear and the client cannot know on its own.
+      return { replaced: out.replaced };
+    },
+  );
 
   /**
    * Retire a device of the caller's own account — what disconnecting does on its way out.

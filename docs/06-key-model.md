@@ -238,8 +238,10 @@ paths, and they answer two different losses.
    - **the passphrase.** The client takes `account_salt` and `kdf_params` from the pre-auth `/auth/kdf`,
      derives the same `KEK` it would derive to unlock, and sends `kek_verifier` — never the phrase, and never
      anything the seed could be read out of. The server answers with `wrapped_seed`;
-   - **the recovery code.** A high-entropy string shown once at registration, under which a second copy of the
-     seed is wrapped. The server holds `recovery_code_hash` and answers with `recovery_key`.
+   - **the recovery code.** A high-entropy string shown **once**, under which a second copy of the seed is
+     wrapped. The server holds `recovery_code_hash` and answers with `recovery_key`. Not at registration:
+     it is an action in the settings, for the reason M7 gives — a code demanded during sign-up lands in the
+     same password manager as the passphrase, where it is a second key to the same door.
 
    Either way it creates the device exactly as claim does and returns `enc_privkey` beside the envelope, and
    the client unwraps with the key it already has.
@@ -256,9 +258,31 @@ caller who can produce neither proof gets the same refusal as an unknown login.
 | every device, the passphrase remembered | `kek_verifier` |
 | the passphrase | the recovery code, if one was kept |
 
-Only the first is implemented ([10](10-roadmap.md), M3.5). The recovery code is specified here, has its
-columns in the schema, and is **M7** — with one condition holding until then, because a half-present
-mechanism must not claim to be a whole one.
+Both are implemented. The passphrase proof arrived with M3.5; the code with M7.
+
+#### How the code wraps the seed
+
+    recovery_kek = HKDF(sha256, ikm = normalised code, salt = account_salt, info = "recovery-code")
+    recovery_key = AEAD(recovery_kek, seed)              ← beside wrapped_seed, same 32 bytes
+    recovery_code_hash = sha256(normalised code), hex    ← like every other stored verifier (#108)
+
+**HKDF and not Argon2id**, unlike the passphrase, and the asymmetry is the point: the code is 128 bits of
+CSPRNG (`human-code.ts`), so no work factor buys anything against it — it would only charge the person
+recovering, at the one moment they are already having a bad day. This is the reasoning of *Hashing the four
+secrets* below, applied one layer up.
+
+**The salt binds the envelope to the account**, so a code cannot be carried to another one, and the `info`
+label keeps this branch from colliding with the seed's own.
+
+**Normalising is the client's job at both ends**, exactly as for a pairing secret. The code crosses a human
+and comes back with or without dashes, in whatever case, with `O` for `0` — and the server hashes the string
+it is handed, having no opinion about any of that. A client that hashes the displayed form when filing and
+sends the typed form when recovering has built a code that can never be redeemed. There is a test that
+asserts this trap rather than describing it.
+
+**Replacing is the same act as creating**, and it invalidates the previous code. The whole risk this feature
+carries is a slip of paper from three years ago that still opens the account, so there is deliberately no way
+to hold two.
 
 #### What this costs, stated plainly
 
@@ -276,8 +300,9 @@ needed the phrase *and* a device's `data.json`; now the phrase, the login and a 
 enough. That is the same bargain every passphrase-recoverable E2EE product makes, and it is the reason the
 server-side attempt limit below is part of the design rather than an operational nicety.
 
-**What it does not rescue.** A forgotten passphrase — that is the recovery code's job, and until that is
-built, nothing rescues it. This is stated at registration, not left to be discovered.
+**What it does not rescue.** A forgotten passphrase — that is the recovery code's job, and an account
+without a code has nothing that rescues it. The settings screen says so in those words rather than leaving it
+to be discovered.
 
 **An account must not claim a path it does not have.** `recovery_key` and `recovery_code_hash` are
 **nullable, and null means exactly what it says**: this account has no recovery code. Writing a placeholder
@@ -520,8 +545,8 @@ losses are not the same loss, and only one of them is survivable:
 
 **There is no escrow and no administrator who can help.** An administrator holds the same envelopes an
 attacker would, which is the property the whole model exists to have. Insurance against forgetting is the
-recovery code, kept where other irreplaceable things are kept — and while it remains unbuilt, an account
-that has none says so with a null rather than a placeholder.
+recovery code, kept where other irreplaceable things are kept — and an account that has none says so with a
+null rather than a placeholder.
 
 The first row is the one that makes the server worth running. It is why recovery exists, and why its cost is
 argued in full under [Bootstrap](#bootstrap-on-a-device-that-has-no-seed) rather than assumed.

@@ -15,7 +15,8 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { KdfParams } from '@syncserver/shared';
-import { randomBytes, toBase64, utf8 } from './bytes.js';
+import { randomBytes, toBase64, toHex, utf8 } from './bytes.js';
+import { normaliseHumanCode } from './human-code.js';
 import { KEY_BYTES } from './format.js';
 import { newKeypair } from './hpke.js';
 import { open, seal } from './sealed.js';
@@ -171,6 +172,52 @@ export const kekVerifier = (kek: Uint8Array, login: string, accountSalt: Uint8Ar
   const info = new Uint8Array([...utf8('recovery'), ...utf8(login), ...accountSalt]);
   return toBase64(hkdf(sha256, kek, undefined, info, KEY_BYTES));
 };
+
+/**
+ * The recovery code's half of the key model (M7): a **second wrapping of the same seed**.
+ *
+ * Nothing is re-encrypted and no vault key changes — `recovery_key` sits beside
+ * `wrapped_seed` exactly as `enc_privkey` sits beside both, and the two envelopes hold the
+ * same 32 bytes under different keys. That is what makes a code cheap to create and cheap to
+ * replace: replacing one re-wraps 32 bytes and re-encrypts nothing.
+ *
+ * **HKDF, not Argon2id, and the asymmetry is deliberate.** The passphrase gets a 64 MiB pass
+ * because it is a human's choice and therefore guessable; the code is 128 bits of CSPRNG
+ * (`human-code.ts`), and no work factor buys anything against that — it would only charge the
+ * person recovering, at the one moment they are already having a bad day. This is the same
+ * reasoning docs/06 gives for hashing the stored verifiers fast.
+ *
+ * Salted with `account_salt` and labelled, so a code cannot be carried to another account and
+ * so this branch can never collide with the seed's own.
+ */
+const recoveryKek = (code: string, accountSalt: Uint8Array): Uint8Array =>
+  hkdf(sha256, utf8(normaliseHumanCode(code)), accountSalt, utf8(RECOVERY), KEY_BYTES);
+
+/** The branch label, distinct from `auth` and `identity` for the same reason they are. */
+const RECOVERY = 'recovery-code';
+
+/** `recovery_key` — the seed, wrapped under the code the person will keep. */
+export const wrapForRecovery = (seed: Uint8Array, code: string, accountSalt: Uint8Array): string =>
+  seal(recoveryKek(code, accountSalt), seed);
+
+/** The other direction, on a device that has the code and nothing else (#34). */
+export const unwrapWithRecovery = (
+  recoveryKey: string,
+  code: string,
+  accountSalt: Uint8Array,
+): Uint8Array => open(recoveryKek(code, accountSalt), recoveryKey);
+
+/**
+ * `recovery_code_hash` — what the server stores, and what it compares a presented code to.
+ *
+ * SHA-256 over the code's UTF-8 bytes, hex, exactly as every other stored verifier (docs/06,
+ * #108). **Over the NORMALISED code**, because that is what the server will be handed at
+ * recovery: the code crosses a human, arriving with or without dashes and with whatever they
+ * made of a `0`. Hashing the displayed form here and the typed form there is the bug that
+ * made pairing fail on real hardware, one layer down.
+ */
+export const recoveryCodeHash = (code: string): string =>
+  toHex(sha256(utf8(normaliseHumanCode(code))));
 
 /** The other direction: a device that has the passphrase and what the server stores. */
 export const openAccount = (

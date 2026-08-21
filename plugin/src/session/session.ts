@@ -40,8 +40,10 @@ import {
   authSecret,
   deriveKek,
   kekVerifier,
+  recoveryCodeHash,
   unwrapIdentity,
   vaultKey,
+  wrapForRecovery,
   type Account,
   type OpenedAccount,
 } from '../crypto/account.js';
@@ -49,7 +51,7 @@ import type { KdfParams } from '@syncserver/shared';
 import { decryptName, encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
-import { normalisePairingCode } from '../crypto/pairing-code.js';
+import { newHumanCode, normaliseHumanCode } from '../crypto/human-code.js';
 import { SyncClient } from '../api/client.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
@@ -461,6 +463,36 @@ export class Session {
   }
 
   /**
+   * Make this account a recovery code, and hand it back **once** (M7).
+   *
+   * It is the second wrapping of the same seed: nothing is re-encrypted, no vault key
+   * changes, and the code that comes back is the only copy that will ever exist. The server
+   * gets the envelope and a hash; a code it could show again would be a code it could use.
+   *
+   * Only an open session can do it, and not merely because the seed is what gets wrapped:
+   * an account that cannot open itself has no business filing a way in. That is the same
+   * proof `/auth/kek-verifier` accepts, and for the same reason.
+   *
+   * **Replacing is the same act.** There is no way to hold two codes, deliberately — the
+   * whole risk this carries is a slip of paper from three years ago that still opens the
+   * account. `replaced` says which of the two happened.
+   */
+  async createRecoveryCode(): Promise<{ code: string; replaced: boolean }> {
+    if (!this.seed) throw new Error('session is locked');
+    const seed = this.seed;
+    const code = newHumanCode();
+    const accountSalt = fromBase64(this.conn.accountSalt);
+
+    const { replaced } = await this.use((h) =>
+      h.client.setRecoveryCode({
+        recovery_key: wrapForRecovery(seed, code, accountSalt),
+        recovery_code_hash: recoveryCodeHash(code),
+      }),
+    );
+    return { code, replaced };
+  }
+
+  /**
    * Approve a pairing from **this** device: seal the seed to the waiting public key.
    *
    * Only an open session can do it — the seed is the thing being sealed — which is why this
@@ -481,7 +513,7 @@ export class Session {
     // Normalised HERE, not by the caller. The code crosses a human on the way to this
     // method and a screen on the way out of `pair()`, so both ends must agree what it is
     // before either hashes it — see the constant below.
-    const code = normalisePairingCode(pairingCode);
+    const code = normaliseHumanCode(pairingCode);
 
     await this.use(async (h) => {
       // Two calls, and they cannot be one: sealing needs the key, and the key is what the
@@ -533,7 +565,7 @@ export class Session {
     // are presentation and must never reach a hash. Registering the displayed form here
     // and normalising on the other side is exactly the bug this line exists to prevent —
     // two hashes of one code, and a pairing nobody can find.
-    const code = normalisePairingCode(args.pairingCode);
+    const code = normaliseHumanCode(args.pairingCode);
 
     const { pairing_id } = await client.beginPairing({
       device_pubkey: toBase64(ephemeral.publicKey),

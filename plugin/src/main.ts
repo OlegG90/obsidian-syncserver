@@ -21,7 +21,7 @@ import { emptyState, type StateStore, type VaultState } from './engine/state.js'
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
-import { newPairingCode } from './crypto/pairing-code.js';
+import { newHumanCode } from './crypto/human-code.js';
 import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport } from './obsidian/net.js';
 import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
@@ -446,7 +446,7 @@ export default class SyncServerPlugin extends Plugin {
   pairing(target: HTMLElement): PairingFlow {
     this.pairingTarget = target;
     this.pairingFlow ??= openPairingFlow({
-      newCode: () => newPairingCode(),
+      newCode: () => newHumanCode(),
       join: (args, waiting) => this.pair(args, waiting),
       approve: (code) => this.approvePairing(code),
       showCode: (code) => this.renderPairingCode(code),
@@ -815,6 +815,22 @@ export default class SyncServerPlugin extends Plugin {
       notify: (message, durationMs) => new Notice(message, durationMs),
       done: () => this.settingsTab?.display(),
     });
+  }
+
+  /**
+   * Whether this account has a recovery code, and making one (M7).
+   *
+   * Both go through the session for the same reason `/auth/recovery-code` is authenticated at
+   * all: the proof that may file a way into an account is being able to open it. Neither takes
+   * the shared gate — one row in `users`, nothing a sync touches, and no vault key moves
+   * (#131 settled the same question for pairing).
+   */
+  async hasRecoveryCode(): Promise<boolean> {
+    return (await this.withSession((h) => h.client.recoveryCodeState())).present;
+  }
+
+  async createRecoveryCode(): Promise<{ code: string; replaced: boolean }> {
+    return (await this.unlocked()).createRecoveryCode();
   }
 
   /**

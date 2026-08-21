@@ -182,6 +182,7 @@ const ACTIONS: Record<string, string> = {
   'account.invite': 'invited',
   'account.activate': 'invitation redeemed',
   'account.recover': 'account recovered',
+  'account.recovery_code': 'recovery code set',
   'account.delete.begin': 'deletion started',
   'account.delete.finish': 'deletion finished',
   'account.enable': 'enabled',
