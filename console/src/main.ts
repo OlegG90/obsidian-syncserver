@@ -18,7 +18,7 @@ import {
   signedIn, signIn, storage, verify,
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
-import { accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, mib, usageFraction } from './format.js';
+import { accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, mib, serverLine, usageFraction } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -121,6 +121,15 @@ type Where = 'accounts' | 'backups' | 'audit';
 
 let side: HTMLElement | undefined;
 
+/**
+ * The server's version, once it has been asked for.
+ *
+ * `undefined` means "not asked yet", `null` means "asked, and this server is old enough not to
+ * report one" — two different states that a single optional string would have flattened into
+ * one, leaving the console asking a server that had already answered.
+ */
+let serverVersion: string | null | undefined;
+
 const shell = (current: Where, login: string, ...content: Node[]): void => {
   side ??= el('nav', { className: 'side' });
   app.before(side);
@@ -150,6 +159,20 @@ const shell = (current: Where, login: string, ...content: Node[]): void => {
     signInScreen();
   };
   who.append(out);
+
+  // Which server this is, under the way out (#135). Asked once per page load and remembered:
+  // `/health` answers before authentication, and the version does not change under a running
+  // console — an image is replaced by restarting the container, which ends this session anyway.
+  const line = el('div', { className: 'muted version', textContent: serverLine(serverVersion, serverVersion !== undefined) });
+  who.append(line);
+  if (serverVersion === undefined) {
+    void health()
+      .then((h) => {
+        serverVersion = h.version ?? null;
+        line.textContent = serverLine(serverVersion);
+      })
+      .catch(() => (line.textContent = serverLine(undefined, false)));
+  }
   side.append(who);
 
   app.replaceChildren(...content);

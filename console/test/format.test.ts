@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { accountBadge, accountKind, accountState, accountUsage, auditAction, freezeWarning, human, mib, usageFraction, type AccountLine } from '../src/format.js';
+import { accountBadge, accountKind, accountState, accountUsage, auditAction, freezeWarning, human, mib, serverLine, usageFraction, type AccountLine } from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (#89) and the server always sends them. Leaving them out built a shape no response has —
@@ -141,5 +141,24 @@ describe('the action column of the audit log', () => {
     // The log is append-only and outlives any particular console build. Hiding an entry
     // because the word is unfamiliar is the one failure a log must not have.
     assert.equal(auditAction(line({ action: 'something.new' })), 'something.new');
+  });
+});
+
+describe('which server this console is talking to', () => {
+  it('names the version', () => {
+    assert.equal(serverLine('0.5.0-d'), 'Server 0.5.0-d');
+  });
+
+  it('dates a server too old to report one, rather than calling it unknown', () => {
+    // `/health` has carried `version` since 0.1.0, so its absence is a fact about the server.
+    assert.equal(serverLine(null), 'Server before 0.1.0');
+    assert.equal(serverLine(undefined), 'Server before 0.1.0');
+  });
+
+  it('keeps "cannot ask" separate from "answered without one"', () => {
+    // A console that could not reach /health must not claim the server is ancient. Two
+    // different situations, and only one of them is about the server's age.
+    assert.equal(serverLine(undefined, false), 'Server version unknown');
+    assert.equal(serverLine('0.5.0-d', false), 'Server version unknown');
   });
 });
