@@ -21,8 +21,8 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, mib, serverLine,
-  usageFraction,
+  accountBadge, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, isOver, mib,
+  serverLine, usageFraction, usageMarker,
 } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 import { whatIsWrong } from './password-form.js';
@@ -357,13 +357,17 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
 
   const storing = a.role !== 'admin' && a.state !== 'provisioned';
   if (storing) {
-    const over = a.frozenAt !== null;
-    const bar = el('div', { className: over ? 'bar over' : 'bar' });
+    // **The bar is red for being OVER, not for being frozen.** It asked the second question and
+    // printed the first, so an account at 115% of its quota looked exactly like one at 1% —
+    // found on a live console. The two come apart: a freeze is raised where somebody else's
+    // write crosses the boundary, so an account syncing alone stays unfrozen while over.
+    const marker = usageMarker(a);
+    const bar = el('div', { className: isOver(a) ? 'bar over' : 'bar' });
     const fill = el('span', {});
     fill.style.width = `${(usageFraction(a) * 100).toFixed(1)}%`;
     bar.append(fill);
     const line = el('div', { className: 'usage' }, el('span', { textContent: accountUsage(a) }));
-    if (over) line.append(el('span', { className: 'right bad', textContent: 'over its limit' }));
+    if (marker) line.append(el('span', { className: 'right bad', textContent: marker }));
     card.append(bar, line);
   } else {
     // Said rather than left blank, because "no bar" and "a bar at zero" mean different things
@@ -586,6 +590,10 @@ const tiles = (rows: readonly AccountRow[], totals: StorageTotals): HTMLElement 
   const shown: [string, string][] = [
     ['Accounts', String(rows.filter((a) => a.state !== 'provisioned').length)],
     ['On disk', human(totals.storedBytes)],
+    // Two counts, because they are two facts and the operator's question — "is anybody in
+    // trouble" — is answered by the first. A console showing FROZEN 0 above a row that is over
+    // its limit is telling the truth and answering nothing.
+    ['Over limit', String(rows.filter(isOver).length)],
     ['Frozen', String(rows.filter((a) => a.frozenAt).length)],
     ['Pending invites', String(rows.filter((a) => a.state === 'provisioned').length)],
   ];

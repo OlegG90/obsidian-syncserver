@@ -8,7 +8,10 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { accountBadge, accountKind, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, mib, serverLine, usageFraction, type AccountLine } from '../src/format.js';
+import {
+  accountBadge, accountKind, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, isOver,
+  mib, serverLine, usageFraction, usageMarker, type AccountLine,
+} from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (#89) and the server always sends them. Leaving them out built a shape no response has —
@@ -176,5 +179,65 @@ describe('why a backup copy was not removed', () => {
     // A console that swallowed one would hide the only clue that the two sides disagree about
     // what can happen.
     assert.equal(backupRefusal('something_new'), 'something_new');
+  });
+});
+
+describe('over the limit is not the same question as frozen', () => {
+  // Found on a live console at 0.5.2: an account storing 2.3 MiB against a 2.0 MiB quota looked
+  // exactly like one at 1%, and the FROZEN tile said 0 — truthfully. The two come apart because
+  // a freeze is raised where somebody ELSE's write crosses the boundary (SH-20), so an account
+  // syncing on its own sits over its limit indefinitely with `frozen_at` null.
+  const account = (over: Partial<AccountLine> = {}): AccountLine => ({
+    role: 'user',
+    state: 'active',
+    quotaBytes: '2097152',
+    usedBytes: '1048576',
+    frozenAt: null,
+    inviteExpiresAt: null,
+    ...over,
+  });
+
+  it('is over when it stores more than its quota, frozen or not', () => {
+    assert.equal(isOver(account({ usedBytes: '2408221' })), true);
+    assert.equal(isOver(account()), false);
+  });
+
+  it('is not over AT the limit, which is the byte the question is about', () => {
+    assert.equal(isOver(account({ usedBytes: '2097152' })), false);
+    assert.equal(isOver(account({ usedBytes: '2097153' })), true);
+  });
+
+  it('compares exactly, above what a double can hold', () => {
+    // A quota check is a question about the last byte, and `number` stops being exact above
+    // 2^53 — where these two would compare equal.
+    assert.equal(isOver(account({ quotaBytes: '9007199254740993', usedBytes: '9007199254740995' })), true);
+  });
+
+  it('says a zero quota is not something to be over', () => {
+    // The console account: no vault, no limit to be a fraction of (#115).
+    assert.equal(isOver(account({ role: 'admin', quotaBytes: '0', usedBytes: '0' })), false);
+  });
+
+  it('names which of the two is true, because they are fixed differently', () => {
+    // Over is fixed by deleting; frozen is fixed by deleting and then waiting for the replicas
+    // to catch up (SH-21).
+    assert.match(usageMarker(account({ usedBytes: '2408221' }))!, /new files are refused/);
+    assert.match(usageMarker(account({ frozenAt: '2026-08-20T15:00:00Z' }))!, /free space to lift it/);
+    assert.match(
+      usageMarker(account({ usedBytes: '2408221', frozenAt: '2026-08-20T15:00:00Z' }))!,
+      /over its limit and frozen/,
+    );
+  });
+
+  it('says nothing about an account that is neither', () => {
+    assert.equal(usageMarker(account()), undefined);
+  });
+
+  it('does not call a frozen account under its limit “over”', () => {
+    // A raised quota leaves an account frozen while under, until a pass thaws it. Saying "over
+    // its limit" there would be the console inventing a fact.
+    const thawing = account({ frozenAt: '2026-08-20T15:00:00Z' });
+    assert.equal(isOver(thawing), false);
+    assert.match(usageMarker(thawing)!, /^frozen/);
   });
 });

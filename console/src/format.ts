@@ -70,6 +70,45 @@ export const usageFraction = (a: AccountLine): number => {
 };
 
 /**
+ * Is this account **over its limit** — which is not the same question as "is it frozen".
+ *
+ * The console asked the second and printed the first, so an account storing 2.3 MiB against a
+ * 2.0 MiB quota looked exactly like one at 1% (found on a live console, 0.5.2). The two come
+ * apart because a freeze is raised where somebody else's write crosses your boundary (SH-20):
+ * an account syncing on its own can sit at 115% with `frozen_at` null for ever. The plugin
+ * learned this in M4 and said so in a comment; this file kept the conflation.
+ *
+ * **Over is the one with immediate consequences for the person**: `fits` refuses every new
+ * blob while `used + growth > quota`, frozen or not. Frozen adds what happens to shares.
+ *
+ * `BigInt`, like `freezeWarning`, because this is a question about the last byte. A quota of
+ * zero is the console account, which has no limit to be over and stores nothing anyway.
+ */
+export const isOver = (a: AccountLine): boolean => {
+  if (a.quotaBytes === null || a.usedBytes === null) return false;
+  const quota = BigInt(a.quotaBytes);
+  return quota > 0n && BigInt(a.usedBytes) > quota;
+};
+
+/**
+ * The marker beside the usage line: which of the two things is true, when either is.
+ *
+ * Both can be, and they mean different things to do: over the limit is fixed by deleting,
+ * frozen is fixed by deleting *and then* waiting for the replicas to catch up (SH-21). An
+ * account that is frozen while UNDER its limit is not a contradiction either — a raised quota
+ * leaves it that way until a pass thaws it — and saying "over its limit" there would be the
+ * console inventing a fact.
+ */
+export const usageMarker = (a: AccountLine): string | undefined => {
+  const over = isOver(a);
+  const frozen = a.frozenAt !== null;
+  if (over && frozen) return 'over its limit and frozen';
+  if (over) return 'over its limit — new files are refused';
+  if (frozen) return 'frozen — free space to lift it';
+  return undefined;
+};
+
+/**
  * The badge under a login: what to write in it, and which of three tones it takes.
  *
  * `frozen` outranks the state, because it is the one that changes what the account can DO —
