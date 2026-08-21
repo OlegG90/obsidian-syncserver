@@ -174,6 +174,21 @@ export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_byt
 export const setEnabled = (userId: string, enabled: boolean): Promise<void> =>
   call('POST', `/admin/accounts/${userId}/enabled`, { enabled });
 
+/**
+ * Change this console account's password (#137).
+ *
+ * The current one travels with it although the call is authenticated: the token proves the
+ * session and the password proves the person, and an unattended browser should not be enough
+ * to lock somebody out of their own console.
+ *
+ * It ends the session on the server — the console device's refresh token is cleared — so the
+ * caller signs in again with what it just chose. There is one console device per account, so
+ * anyone else holding that token is cut off too, which is the point when a password is changed
+ * because it leaked.
+ */
+export const changePassword = (current: string, password: string): Promise<void> =>
+  call('PUT', '/auth/password', { current, password });
+
 /** Mint a fresh token for an invitation nobody redeemed — the answer to a token that got lost. */
 export const reissue = (userId: string): Promise<{ token: string; expires_at: string }> =>
   call('POST', `/admin/invitations/${userId}`, {});

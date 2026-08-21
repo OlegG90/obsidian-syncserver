@@ -13,6 +13,7 @@ import { buildApp } from '../src/app.js';
 import { inProcessAttemptLimiter } from '../src/auth/attempts.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { hashPassword } from '../src/auth/password.js';
 
 const cfg = loadConfig();
 let db: Db;
@@ -778,5 +779,148 @@ describe('the passphrase an account can be given again', () => {
     );
     assert.equal(row!.actor, VAULT_LOGIN);
     assert.equal(row!.target, VAULT_LOGIN);
+  });
+});
+
+/**
+ * Changing a console password (#137).
+ *
+ * There was no way to do it at all: `/auth/bootstrap` creates the first password and refuses
+ * once one exists, and nothing else wrote `password_hash`. An administrator whose password had
+ * been shared to get somebody started had an `UPDATE` by hand as their only option.
+ */
+describe('a console administrator changing their password', () => {
+  const FIRST = 'the first password';
+  const SECOND = 'the second password';
+  /**
+   * The account the schema seeds, put back into the state a bootstrapped server leaves it in.
+   *
+   * NOT a console account of its own, and the first attempt at one taught why: an active
+   * administrator cannot be deleted — deletion is a procedure, not a statement (#55) — and the
+   * schema separately refuses to leave the server with no active administrator. So a fixture
+   * that created one left it behind, and the NEXT run's `before` hook, which demotes every
+   * active administrator but this row, was refused by that guard: `23001, refusing to remove
+   * the last active administrator`, before a single test of this file ran.
+   *
+   * This row is the one `before` already normalises on every run, so borrowing it leaves
+   * nothing behind for the next.
+   */
+  const SEEDED = '00000000-0000-0000-0000-000000000001';
+  let login = 'admin';
+
+  const seedConsole = async (password: string): Promise<void> => {
+    const row = await db.one<{ login: string }>(
+      `UPDATE users SET state = 'active', role = 'admin', password_hash = $2 WHERE id = $1
+       RETURNING login`,
+      [SEEDED, hashPassword(password)],
+    );
+    login = row!.login;
+    // Any console session from an earlier test in this describe is not this test's session.
+    await db.query(`UPDATE devices SET refresh_token_hash = NULL WHERE user_id = $1`, [SEEDED]);
+  };
+
+  const signIn = async (password: string) =>
+    app.inject({ method: 'POST', url: '/auth/console', payload: { login, password } });
+
+  const change = async (access: string, body: Record<string, unknown>) =>
+    app.inject({
+      method: 'PUT',
+      url: '/auth/password',
+      headers: { authorization: `Bearer ${access}` },
+      payload: body,
+    });
+
+  it('replaces the password, and the new one is the one that works', async () => {
+    await seedConsole(FIRST);
+    const session = await signIn(FIRST);
+    assert.equal(session.statusCode, 200, session.body);
+
+    assert.equal((await change(session.json().access, { current: FIRST, password: SECOND })).statusCode, 204);
+
+    assert.equal((await signIn(SECOND)).statusCode, 200, 'the new password signs in');
+    assert.equal((await signIn(FIRST)).statusCode, 401, 'and the old one does not');
+  });
+
+  it('demands the current password, although the caller is already authenticated', async () => {
+    // The token proves the session; the password proves the person. A browser somebody walked
+    // away from must not be enough to lock the owner out of their own console.
+    await seedConsole(FIRST);
+    const access = (await signIn(FIRST)).json().access;
+
+    assert.equal((await change(access, { password: SECOND })).statusCode, 400);
+    assert.equal((await change(access, { current: 'not it', password: SECOND })).statusCode, 401);
+    assert.equal((await signIn(FIRST)).statusCode, 200, 'and nothing changed');
+  });
+
+  it('ends the session, so a leaked one cannot outlive the password', async () => {
+    // There is one console device per account, shared by every browser that signs in. Leaving
+    // its refresh token alive would let whoever else holds it stay signed in indefinitely —
+    // which is the case a password gets changed for.
+    await seedConsole(FIRST);
+    const session = await signIn(FIRST);
+    const refresh = session.json().refresh;
+
+    await change(session.json().access, { current: FIRST, password: SECOND });
+
+    const renewed = await app.inject({ method: 'POST', url: '/auth/refresh', payload: { refresh } });
+    assert.equal(renewed.statusCode, 401, 'the refresh token is done');
+
+    // And the device row is still there, not revoked: it must be made to prove itself again,
+    // not retired — a revoked row would have the next sign-in mint a second one.
+    const devices = await db.one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM devices
+        WHERE user_id = $1 AND platform = 'console' AND revoked_at IS NULL`,
+      [SEEDED],
+    );
+    assert.equal(devices!.n, '1');
+    assert.equal((await signIn(SECOND)).statusCode, 200);
+  });
+
+  it('holds the same floor the first password had', async () => {
+    await seedConsole(FIRST);
+    const access = (await signIn(FIRST)).json().access;
+    // Eleven characters, counted rather than eyeballed: the first attempt at this line used a
+    // twelve-character string that reads like eleven, and the test failed the code for being
+    // right.
+    const eleven = 'elevenchars';
+    assert.equal(eleven.length, 11);
+    const short = await change(access, { current: FIRST, password: eleven });
+    assert.equal(short.statusCode, 400);
+    assert.equal(short.json().error, 'password_too_short');
+  });
+
+  it('refuses an account that has no password to change', async () => {
+    // A vault account is not a console account. The endpoint is right, so this is a 409 and
+    // not a 404 — the same distinction /auth/bootstrap makes once the first run is over.
+    const device = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    const vault = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    const out = await change(vault.json().access, { current: 'anything', password: 'a long enough one' });
+    assert.equal(out.statusCode, 409);
+  });
+
+  it('takes nothing from a caller who is not signed in', async () => {
+    const anon = await app.inject({
+      method: 'PUT',
+      url: '/auth/password',
+      payload: { current: FIRST, password: SECOND },
+    });
+    assert.equal(anon.statusCode, 401);
+  });
+
+  it('records it, because it changes what opens the console', async () => {
+    await seedConsole(FIRST);
+    const access = (await signIn(FIRST)).json().access;
+    await change(access, { current: FIRST, password: SECOND });
+    const row = await db.one<{ actor: string }>(
+      `SELECT actor_login AS actor FROM audit_log WHERE action = 'account.password' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.equal(row!.actor, login);
   });
 });
