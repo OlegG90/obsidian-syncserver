@@ -54,8 +54,17 @@ Fill those in, then pick **one** of the three things underneath.
 The only route that needs a token. Your administrator issues one from the console; it appears once and
 is not stored, so if it is lost it has to be reissued.
 
-Paste it and press **Connect**. Your keys are generated on this device, from the passphrase. Deriving
-them takes a few seconds and is meant to — it is what makes a guessable passphrase expensive to attack.
+**This is the only route that asks for the passphrase twice**, and it is worth knowing why. Everywhere
+else the passphrase is *checked* against something that already exists, so a typo fails and costs you a
+retry. Here it is what your keys are **made from** — so a typo does not fail. It succeeds, at creating
+an account nobody can ever open, including you, including your administrator. There is no reset, because
+the server never sees the passphrase at all.
+
+There is a **show** button beside the field. Use it: this is a string you want to be right.
+
+Paste the token and press **Connect**. Your keys are generated on this device, from the passphrase.
+Deriving them takes a few seconds and is meant to — it is what makes a guessable passphrase expensive to
+attack.
 
 ### Add this device to an account — a second phone, laptop, or desktop
 
