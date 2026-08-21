@@ -326,8 +326,26 @@ export class SyncClient {
     enc_privkey: string;
     /** True for an account that predates recovery: only a client with the phrase can fix it. */
     needs_kek_verifier?: boolean;
+    /**
+     * A hash of the envelope the account is currently behind (#138).
+     *
+     * Absent from a server older than 0.5.2, which is why the client treats "no fingerprint"
+     * as "nothing to compare" rather than as a mismatch: a device must not announce a
+     * passphrase change because the server is old.
+     */
+    seed_fingerprint?: string;
   }> {
     return this.json('POST', '/auth/login', body, { auth: false });
+  }
+
+  /**
+   * The current seed envelope, for a device whose own copy is stale (#138).
+   *
+   * Takes the proof, not just the token: the envelope is an offline target for guessing the
+   * passphrase, so knowing the passphrase is what buys it.
+   */
+  seedEnvelope(kekVerifier: string): Promise<{ wrapped_seed: string }> {
+    return this.json('POST', '/auth/seed-envelope', { kek_verifier: kekVerifier });
   }
 
   /** File this account's recovery verifier — on a backfill, or after a passphrase change. */

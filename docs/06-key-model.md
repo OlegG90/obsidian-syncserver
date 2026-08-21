@@ -246,6 +246,28 @@ paths, and they answer two different losses.
    Either way it creates the device exactly as claim does and returns `enc_privkey` beside the envelope, and
    the client unwraps with the key it already has.
 
+### Changing it
+
+A passphrase change rewrites `wrapped_seed` and `kek_verifier_hash` together, through
+`PUT /auth/passphrase`, and **changes nothing else**: the seed is the same seed, so every vault key derived
+from it is the same key and not a byte is re-encrypted. `account_salt` stays too, for the reason above — it
+is an input to the recovery code's derivation.
+
+**It does not reach the account's other devices, and cannot.** Each holds its own copy of the envelope and
+unwraps it locally, so a device that was not present goes on opening with the old passphrase — syncing
+correctly, behind a phrase its owner has stopped using. The server says so rather than leaving it silent:
+`/auth/login` answers with `seed_fingerprint`, a hash of the current envelope, and a device whose own copy
+hashes to something else knows it is behind.
+
+Catching up takes the **new passphrase**, not merely the session: `POST /auth/seed-envelope` wants the same
+`kek_verifier` recovery does. A hash on login and a proof for the envelope are one decision made twice — the
+envelope is an offline target for guessing the passphrase, so a stolen access token must not be able to
+fetch one.
+
+**The recovery code survives a passphrase change**, by construction: it wraps the seed, and the seed did not
+move. A passphrase changed because it leaked leaves that second way in exactly as it was, which is worth
+saying out loud to whoever is changing it.
+
 **Recovery hands back a seed envelope, not the seed**, and only against proof that the caller can open that
 particular envelope. That is the whole design, and it is why one endpoint can carry both proofs: each returns
 the envelope its proof unlocks and nothing else. The server learns nothing it did not already store, and a

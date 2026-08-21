@@ -850,6 +850,29 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Change the passphrase this vault is behind (#138), and take a change made elsewhere.
+   *
+   * Both need an open session and neither takes the shared gate: one row in `users`, nothing a
+   * sync touches, no vault key moved — the same reasoning #131 settled for pairing.
+   */
+  async changePassphrase(current: string, next: string): Promise<void> {
+    await (await this.unlocked()).changePassphrase(current, next);
+    this.data.connection = this.sess!.connection;
+    await this.save();
+  }
+
+  async adoptPassphrase(passphrase: string): Promise<void> {
+    await (await this.unlocked()).adoptEnvelope(passphrase);
+    this.data.connection = this.sess!.connection;
+    await this.save();
+  }
+
+  /** Whether this device is behind a passphrase the account has stopped using (#138). */
+  passphraseChangedElsewhere(): boolean {
+    return this.sess?.envelopeIsStale === true;
+  }
+
+  /**
    * Whether this account has a recovery code, and making one (M7).
    *
    * Both go through the session for the same reason `/auth/recovery-code` is authenticated at

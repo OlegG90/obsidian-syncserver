@@ -924,3 +924,85 @@ describe('a console administrator changing their password', () => {
     assert.equal(row!.actor, login);
   });
 });
+
+/**
+ * Telling a device its envelope has gone stale, and handing it the current one (#138).
+ *
+ * Every device keeps `wrapped_seed` locally and unwraps it there, so a passphrase changed on
+ * one device leaves the others opening with the old one — working perfectly, behind a phrase
+ * their owner has stopped using. Nothing on the wire said so until there was a way to change a
+ * passphrase at all.
+ */
+describe('the seed envelope, and knowing whose copy is current', () => {
+  const NEW_ENVELOPE = Buffer.alloc(48, 9).toString('base64');
+  const NEW_VERIFIER = 'w'.repeat(43);
+
+  const signIn = async () => {
+    const device = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    return res.json();
+  };
+
+  it('answers a login with a hash of the envelope, not the envelope', () => {
+    // The envelope is an offline target for guessing the passphrase. Handing it to every login
+    // would turn a stolen access token into one; a hash answers "is yours current" and nothing
+    // else.
+    return signIn().then(async (session) => {
+      const stored = await db.one<{ hex: string }>(
+        `SELECT encode(sha256(wrapped_seed), 'hex') AS hex FROM users WHERE login = $1`,
+        [VAULT_LOGIN],
+      );
+      assert.equal(session.seed_fingerprint, stored!.hex);
+      assert.ok(!('wrapped_seed' in session), 'and the envelope itself is not in the answer');
+    });
+  });
+
+  it('changes when the passphrase does, which is how another device finds out', async () => {
+    const before = (await signIn()).seed_fingerprint;
+    const access = (await signIn()).access;
+    await app.inject({
+      method: 'PUT',
+      url: '/auth/passphrase',
+      headers: { authorization: `Bearer ${access}` },
+      payload: { wrapped_seed: NEW_ENVELOPE, kek_verifier: NEW_VERIFIER },
+    });
+    assert.notEqual((await signIn()).seed_fingerprint, before);
+  });
+
+  it('hands the envelope to a caller who proves the passphrase, and to nobody else', async () => {
+    const access = (await signIn()).access;
+    const ask = (body: Record<string, unknown>) =>
+      app.inject({
+        method: 'POST',
+        url: '/auth/seed-envelope',
+        headers: { authorization: `Bearer ${access}` },
+        payload: body,
+      });
+
+    // The token alone is not enough, and that is the whole design: it says which account, the
+    // verifier says the caller can already open what it is asking for.
+    assert.equal((await ask({ kek_verifier: 'not the verifier' })).statusCode, 401);
+    assert.equal((await ask({})).statusCode, 400);
+
+    const out = await ask({ kek_verifier: NEW_VERIFIER });
+    assert.equal(out.statusCode, 200, out.body);
+    assert.equal(out.json().wrapped_seed, NEW_ENVELOPE);
+  });
+
+  it('takes nothing from a caller who is not signed in', async () => {
+    const anon = await app.inject({
+      method: 'POST',
+      url: '/auth/seed-envelope',
+      payload: { kek_verifier: NEW_VERIFIER },
+    });
+    assert.equal(anon.statusCode, 401);
+  });
+});

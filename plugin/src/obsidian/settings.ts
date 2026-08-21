@@ -16,6 +16,7 @@ import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
 import { busyLine } from '../gate.js';
 import { recoveryRow } from '../recovery-row.js';
+import { wayBack, whatIsWrong, type PassphraseDraft } from '../passphrase-form.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
@@ -157,6 +158,7 @@ export class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.passphraseSection(containerEl);
       this.recoverySection(containerEl);
       this.shareSection(containerEl);
       this.trashSection(containerEl);
@@ -457,6 +459,115 @@ export class SyncServerSettings extends PluginSettingTab {
     );
   }
 
+
+  /**
+   * Changing the passphrase, and catching up with a change made on another device (#138).
+   *
+   * **Two different things on one heading, because they are two sides of one fact:** every
+   * device holds its own copy of the envelope and unwraps it locally, so a change made here
+   * does not reach the others and a change made there does not reach here. The screen says
+   * both rather than letting a person discover the asymmetry at a restart.
+   *
+   * The stale case is offered first when it applies, since a device that is behind should not
+   * be invited to change anything until it has caught up — changing from here would put the
+   * account behind a phrase the OTHER devices have never heard of either.
+   */
+  private passphraseSection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Passphrase' });
+
+    if (this.plugin.passphraseChangedElsewhere()) {
+      containerEl.createEl('p', {
+        text:
+          'The passphrase was changed on another device. This one still opens with the old one, and will ' +
+          'keep doing so until it is told the new one — nothing is broken, and nothing is syncing wrongly.',
+      });
+
+      let phrase = '';
+      new Setting(containerEl)
+        .setName('The new passphrase')
+        .setDesc('Proved to the server, which then hands this device the envelope that phrase opens.')
+        .addText((t) => {
+          t.inputEl.type = 'password';
+          t.onChange((v) => (phrase = v));
+        })
+        .addButton((b) =>
+          this.waits(b)
+            .setButtonText('Catch up')
+            .setCta()
+            .onClick(async () => {
+              if (!phrase) return void new Notice('SyncServer: the new passphrase is needed.');
+              b.setDisabled(true);
+              try {
+                await this.plugin.adoptPassphrase(phrase);
+                new Notice('SyncServer: this device is on the account’s current passphrase.', 8000);
+                this.display();
+              } catch (e) {
+                new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+              } finally {
+                b.setDisabled(false);
+              }
+            }),
+        );
+      return;
+    }
+
+    const draft: PassphraseDraft = { current: '', next: '', again: '' };
+    const warning = containerEl.createEl('p');
+    warning.style.fontSize = 'var(--font-ui-smaller)';
+
+    // Asked because the answer decides what this screen is allowed to promise. Until it
+    // arrives the line stays empty rather than guessing in either direction.
+    void this.plugin
+      .hasRecoveryCode()
+      .then((has) => {
+        const said = wayBack(has);
+        if (!said) return;
+        warning.setText(said);
+        if (!has) warning.style.color = 'var(--text-error)';
+      })
+      .catch(() => undefined);
+
+    const field = (name: string, desc: string, take: (v: string) => void): void => {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addText((t) => {
+          t.inputEl.type = 'password';
+          t.onChange(take);
+        });
+    };
+
+    field('Current passphrase', 'An open vault is not proof of the person.', (v) => (draft.current = v));
+    field('New passphrase', 'Every vault of this account is behind it, not only this one.', (v) => (draft.next = v));
+    field('New passphrase again', 'Nothing checks it afterwards, so it is checked here.', (v) => (draft.again = v));
+
+    new Setting(containerEl)
+      .setDesc('Other devices keep opening with the old passphrase until each is told the new one.')
+      .addButton((b) =>
+        this.waits(b)
+          .setButtonText('Change the passphrase')
+          .setWarning()
+          .onClick(async () => {
+            const wrong = whatIsWrong(draft);
+            if (wrong) return void new Notice(`SyncServer: ${wrong}`, 10000);
+            b.setDisabled(true);
+            try {
+              new Notice('SyncServer: deriving keys…');
+              await this.plugin.changePassphrase(draft.current, draft.next);
+              new Notice(
+                'SyncServer: changed. Your other devices still open with the old one — each will say so ' +
+                  'the next time it unlocks.',
+                12000,
+              );
+              this.display();
+            } catch (e) {
+              new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 12000);
+            } finally {
+              b.setDisabled(false);
+            }
+          }),
+      );
+  }
 
   /**
    * The recovery code: the only thing that opens this account if the passphrase is forgotten.
