@@ -451,6 +451,18 @@ Mechanically it is a second wrapping of the **same seed**: nothing is re-encrypt
 beside `wrapped_seed` exactly as `enc_privkey` sits beside both. The columns and their paired `CHECK` have
 been in the schema since M3.5.
 
+**Walked by a person on 2026-08-21, against the home server on 0.5.0.** A code made in one vault's settings,
+then that code typed into a second vault: the account came back, and — the assertion that matters — **the
+passphrase it had been living under no longer opens it.** That is the half no local check can see, because it
+is about the server having moved `wrapped_seed` and `kek_verifier_hash` *together*: written apart, both
+columns are individually valid and the account answers recovery with an envelope its accepted proof cannot
+open. A suite can assert the pair; only a walk proves the account a person is holding is the one that moved.
+
+Unlike M0, M3, M4 and M5, this walk found **no defects** — the first that has not. Worth stating rather than
+leaving as an absence, and worth being unsurprised by: the mechanism is one endpoint and one screen, and the
+live roundtrip that shipped with it exercises the same path end to end. The walks that found nine and
+eighteen were milestones with a dozen moving parts each.
+
 - [x] **Generate, show once, store the hash.** A high-entropy code produced on the client, `recovery_key =
       seal(code, seed)` and `recovery_code_hash` sent up through `PUT /auth/recovery-code`. The code itself
       never reaches the server, and is shown exactly once — there is no second viewing, because a code the
