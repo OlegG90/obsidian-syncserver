@@ -107,7 +107,7 @@ describe('the sync coordinator', () => {
 
     await sync.run(); // manual, during the pass
     assert.equal(r.calls.pass, 1, 'the manual second run was refused');
-    assert.ok(r.notices.some((m) => m.includes('already running')));
+    assert.ok(r.notices.some((m) => m.includes('Waiting for a sync')));
 
     await sync.runIfIdle(); // push hint, during the pass
     assert.equal(r.calls.pass, 1, 'the push hint was silently skipped');

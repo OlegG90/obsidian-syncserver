@@ -95,7 +95,7 @@ describe('sharing a folder', () => {
 
     const first = h.flow.share('Team');
     await h.flow.share('Other');
-    assert.match(h.notices.at(-1)!, /already running/);
+    assert.match(h.notices.at(-1)!, /Waiting for sharing the folder/);
 
     release!();
     await first;

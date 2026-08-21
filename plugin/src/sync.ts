@@ -19,7 +19,7 @@
 import type { SyncReport } from './engine/engine.js';
 import { eventSentence, priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
-import type { Gate } from './gate.js';
+import { busyLine, type Gate } from './gate.js';
 
 export interface SyncCoordinatorDeps {
   /** The one gate every operation family shares — one operation at a time, across all of them. */
@@ -51,8 +51,8 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     // push hint — cannot slip past while the first waits on the passphrase or the pass. It
     // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
     // finds it held and yields instead of meeting interior names with no key.
-    if (!deps.gate.tryBegin()) {
-      if (prompt) deps.notify('SyncServer: another operation is already running.');
+    if (!deps.gate.tryBegin('a sync')) {
+      if (prompt) deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
       return;
     }
     try {

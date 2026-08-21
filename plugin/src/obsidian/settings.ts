@@ -11,9 +11,10 @@
  * **type-only**, so nothing circular exists at runtime: the composition root imports this
  * screen, and this screen imports nothing back.
  */
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
+import { busyLine } from '../gate.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
@@ -27,6 +28,19 @@ import type { ShareFlow, ShareRow } from '../share-flow.js';
 const mib = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 
 export class SyncServerSettings extends PluginSettingTab {
+  /**
+   * The buttons the shared gate would refuse, and the line that says why.
+   *
+   * Rebuilt with the tab: `display()` throws the old elements away, so holding the previous
+   * ones would be disabling buttons nobody can see. Rows arrive after their network call, so
+   * each registers itself and takes the current state at that moment rather than waiting for
+   * a sweep that has already run.
+   */
+  private waiting: ButtonComponent[] = [];
+  private busyNote: HTMLElement | undefined;
+  /** How to stop hearing about the gate. Called before the next display, and on hide. */
+  private unwatch: (() => void) | undefined;
+
   constructor(
     app: App,
     private readonly plugin: SyncServerPlugin,
@@ -34,13 +48,54 @@ export class SyncServerSettings extends PluginSettingTab {
     super(app, plugin);
   }
 
+  /**
+   * A control that cannot work while an operation is running — disabled with the reason on
+   * screen, instead of refusing after the press (#125).
+   *
+   * It is the same rule `gate.ts` enforces, said before it refuses rather than after. The
+   * gate stays the authority: this only mirrors it, so a press that slips through a redraw
+   * still meets the real guard.
+   */
+  private waits(b: ButtonComponent): ButtonComponent {
+    this.waiting.push(b);
+    if (this.plugin.busyWith() !== undefined) b.setDisabled(true);
+    return b;
+  }
+
+  /** Mirror the gate onto every registered control, and show or hide the reason. */
+  private showBusy(holding: string | undefined): void {
+    for (const b of this.waiting) b.setDisabled(holding !== undefined);
+    if (!this.busyNote) return;
+    this.busyNote.setText(holding === undefined ? '' : busyLine(holding));
+    this.busyNote.style.display = holding === undefined ? 'none' : '';
+  }
+
+  /** Obsidian closes the tab; the gate must not keep a listener writing into dead elements. */
+  override hide(): void {
+    this.unwatch?.();
+    this.unwatch = undefined;
+    super.hide();
+  }
+
   override display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
+    // Both belong to the elements about to be discarded.
+    this.unwatch?.();
+    this.waiting = [];
+    this.busyNote = undefined;
+
     const conn = this.plugin.data.connection;
     if (conn) {
       containerEl.createEl('h3', { text: 'Connected' });
+
+      // Above everything it explains, and before the sections that fill in over the network:
+      // the reason has to be readable at the moment the buttons go grey, not below them.
+      this.busyNote = containerEl.createEl('p');
+      this.busyNote.style.display = 'none';
+      this.busyNote.style.color = 'var(--text-accent)';
+      this.busyNote.style.fontSize = 'var(--font-ui-smaller)';
       const list = containerEl.createEl('dl');
       const rows: [string, string][] = [
         ['Login', conn.login],
@@ -80,7 +135,7 @@ export class SyncServerSettings extends PluginSettingTab {
         .setName('Sync now')
         .setDesc('Also on the ribbon icon, and in the command palette.')
         .addButton((b) =>
-          b
+          this.waits(b)
             .setButtonText('Sync now')
             .setCta()
             .onClick(() => void this.plugin.syncNow()),
@@ -105,6 +160,11 @@ export class SyncServerSettings extends PluginSettingTab {
       this.trashSection(containerEl);
       this.disconnectSection(containerEl);
       this.versionSection(containerEl);
+
+      // Last, so the sections have registered what they own — and applied straight away,
+      // because an operation may already be running when the tab is opened.
+      this.unwatch = this.plugin.watchBusy((holding) => this.showBusy(holding));
+      this.showBusy(this.plugin.busyWith());
       return;
     }
 
@@ -380,8 +440,13 @@ export class SyncServerSettings extends PluginSettingTab {
         const row = new Setting(list)
           .setName(`Invitation from ${inv.initiatorLogin}`)
           .setDesc('Accepting materialises a copy in this vault; it arrives on the next sync.');
-        row.addButton((b) => b.setButtonText('Accept').setCta().onClick(() => void flow.accept(inv.shareId)));
-        row.addButton((b) => b.setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
+        row.addButton((b) =>
+          this.waits(b)
+            .setButtonText('Accept')
+            .setCta()
+            .onClick(() => void flow.accept(inv.shareId)),
+        );
+        row.addButton((b) => this.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }
 
       for (const share of out.joined) {
@@ -400,11 +465,20 @@ export class SyncServerSettings extends PluginSettingTab {
         if (share.isInitiator) {
           let login = '';
           row.addText((t) => t.setPlaceholder('login to invite').onChange((v) => (login = v)));
-          row.addButton((b) => b.setButtonText('Invite').onClick(() => void flow.invite(share.shareId, login)));
+          row.addButton((b) =>
+            this.waits(b)
+              .setButtonText('Invite')
+              .onClick(() => void flow.invite(share.shareId, login)),
+          );
         }
         // Leaving is everybody's, the initiator included — for them it ends the share, and
         // the coordinator says which happened rather than guessing here.
-        row.addButton((b) => b.setButtonText('Leave').setWarning().onClick(() => void flow.leave(share.shareId)));
+        row.addButton((b) =>
+          this.waits(b)
+            .setButtonText('Leave')
+            .setWarning()
+            .onClick(() => void flow.leave(share.shareId)),
+        );
 
         // Who is in it, under the row it belongs to. Shown for everybody and not only the
         // initiator: "who can read this folder" is the question a shared folder raises, and
@@ -432,7 +506,7 @@ export class SyncServerSettings extends PluginSettingTab {
             // under two names.
             if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
             who.addButton((b) =>
-              b
+              this.waits(b)
                 .setButtonText(m.joined_at ? 'Revoke' : 'Withdraw')
                 .setWarning()
                 .onClick(() => void flow.remove(share.shareId, m.user_id, m.login)),
@@ -480,14 +554,16 @@ export class SyncServerSettings extends PluginSettingTab {
         d.setValue(folder).onChange((v) => (folder = v));
       })
       .addButton((b) =>
-        b.setButtonText('Share').onClick(async () => {
-          b.setDisabled(true);
-          try {
-            await flow.share(folder);
-          } finally {
-            b.setDisabled(false);
-          }
-        }),
+        this.waits(b)
+          .setButtonText('Share')
+          .onClick(async () => {
+            b.setDisabled(true);
+            try {
+              await flow.share(folder);
+            } finally {
+              b.setDisabled(false);
+            }
+          }),
       );
   }
 
@@ -561,43 +637,45 @@ export class SyncServerSettings extends PluginSettingTab {
         picker.style.margin = '0 0 0.75rem 1rem';
 
         setting.addButton((b) =>
-          b.setButtonText(row.versions === 1 ? 'Restore' : 'Restore…').onClick(async () => {
-            const versions = await flow.versions(row.nodeId);
-            if (!versions || versions.length === 0) return;
-            const ordered = newestFirst(versions);
-            if (ordered.length === 1) return void (await flow.restore(row.nodeId, ordered[0]!.rev));
+          this.waits(b)
+            .setButtonText(row.versions === 1 ? 'Restore' : 'Restore…')
+            .onClick(async () => {
+              const versions = await flow.versions(row.nodeId);
+              if (!versions || versions.length === 0) return;
+              const ordered = newestFirst(versions);
+              if (ordered.length === 1) return void (await flow.restore(row.nodeId, ordered[0]!.rev));
 
-            if (picker.style.display !== 'none') {
-              picker.style.display = 'none';
-              return;
-            }
-            picker.empty();
-            picker.createEl('p', {
-              text: 'Pick what comes back. The newest is what most people mean by restore.',
-              cls: 'setting-item-description',
-            });
-            ordered.forEach((v, i) => {
-              new Setting(picker)
-                .setName(`r${v.rev} · ${new Date(v.at).toLocaleString()}`)
-                // The size is here because it is the one thing that tells two revisions of the
-                // same note apart at a glance when the timestamps are minutes from each other.
-                .setDesc(`${mib(v.size)}${i === 0 ? ' · newest' : ''}`)
-                .addButton((r) =>
-                  r
-                    .setButtonText('Restore')
-                    .setCta()
-                    .onClick(async () => {
-                      picker.style.display = 'none';
-                      await flow.restore(row.nodeId, v.rev);
-                    }),
-                );
-            });
-            picker.style.display = '';
-          }),
+              if (picker.style.display !== 'none') {
+                picker.style.display = 'none';
+                return;
+              }
+              picker.empty();
+              picker.createEl('p', {
+                text: 'Pick what comes back. The newest is what most people mean by restore.',
+                cls: 'setting-item-description',
+              });
+              ordered.forEach((v, i) => {
+                new Setting(picker)
+                  .setName(`r${v.rev} · ${new Date(v.at).toLocaleString()}`)
+                  // The size is here because it is the one thing that tells two revisions of the
+                  // same note apart at a glance when the timestamps are minutes from each other.
+                  .setDesc(`${mib(v.size)}${i === 0 ? ' · newest' : ''}`)
+                  .addButton((r) =>
+                    this.waits(r)
+                      .setButtonText('Restore')
+                      .setCta()
+                      .onClick(async () => {
+                        picker.style.display = 'none';
+                        await flow.restore(row.nodeId, v.rev);
+                      }),
+                  );
+              });
+              picker.style.display = '';
+            }),
         );
 
         setting.addButton((b) =>
-          b
+          this.waits(b)
             .setButtonText('Discard')
             .setWarning()
             .onClick(() => void flow.discard(row.nodeId, row.name)),
@@ -621,7 +699,7 @@ export class SyncServerSettings extends PluginSettingTab {
             'action that lowers what the account is using.',
         )
         .addButton((b) =>
-          b
+          this.waits(b)
             .setButtonText('Empty')
             .setWarning()
             .onClick(() => void flow.empty(page.total)),
