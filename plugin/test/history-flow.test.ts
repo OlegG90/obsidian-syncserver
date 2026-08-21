@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.js';
-import { openHistoryFlow, type HistoryFlowDeps } from '../src/history-flow.js';
+import { newestFirst, openHistoryFlow, type HistoryFlowDeps } from '../src/history-flow.js';
 import { openGate } from '../src/gate.js';
 
 const rows = [
@@ -151,5 +151,47 @@ describe('the screen asks for several things at once', () => {
     await Promise.all([flow.discard('n1', 'a.md'), flow.discard('n1', 'a.md')]);
     assert.equal(peak, 1);
     assert.ok(said.some((s) => /already running/.test(s)));
+  });
+});
+
+describe('which revision is the newest (#125)', () => {
+  // `VersionRow` said "newest first" in a comment and the settings tab restored `versions[0]`
+  // — the newest by POSITION. Position is the server's to decide, and a client reading an
+  // ordering as a fact restores whatever is first on the day the query gains an `ORDER BY`
+  // somebody thought was equivalent. Silently, and over the newest copy of a file.
+  const v = (rev: number, at: string) => ({ rev, at, size: rev * 100 });
+
+  it('orders by revision, whatever order they arrive in', () => {
+    const jumbled = [v(18, '2026-08-05T08:55:00Z'), v(31, '2026-08-12T18:31:00Z'), v(27, '2026-08-11T14:02:00Z')];
+
+    assert.deepEqual(
+      newestFirst(jumbled).map((x) => x.rev),
+      [31, 27, 18],
+    );
+  });
+
+  it('leaves the caller a list of its own', () => {
+    // The rows come from a fetch the screen may draw twice; sorting them in place would
+    // reorder somebody else's array as a side effect of reading it.
+    const rows = [v(1, '2026-08-01T00:00:00Z'), v(2, '2026-08-02T00:00:00Z')];
+    newestFirst(rows);
+
+    assert.deepEqual(
+      rows.map((x) => x.rev),
+      [1, 2],
+      'the input is untouched',
+    );
+  });
+
+  it('orders by revision rather than by clock', () => {
+    // `rev` is monotonic per node (docs/03); `at` is a timestamp, and two writes inside one
+    // second are not a tie the client should be breaking.
+    const sameSecond = [v(9, '2026-08-12T18:31:00Z'), v(10, '2026-08-12T18:31:00Z')];
+
+    assert.equal(newestFirst(sameSecond)[0]!.rev, 10);
+  });
+
+  it('has nothing to say about an empty list', () => {
+    assert.deepEqual(newestFirst([]), []);
   });
 });

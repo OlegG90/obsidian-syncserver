@@ -13,6 +13,7 @@
  */
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
+import { newestFirst } from '../history-flow.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
@@ -505,14 +506,54 @@ export class SyncServerSettings extends PluginSettingTab {
               (row.shared ? ' · was in a shared folder' : ''),
           );
 
-        // Restoring takes a revision, and the newest is what a person means by "restore"
-        // unless they say otherwise — so the button does that, and the list is one press
-        // further in rather than in everybody's way.
+        /**
+         * Restoring takes a revision, and until now the screen chose one and threw the rest
+         * away: it fetched every version and restored `versions[0]` (#125). The list was
+         * already in hand.
+         *
+         * **A choice is offered only when there is one.** One version means the picker is a
+         * list of one and a press spent on a decision nobody has — so that row restores
+         * directly and says so with its label. More than one opens them, newest first and
+         * marked, because that is what most people mean by "restore" and the rest are why
+         * this is a list rather than a button.
+         */
+        const picker = list.createEl('div');
+        picker.style.display = 'none';
+        picker.style.margin = '0 0 0.75rem 1rem';
+
         setting.addButton((b) =>
-          b.setButtonText('Restore').onClick(async () => {
+          b.setButtonText(row.versions === 1 ? 'Restore' : 'Restore…').onClick(async () => {
             const versions = await flow.versions(row.nodeId);
             if (!versions || versions.length === 0) return;
-            await flow.restore(row.nodeId, versions[0]!.rev);
+            const ordered = newestFirst(versions);
+            if (ordered.length === 1) return void (await flow.restore(row.nodeId, ordered[0]!.rev));
+
+            if (picker.style.display !== 'none') {
+              picker.style.display = 'none';
+              return;
+            }
+            picker.empty();
+            picker.createEl('p', {
+              text: 'Pick what comes back. The newest is what most people mean by restore.',
+              cls: 'setting-item-description',
+            });
+            ordered.forEach((v, i) => {
+              new Setting(picker)
+                .setName(`r${v.rev} · ${new Date(v.at).toLocaleString()}`)
+                // The size is here because it is the one thing that tells two revisions of the
+                // same note apart at a glance when the timestamps are minutes from each other.
+                .setDesc(`${mib(v.size)}${i === 0 ? ' · newest' : ''}`)
+                .addButton((r) =>
+                  r
+                    .setButtonText('Restore')
+                    .setCta()
+                    .onClick(async () => {
+                      picker.style.display = 'none';
+                      await flow.restore(row.nodeId, v.rev);
+                    }),
+                );
+            });
+            picker.style.display = '';
           }),
         );
 
