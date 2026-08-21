@@ -40,12 +40,28 @@ export interface TrashRow {
   shared: boolean;
 }
 
-/** One revision of a node, newest first. */
+/** One revision of a node. */
 export interface VersionRow {
   rev: number;
   size: number;
   at: string;
 }
+
+/**
+ * The revisions, newest first — sorted here rather than trusted to arrive that way (#125).
+ *
+ * This was a comment: `VersionRow` said "newest first" and the settings tab restored
+ * `versions[0]`, which is the newest **by position**. Position is the server's to decide, and
+ * a client that reads an ordering as a fact restores whatever happens to be first the day the
+ * query gains an `ORDER BY` somebody thought was equivalent. The failure would be silent and
+ * would restore the OLDEST copy of a file over the newest.
+ *
+ * `rev` is monotonic per node (docs/03), so it orders them without a clock — which matters
+ * because `at` is a timestamp and two writes in one second are not a tie anybody should have
+ * to break in the client.
+ */
+export const newestFirst = (rows: readonly VersionRow[]): VersionRow[] =>
+  [...rows].sort((a, b) => b.rev - a.rev);
 
 /** A page of the trash, and how much of it there is. */
 export interface TrashPage {
