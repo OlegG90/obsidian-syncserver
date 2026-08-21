@@ -88,12 +88,16 @@ Write `.env` from [`.env.example`](../.env.example), which documents every varia
 a deployment:
 
 ```bash
-SERVER_IMAGE=ghcr.io/olegg90/syncserver:0.5.2   # never `latest`: a server must be able to say what it runs
-POSTGRES_PASSWORD=…                             # compose refuses to start without it
-SERVER_SECRET=…                                 # likewise, and not the same value
-PUBLISH_PORT=8087                               # the container is always 8080; the host port is yours
-RUN_AS=1001:100                                 # uid:gid the server runs as — see below
+SERVER_IMAGE=ghcr.io/olegg90/syncserver:<version>  # a version, never `latest` — see below
+POSTGRES_PASSWORD=…                                # compose refuses to start without it
+SERVER_SECRET=…                                    # likewise, and not the same value
+PUBLISH_PORT=8087                                  # the container is always 8080; the host port is yours
+RUN_AS=1001:100                                    # uid:gid the server runs as — see below
 ```
+
+**A version and not `latest`**, because a server has to be able to say what it is running and to go back
+to what it ran yesterday. The current one is on the repository's releases page; this file does not name it,
+having twice been a release behind while looking exact.
 
 Generate the two secrets rather than inventing them, and **keep them**. `POSTGRES_PASSWORD` is what the
 database was initialised with; a different one on a later start leaves the installation unable to open
