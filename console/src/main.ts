@@ -305,6 +305,11 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
       ),
       true,
     );
+  } else if (a.state === 'deleting') {
+    // An account being taken apart has one thing left that can be done to it. Offering to
+    // change the limit of something that is being removed is offering an act with no future,
+    // and the operator would be right to wonder which of the two they had misunderstood.
+    act('Deletion…', opens(() => deletionForm(a, done, report)), true);
   } else if (a.role !== 'admin') {
     act('Change quota', opens(() => quotaControl(a, done, report, () => drawer.replaceChildren())));
     act(a.state === 'disabled' ? 'Enable' : 'Disable', opens(() => enableForm(a, done, report)));
@@ -363,23 +368,48 @@ const enableForm = (a: AccountRow, done: () => Promise<void>, report: Report): H
  * finish on their behalf. That wait is why this draws a progress surface rather than a
  * dialogue that closes and claims success.
  *
- * The confirmation names the part that reaches other people, because that is the half nobody
- * expects: deleting one account ends shared folders for everybody in them. And it says what
- * survives — the audit log keeps naming this account, by design (#93), since a history that
- * forgets who did what is worse than one naming somebody who has gone.
+ * **Two states, and each offers only what exists in it.** Both buttons used to be on screen
+ * from the start, so "Check again" sat there before anything had begun — an offer to look at
+ * a procedure that did not exist. Pressed, it would have said "Deletion is active", because
+ * `GET …/deletion` answers with the account's state and an account nobody is deleting is
+ * simply active. A control whose honest answer is nonsense should not be on the screen yet.
+ *
+ * So: before, a warning and one way forward. After, the progress and the two acts that now
+ * mean something — carry on, or look without moving it. `POST` advances and `GET` only looks,
+ * deliberately, since a poll that pushed the state would make watching a deletion
+ * indistinguishable from driving one.
+ *
+ * An account already in `deleting` when the console opens goes straight to the progress: the
+ * operator who comes back the next day has already agreed, and asking them again would be
+ * asking about a decision that has been taken.
+ *
+ * The confirmation leads with the half that surprises people — deleting one account ends
+ * shared folders for everybody in them — and says what survives: the audit log keeps naming
+ * this account, by design (#93), since a history that forgets who did what is worse than one
+ * naming somebody who has gone.
  */
 const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
   const box = el('div', {});
-  const progress = el('div', {});
+  const body = el('div', {});
+  box.append(body);
 
-  const draw = (p: DeletionProgress): void => {
+  const underway = (p: DeletionProgress): void => {
     if (p.finished) {
-      progress.replaceChildren(say(`${a.login} and everything it held are gone.`));
+      body.replaceChildren(say(`${a.login} and everything it held are gone.`));
       return;
     }
-    const lines: HTMLElement[] = [el('p', { textContent: `Deletion is ${p.state}.` })];
+
+    // Said as a sentence, not as the enum. `state` is a column value — "Deletion of marta is
+    // deleting" is what interpolating it produces, and it reads like a machine talking to
+    // itself. An unfamiliar state still gets shown under its own name, for the audit log's
+    // reason: a surface that hides what it does not recognise is worse than a clumsy one.
+    const lines: HTMLElement[] = [
+      el('p', {
+        textContent: p.state === 'deleting' ? `${a.login} is being deleted.` : `${a.login} is ${p.state}.`,
+      }),
+    ];
     if (p.awaiting.length === 0) {
-      lines.push(el('p', { className: 'muted', textContent: 'Nothing is outstanding; press again to carry on.' }));
+      lines.push(el('p', { className: 'muted', textContent: 'Nothing is outstanding. Carry on to finish it.' }));
     } else {
       // Named, not counted. "Waiting on 3" is a number somebody can do nothing with; a list of
       // logins is a list of people to ask.
@@ -391,13 +421,30 @@ const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report):
         el('ul', {}, ...p.awaiting.map((w) => el('li', { textContent: w.login }))),
       );
     }
-    progress.replaceChildren(...lines);
+
+    const carry = el('button', { className: 'danger', textContent: 'Carry on' });
+    const look = el('button', { textContent: 'Check again' });
+    lines.push(carry, look);
+    body.replaceChildren(...lines);
+
+    submits(carry, body, async () => {
+      const next = await beginDeletion(a.id);
+      underway(next);
+      if (next.finished) report(`${a.login} was deleted.`);
+      await done();
+    });
+    submits(look, body, async () => underway(await deletionProgress(a.id)));
   };
 
-  const advance = el('button', { className: 'danger', textContent: 'Delete this account' });
-  const look = el('button', { textContent: 'Check again' });
+  // Already begun — by a previous session, or by this one before a reload.
+  if (a.state === 'deleting') {
+    body.replaceChildren(el('p', { className: 'muted', textContent: 'Reading where it got to…' }));
+    void attempt(body, async () => underway(await deletionProgress(a.id)));
+    return box;
+  }
 
-  box.append(
+  const start = el('button', { className: 'danger', textContent: 'Delete this account' });
+  body.replaceChildren(
     el('p', {
       className: 'bad',
       textContent:
@@ -410,18 +457,15 @@ const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report):
         'The audit log keeps naming this account afterwards, deliberately: a history that forgets ' +
         'who did what is worse than one naming somebody who is gone.',
     }),
-    advance,
-    look,
-    progress,
+    start,
   );
 
-  submits(advance, box, async () => {
+  submits(start, body, async () => {
     const p = await beginDeletion(a.id);
-    draw(p);
+    underway(p);
     report(p.finished ? `${a.login} was deleted.` : `Deletion of ${a.login} has begun.`, !p.finished);
     await done();
   });
-  submits(look, box, async () => draw(await deletionProgress(a.id)));
   return box;
 };
 
