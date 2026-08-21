@@ -24,7 +24,7 @@ import { after, before, describe, it } from 'node:test';
 import { ApiError, SyncClient, type CursorRejected, type CursorUnverifiable } from '../src/api/client.js';
 import type { Delta } from '@syncserver/shared';
 import { fetchTransport, type Transport } from '../src/api/transport.js';
-import { authSecret, createAccount, openAccount, vaultKey } from '../src/crypto/account.js';
+import { authSecret, createAccount, openAccount, unwrapWithRecovery, vaultKey } from '../src/crypto/account.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
 import { fromBase64, fromUtf8, randomBytes, randomUuid, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { HEADER_BYTES } from '../src/crypto/format.js';
@@ -32,7 +32,7 @@ import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapCon
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
 import { MemoryStateStore } from '../src/engine/state.js';
-import { newPairingCode } from '../src/crypto/pairing-code.js';
+import { newHumanCode, normaliseHumanCode } from '../src/crypto/human-code.js';
 import { session, type Session } from '../src/session/index.js';
 import { wrapShareKey } from '../src/crypto/share.js';
 import { shareFolder } from '../src/sharing.js';
@@ -392,12 +392,49 @@ describe('a vault, end to end', () => {
     });
   });
 
+  it('makes a recovery code, and that code hands back the same seed the passphrase does (M7)', async () => {
+    // The one test that proves the whole chain agrees: the client derives a key from the code
+    // and wraps the seed, the server stores an envelope it cannot read, and `/auth/recover`
+    // hands it back against a hash the client computed. Nothing else checks that the client's
+    // HKDF and the server's hex hash are talking about the same code — and a mismatch would
+    // be found by somebody who had lost their passphrase, which is the worst possible time.
+    if (sess.state !== 'open') assert.equal(await sess.open(passphrase), 'open');
+    const { code, replaced } = await sess.createRecoveryCode();
+    assert.equal(replaced, false, 'this account had none');
+
+    const fresh = new SyncClient(base, fetchTransport);
+    const typed = ` ${code.toLowerCase()} `; // as a person hands it back months later
+    const recoverWith = (recovery_code: string) =>
+      fresh.recover({
+        login: 'roundtrip-user',
+        recovery_code,
+        device_name: 'the replacement laptop',
+        device_platform: 'linux',
+      });
+
+    // **The normalising is the client's, at both ends** — the server hashes the string it is
+    // handed and has no opinion about dashes or case. So the code must be normalised before
+    // it is sent, exactly as a pairing secret is (`session.ts`), and this asserts the trap
+    // rather than describing it: the raw typed form is refused, and #34 has to normalise.
+    await assert.rejects(recoverWith(typed), /401/, 'the typed form is not the code');
+
+    const back = await recoverWith(normaliseHumanCode(typed));
+    assert.equal(back.opened_by, 'recovery_code');
+
+    // The seed itself, compared against the one the passphrase opens. Same bytes or the
+    // vault keys derived from it would decrypt nothing.
+    const recovered = unwrapWithRecovery(back.seed_envelope, code, fromBase64(back.account_salt));
+    await sess.use(async (h) => {
+      assert.deepEqual(vaultKey(recovered, vaultId), h.kv, 'and it derives this vault’s key');
+    });
+  });
+
   it('pairs a second device, which then reads the vault without ever seeing the passphrase path', async () => {
     // The scenario the plugin could not perform at all until now: a phone joining an
     // account that already exists. `connect()` mints a new account and spends an invitation;
     // this spends nothing and generates nothing — the seed already exists, and the whole
     // flow is about moving it to a second device without the server being able to read it.
-    const code = newPairingCode();
+    const code = newHumanCode();
 
     // B begins and polls; A approves on the first wait. Concurrency is the point — a
     // pairing that could only be approved before it was started would not be a pairing.
@@ -446,7 +483,7 @@ describe('a vault, end to end', () => {
   });
 
   it('refuses a pairing code that was already used', async () => {
-    const code = newPairingCode();
+    const code = newHumanCode();
     await assert.rejects(
       session.pair(
         { serverUrl: base, login: 'roundtrip-user', passphrase, pairingCode: code },

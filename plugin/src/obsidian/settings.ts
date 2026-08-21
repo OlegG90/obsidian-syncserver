@@ -18,7 +18,7 @@ import { busyLine } from '../gate.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
-import { newPairingCode } from '../crypto/pairing-code.js';
+import { newHumanCode } from '../crypto/human-code.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from '../version.js';
 import { ConfirmModal } from './modals.js';
 import type SyncServerPlugin from '../main.js';
@@ -156,6 +156,7 @@ export class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.recoverySection(containerEl);
       this.shareSection(containerEl);
       this.trashSection(containerEl);
       this.disconnectSection(containerEl);
@@ -405,6 +406,124 @@ export class SyncServerSettings extends PluginSettingTab {
     );
   }
 
+
+  /**
+   * The recovery code: the only thing that opens this account if the passphrase is forgotten.
+   *
+   * **Offered, and never demanded.** A code asked for during registration lands in the same
+   * password manager as the passphrase, where it is a second key to the same door — all of
+   * the cost, none of the protection. It pays only when it is kept somewhere else, and where
+   * that is belongs to the person and not to this plugin. So the screen does one thing: shows
+   * the code, once, and says plainly what it is for. Where it goes next is not a question
+   * with a button.
+   *
+   * Shown once because there is no second showing: the server holds a hash, and a code it
+   * could show again would be a code it could use.
+   */
+  private recoverySection(containerEl: HTMLElement): void {
+    containerEl.createEl('h3', { text: 'Recovery code' });
+    containerEl.createEl('p', {
+      text:
+        'The passphrase is the only thing that opens this account, and the server never sees it — ' +
+        'so nobody can reset it. A recovery code is a second way in, and the only one there is.',
+    });
+
+    const setting = new Setting(containerEl).setName('This account').setDesc('Asking the server…');
+    // The code lands here, below the row that made it, and stays until the screen is rebuilt.
+    const shown = containerEl.createEl('div');
+
+    const button = new ButtonComponent(setting.controlEl).setButtonText('Create a recovery code');
+    button.setDisabled(true);
+
+    // What the button means depends on whether there is already a code, and only the server
+    // knows — this device may not be the one that made it. Until the answer arrives the
+    // button says nothing it might have to take back.
+    void this.plugin
+      .hasRecoveryCode()
+      .then((present) => {
+        setting.setDesc(
+          present
+            ? 'has a recovery code. Making another replaces it, and the old one stops working.'
+            : 'has no recovery code. A forgotten passphrase would be the end of it.',
+        );
+        button.setButtonText(present ? 'Replace the recovery code' : 'Create a recovery code');
+        button.setDisabled(false);
+        button.onClick(() => this.makeRecoveryCode(shown, present));
+      })
+      .catch(() => setting.setDesc('The server could not be asked whether this account has one.'));
+  }
+
+  /**
+   * Make the code and put it on screen — the one moment it exists anywhere but in a hash.
+   *
+   * Replacing is confirmed and creating is not, because they are different acts: one adds a
+   * way in, the other takes one away. Somebody who still holds the old code on paper is
+   * about to find it stops working, and that is worth a sentence before rather than a notice
+   * after.
+   */
+  private makeRecoveryCode(shown: HTMLElement, replacing: boolean): void {
+    const make = async (): Promise<void> => {
+      shown.empty();
+      shown.createEl('p', { text: 'Making it…' });
+      try {
+        const { code, replaced } = await this.plugin.createRecoveryCode();
+        this.showRecoveryCode(shown, code, replaced);
+      } catch (e) {
+        shown.empty();
+        const failed = shown.createEl('p', {
+          text: `The code was not made — ${e instanceof Error ? e.message : String(e)}`,
+        });
+        failed.style.color = 'var(--text-error)';
+      }
+    };
+
+    if (!replacing) return void make();
+    new ConfirmModal(
+      this.app,
+      'Replace the recovery code?',
+      'The code this account has now stops working the moment the new one is made. If it is written down somewhere, that copy becomes waste paper.',
+      make,
+      'Replace it',
+    ).open();
+  }
+
+  /**
+   * The code itself, and the one thing worth saying about where it goes.
+   *
+   * Copy is offered because a clipboard is how a code reaches a password manager or a file,
+   * and typing 26 characters by hand invites an error nobody would notice until the day it
+   * mattered. What is NOT offered is saving it into this vault, and the sentence says why
+   * rather than leaving the absence to be read as an oversight: a copy in here survives
+   * forgetting the passphrase and does not survive losing the device — and losing the device
+   * is half of what this exists for.
+   */
+  private showRecoveryCode(shown: HTMLElement, code: string, replaced: boolean): void {
+    shown.empty();
+    shown.createEl('p', {
+      text: replaced
+        ? 'Done. The previous code no longer works. This is the new one, and it is shown once:'
+        : 'This is the code, and it is shown once — the server keeps only a hash of it:',
+    });
+    shown.createEl('pre', { text: code });
+
+    const copy = shown.createEl('button', { text: 'Copy' });
+    copy.addEventListener('click', () => {
+      void navigator.clipboard
+        .writeText(code)
+        .then(() => new Notice('SyncServer: recovery code copied. A clipboard is not somewhere to keep it.', 8000))
+        .catch(() =>
+          new Notice('SyncServer: could not reach the clipboard — the code above is still the code.', 8000),
+        );
+    });
+
+    const where = shown.createEl('p', {
+      text:
+        'Keep it away from the passphrase — the two together are one key, not two. Keeping it inside this ' +
+        'vault is worth saying no to: it would survive forgetting the passphrase and not survive losing the device.',
+    });
+    where.style.fontSize = 'var(--font-ui-smaller)';
+    where.style.opacity = '0.8';
+  }
 
   /**
    * Folders shared with other people, and the invitations waiting for an answer.

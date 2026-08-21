@@ -1,12 +1,20 @@
 /**
- * The one secret in this system a **human carries**, and the only reason it is not simply
+ * The secrets in this system a **human carries**, and the only reason they are not simply
  * 32 random bytes in base64.
  *
- * A pairing secret is read off one screen and typed into another, so its encoding is a
- * usability decision with a security floor under it. The floor wins: **128 bits of CSPRNG**,
- * the same entropy #108 requires of every stored verifier, because the server does no rate
- * limiting on approval or claim and a pairing lives ten minutes — long enough to brute-force
- * anything short.
+ * Two of them now: a **pairing secret**, read off one screen and typed into another, and a
+ * **recovery code** (M7), written down somewhere and typed back months later. Their
+ * lifetimes could hardly differ more, and their encoding problem is identical — which is why
+ * this module was renamed out of `pairing-code.ts` rather than copied: a recovery code
+ * produced by a function called `newPairingCode` would be mislabelled for as long as it
+ * existed.
+ *
+ * The encoding is a usability decision with a security floor under it. The floor wins:
+ * **128 bits of CSPRNG**, the same entropy #108 requires of every stored verifier. For a
+ * pairing that is because the server does no rate limiting on approval or claim and a
+ * pairing lives ten minutes; for a recovery code it is because the code wraps a second copy
+ * of the seed, and an attacker holding a database dump can attack that copy offline for
+ * years. Neither is brute-forceable at 128 bits, which is the point.
  *
  * **Crockford's base32, not RFC 4648's.** Both encode five bits per character; the
  * difference is that Crockford's alphabet omits `I`, `L`, `O` and `U`, which is what makes
@@ -43,7 +51,7 @@ const encode = (bytes: Uint8Array): string => {
 };
 
 /** A fresh code, grouped for reading aloud and for typing without losing one's place. */
-export const newPairingCode = (): string => {
+export const newHumanCode = (): string => {
   const raw = encode(randomBytes(SECRET_BYTES));
   return (raw.match(/.{1,4}/g) ?? []).join('-');
 };
@@ -59,7 +67,7 @@ export const newPairingCode = (): string => {
  * bytes, or the failure is "wrong code" for a code that was read correctly — which is the
  * kind of fault a person cannot act on.
  */
-export const normalisePairingCode = (typed: string): string =>
+export const normaliseHumanCode = (typed: string): string =>
   typed
     .toUpperCase()
     .replace(/[\s-]/g, '')

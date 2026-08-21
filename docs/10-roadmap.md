@@ -10,7 +10,7 @@
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
 | **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
-| **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☐ |
+| **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ◐ — a code can be made; redeeming it from the plugin is #34 |
 
 **There is no M6.** It was a WebDAV gateway, and it is dropped rather than deferred: the vault is reached
 through the plugin, and a second protocol into the same data is a second place for the key model to be got
@@ -451,18 +451,27 @@ Mechanically it is a second wrapping of the **same seed**: nothing is re-encrypt
 beside `wrapped_seed` exactly as `enc_privkey` sits beside both. The columns and their paired `CHECK` have
 been in the schema since M3.5.
 
-- [ ] **Generate, show once, store the hash.** A high-entropy code produced on the client, `recovery_key =
-      seal(code, seed)` and `recovery_code_hash` sent up. The code itself never reaches the server, and is
-      shown exactly once — there is no second viewing, because a code the server could show again would be
-      a code the server could use.
-- [ ] **The second proof at `/auth/recover`.** The endpoint's shape does not change: one endpoint, two
+- [x] **Generate, show once, store the hash.** A high-entropy code produced on the client, `recovery_key =
+      seal(code, seed)` and `recovery_code_hash` sent up through `PUT /auth/recovery-code`. The code itself
+      never reaches the server, and is shown exactly once — there is no second viewing, because a code the
+      server could show again would be a code the server could use. `GET` on the same path answers a
+      **boolean**, which is the most a screen may ask.
+- [x] **The second proof at `/auth/recover`.** The endpoint's shape does not change: one endpoint, two
       proofs, each returning only the envelope its own proof opens. The same generic refusal (#73) and the
       same attempt limit cover it, so a code cannot be used to distinguish an account from a stranger either.
-- [ ] **Regenerate**, which is another wrapping of the same seed and therefore cheap — and which
+      This half was built with M3.5 and had no way to acquire a code until now.
+- [x] **Regenerate**, which is another wrapping of the same seed and therefore cheap — and which
       **invalidates the previous code**, since the whole risk of this feature is a slip of paper from three
-      years ago that still opens the account.
-- [ ] **A screen that says what it is for**, because the value of this depends entirely on where the user
-      puts it.
+      years ago that still opens the account. It is the same endpoint: there is no way to hold two, and the
+      answer says `replaced` so the screen can say the old one has stopped working.
+- [x] **A screen that says what it is for**, because the value of this depends entirely on where the user
+      puts it. It shows the code and offers to copy it, and it says the one thing that is not obvious: a copy
+      kept inside this vault survives forgetting the passphrase and does not survive losing the device.
+- [ ] **Redeeming it** (#34) — the client half of `/auth/recover` with a code instead of a passphrase. The
+      server has answered that call since M3.5 and nothing on the client makes it, so a code created today
+      is redeemable with `curl` and not from the plugin. **Normalising is what that work must not forget**:
+      the server hashes the string it is handed, so a typed code has to be normalised before it is sent, and
+      a roundtrip test asserts the trap rather than describing it.
 
 **Offered, never forced.** It is an action in the settings and not a step of registration. A code demanded
 during sign-up lands in the same password manager as the passphrase, where it is a second key to the same

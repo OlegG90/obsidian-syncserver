@@ -15,8 +15,12 @@ import {
   deriveKek,
   newSeed,
   openAccount,
+  recoveryCodeHash,
+  unwrapWithRecovery,
   vaultKey,
+  wrapForRecovery,
 } from '../src/crypto/account.js';
+import { newHumanCode } from '../src/crypto/human-code.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
 import { MARKER_BYTES, WRAP_VERSION, open, seal } from '../src/crypto/sealed.js';
 import { fromBase64, randomBytes, toBase64, toHex, utf8 } from '../src/crypto/bytes.js';
@@ -289,5 +293,67 @@ describe('encoding', () => {
     // The spread inside toBase64 is chunked because a whole file goes through it.
     const big = randomBytes(200_000);
     assert.deepEqual(fromBase64(toBase64(big)), big);
+  });
+});
+
+/**
+ * The recovery code's wrapping (M7): a second envelope over the same seed.
+ *
+ * The property that matters is not that it round-trips — it is that the code and the
+ * passphrase reach the same 32 bytes by different routes, because a recovery code that
+ * returned a DIFFERENT seed would produce an account whose vault keys no longer match
+ * anything it holds, and it would do so silently.
+ */
+describe('the recovery code, wrapping the same seed a second time', () => {
+  const salt = new Uint8Array(16).fill(7);
+
+  it('gives back the very seed the passphrase gives back', () => {
+    const account = createAccount('a chosen phrase');
+    const code = newHumanCode();
+    const envelope = wrapForRecovery(account.seed, code, account.accountSalt);
+
+    assert.deepEqual(unwrapWithRecovery(envelope, code, account.accountSalt), account.seed);
+  });
+
+  it('refuses a code that is not the one, rather than returning rubbish', () => {
+    const seed = newSeed();
+    const envelope = wrapForRecovery(seed, newHumanCode(), salt);
+    assert.throws(() => unwrapWithRecovery(envelope, newHumanCode(), salt));
+  });
+
+  it('accepts the code as a human hands it back — dashes, case, a misread O', () => {
+    // The code is written down and typed months later. If the wrapping key depended on the
+    // exact string, a correctly kept code would fail for its punctuation.
+    const seed = newSeed();
+    const code = newHumanCode();
+    const envelope = wrapForRecovery(seed, code, salt);
+
+    assert.deepEqual(unwrapWithRecovery(envelope, code.replace(/-/g, ''), salt), seed);
+    assert.deepEqual(unwrapWithRecovery(envelope, code.toLowerCase(), salt), seed);
+    assert.deepEqual(unwrapWithRecovery(envelope, ` ${code} `, salt), seed);
+  });
+
+  it('is bound to the account, so a code cannot be carried to another one', () => {
+    const seed = newSeed();
+    const code = newHumanCode();
+    const envelope = wrapForRecovery(seed, code, salt);
+    const elsewhere = new Uint8Array(16).fill(9);
+    assert.throws(() => unwrapWithRecovery(envelope, code, elsewhere));
+  });
+
+  it('hashes what the server will be handed, not what the screen showed', () => {
+    // The server hashes the string it receives at recovery, and that string has crossed a
+    // human. Both sides must normalise first or a correctly kept code hashes to nothing.
+    const code = newHumanCode();
+    assert.equal(recoveryCodeHash(code), recoveryCodeHash(code.replace(/-/g, '').toLowerCase()));
+    assert.match(recoveryCodeHash(code), /^[0-9a-f]{64}$/, 'sha-256, hex, like every other stored verifier');
+  });
+
+  it('gives two accounts with the same code different envelopes', () => {
+    const seed = newSeed();
+    const code = newHumanCode();
+    const a = wrapForRecovery(seed, code, salt);
+    const b = wrapForRecovery(seed, code, new Uint8Array(16).fill(3));
+    assert.notEqual(a, b);
   });
 });
