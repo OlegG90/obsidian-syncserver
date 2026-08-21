@@ -202,7 +202,9 @@ one — but while it holds, it is the boundary of the system.
 Named so that their absence reads as a decision rather than an omission:
 
 - **the code level of C4** — there is no code yet, and describing classes in advance is fiction;
-- **a WebDAV gateway** — a roadmap item (M6), not part of the system today;
+- **a WebDAV gateway** — dropped, not deferred (it was M6). The vault is reached through the plugin, and a
+  second protocol into the same data is a second place to get the key model wrong, for a way in nobody
+  needs;
 - **a separate search service** — search stays in Obsidian, on the client. Server-side search is impossible
   under E2EE (the server cannot read content) and is not planned;
 - **a cache or CDN in front of the blobs** — premature at the scale of a handful of people.
