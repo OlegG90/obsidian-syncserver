@@ -15,6 +15,7 @@ import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidia
 import { whatIsMissing, type ConnectDraft } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
 import { busyLine } from '../gate.js';
+import { recoveryRow } from '../recovery-row.js';
 
 import { SyncClient } from '../api/client.js';
 import { transport } from './net.js';
@@ -299,15 +300,21 @@ export class SyncServerSettings extends PluginSettingTab {
       );
 
     // 3 — an account that exists with no device left to ask.
+    //
+    // Named for what the person still HAS, not for the mechanism, because the route below it
+    // is also a recovery and the two buttons read alike on a screen where choosing wrong is a
+    // wasted attempt. This one is "I know the passphrase", the other is "I do not" — so this
+    // one is re-connecting a vault and that one is recovering an account.
     new Setting(containerEl)
-      .setName('Recover this account')
+      .setName('Re-connect this vault with the passphrase')
       .setDesc(
-        'When no device is left to pair with. The passphrase proves itself to the server, which returns ' +
-          'the account key it has always held sealed — it cannot read it, and never sees the passphrase.',
+        'When no device is left to pair with, and you still have the passphrase. It proves itself to the ' +
+          'server, which returns the account key it has always held sealed — it cannot read it, and never ' +
+          'sees the passphrase.',
       )
       .addButton((b) =>
         b
-          .setButtonText('Recover')
+          .setButtonText('Re-connect')
           .setWarning()
           .onClick(async () => {
             const need = whatIsMissing(draft, 'recover');
@@ -332,9 +339,9 @@ export class SyncServerSettings extends PluginSettingTab {
 
     // 4 — an account that exists, whose passphrase is gone. The other half of the same door.
     new Setting(containerEl)
-      .setName('Recover with a recovery code')
+      .setName('Recover this account with a recovery code')
       .setDesc(
-        'When the passphrase is the thing that was lost. The code opens the account key the server has ' +
+        'When the passphrase itself is what was lost. The code opens the account key the server has ' +
           'always held sealed, and the passphrase above becomes this account’s passphrase from now on.',
       )
       .addText((t) => t.setPlaceholder('recovery code').onChange((v) => (draft.code = v)))
@@ -479,21 +486,34 @@ export class SyncServerSettings extends PluginSettingTab {
     const button = new ButtonComponent(setting.controlEl).setButtonText('Create a recovery code');
     button.setDisabled(true);
 
+    /**
+     * The row, drawn from one fact: does this account have a code.
+     *
+     * **A function rather than a one-time render, because the act on the row changes the
+     * fact.** It was written once, from the server's answer at page load, and never again —
+     * so after making a code the line still read "has no recovery code", and the button still
+     * believed it was creating one. Pressing it a second time would have gone down the
+     * creating path: no confirmation, and the code just written down replaced in silence.
+     * That is the exact warning the replacing path exists to give.
+     *
+     * Found by a person walking it (2026-08-21), which is where this class of defect is
+     * always found: nothing was wrong with either branch, only with which one the screen
+     * thought it was in.
+     */
+    const paint = (present: boolean): void => {
+      const row = recoveryRow(present);
+      setting.setDesc(row.desc);
+      button.setButtonText(row.button);
+      button.setDisabled(false);
+      button.onClick(() => this.makeRecoveryCode(shown, row.confirms, () => paint(true)));
+    };
+
     // What the button means depends on whether there is already a code, and only the server
     // knows — this device may not be the one that made it. Until the answer arrives the
     // button says nothing it might have to take back.
     void this.plugin
       .hasRecoveryCode()
-      .then((present) => {
-        setting.setDesc(
-          present
-            ? 'has a recovery code. Making another replaces it, and the old one stops working.'
-            : 'has no recovery code. A forgotten passphrase would be the end of it.',
-        );
-        button.setButtonText(present ? 'Replace the recovery code' : 'Create a recovery code');
-        button.setDisabled(false);
-        button.onClick(() => this.makeRecoveryCode(shown, present));
-      })
+      .then(paint)
       .catch(() => setting.setDesc('The server could not be asked whether this account has one.'));
   }
 
@@ -505,13 +525,16 @@ export class SyncServerSettings extends PluginSettingTab {
    * about to find it stops working, and that is worth a sentence before rather than a notice
    * after.
    */
-  private makeRecoveryCode(shown: HTMLElement, replacing: boolean): void {
+  private makeRecoveryCode(shown: HTMLElement, replacing: boolean, made: () => void): void {
     const make = async (): Promise<void> => {
       shown.empty();
       shown.createEl('p', { text: 'Making it…' });
       try {
         const { code, replaced } = await this.plugin.createRecoveryCode();
         this.showRecoveryCode(shown, code, replaced);
+        // The row is now describing an account that has changed under it: from here on, this
+        // button replaces, and must say so and ask before it does.
+        made();
       } catch (e) {
         shown.empty();
         const failed = shown.createEl('p', {
