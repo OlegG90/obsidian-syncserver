@@ -65,6 +65,88 @@ Two things it does that are worth knowing before you need them:
 
 When it finishes it prints the health line. `"bootstrap_pending":true` is the expected first-run state.
 
+### Doing it with compose alone
+
+The script is a convenience over `docker compose`, and this is what it does, step by step. It is also
+the route to take when the host runs compose from a UI — Portainer, a NAS app manager — that wants a
+compose file and an `.env` rather than a shell script.
+
+**Three files go on the host**, and the third is the one people miss:
+
+```
+syncserver/
+  docker-compose.yml     from this repository, unedited
+  db/schema.sql          mounted into the database on FIRST START only
+  .env                   yours: secrets, paths, port, image version
+```
+
+`db/schema.sql` is mounted at a path relative to the compose file, so it has to sit beside it in exactly
+that directory. **It runs once, on an empty database directory**, and never again: a database that has
+started before ignores it completely.
+
+Write `.env` from [`.env.example`](../.env.example), which documents every variable. The five that decide
+a deployment:
+
+```bash
+SERVER_IMAGE=ghcr.io/olegg90/syncserver:0.5.2   # never `latest`: a server must be able to say what it runs
+POSTGRES_PASSWORD=…                             # compose refuses to start without it
+SERVER_SECRET=…                                 # likewise, and not the same value
+PUBLISH_PORT=8087                               # the container is always 8080; the host port is yours
+RUN_AS=1001:100                                 # uid:gid the server runs as — see below
+```
+
+Generate the two secrets rather than inventing them, and **keep them**. `POSTGRES_PASSWORD` is what the
+database was initialised with; a different one on a later start leaves the installation unable to open
+its own data, while the database reports itself healthy.
+
+```bash
+printf 'POSTGRES_PASSWORD=%s
+SERVER_SECRET=%s
+' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
+```
+
+Then say where the data lives. These are host paths; the container side is fixed:
+
+```bash
+DB_DIR=/share/AppData/SyncServer/db            # → /var/lib/postgresql
+BLOB_DIR=/share/AppData/SyncServer/blobs       # → /data/blobs
+BACKUP_DIR=/share/AppData/SyncServer/backups   # → /backups
+STATE_DIR=/share/AppData/SyncServer/state      # → /state
+```
+
+Create them, and make the three the **server** writes writable by `RUN_AS`:
+
+```bash
+mkdir -p /share/AppData/SyncServer/{db,blobs,backups,state}
+chmod 775 /share/AppData/SyncServer/{blobs,backups,state}
+```
+
+`chmod`, not `chown`: `chown` needs root, which a NAS administrator often does not have, and the group is
+usually one both they and the container are in. The database directory is not yours to arrange — the
+image takes it over as its own user.
+
+Then, from that directory:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps          # both healthy
+curl -s localhost:8087/health
+```
+
+**Four ways this goes wrong, and what each looks like:**
+
+| what you did | what you see |
+|---|---|
+| left `PUBLISH_PORT` at 8080 on a NAS | the port is held by the box's own admin panel — and you find out *after* the database is healthy |
+| `BLOB_DIR` not writable by `RUN_AS` | the server starts, and the first upload fails with `EACCES`. The confusing order |
+| `STATE_DIR` not writable | the server does **not** start: the restore guard writes there before it listens |
+| `db/schema.sql` not beside the compose file | the database comes up empty, and the server fails against tables that are not there |
+
+Upgrading by this route is `SERVER_IMAGE=…:<new>` in `.env`, then `docker compose pull && docker compose up -d`.
+Nothing else moves — every data directory is outside the containers. Read [§6](#6--upgrading) first: a
+build whose schema gained something needs a step no `pull` performs.
+
 ---
 
 ## 2 — Create the first administrator
@@ -124,6 +206,11 @@ BACKUP_EVERY_SECONDS=86400
 container's writable layer, where the next `docker compose pull` takes it with it.
 
 Restart, and the boot log says `backups are scheduled every 86400s to /backups`.
+
+**Copies are kept for ever unless you say otherwise.** Add `BACKUP_KEEP=7` and each scheduled run prunes
+what falls past the newest seven, after taking its own — the newest good copy is never removed, and every
+removal is logged. Leave it unset and nothing is ever deleted, which is what a server does that has not
+been asked.
 
 ### Taking one
 
