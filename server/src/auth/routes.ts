@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import { fakeAccountSalt, hashToken } from '../crypto.js';
 import type { Db } from '../db.js';
 import {
+  changePassword,
   findActiveAccount,
   findDeviceByRefresh,
   hasRecoveryCode,
@@ -19,6 +20,22 @@ import { inProcessAttemptLimiter, type AttemptLimiter } from './attempts.js';
 import type { KdfParams } from '@syncserver/shared';
 
 const b64 = (s: string): Buffer => Buffer.from(s, 'base64');
+
+/**
+ * What a console password has to be, in one place rather than two.
+ *
+ * The floor is 12 because this secret is checked by the server against an Argon2id hash and
+ * nothing else: there is no client-side KDF in front of it, as there is for a vault
+ * passphrase. Two endpoints set a password now (#137), and a floor stated twice is a floor
+ * that will eventually be two different floors.
+ */
+const longEnough = (password: unknown): password is string =>
+  typeof password === 'string' && password.length >= 12;
+
+const TOO_SHORT = {
+  error: 'password_too_short',
+  detail: 'at least 12 characters — this one is not slowed down by a client-side KDF',
+};
 
 export const registerAuthRoutes = (
   app: FastifyInstance,
@@ -62,12 +79,7 @@ export const registerAuthRoutes = (
    */
   app.post<{ Body: { login?: string; password: string } }>('/auth/bootstrap', async (req, reply) => {
     const password = req.body?.password;
-    if (typeof password !== 'string' || password.length < 12) {
-      return reply.code(400).send({
-        error: 'password_too_short',
-        detail: 'at least 12 characters — this one is not slowed down by a client-side KDF',
-      });
-    }
+    if (!longEnough(password)) return reply.code(400).send(TOO_SHORT);
 
     // Defaulted rather than required (#123): most operators will keep `admin`, and forcing a
     // choice on the first screen of a fresh server is a decision nobody asked to make. What
@@ -375,6 +387,53 @@ export const registerAuthRoutes = (
       claims.sub,
       hashToken(req.body.kek_verifier),
     ]);
+    return reply.code(204).send();
+  });
+
+  /**
+   * Change this console account's password (#137).
+   *
+   * **The current one is required although the caller is authenticated**, and the two prove
+   * different things: the token proves the session, the password proves the person. An access
+   * token in a browser somebody walked away from must not be enough to lock the owner out of
+   * their own console.
+   *
+   * Through the same attempt limiter as signing in, because it is the same kind of secret
+   * behind the same kind of guess — and an unlimited check beside a limited one is the way in.
+   * Keyed by the login, like `/auth/console`, so the two share a budget rather than offering
+   * a fresh one each.
+   *
+   * It answers `204` and **ends the session**: the console device's refresh token is cleared,
+   * so this browser and any other holding it sign in again with the new password. That is the
+   * point when a password is changed because it leaked.
+   */
+  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+
+    const b = req.body ?? {};
+    if (typeof b.current !== 'string' || !b.current) {
+      return reply.code(400).send({ error: 'current_password_required' });
+    }
+    if (!longEnough(b.password)) return reply.code(400).send(TOO_SHORT);
+
+    // Counted against the account, not the token: a stolen token is exactly the case this
+    // check exists for, and letting it guess freely because it is authenticated would be the
+    // whole point missed.
+    const allowed = attempts.check(claims.sub);
+    if (!allowed.ok) {
+      return reply.code(429).send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
+    }
+
+    const out = await changePassword(db, claims.sub, b.current, b.password);
+    if (out === 'wrong') {
+      attempts.fail(claims.sub);
+      return reply.code(401).send({ error: 'invalid_credentials' });
+    }
+    attempts.succeed(claims.sub);
+    // `gone` is an account with no password to change — a vault account, or one still
+    // provisioned. Not a 404: the endpoint is right, this account simply has no password.
+    if (out === 'gone') return reply.code(409).send({ error: 'no_password_to_change' });
     return reply.code(204).send();
   });
 

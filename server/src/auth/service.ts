@@ -186,6 +186,63 @@ export const consoleSignIn = async (
 };
 
 /**
+ * Change a console account's password (#137).
+ *
+ * Until now there was **no way at all**: `/auth/bootstrap` creates the first password on a
+ * server that has none and refuses once one exists, and nothing else wrote `password_hash`. An
+ * administrator whose password had been shared to get somebody started, or typed into the
+ * wrong window, had an `UPDATE` by hand as their only option.
+ *
+ * **The current password is required even though the caller is already authenticated.** An
+ * access token in a browser somebody walked away from should not be enough to lock the owner
+ * out of their own console — the token proves the session, and this proves the person.
+ *
+ * **It ends the console session, and that is the point rather than a side effect.** There is
+ * exactly one console device per account, shared by every browser that signs in
+ * (`consoleSignIn`), so a password changed because it leaked would otherwise leave whoever
+ * else holds that refresh token signed in indefinitely. Clearing it cuts them off — and the
+ * administrator too, who signs in again with the password they just chose. An access token
+ * already issued lives out its few minutes; the refresh is what makes a session survive, and
+ * that is what goes.
+ */
+export const changePassword = async (
+  db: Db,
+  userId: string,
+  current: string,
+  next: string,
+): Promise<'ok' | 'wrong' | 'gone'> =>
+  db.tx(async (c) => {
+    const found = await c.query<{ login: string; hash: string | null }>(
+      `SELECT login, password_hash AS hash FROM users
+        WHERE id = $1 AND state = 'active' AND role = 'admin' FOR UPDATE`,
+      [userId],
+    );
+    const user = found.rows[0];
+    // An account with no password is not one whose password can be changed: that is the first
+    // run, and it has its own endpoint.
+    if (!user?.hash) return 'gone';
+    if (!passwordMatches(current, user.hash)) return 'wrong';
+
+    await c.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [userId, hashPassword(next)]);
+
+    // Every console session of this account, which is one row by design. `revoked_at` is left
+    // alone: the device is not being retired, it is being made to prove itself again, and a
+    // revoked row would have `consoleSignIn` mint a second one on the next sign-in.
+    await c.query(
+      `UPDATE devices SET refresh_token_hash = NULL
+        WHERE user_id = $1 AND platform = 'console' AND revoked_at IS NULL`,
+      [userId],
+    );
+
+    await record(c, {
+      actor: { id: userId, login: user.login },
+      action: 'account.password',
+      target: { id: userId, login: user.login },
+    });
+    return 'ok';
+  });
+
+/**
  * Complete a seeded or administrator-issued invitation.
  *
  * Everything happens in one transaction, because a half-redeemed invitation is the state
