@@ -13,13 +13,17 @@
  * have.
  */
 import {
-  accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, forgetSession, health, invite, reissue, restoreStatus, revokeInvitation, runBackup, setEnabled,
+  accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
+  changePassword, forgetSession, health, invite, reissue, removeBackup, restoreStatus, revokeInvitation, runBackup,
+  setEnabled,
   setQuota,
   signedIn, signIn, storage, verify,
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
-import { accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, mib, serverLine, usageFraction } from './format.js';
+import {
+  accountBadge, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, mib, serverLine,
+  usageFraction,
+} from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
 import { whatIsWrong } from './password-form.js';
 
@@ -808,7 +812,59 @@ const backupRow = (b: BackupRun): HTMLElement => {
   if (b.error) card.append(el('p', { className: 'bad', textContent: b.error }));
   if (b.verifiedAt) card.append(el('div', { className: 'muted', textContent: `verified ${when(b.verifiedAt)}` }));
   if (b.status === 'ok') card.append(verifyButton(b));
+
+  // Said before it is offered: a row whose copy is gone still stands in the history, and
+  // without this line "no Remove button" would read as a console that forgot to draw one.
+  if (b.destination === null) {
+    card.append(el('div', { className: 'muted', textContent: 'the copy has been removed; the run stays in the history' }));
+  } else if (b.status !== 'running') {
+    card.append(removeButton(b));
+  }
   return card;
+};
+
+/**
+ * Remove one copy, per row, behind a confirmation that names it (#136).
+ *
+ * **Per row and not a selection with one button.** Checkboxes plus Delete is the most
+ * destructive control a console can have — one press, many copies, no chance to read what is
+ * about to go — and the thing an operator actually wants is not to delete backups one by one
+ * but for them to stop piling up, which is `BACKUP_KEEP` and happens without anybody standing
+ * over it.
+ *
+ * The confirmation names the date rather than asking "are you sure": the question is which
+ * copy, and a dialogue that does not answer it is a speed bump instead of a check.
+ */
+const removeButton = (run: BackupRun): HTMLElement => {
+  const where = el('div', {});
+  const button = el('button', { className: 'danger', textContent: 'Remove the copy' });
+  const confirm = el('button', { className: 'danger', textContent: `Yes, remove the copy from ${when(run.startedAt)}` });
+  const cancel = el('button', { className: 'link', textContent: 'Keep it' });
+
+  button.onclick = (): void => {
+    button.replaceWith(confirm, cancel);
+  };
+  cancel.onclick = (): void => {
+    confirm.replaceWith(button);
+    cancel.remove();
+  };
+
+  submits(confirm, where, async () => {
+    try {
+      await removeBackup(run.id);
+    } catch (e) {
+      // Rethrown as a sentence. `attempt` owns where a failure is drawn — a second place that
+      // drew them would be a second wording — and a refusal here is a decision the server made
+      // deliberately, so "409 newest_copy" is the one thing it must not read as.
+      if (e instanceof ApiError && e.status === 409) throw new Error(backupRefusal(e.code));
+      throw e;
+    }
+    confirm.remove();
+    cancel.remove();
+    where.append(say('The copy is gone. This run stays in the history.'));
+  });
+
+  return el('div', {}, button, where);
 };
 
 const verifyButton = (run: BackupRun): HTMLElement => {

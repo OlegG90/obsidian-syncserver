@@ -198,6 +198,15 @@ export const revokeInvitation = (userId: string): Promise<void> =>
   call('DELETE', `/admin/invitations/${userId}`);
 
 /**
+ * Remove one backup's copy from disk, keeping the run in the history (#136).
+ *
+ * The server refuses the newest successful copy, a run still in progress, and any destination
+ * outside its own backup directory — so the console's job is to say which refusal came back,
+ * not to decide any of it.
+ */
+export const removeBackup = (id: string): Promise<void> => call('DELETE', `/admin/backups/${id}`);
+
+/**
  * Push the deletion procedure as far as it can go right now, and say what is outstanding.
  *
  * Idempotent (#55): the operator's only handle on a wait is to ask again, so a second "begin"

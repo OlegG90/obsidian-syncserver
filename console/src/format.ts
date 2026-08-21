@@ -211,3 +211,20 @@ export const serverLine = (version: string | null | undefined, reachable = true)
   if (!reachable) return 'Server version unknown';
   return `Server ${version ?? 'before 0.1.0'}`;
 };
+
+/**
+ * Why the server refused to remove a backup's copy, as a sentence (#136).
+ *
+ * Each refusal is a decision the server made on purpose, so each gets a reason rather than a
+ * code: an operator reading "newest_copy" learns nothing about why a server would protect it.
+ * An unknown code falls through as itself — a console that swallowed one would be hiding the
+ * only clue that the two sides disagree about what can happen.
+ */
+export const backupRefusal = (code: string): string =>
+  ({
+    newest_copy:
+      'that is the newest good copy — the one a restore would use, and the one the nightly check verifies. Take a new backup first.',
+    still_running: 'that backup is still being written. It has no finished copy to remove.',
+    outside_destination:
+      'that run points outside this server’s backup directory, so it will not be deleted from here. Remove it by hand if it is really yours.',
+  })[code] ?? code;
