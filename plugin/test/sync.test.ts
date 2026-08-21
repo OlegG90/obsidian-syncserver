@@ -188,7 +188,8 @@ describe('the sync coordinator', () => {
       leave: async () => ({ ended: false }),
       members: async () => [],
       remove: async () => ({ outcome: 'revoked' as const }),
-      isSynced: () => true,
+      syncedPaths: () => ['Team'],
+      folders: () => ['Team'],
       notify: (m) => shareNotices.push(m),
       done: () => undefined,
     });

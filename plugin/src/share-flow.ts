@@ -21,6 +21,7 @@
  */
 import { ApiError, type ShareMember } from './api/client.js';
 import type { Gate } from './gate.js';
+import { holdsSynced, nothingToShare, shareableFolders } from './shareable-folders.js';
 
 /** A share as the person sees it in the list. */
 export interface ShareRow {
@@ -62,8 +63,10 @@ export interface ShareFlowDeps {
    * server — it depends on whether they ever joined — so this asks and is told.
    */
   remove(shareId: string, userId: string): Promise<{ outcome: 'withdrawn' | 'revoked'; ended?: boolean }>;
-  /** True when this device has already synced that folder, so the server knows it. */
-  isSynced(folderPath: string): boolean;
+  /** Every path the server knows, as this device last recorded them. */
+  syncedPaths(): string[];
+  /** Every folder that exists in this vault. */
+  folders(): string[];
   notify(message: string, durationMs?: number): void;
   /** The screen showing this is now out of date. */
   done(): void;
@@ -71,6 +74,14 @@ export interface ShareFlowDeps {
 
 export interface ShareFlow {
   list(): Promise<{ joined: ShareRow[]; invitations: InvitationRow[] } | undefined>;
+  /**
+   * The folders that could be shared right now, and — when there are none — why.
+   *
+   * Takes the folders already in a share rather than reading them: the caller has just
+   * fetched the share list, and a share ended elsewhere while this screen was closed must
+   * not still be filtered against.
+   */
+  shareable(shared: readonly string[]): { offered: string[]; reason?: string | undefined };
   share(folderPath: string): Promise<void>;
   invite(shareId: string, login: string): Promise<void>;
   accept(shareId: string): Promise<void>;
@@ -132,6 +143,14 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
   return {
     list: () => once('reading the share list', () => deps.list()),
 
+    // Not through `once`: nothing leaves this device, so taking the gate for it would make a
+    // dropdown refuse while a sync ran, and there is nothing here for a sync to disturb.
+    shareable(shared) {
+      const folders = deps.folders();
+      const offered = shareableFolders(folders, deps.syncedPaths(), shared);
+      return { offered, reason: nothingToShare(offered, folders, shared) };
+    },
+
     async share(folderPath) {
       // Checked before anything is created: a share rooted at a folder the server has never
       // seen cannot be made, and finding that out after the passphrase prompt and a request
@@ -140,7 +159,11 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
         deps.notify('SyncServer: choose a folder to share.');
         return;
       }
-      if (!deps.isSynced(folderPath)) {
+      // Kept although the screen now picks from a list rather than taking a typed path: the
+      // list is built when the tab is drawn, and a folder can stop being synced-and-free
+      // between then and the press. It is no longer the message a typo produces, which is
+      // the whole point of the list.
+      if (!holdsSynced(folderPath, deps.syncedPaths())) {
         deps.notify(`SyncServer: sync this vault first — the server does not know “${folderPath}” yet.`, 10000);
         return;
       }

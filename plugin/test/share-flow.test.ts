@@ -34,7 +34,8 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     leave: async () => ({ ended: false }),
     members: async () => [],
     remove: async () => ({ outcome: 'revoked' as const }),
-    isSynced: () => true,
+    syncedPaths: () => ['Team', 'Team/a.md', 'Other', 'Personal/b.md'],
+    folders: () => ['Team', 'Other', 'Personal'],
     notify: (m) => notices.push(m),
     done: () => {
       rebuilt++;
@@ -50,7 +51,7 @@ describe('sharing a folder', () => {
     // A share is rooted at a node id, and a folder this device never uploaded has none.
     // Finding that out after a passphrase prompt and a request would be a worse way to
     // learn it.
-    const h = harness({ isSynced: () => false });
+    const h = harness({ syncedPaths: () => [] });
     await h.flow.share('Team');
 
     assert.deepEqual(h.shared, [], 'nothing was created');
@@ -98,6 +99,23 @@ describe('sharing a folder', () => {
 
     release!();
     await first;
+  });
+
+  it('offers the synced folders that are not in a share, and does not take the gate to do it', () => {
+    // The folder list is read while a sync may be running — it is a dropdown being drawn, not
+    // an operation — so going through the gate would make the screen refuse to show a list.
+    const h = harness({ share: () => new Promise(() => undefined) });
+    void h.flow.share('Team'); // takes the gate and never gives it back
+
+    const { offered } = h.flow.shareable(['Personal']);
+    assert.deepEqual(offered, ['Other', 'Team']);
+  });
+
+  it('says why it offers nothing, rather than showing an empty list', () => {
+    const h = harness({ syncedPaths: () => [] });
+    const { offered, reason } = h.flow.shareable([]);
+    assert.deepEqual(offered, []);
+    assert.match(reason!, /synced/);
   });
 
   it('releases the guard after a failure, so a retry is possible', async () => {

@@ -790,10 +790,12 @@ export default class SyncServerPlugin extends Plugin {
       // button reached: withdrawing an invitation, and revoking somebody who joined.
       remove: (shareId, userId) => this.withSession((h) => h.client.removeMember(shareId, userId)),
 
-      // A folder the server knows is one this device has already synced; its node id is
-      // what a share is rooted at.
-      isSynced: (folderPath) =>
-        Object.keys(this.data.state?.nodes ?? {}).some((p) => p === folderPath || p.startsWith(`${folderPath}/`)),
+      // The two facts the offer of a folder is made from, each read where it lives: what the
+      // server knows is in the sync state, and what exists is Obsidian's. Deciding which of
+      // them may be shared is `shareable-folders.ts` — the rule it applies is the schema's,
+      // and belongs somewhere a test can reach it.
+      syncedPaths: () => Object.keys(this.data.state?.nodes ?? {}),
+      folders: () => this.app.vault.getAllFolders().map((f) => f.path),
 
       notify: (message, durationMs) => new Notice(message, durationMs),
       done: () => this.settingsTab?.display(),
