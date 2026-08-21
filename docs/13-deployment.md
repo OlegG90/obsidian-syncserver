@@ -389,7 +389,12 @@ just `docker compose pull` again.
   database's own major, so `BACKUP_DB_COMMAND` has a working default; **`BACKUP_DESTINATION` is
   still the operator's to choose**, and while it is unset the trio is "not configured", the
   button says so and nothing is scheduled. Note that the collector is held off during the
-  window, which is what its advisory lock is for;
+  window, which is what its advisory lock is for. **Copies are kept for ever unless
+  `BACKUP_KEEP` says otherwise** (#136): set it to a number and each scheduled run prunes what
+  falls past the newest N, after taking its own — pruning first would trade an old backup for
+  one that then failed. The newest good copy is never removed, and a copy can be removed one at
+  a time from the console, which leaves the run in the history with no destination: the log
+  keeps saying a backup ran, and the empty destination says its copy is gone;
 - **not upgradable in place.** `schema.sql` runs once, on an empty data directory. There is no
   migration tool yet, deliberately (see the repository README), so a schema change means
   discarding the database and starting again. That is fine while nothing in it matters, and it is

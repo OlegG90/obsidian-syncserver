@@ -120,6 +120,15 @@ export interface Config {
         dumpCommand: string[];
         /** The blob store directory, copied after the dump (#114). */
         blobSource: string;
+        /**
+         * How many finished copies to keep on disk, or `undefined` for all of them (#136).
+         *
+         * Unset is the default and means **nothing is ever pruned**, which is what every
+         * deployment has done until now. Deleting backups is not a behaviour to acquire by
+         * upgrading: an operator who has not asked for it should find their copies where they
+         * left them.
+         */
+        keep?: number | undefined;
       }
     | undefined;
   /**
@@ -188,10 +197,15 @@ export const loadConfig = (): Config => {
           'a partial backup configuration would start a run that cannot finish',
       );
     }
+    const keep = process.env['BACKUP_KEEP'];
+    if (keep !== undefined && !/^[1-9][0-9]*$/.test(keep)) {
+      throw new Error('BACKUP_KEEP must be a whole number of copies to keep, at least 1 — or unset, to keep all');
+    }
     cfg.backup = {
       destination,
       dumpCommand: dumpCommand.split(/\s+/),
       blobSource,
+      ...(keep === undefined ? {} : { keep: Number(keep) }),
     };
   }
 

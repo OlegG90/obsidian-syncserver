@@ -23,6 +23,7 @@
 import { join } from 'node:path';
 import { openStore } from './blobs/store.js';
 import { runBackup, type CopyReader, type Legs } from './backup.js';
+import { pruneBackupCopies } from './backup-remove.js';
 import { backupRunDir, runDirOf } from './backup-legs.js';
 import type { Config } from './config.js';
 import type { Db } from './db.js';
@@ -65,6 +66,13 @@ export const takeScheduledBackup = async (
     log: (m) => log(`scheduled ${m}`),
     warn: (m) => warn(`scheduled ${m}`),
   });
+
+  // **After the run, never before.** Pruning first would delete an old copy to make room for
+  // one that then failed, which is the trade nobody would agree to if asked: fewer backups in
+  // exchange for a backup. Unset `keep` prunes nothing at all (#136).
+  if (backup.keep !== undefined) {
+    await pruneBackupCopies(db, backup.destination, backup.keep, (m) => log(`scheduled ${m}`));
+  }
 };
 
 /**

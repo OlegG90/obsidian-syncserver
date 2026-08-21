@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { accountBadge, accountKind, accountState, accountUsage, auditAction, freezeWarning, human, mib, serverLine, usageFraction, type AccountLine } from '../src/format.js';
+import { accountBadge, accountKind, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, mib, serverLine, usageFraction, type AccountLine } from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (#89) and the server always sends them. Leaving them out built a shape no response has —
@@ -160,5 +160,21 @@ describe('which server this console is talking to', () => {
     // different situations, and only one of them is about the server's age.
     assert.equal(serverLine(undefined, false), 'Server version unknown');
     assert.equal(serverLine('0.5.0-d', false), 'Server version unknown');
+  });
+});
+
+describe('why a backup copy was not removed', () => {
+  it('gives a reason, not a code', () => {
+    // Each refusal is a decision the server made on purpose. "newest_copy" teaches an operator
+    // nothing about why a server would protect that one.
+    assert.match(backupRefusal('newest_copy'), /a restore would use/);
+    assert.match(backupRefusal('still_running'), /still being written/);
+    assert.match(backupRefusal('outside_destination'), /outside this server/);
+  });
+
+  it('passes an unknown code through as itself', () => {
+    // A console that swallowed one would hide the only clue that the two sides disagree about
+    // what can happen.
+    assert.equal(backupRefusal('something_new'), 'something_new');
   });
 });

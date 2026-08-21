@@ -140,6 +140,30 @@ then the effective quarantine is zero and every restore should expect the report
 - **keep the quarantine short and verify integrity during the restore**, producing a list of lost blobs.
   Chosen: an honest report of "13 files not restored" beats a store that never frees space.
 
+## Removing a copy, and how many to keep
+
+Copies pile up on a schedule, so left alone they fill a disk on a schedule. Two answers, and the first is
+the one that matters:
+
+- **`BACKUP_KEEP`** — a number of finished copies to keep. Each scheduled run prunes what falls past the
+  newest N, **after** taking its own: pruning first would delete an old backup to make room for one that
+  then failed, which is a trade nobody would agree to if asked. Unset means keep everything, which is what
+  every deployment did before this existed;
+- **removing one from the console**, per row and behind a confirmation naming it. For the one-off — a run
+  that left a partial copy, a copy moved by hand — not as the way to stay under a disk.
+
+**The run stays in the history and its `destination` becomes null.** Dropping the row would leave the files
+behind with nothing referencing them, which is exactly the state an operator watching free space disappear
+cannot investigate. A row with no destination says what happened: this backup ran, and its copy is gone.
+It is also what makes the restore rehearsal skip it, since that already asks for a destination.
+
+**Four refusals, each a decision rather than a check.** A destination outside this deployment's backup
+directory is refused, because `destination` is a text column and a value from a restored dump or another
+host would otherwise become a recursive delete of whatever that path names *here*. The **newest good copy**
+is refused, because it is what a restore would use and what the rehearsal verifies — a server that will not
+leave itself without a backup is worth more than one that does exactly as it is told. A run still in
+progress is refused, and a copy already gone is not an error.
+
 ## What backups do not replace
 
 - **Version history is not a backup.** It lives in the same database: corruption or a mistaken `DROP`

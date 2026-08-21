@@ -24,6 +24,7 @@ import {
   storage,
 } from './service.js';
 import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
+import { removeBackupCopy } from '../backup-remove.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
@@ -197,6 +198,34 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   });
 
   app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));
+
+  /**
+   * Remove one backup's copy from disk, keeping the run in the history (#136).
+   *
+   * **The row stays and `destination` becomes null.** Dropping the row would leave the files
+   * behind with nothing referencing them, so an operator watching free space disappear would
+   * have nothing left that explains where it went; keeping the row with no destination says
+   * exactly what happened — this backup ran, and its copy is gone.
+   *
+   * Four refusals, each of which is a decision rather than a check
+   * (`backup-remove.ts` argues them): a destination outside this deployment's backup
+   * directory, the newest successful copy, a run still in progress, and a copy already
+   * removed. The first is the one that matters: `destination` is a text column, and a value
+   * from a restored dump or another host would otherwise become a recursive delete of
+   * whatever that path names here.
+   */
+  app.delete<{ Params: { id: string } }>('/admin/backups/:id', admin, async (req, reply) => {
+    if (!backup.destination) return noBackup(reply);
+    const refused = await removeBackupCopy(db, backup.destination, req.params.id);
+    if (refused === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (refused === 'already_gone') return reply.code(204).send();
+    if (refused) {
+      // 409 for all three: the request is well formed and the server is refusing THIS one,
+      // for a reason the console prints as a sentence rather than a code.
+      return reply.code(409).send({ error: refused });
+    }
+    return reply.code(204).send();
+  });
 
   app.post<{ Params: { id: string } }>('/admin/backups/:id/verify', admin, async (req, reply) => {
     if (!backup.destination) return noBackup(reply);
