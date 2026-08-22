@@ -309,18 +309,12 @@ export const storage = async (db: Db): Promise<{
   };
 };
 
-/** The log, newest first. Filterable by who it was about, which is how it is actually read. */
 /**
- * How much log there is, so the assumption under it stays visible (#160).
+ * How much log there is — the number D-117 rests on, made visible.
  *
- * The audit log has **no retention, deliberately** (D-117) — it is the only record of who did what, and
- * every action that writes to it is administrative and rare: inviting, enabling, changing a quota,
- * recovering, revoking, confirming a restore. A real installation measured 20 rows across two days of
- * heavy testing, in a table whose 64 kB is mostly the minimum footprint of its own indexes.
- *
- * That decision rests on the frequency staying rare, and nothing enforces it: somebody adding a
- * `record()` call to a path that runs on every sync would break it silently. So the console shows this
- * number beside a page of the log, and it is the one that would look wrong.
+ * The decision assumes every action recorded is rare. Nothing enforces that, so the assumption is put on
+ * a screen instead of in a comment: a `record()` call added to a path that runs per sync would show up
+ * here, and nowhere else.
  */
 export const auditSize = async (db: Db): Promise<{ rows: number; bytes: string }> => {
   const row = await db.one<{ rows: string; bytes: string }>(
@@ -329,6 +323,7 @@ export const auditSize = async (db: Db): Promise<{ rows: number; bytes: string }
   return { rows: Number(row?.rows ?? 0), bytes: row?.bytes ?? '0' };
 };
 
+/** The log, newest first. Filterable by who it was about, which is how it is actually read. */
 export const listAudit = (db: Db, opts: { targetUserId?: string | undefined; limit: number }): Promise<AuditRow[]> =>
   db.query<AuditRow>(
     `SELECT id::text AS id, at, actor_login AS "actorLogin", action,

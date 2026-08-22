@@ -468,11 +468,10 @@ describe('deleting an account, which is a procedure', () => {
 });
 
 /**
- * How much audit log there is (#160).
+ * How much audit log there is (D-117).
  *
- * The log has no retention by decision (D-117), and that decision rests on every action it records being
- * rare. Nothing enforces that — a `record()` call on a path that runs per sync would break it silently —
- * so the size travels with the page, and this is the assertion that it does.
+ * The size travels with the page because the decision rests on a number nothing enforces; this is the
+ * assertion that it still travels.
  */
 describe('the size of the audit log', () => {
   it('comes back beside the entries, in rows and bytes', async () => {
