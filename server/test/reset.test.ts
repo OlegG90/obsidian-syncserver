@@ -156,6 +156,21 @@ describe('reset', () => {
     assert.ok(after_ < before_, 'the accounting is right when the transaction commits');
   });
 
+  it('recounts quota when a whole vault goes, not only when it is reset', async () => {
+    // Removing a vault takes its tree and its history with it (#175), so the blobs it was the last to
+    // reference are held by nothing — and an account that deleted a vault to make room would otherwise
+    // still read as full until the sweep ran.
+    const v = await freshVault();
+    await addNode(v, 'heavy.md', v.rootId);
+
+    const before_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
+    const gone = await app.inject({ method: 'DELETE', url: `/vaults/${v.vaultId}`, headers: auth() });
+    assert.equal(gone.statusCode, 204, gone.body);
+    const after_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
+
+    assert.ok(after_ < before_, 'the accounting is right when the transaction commits');
+  });
+
   it('answers 404 for a vault of another account', async () => {
     const stranger = randomUUID();
     await db.query(

@@ -8,6 +8,8 @@
 import { randomUUID } from 'node:crypto';
 import { isFrozen } from '../account.js';
 import type { Db } from '../db.js';
+import { dropUnreferenced } from '../holdings.js';
+import { DEPTH, removeNodesByDepth } from '../nodes/remove.js';
 import { refusalFromDatabase, type Refusal } from '../refusal.js';
 
 /** PostgreSQL's `unique_violation`. */
@@ -102,27 +104,33 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
 };
 
 /**
- * Deleting a vault waits for more than "it looks empty", and the second reason surprises
- * people: an **ended** share still names the vault it lived in until the collector takes
- * its row after the journal TTL. Ending a share is a state change rather than a delete
- * (#44), because participants who were offline must still learn of it from their delta —
- * so a vault that hosted a share stays undeletable for up to 90 days after it ends.
+ * Remove a vault **and whatever it holds** (#175).
  *
- * The foreign keys would refuse it anyway; this refuses it with a reason.
+ * It used to refuse anything but an empty one, which read as caution and was closer to a dead end: the
+ * vault somebody wants gone is the one a mistaken pairing filled with a copy of their notes (#117), and
+ * emptying it meant connecting to it, deleting every note, emptying the trash, disconnecting, connecting
+ * to the right vault, and only then pressing Remove. Two disconnects, and no screen said so.
+ *
+ * **This deletes server-side data and nothing else.** Files on the device stay where they are; a device
+ * that later opens a vault this removed finds it gone and says so, which is the honest end of the story
+ * rather than a silent resync.
+ *
+ * **The one refusal that stays** is a share, and the reason surprises people: an **ended** share still
+ * names the vault it lived in until the collector takes its row after the journal TTL. Ending a share is
+ * a state change rather than a delete (#44), because participants who were offline must still learn of it
+ * from their delta — so a vault that hosted a share stays undeletable for up to 90 days after it ends.
+ * What a share holds is other people's access, which is not this account's to tidy away (SH-27).
+ *
+ * **Not this device's own vault**, and that is refused where the connection lives — on the device
+ * (`session.ts`). The server cannot know which vault a caller is syncing.
  */
 export const deleteVault = async (db: Db, userId: string, vaultId: string): Promise<Refusal | undefined> =>
   db.tx(async (c) => {
-    const found = await c.query<{ rootNodeId: string }>(
-      `SELECT root_node_id AS "rootNodeId" FROM vaults WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    const found = await c.query(
+      `SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [vaultId, userId],
     );
     if (found.rowCount === 0) return { kind: 'not_found' } as Refusal;
-
-    const others = await c.query(
-      `SELECT 1 FROM nodes WHERE vault_id = $1 AND id <> $2 LIMIT 1`,
-      [vaultId, found.rows[0]!.rootNodeId],
-    );
-    if ((others.rowCount ?? 0) > 0) return { kind: 'not_empty' } as Refusal;
 
     const named = await c.query(
       `SELECT 1 FROM shares WHERE initiator_vault_id = $1
@@ -133,8 +141,18 @@ export const deleteVault = async (db: Db, userId: string, vaultId: string): Prom
     );
     if ((named.rowCount ?? 0) > 0) return { kind: 'named_by_a_share' } as Refusal;
 
-    await c.query(`DELETE FROM nodes WHERE vault_id = $1`, [vaultId]);
+    // Deepest-first, because `parent_id` is RESTRICT and a single DELETE fails on the first parent it
+    // reaches — the schema fact `nodes/remove.ts` owns, and the fourth caller to need it.
+    const doomed = await c.query<{ id: string; vaultId: string; depth: number }>(
+      `SELECT n.id, n.vault_id AS "vaultId", ${DEPTH} AS depth FROM nodes n WHERE n.vault_id = $1`,
+      [vaultId],
+    );
+    await removeNodesByDepth(c, doomed.rows);
     await c.query(`DELETE FROM vaults WHERE id = $1`, [vaultId]);
+    // The versions went with the nodes, so blobs this vault was the last to reference are now held by
+    // nothing. Recomputed here rather than left to the sweep: an account that deleted a vault to make
+    // room would otherwise still read as full.
+    await dropUnreferenced(c, userId);
     return undefined;
   });
 

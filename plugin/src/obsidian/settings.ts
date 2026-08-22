@@ -16,6 +16,7 @@ import { whatIsMissing, type ConnectDraft, type Route } from '../connect-form.js
 import { newestFirst } from '../history-flow.js';
 import { lastActionLine } from '../last-action.js';
 import { matching, showing } from '../trash-filter.js';
+import { removalWarning } from '../vault-removal.js';
 import { deviceLabel } from './device.js';
 import { shortStatus } from './status.js';
 import { busyLine } from '../gate.js';
@@ -618,12 +619,6 @@ export class SyncServerSettings extends PluginSettingTab {
             .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
 
           if (v.current) continue;
-          if (v.nodes > 0) {
-            // Said rather than shown as a disabled button: "why can I not" is the question, and a grey
-            // button answers it with nothing. Emptying it is a reset (#158), which has no screen yet.
-            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — to remove it, empty it first`);
-            continue;
-          }
           if (v.shared) {
             // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share`
             // once somebody had already read a confirmation promising that nothing would be lost — and
@@ -639,8 +634,7 @@ export class SyncServerSettings extends PluginSettingTab {
                 new ConfirmModal(
                   this.app,
                   `Remove ${v.name}?`,
-                  'It holds nothing, so nothing is lost — the vault itself stops existing on the server. ' +
-                    'Any device still connected to it will find it gone.',
+                  removalWarning(v.nodes),
                   async () => {
                     try {
                       await this.plugin.deleteVault(v.id);

@@ -122,21 +122,33 @@ describe('deleting a vault', () => {
     assert.equal(gone, undefined);
   });
 
-  it('refuses one that still holds a node, and says so', async () => {
+  it('removes one that still holds a nested tree, deepest first', async () => {
+    // It used to refuse anything but an empty vault, which made the vault somebody actually wants gone —
+    // the one a mistaken pairing filled with a copy of their notes (#117) — reachable only through two
+    // disconnects (#175). `parent_id` is RESTRICT, so a folder inside a folder is the case that decides
+    // whether this works at all: a single DELETE fails on the first parent it reaches.
     const id = randomUUID();
     const created = await createVault(id, 'busy');
-    const rootId = created.json().root_node_id;
+    const rootId = created.json().root_node_id as string;
     const keyId = (await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [id]))!.id;
 
-    await db.query(
-      `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry)
-       VALUES ($1, $2, '\\xaa', decode($3,'hex'), $4, 'folder', now(), 0, ARRAY[$2::uuid])`,
-      [id, rootId, sha(randomBytes(8)), keyId],
-    );
+    const add = async (parent: string, ancestry: string[]): Promise<string> =>
+      (await db.one<{ id: string }>(
+        `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry)
+         VALUES ($1, $2, 'ª', decode($3,'hex'), $4, 'folder', now(), 0, $5::uuid[]) RETURNING id`,
+        [id, parent, sha(randomBytes(8)), keyId, ancestry],
+      ))!.id;
+    const one = await add(rootId, [rootId]);
+    const two = await add(one, [rootId, one]);
+    await add(two, [rootId, one, two]);
 
     const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth() });
-    assert.equal(r.statusCode, 409);
-    assert.equal(r.json().error, 'not_empty');
+    assert.equal(r.statusCode, 204, r.body);
+
+    const left = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [id]);
+    assert.equal(left.length, 0, 'the tree went with it');
+    const vault = await db.query(`SELECT 1 FROM vaults WHERE id = $1`, [id]);
+    assert.equal(vault.length, 0);
   });
 
   it('answers 404 for a vault belonging to somebody else', async () => {

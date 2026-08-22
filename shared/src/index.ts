@@ -67,7 +67,6 @@ export type RefusalCode =
   | 'already_settled'
   | 'not_approved'
   // A vault that is not the caller's to remove yet.
-  | 'not_empty'
   | 'named_by_a_share'
   | 'vault_exists'
   // Sharing (docs/05).
