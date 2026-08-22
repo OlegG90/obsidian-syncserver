@@ -490,7 +490,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       stays invisible: #117 exists because a pairing silently made a second one. The names are readable
       here — they are encrypted under each vault's own key and this device holds the seed, which is what
       `vaultLabel()` already does for the chooser.
-- [ ] **A policy for the audit log** (#160). `retention.ts` thins versions, empties spent trash and drops
+- [x] **A policy for the audit log** (#160) — which turned out to be a **decision that there is none**, D117. `retention.ts` thins versions, empties spent trash and drops
       spent claims. The audit log is in none of it and grows for ever. That may well be right — it is the
       one record of who did what — but it is currently a decision nobody made.
 

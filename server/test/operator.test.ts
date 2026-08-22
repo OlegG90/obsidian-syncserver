@@ -466,3 +466,28 @@ describe('deleting an account, which is a procedure', () => {
     assert.equal(still!.state, 'active');
   });
 });
+
+/**
+ * How much audit log there is (#160).
+ *
+ * The log has no retention by decision (D117), and that decision rests on every action it records being
+ * rare. Nothing enforces that — a `record()` call on a path that runs per sync would break it silently —
+ * so the size travels with the page, and this is the assertion that it does.
+ */
+describe('the size of the audit log', () => {
+  it('comes back beside the entries, in rows and bytes', async () => {
+    const out = await app.inject({ method: 'GET', url: '/admin/audit', headers: asAdmin() });
+    assert.equal(out.statusCode, 200, out.body);
+    const size = out.json().size as { rows: number; bytes: string };
+
+    assert.equal(typeof size.rows, 'number');
+    // Bytes as a string, like every other size on this API: it is a `bigint` in the database and a
+    // number here would be a quiet ceiling somebody meets years later.
+    assert.equal(typeof size.bytes, 'string');
+    assert.ok(Number(size.bytes) > 0, 'a table always occupies something');
+
+    // The whole log, not the page: `limit` bounds what comes back and must not bound what is counted.
+    const page = out.json().entries as unknown[];
+    assert.ok(size.rows >= page.length);
+  });
+});
