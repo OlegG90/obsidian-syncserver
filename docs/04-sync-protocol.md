@@ -17,7 +17,7 @@ POST /auth/devices        {name, platform}              → device_id
 POST /auth/bootstrap      {password}                → {login}   the FIRST RUN, once only
                                                    the seeded administrator has no password;
                                                    setting one CREATES it, so no default ever
-                                                   works (#107, #115). 409 afterwards.
+                                                   works (D-107, D-115). 409 afterwards.
                                                    MINIMUM 12 CHARACTERS, refused as
                                                    `password_too_short`: this is the one
                                                    secret here a person invents, and the only
@@ -25,7 +25,7 @@ POST /auth/bootstrap      {password}                → {login}   the FIRST RUN,
                                                    — there is no client-side one to slow a
                                                    guess down first.
 POST /auth/console        {login, password}         → access + refresh + user_id
-                                                   a CONSOLE account signs in (#115): no seed,
+                                                   a CONSOLE account signs in (D-115): no seed,
                                                    so no `auth_secret` — the password is checked
                                                    with Argon2id here, since no client-side KDF
                                                    can stand in. Rate-limited like /auth/recover.
@@ -44,10 +44,10 @@ POST /auth/redeem         {invitation_token, login, auth_secret, account_salt, k
                                                    the recovery pair is OPTIONAL and null-by-default:
                                                    an account without a code says so, rather than
                                                    carrying a placeholder that claims otherwise
-POST /auth/pairings       {device_pubkey, pairing_token_hash} → {pairing_id}   anonymous (#110)
+POST /auth/pairings       {device_pubkey, pairing_token_hash} → {pairing_id}   anonymous (D-110)
 POST /auth/pairings/approve
                             {pairing_secret, seed_envelope} authenticated existing device only;
-                                                            addressed by the secret, no id (#110)
+                                                            addressed by the secret, no id (D-110)
 POST /auth/pairings/{id}/claim
                              {pairing_secret, name, platform}
                                                     → {seed_envelope, enc_privkey, account_salt, kdf_params, device_id}
@@ -60,7 +60,7 @@ POST /auth/recover        {login, kek_verifier | recovery_code, name, platform}
                                                     proof unlocks — `wrapped_seed` for the passphrase,
                                                     `recovery_key` for the code. Rate-limited per login and
                                                     per source, audit-logged, and refuses an unknown login
-                                                    exactly as it refuses a wrong proof (#73)
+                                                    exactly as it refuses a wrong proof (D-73)
 GET  /vaults              → [{id, name_enc}]             the account's vaults; sync targets one of them
 POST /vaults              {id, name_enc}                 → {id, root_node_id}
 PUT  /vaults/{vault_id}   {name_enc}                     → 204; rename
@@ -74,13 +74,13 @@ GET  /usage               → {used, quota, frozen}        account-wide — quot
 
 Every secret this section sends — `auth_secret`, the invitation token, the recovery code, the refresh token
 — is verified against a **SHA-256 hex** hash compared in constant time, and every one of them must be at
-least 128 bits of CSPRNG output for that to be sound (#108, [06](06-key-model.md)). `kek_verifier` is stored
+least 128 bits of CSPRNG output for that to be sound (D-108, [06](06-key-model.md)). `kek_verifier` is stored
 the same way and is the one exception to the entropy floor: the slow KDF that protects it has already run on the client, and
 the dump that would expose its hash carries `wrapped_seed` beside it — the same guesses, the same cost.
 
 **The refresh token has no expiry and no rotation — a named limitation, with its consequence.** It lives in
 `devices.refresh_token_hash` and is replaced only by a new login on the same device row or by revocation
-(#90). Between the two secrets a session holds, this is the one an indefinite lifetime is dangerous for: the
+(D-90). Between the two secrets a session holds, this is the one an indefinite lifetime is dangerous for: the
 seed never leaves the device, but the refresh token travels the network — in the body of `POST
 /auth/refresh`, to a server that compares it against the hash — so it is the one that can be intercepted or
 settle in somebody else's log. Whoever holds it can synchronise as that device for as long as the device row
@@ -107,7 +107,7 @@ record, vault row and unnamed root for that supplied UUID; it never assigns an i
 
 **`DELETE /vaults/{vault_id}` waits longer than "no live share".** It needs the vault to have no non-root
 nodes and to be named by no `shares` or `share_members` row at all — and an **ended** share keeps naming it.
-Ending a share is a state change, not a delete (#44), because offline participants must still learn of it
+Ending a share is a state change, not a delete (D-44), because offline participants must still learn of it
 from their delta, so the collector removes that row only after the journal TTL. A vault that hosted a share
 is therefore undeletable for up to 90 days after the share ends, even when it is empty and the share is long
 over. The endpoint reports that as a reason rather than a bare conflict; there is no way to shorten it that
@@ -117,7 +117,7 @@ ancestor chain each replica hangs from** (`parent_id` is `ON DELETE RESTRICT`, s
 those parents would simply fail), increments that vault's `reset_epoch`, and returns the new epoch before
 the client uploads its replacement tree.
 
-**The pairing secret is made by the new device** ([#110](09-decisions.md)), which sends only
+**The pairing secret is made by the new device** ([D-110](09-decisions.md)), which sends only
 `sha256(secret)` when it starts the pairing and the secret itself when approving and claiming. The server
 storing `pairing_token_hash` is the reason: a hash of a value the server generated and handed back would
 prove nothing about who is presenting it later, and the secret would be known to the server from the first
@@ -154,7 +154,7 @@ random salt would not be.
 `GET /shares/{id}/recipients/{login}/pubkey` is the other endpoint that takes a login, and it follows the
 same rule for the same reason: an unknown login receives a **deterministic fake `{user_id, pubkey}`**, also
 derived from a server secret, never a `404`. Without that, every account able to open a share — which is
-every account — could probe who else exists on the server, in a document that spends a decision (#73) on
+every account — could probe who else exists on the server, in a document that spends a decision (D-73) on
 closing exactly that hole one endpoint over.
 
 Two more measures, because a single uniform answer is not by itself enough:
@@ -164,7 +164,7 @@ Two more measures, because a single uniform answer is not by itself enough:
 - **`POST /shares/{id}/invite` fails generically** for a `user_id` that names no account. It must not say
   "no such account" — that is the same oracle, one call later.
 
-**A CONSOLE account is the one login that gets a straight answer**, `409 console_account` (#115). It is
+**A CONSOLE account is the one login that gets a straight answer**, `409 console_account` (D-115). It is
 not an exception to the rule so much as a case outside it: what the fake protects is *whether an account
 exists*, and a console account's existence is not the secret — `admin` is seeded on every installation and
 named in this document. What it holds is no `pubkey`, so a share key cannot be sealed to it at all, and the
@@ -182,7 +182,7 @@ family-sized server rather than an anonymous stranger.
 
 ### First run: the server serves one thing until it has an administrator
 
-`schema.sql` seeds an unredeemed invitation for the first administrator (#107) — the only shape the server
+`schema.sql` seeds an unredeemed invitation for the first administrator (D-107) — the only shape the server
 can create, since keys are born on a device. While no account is both `active` and `admin`, the API answers
 **only `/auth/kdf` and `/auth/redeem`**; everything else is `503` with a reason naming the bootstrap. The
 console shows the same thing instead of a login form.
@@ -329,7 +329,7 @@ POST   /blobs/{sha256}/complete?size=&enc_alg=&key_id=
 GET    /vaults/{vault_id}/blob-keys?sha256=a,b,…
                                                → {keys: [{sha256, scope_id, wrapped_key}]}
                                                batched; an address the caller cannot open is
-                                               OMITTED, the same 404-not-403 rule as a blob read (#20)
+                                               OMITTED, the same 404-not-403 rule as a blob read (D-20)
 GET    /vaults/{vault_id}/dedup?tags=a,b,…
                                                → {matches: [{content_tag, sha256}]}
                                                batched; scoped to the vault's OWN key scope —
@@ -379,7 +379,7 @@ already-synced vault "nearly free" ([07](07-onboarding.md)): after matching by p
 
 Both are authorised by **vault ownership**, not by the caller already holding what they are asking about —
 the whole point of each is to learn something before that would be true. Neither is a new oracle: a
-`blob-keys` address the caller cannot open is omitted exactly as a blob read would refuse it (#20), and a
+`blob-keys` address the caller cannot open is omitted exactly as a blob read would refuse it (D-20), and a
 `dedup` tag is `HMAC(scope key, sha256(plaintext))`, so only a holder of the vault's own key could ever have
 produced the tags sitting in its scope to begin with — querying them back is self-consistent.
 
@@ -546,7 +546,7 @@ one answer, and it decides whether local files are deleted.
 are contradictory over the same set of local files, and the mistakes are not the same size: applying
 deletions when the server has been rolled back destroys work that exists nowhere else, while *not* applying
 them after a reset resurrects files the user chose to wipe — and the user wipes them once more. That is
-`#70`'s trade, and it does not change because a second reason arrived with the first.
+`D-70`'s trade, and it does not change because a second reason arrived with the first.
 
 Deciding by which event happened **later** is not available: `server_meta.restored_at` records the restore,
 but `vaults` carries `reset_epoch` with no timestamp, so the order of the two is not derivable. The rule
@@ -580,7 +580,7 @@ journal at all ([05](05-sharing.md)).
 `/delta` with `limit: 1` and reads the verdict. `200` means the server is continuous with what it last
 saw; `410` names the epoch that moved; `400 cursor_unverifiable` means the cursor cannot be checked at all.
 That verdict is what decides how an absence is read: whether a node missing from the listing was deleted
-there, or the server simply no longer holds it (docs/04's epoch table below, #70). The probe is a check,
+there, or the server simply no longer holds it (docs/04's epoch table below, D-70). The probe is a check,
 not the data — the client re-reads the tree through a full walk (incremental application is M2).
 
 Local changes go out first. The reverse order hides conflicts: the client would
@@ -624,7 +624,7 @@ clients' backoff reconnects them.
 browser `WebSocket` cannot set a header. The client connects and sends the access token as its first
 message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The verification is
 the API's own: a token must name an account **and** a device, or it is refused — a connection that
-cannot be attributed to a device cannot be throttled or signed out (#90). The connection lives
+cannot be attributed to a device cannot be throttled or signed out (D-90). The connection lives
 while the access token does; when it expires the client refreshes and reconnects, which is the ordinary
 token lifecycle ([06](06-key-model.md)).
 
@@ -791,7 +791,7 @@ overwrites it, so a client that is unsure whether a part landed may simply send 
 that reconnects asks what it already sent and skips those indices. For a hash it never
 started, the answer is `{parts: []}` with a `200` — never a `404`, and never a word about
 whether the finished blob exists. Otherwise the resume call would be exactly the existence
-oracle that the `404`-not-`403` rule (#20) and the missing short-circuit on `POST /blobs`
+oracle that the `404`-not-`403` rule (D-20) and the missing short-circuit on `POST /blobs`
 both exist to close.
 
 **There is deliberately no `init` call, and no row is written before the bytes arrive.**
@@ -799,7 +799,7 @@ The obvious design reserves quota up front by creating the unbound `user_blobs` 
 start of the upload. It must not: that row is a *claim on content*, and creating one from a
 declared hash alone would let anyone who learns an address — from a delta they once had, or
 from a share they have since left — claim a blob somebody else then uploads, and read it.
-Under deduplication one address is shared by every account holding that content (#42), so a
+Under deduplication one address is shared by every account holding that content (D-42), so a
 claim that costs no bytes is a way to acquire content one never had. The claim is therefore
 written by `complete`, from the same `recordUpload` the single-shot `POST` uses, and only
 after the assembled bytes have been hashed and found to equal the address they claim.
@@ -838,9 +838,9 @@ moment this stops being a single process. One process is what the deployment is
 ([02](02-architecture.md)), and this is written down so that changing it is a decision
 rather than a surprise.
 
-**An upload also checks the device**, not just the session (#33): an access token names a
+**An upload also checks the device**, not just the session (D-33): an access token names a
 device and outlives the row, so without this "sign out this device" would be advice rather
-than an act for as long as the token lives (#90). It is checked here rather than on every
+than an act for as long as the token lives (D-90). It is checked here rather than on every
 request because this is the path where being wrong costs disk.
 
 Two of them are not independent, and getting the order wrong breaks uploads rather than limiting them: **the

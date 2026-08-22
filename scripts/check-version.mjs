@@ -1,5 +1,5 @@
 /**
- * Assert the whole solution ships as one version (#111).
+ * Assert the whole solution ships as one version (D-111).
  *
  * Five files have to carry the number and none of them can be deleted: npm requires a
  * `version` in every workspace manifest, and Obsidian requires one in `manifest.json` —
@@ -52,7 +52,7 @@ for (const { file, version } of rest) {
 if (problems.length > 0) {
   console.error('version drift:');
   for (const p of problems) console.error(`  - ${p}`);
-  console.error('\nEvery component of the solution ships as one version — see docs/09 #111.');
+  console.error('\nEvery component of the solution ships as one version — see docs/09 D-111.');
   process.exit(1);
 }
 

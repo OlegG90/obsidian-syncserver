@@ -1,5 +1,5 @@
 /**
- * The compatibility rule (#111) — the one piece of versioning that is a decision rather
+ * The compatibility rule (D-111) — the one piece of versioning that is a decision rather
  * than a string.
  *
  * It is worth testing for a reason most version comparisons are not: **the rule changes

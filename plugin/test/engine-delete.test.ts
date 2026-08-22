@@ -216,7 +216,7 @@ const continuous: Delta = { changes: [], events: [], next_cursor: 'cursor-new', 
 const restore: CursorRejected = { rejected: true, reason: 'restore' };
 const ttl: CursorRejected = { rejected: true, reason: 'journal_ttl' };
 /**
- * The 400, not a 410: a cursor this server cannot verify at all (#100).
+ * The 400, not a 410: a cursor this server cannot verify at all (D-100).
  *
  * It was the one epoch with no test, and the reason is worth recording — it used to reach
  * the engine as a thrown `ApiError` caught by status, so simulating it meant a fake that

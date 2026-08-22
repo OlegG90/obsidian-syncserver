@@ -48,7 +48,7 @@ export interface Config {
   databaseUrl: string | undefined;
   /**
    * Signs access tokens, the delta cursor and the fake salt an unknown login receives
-   * (#73). One secret with three uses, because all three are "the server proving it
+   * (D-73). One secret with three uses, because all three are "the server proving it
    * produced this" and none of them ever leaves the server.
    *
    * A development default exists so the first run needs no ceremony; production must set
@@ -57,7 +57,7 @@ export interface Config {
    */
   serverSecret: string;
   serverSecretIsDefault: boolean;
-  /** Where blobs live. Content only — metadata is in PostgreSQL, and the split is what makes rename, sharing and dedup cheap (#1). */
+  /** Where blobs live. Content only — metadata is in PostgreSQL, and the split is what makes rename, sharing and dedup cheap (D-1). */
   blobStorePath: string;
   accessTokenTtlSeconds: number;
   limits: {
@@ -142,7 +142,7 @@ export interface Config {
         destination: string;
         /** `pg_dump`, or whatever this deployment calls it. Must match the server's PG. */
         dumpCommand: string[];
-        /** The blob store directory, copied after the dump (#114). */
+        /** The blob store directory, copied after the dump (D-114). */
         blobSource: string;
         /**
          * How many finished copies to keep on disk, or `undefined` for all of them (#136).

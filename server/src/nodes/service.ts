@@ -1,7 +1,7 @@
 /**
  * Node writes: the one place a revision is born.
  *
- * Every write is **node + journal + version in one transaction** (#14), together with the
+ * Every write is **node + journal + version in one transaction** (D-14), together with the
  * client-produced key material the node needs to be openable. All of it commits or none
  * does — a node without its envelope is a file nobody can decrypt, and a journal that
  * disagrees with the tree is a client that syncs the wrong thing for ever.
@@ -150,7 +150,7 @@ export const createNode = async (db: Db, input: CreateInput): Promise<{ nodeId: 
   });
 
 /**
- * The precondition for a content write is **content**, not a revision number (#52).
+ * The precondition for a content write is **content**, not a revision number (D-52).
  *
  * `nodes.rev` moves on any operation, `move` included, so using it here would turn the
  * everyday "renamed on the desktop, edited on the phone" into a conflict between two

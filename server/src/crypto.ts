@@ -8,7 +8,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
- * The stored form of the four verifiers (#108): SHA-256 over the token's **UTF-8 bytes**,
+ * The stored form of the four verifiers (D-108): SHA-256 over the token's **UTF-8 bytes**,
  * hex. No salt, no pepper, no slow KDF — every input is at least 128 bits of CSPRNG
  * output, so a work factor would buy nothing and cost latency on every login.
  *
@@ -30,11 +30,11 @@ export const tokenMatches = (presented: string, storedHex: string): boolean => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-/** 256 bits from a CSPRNG — the entropy floor #108 depends on, with room to spare. */
+/** 256 bits from a CSPRNG — the entropy floor D-108 depends on, with room to spare. */
 export const newToken = (): string => randomBytes(32).toString('base64url');
 
 /**
- * The salt an unknown login receives (#73).
+ * The salt an unknown login receives (D-73).
  *
  * `/auth/kdf` answers before authentication, so a 404 there would turn it into an account
  * enumeration oracle. A fake salt has to be indistinguishable from a real one **and stable
@@ -44,7 +44,7 @@ export const newToken = (): string => randomBytes(32).toString('base64url');
 export const fakeAccountSalt = (serverSecret: string, login: string): Buffer =>
   createHmac('sha256', serverSecret).update(`kdf-salt:${login.toLowerCase()}`, 'utf8').digest().subarray(0, 16);
 
-/** The same trick for the key pair a share invitation asks about (#73). */
+/** The same trick for the key pair a share invitation asks about (D-73). */
 export const fakeRecipient = (serverSecret: string, login: string): { userId: string; pubkey: Buffer } => {
   const d = createHmac('sha256', serverSecret).update(`recipient:${login.toLowerCase()}`, 'utf8').digest();
   const hex = d.subarray(0, 16).toString('hex');

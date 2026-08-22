@@ -192,14 +192,14 @@ account's `auth_secret` is shown once and stored only as a hash), and runs the w
 `scripts/smoke.sh` can still be run directly against a server you have a token for.
 
 It claims the seeded administrator if nobody has, then exercises the account surface, a blob and
-all three node verbs M0 names — create, `put` with the content precondition (#52), `delete` with
+all three node verbs M0 names — create, `put` with the content precondition (D-52), `delete` with
 its revision precondition — and the delta reporting each. Three of its assertions are answers
 that look wrong and are not:
 
 | It asserts | Because |
 |---|---|
-| `HEAD /blobs` is **404** on a freshly uploaded blob | an upload leaves a *pending* reference and reads are authorised by a **live** one (#20) |
-| re-uploading identical content is **201**, not "already have it" | the short circuit would make the address an existence oracle (#46) |
+| `HEAD /blobs` is **404** on a freshly uploaded blob | an upload leaves a *pending* reference and reads are authorised by a **live** one (D-20) |
+| re-uploading identical content is **201**, not "already have it" | the short circuit would make the address an existence oracle (D-46) |
 | `HEAD /blobs` is still **200** after a delete | a **soft** delete releases nothing: the trash is the row, and a restore needs the content |
 
 **Every run is independent** — it derives a nonce and puts it in the content, the filename and
@@ -257,9 +257,9 @@ A fresh instance answers:
 ```
 
 `bootstrap_pending` is the whole first-run state: the database has been created and seeded, and
-the server is waiting for its first administrator (#107).
+the server is waiting for its first administrator (D-107).
 
-`version` is the release this server is, and `/health` is the only place it is reported (#111) —
+`version` is the release this server is, and `/health` is the only place it is reported (D-111) —
 because it is the only endpoint open before authentication and before an administrator exists,
 which is precisely when a client has to decide whether it can talk to this server at all. It is
 reported on the `503` path too: the version is a fact about the process, not about the database.
@@ -269,7 +269,7 @@ reported on the `503` path too: the version is a fact about the process, not abo
 Until a password is set the API answers **only** `/auth/kdf`, `/auth/bootstrap`, `/health` and
 the console's own two files; everything else is `503 bootstrap_pending`. What makes that window
 safe is not a token being short-lived — it is that there is **no credential at all** until this
-call creates one (#107). A seeded password would keep working for anybody who never got round
+call creates one (D-107). A seeded password would keep working for anybody who never got round
 to changing it.
 
 The ordinary way is the console: open `http://<host>:$PUBLISH_PORT/` and it shows one screen,
@@ -288,7 +288,7 @@ It answers `{"login":"admin"}` once and `409 already_bootstrapped` every time af
 statement that sets the password is the same one that moves the row out of the state it matched
 on, so there is no second chance and no window between checking and writing.
 
-That account is a **console account** (#115): a password, and no key material at all. It
+That account is a **console account** (D-115): a password, and no key material at all. It
 administers the server and cannot sync a vault — there is no seed to derive a vault key from.
 Signing in is `POST /auth/console` with the login `admin` and that password, which answers with
 the usual access and refresh tokens.
@@ -318,12 +318,12 @@ of the API answers.
 One tag releases both halves, and the tag **is** the version — `0.5.0-b`, with no `v` on the
 front. That is BRAT's rule rather than a preference; see the plugin below. The publish workflow
 refuses a tag that disagrees with `package.json`, because a release named after code it does
-not contain is the same quiet failure #111 was opened about, one layer out.
+not contain is the same quiet failure D-111 was opened about, one layer out.
 
 ### The image
 
 Built and pushed from CI — one image per released version, matching the single version across
-six manifests (#111). Each run also tags by commit, so a running container can be traced to a
+six manifests (D-111). Each run also tags by commit, so a running container can be traced to a
 build:
 
 - `ghcr.io/<owner>/syncserver:<version>` — e.g. `ghcr.io/olegg90/syncserver:0.5.0-b`;
@@ -381,7 +381,7 @@ just `docker compose pull` again.
   Public exposure stays out of scope until authentication has had a review of its own
   ([02](02-architecture.md)). Reaching it from elsewhere is a VPN's job, not this compose file's;
 - **backed up only once a destination is chosen.** The procedure is wired up — one refusal
-  window, database dumped first and blobs copied second inside it (#114), described in
+  window, database dumped first and blobs copied second inside it (D-114), described in
   [08](08-backup-restore.md) — the console has a button that runs it, and a schedule takes one
   every `BACKUP_EVERY_SECONDS` (a day by default; `0` turns it off for a deployment driving
   backups from cron on the host). Each scheduled run verifies the copy it just wrote and says so

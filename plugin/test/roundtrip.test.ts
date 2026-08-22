@@ -47,7 +47,7 @@ import { FakeVault } from './fake-vault.js';
  * A delta answer narrowed to its page.
  *
  * `delta` declares three outcomes — a page, a `410` with its reason, and a cursor this
- * server cannot verify (#100) — and a test that wants the page has to say so about both
+ * server cannot verify (D-100) — and a test that wants the page has to say so about both
  * refusals. Said once here rather than twice at each of eleven call sites.
  */
 const page = (res: Delta | CursorRejected | CursorUnverifiable): Delta => {
@@ -79,7 +79,7 @@ const DATABASE_URL = process.env['DATABASE_URL'] ?? `postgres:///${DB}?host=/var
 const STORE = path.join(repo, `server/var/test-plugin-${process.pid}`);
 const base = `http://127.0.0.1:${PORT}`;
 
-// The REAL Argon2id parameters, not fast ones. The server enforces a 64 MiB floor (#62)
+// The REAL Argon2id parameters, not fast ones. The server enforces a 64 MiB floor (D-62)
 // and refuses anything weaker, so a round trip that lowered them would be testing a
 // registration no plugin can perform. It costs about a second, once.
 
@@ -164,7 +164,7 @@ after(async () => {
 });
 
 describe('a vault, end to end', () => {
-  /** Made by the M7 test, used by the #34 test below it — the two halves of one mechanism. */
+  /** Made by the M7 test, used by the D-34 test below it — the two halves of one mechanism. */
   let recoveryCode = '';
 
   const passphrase = 'a passphrase the server never sees';
@@ -180,7 +180,7 @@ describe('a vault, end to end', () => {
    * A vault account to be, invited the way every real one is.
    *
    * A fresh server holds no invitation any more: it holds a console administrator with no
-   * password (#107, #115). So the first run here is what it is anywhere — set that password,
+   * password (D-107, D-115). So the first run here is what it is anywhere — set that password,
    * sign in to the console, and issue an invitation — and only then is there something for a
    * client to redeem. It is three requests rather than none, and each one is the real path.
    */
@@ -201,7 +201,7 @@ describe('a vault, end to end', () => {
     assert.equal(bootstrap.status, 201, bootstrap.text);
 
     // The ADMINISTRATOR signs in here, not the account being invited: the console is a
-    // different kind of account (#115), and it is the one that may issue an invitation.
+    // different kind of account (D-115), and it is the one that may issue an invitation.
     const signIn = await ask('/auth/console', {
       login: 'admin',
       password: 'the first administrator password',
@@ -240,7 +240,7 @@ describe('a vault, end to end', () => {
     assert.equal(sess.state, 'open', 'connect() returns an open session — the phrase was just typed');
     vaultId = sess.connection.vaultId;
 
-    // The live KDF floor check (#62): the session derived these with real Argon2id, and the
+    // The live KDF floor check (D-62): the session derived these with real Argon2id, and the
     // server accepted them — the only place that proof can live.
     const kdf = sess.connection.kdfParams;
     assert.equal(kdf.v, 19, 'the live KDF parameters meet the floor');
@@ -280,7 +280,7 @@ describe('a vault, end to end', () => {
     assert.equal(stored.sha256, sealed.sha256, 'the server re-hashed what it received and agrees');
 
     // 404 until a node references it: an upload leaves a PENDING reference and reads are
-    // authorised by a live one (#20).
+    // authorised by a live one (D-20).
     assert.equal(await client.hasBlob(address), false);
 
     const node = await client.createNode(vaultId, {
@@ -422,7 +422,7 @@ describe('a vault, end to end', () => {
     // **The normalising is the client's, at both ends** — the server hashes the string it is
     // handed and has no opinion about dashes or case. So the code must be normalised before
     // it is sent, exactly as a pairing secret is (`session.ts`), and this asserts the trap
-    // rather than describing it: the raw typed form is refused, and #34 has to normalise.
+    // rather than describing it: the raw typed form is refused, and D-34 has to normalise.
     await assert.rejects(recoverWith(typed), /401/, 'the typed form is not the code');
 
     const back = await recoverWith(normaliseHumanCode(typed));
@@ -509,7 +509,7 @@ describe('a vault, end to end', () => {
 
   it('hands out no envelope for an address the caller does not hold', async () => {
     // Absent, not forbidden: an envelope is worth exactly what the bytes it opens are worth,
-    // so it follows the same rule as a blob read (#20).
+    // so it follows the same rule as a blob read (D-20).
     const stranger = 'a'.repeat(64);
     assert.equal((await client.blobKeys(vaultId, [stranger])).size, 0);
   });
@@ -566,7 +566,7 @@ describe('a vault, end to end', () => {
    * Last in this describe on purpose: it changes the account's passphrase, and every test
    * above it is about the account as it was.
    */
-  it('takes the account back with the code, and the passphrase it sets is the one that opens it (#34)', async () => {
+  it('takes the account back with the code, and the passphrase it sets is the one that opens it (D-34)', async () => {
     const chosen = 'a phrase chosen on the day it was needed';
     const taken = await session.recoverWithCode(
       { serverUrl: base, login: 'roundtrip-user', code: recoveryCode, passphrase: chosen },
@@ -1106,7 +1106,7 @@ describe('the engine, device A pushes and device B pulls', () => {
   it('a reset on one device resyncs the other through 410, quarantining displaced work', async () => {
     // docs/07: another device running "my client wins" sends the loser `410 reset`. The
     // loser resyncs against the winner's tree and QUARANTINES its own local-only work rather
-    // than erasing it (#80) — never delete the user's files silently.
+    // than erasing it (D-80) — never delete the user's files silently.
     const path = 'Devices/reset-shared.md';
     const extraPath = 'Devices/reset-only-on-b.md';
 

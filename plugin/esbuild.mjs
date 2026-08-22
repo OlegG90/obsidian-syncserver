@@ -40,7 +40,7 @@ const outDir = out ?? path.join(vault, '.obsidian', 'plugins', 'syncserver');
 await mkdir(outDir, { recursive: true });
 
 // The bundle's version comes from the same file Obsidian reads for its plugin list, so the
-// number a person sees there and the number this build reports cannot disagree (#111).
+// number a person sees there and the number this build reports cannot disagree (D-111).
 const manifestPath = path.join(here, 'manifest.json');
 const { version } = JSON.parse(await readFile(manifestPath, 'utf8'));
 await copyFile(manifestPath, path.join(outDir, 'manifest.json'));

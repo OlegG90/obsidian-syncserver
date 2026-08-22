@@ -65,7 +65,7 @@ describe('a console session that outlives its access token', () => {
 
   it('surfaces the refusal when the refresh itself is refused', async () => {
     // The device was revoked, or the token is spent. The caller's next move is the sign-in
-    // screen (#101), which needs to see the original refusal rather than a refresh failure.
+    // screen (D-101), which needs to see the original refusal rather than a refresh failure.
     await signedIn();
     stub([expired, { status: 401, body: { error: 'invalid_refresh' } }]);
 
@@ -74,7 +74,7 @@ describe('a console session that outlives its access token', () => {
 
   it('does not renew for a refusal that a new token cannot answer', async () => {
     // `forbidden` is a demoted or disabled administrator; a fresh token says the same thing.
-    // Only `unauthenticated` means "this token is no good", which is why #101 matches on the
+    // Only `unauthenticated` means "this token is no good", which is why D-101 matches on the
     // code and not on the status.
     await signedIn();
     const seen = stub([{ status: 403, body: { error: 'forbidden' } }]);

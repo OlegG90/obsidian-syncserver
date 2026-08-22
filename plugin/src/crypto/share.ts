@@ -8,7 +8,7 @@
  * share costs nothing cryptographically: the leaver keeps the copy, converts the names back
  * to `KV`, and `KS` simply stops mattering to them.
  *
- * It is never rotated (#10). A rotation would have to re-key every name in the subtree in
+ * It is never rotated (D-10). A rotation would have to re-key every name in the subtree in
  * every replica at once, and it would buy nothing: anyone who ever held `KS` has already
  * seen the plaintext it protects.
  */

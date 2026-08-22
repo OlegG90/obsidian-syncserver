@@ -4,7 +4,7 @@ One web client, served by the server itself, for **administration and nothing el
 are invited, quotas are changed, backups are run and the audit log is read — all of it about *other
 people's* accounts, which is what makes it a separate surface at all.
 
-## Two kinds of account, and neither can be the other (#115)
+## Two kinds of account, and neither can be the other (D-115)
 
 | | console account | vault account |
 |---|---|---|
@@ -15,7 +15,7 @@ people's* accounts, which is what makes it a separate surface at all.
 | can it be invited into a share | no — there is no public key to seal one to | yes |
 | can it read the console | yes | no |
 | quota | **zero**, and the schema insists on it — it owns no vault | positive, per account (AC-Q2) |
-| device rows | **one, reused** on every sign-in | one per device, revocable one at a time (#90) |
+| device rows | **one, reused** on every sign-in | one per device, revocable one at a time (D-90) |
 
 A console session is a browser, and a browser is not a device somebody installed and can point at. So a
 sign-in reuses the account's one console device row rather than adding another — the alternative is a
@@ -23,7 +23,7 @@ list of devices nobody owns, growing for ever, in the surface whose job is to ma
 The consequence is stated rather than hidden: signing in from a second browser takes the session from the
 first, which is acceptable for an administrator and would not be for a vault.
 
-**A console session lasts as long as its tab** (#102). Both tokens live in memory — the access token, and
+**A console session lasts as long as its tab** (D-102). Both tokens live in memory — the access token, and
 the refresh token that quietly buys another when it expires — and neither is written down: no storage, no
 cookie. So closing the tab ends the session, and so does a reload, which is consistent with this surface's
 one structural promise: a reload is never wrong.
@@ -54,7 +54,7 @@ a passphrase at all. The user changes it only from a client that already has the
 paired to it, or one recovered with the phrase itself ([07](07-onboarding.md)). Administrative recovery means
 disable the account or issue a replacement invitation, not silently create empty vaults.
 
-**Delete an account with one click.** Deletion is a procedure (#55): dissolve the shares the account
+**Delete an account with one click.** Deletion is a procedure (D-55): dissolve the shares the account
 initiated, wait for each participant to finalize their copy (SH-29), reassign the account's authorship in
 other people's history to the **tombstone**, only then remove its vaults. The console models this as a
 **state**, `deleting`, with progress — not as a button that either works or times out.
@@ -74,7 +74,7 @@ there. `vault_key_id` is a server-side scope identifier for a later vault, not a
 administrator cannot produce the account's cryptographic material.
 
 **The first administrator is the exception that proves it.** They cannot be invited — there is nobody to
-issue it — so `schema.sql` seeds a console account **with no password at all** (#107), and the server
+issue it — so `schema.sql` seeds a console account **with no password at all** (D-107), and the server
 answers nothing but the setting of one until it is set. Setting it is what creates it, so there is no state
 in which a default works; a seeded password that had to be changed would still work if nobody changed it.
 The console shows that one form in place of a login while it is pending, which is the whole of a fresh
@@ -83,7 +83,7 @@ server's interface.
 **At least 12 characters**, refused as `password_too_short` below that. A length rule and nothing else —
 no character classes, which push people towards `Passw0rd!` and buy less than length does. The floor
 exists because this is the one secret on the server a person chooses: everything else it stores is
-≥128 bits of CSPRNG output (#108), and everything the *client* holds has Argon2id in front of it before
+≥128 bits of CSPRNG output (D-108), and everything the *client* holds has Argon2id in front of it before
 the server ever sees it. Here there is only Argon2id on the server, so the phrase has to carry its own
 weight.
 
@@ -117,7 +117,7 @@ login and no keys could own data.
 | `active` | a working account |
 | `disabled` | sessions revoked, writes refused, data intact |
 | `deleting` | the deletion procedure is running |
-| `tombstone` | the reserved account that account deletion reassigns authorship to; no keys, no login, never altered (#55) |
+| `tombstone` | the reserved account that account deletion reassigns authorship to; no keys, no login, never altered (D-55) |
 
 **The last active administrator cannot be demoted, disabled or deleted** — enforced by a trigger, because
 locking yourself out of your own server is otherwise a single keystroke.
@@ -149,7 +149,7 @@ plugin — which is the only place that has them:
 
 | Section | Contents |
 |---|---|
-| Vaults | list; rename or delete an empty one; usage split into current content and history. **Creating** one mints a vault key from the seed (#86, AC-11), so it could never have been done from a browser. A share replica counts as ordinary content of the vault it lives in ([03](03-data-model.md)) |
+| Vaults | list; rename or delete an empty one; usage split into current content and history. **Creating** one mints a vault key from the seed (D-86, AC-11), so it could never have been done from a browser. A share replica counts as ordinary content of the vault it lives in ([03](03-data-model.md)) |
 | Devices | list, last seen, **sign out this device**, sign out everywhere |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
 | Security | change passphrase, and regenerate the recovery code once [M7](10-roadmap.md) builds one |
@@ -185,7 +185,7 @@ console adds on top.
 ### Backups: trigger and observe, do not download
 
 The console can start a backup and list previous runs with their status, size, blob
-count, error and verification. A run records the **refusal window** and both legs (#114), and `CHECK`s reject a leg
+count, error and verification. A run records the **refusal window** and both legs (D-114), and `CHECK`s reject a leg
 taken outside it, or a blob leg the database leg did not precede — so a half-finished backup, or one whose two stores describe different instants, can
 never be mistaken for a usable one.
 
@@ -210,7 +210,7 @@ all-or-nothing (server/src/config.ts).
 Restoring the database means replacing the database the console itself is running on. So the console does
 not restore; it **prepares and confirms**:
 
-- verify a backup: check that all `nodes.sha256` and `versions.sha256` values are present in the blob copy, report missing blobs — done, the Verify button on each finished run (#59);
+- verify a backup: check that all `nodes.sha256` and `versions.sha256` values are present in the blob copy, report missing blobs — done, the Verify button on each finished run (D-59);
 - show the post-restore checklist — done: after the confirmation the console lists what only the administrator can decide next — that clients resync on their own, that the copy was verified against the blobs, and that users are told (docs/08);
 - after a restore, take the confirmation and **raise `restore_epoch`** — an audited administrative action,
   because it forces every client into a full resync. The new value is `max(state file, restored database)

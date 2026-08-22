@@ -46,7 +46,7 @@ describe('applying it to an empty database', () => {
     assert.match(said.join(' '), /schema applied/);
 
     // The seeds are part of it, and the one that matters is the invitation a first run redeems
-    // (#107): a database with tables and no seeded administrator invitation is a server nobody
+    // (D-107): a database with tables and no seeded administrator invitation is a server nobody
     // can sign into.
     const users = await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM users`);
     assert.equal(Number(users!.n) >= 2, true, 'the tombstone and the first invitation');

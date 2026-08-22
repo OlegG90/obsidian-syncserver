@@ -1,6 +1,6 @@
 /**
  * Authentication, and the one rule that shapes all of it: the passphrase never reaches
- * the server (#61).
+ * the server (D-61).
  *
  * What arrives is `auth_secret = HKDF(seed, "auth")` — a value derived from the account
  * seed on the device, hashed again on arrival. If login used the same material as
@@ -34,7 +34,7 @@ export interface RedeemInput {
   pubkey: Buffer;
   encPrivkey: Buffer;
   wrappedSeed: Buffer;
-  /** Proof the account can later be recovered from the passphrase alone (#112). Required. */
+  /** Proof the account can later be recovered from the passphrase alone (D-112). Required. */
   kekVerifier: string;
   /**
    * The recovery code's envelope and verifier, or neither.
@@ -63,7 +63,7 @@ export type Account = {
 /**
  * The first run: give the seeded administrator a password, which is what brings it to life.
  *
- * `schema.sql` seeds a **console account with none** (#107, #115). Setting one is what
+ * `schema.sql` seeds a **console account with none** (D-107, D-115). Setting one is what
  * *creates* it — there is no default to change, so there is no state in which a default
  * works, which a seeded password would have left behind for anybody who never got round to
  * it. While it is unset the server answers nothing else, so the window is the first run.
@@ -72,7 +72,7 @@ export type Account = {
  * meant every installation of this server shipped with the login of its most privileged
  * account already known — written in `schema.sql`, repeated in the docs, and identical
  * everywhere. Half a credential, given away. `attempts.check` rate-limits by login, so a
- * fixed one is also the half an attacker never has to guess. #107 already says that setting
+ * fixed one is also the half an attacker never has to guess. D-107 already says that setting
  * the password is what CREATES the administrator; naming it is part of creating it.
  *
  * The seeded `admin` stays as the default the console offers, because most operators will
@@ -83,7 +83,7 @@ export type Account = {
  * same statement that sets the password moves the row out of the state it matches on, so a
  * second call finds nothing. No separate check, and no window between checking and writing.
  * A concurrent second call blocks on the row and then re-reads it as `active`, so the
- * guarantee survives being wrapped in a transaction — which it now is (#88).
+ * guarantee survives being wrapped in a transaction — which it now is (D-88).
  *
  * **One transaction: the password and its audit row commit together, or neither does.** They
  * were two, and the audit entry was wrapped in a `db.tx` of its own — the one shape that looks
@@ -91,7 +91,7 @@ export type Account = {
  * had been created, on the single account whose creation is the most interesting line the log
  * will ever hold. `confirmRestore` had already written the rule down for exactly this case.
  *
- * **Hashed before the transaction opens, deliberately.** Argon2id at the 64 MiB floor (#62)
+ * **Hashed before the transaction opens, deliberately.** Argon2id at the 64 MiB floor (D-62)
  * takes real time, and computing it inside would pin a pool connection for the whole
  * derivation — on the one request a fresh server is certain to receive.
  */
@@ -133,10 +133,10 @@ export const setFirstPassword = async (
  * Sign in a console account, and give it a device to be signed out from.
  *
  * A **password** rather than an `auth_secret`, because a console account has no seed to
- * derive one from — that is the whole of #115. It is checked with Argon2id here, since no
+ * derive one from — that is the whole of D-115. It is checked with Argon2id here, since no
  * client-side KDF can stand in: the browser is not trusted to have run one.
  *
- * **A device row, for a browser.** The access token names an account *and* a device (#90),
+ * **A device row, for a browser.** The access token names an account *and* a device (D-90),
  * so a caller can be throttled and a session can be ended one place at a time. A browser is
  * not a device in the way a phone is, but it is a session somebody may want to end, and
  * inventing a second shape of token to avoid a row would cost more than the row.
@@ -159,7 +159,7 @@ export const consoleSignIn = async (
   if (!row || !passwordMatches(password, row.hash)) return undefined;
 
   // One console device per account, reused. A device row exists so a session can be revoked
-  // one at a time (#90) — it is a thing somebody installed and can point at. A browser is not
+  // one at a time (D-90) — it is a thing somebody installed and can point at. A browser is not
   // that: it signs in, closes, signs in again, and a row per sign-in is a list of devices
   // nobody owns, growing for ever, that makes the real ones harder to find.
   //
@@ -359,7 +359,7 @@ export const findActiveAccount = async (db: Db, login: string): Promise<(Account
 export const verifyAuthSecret = (stored: string | null, presented: string): boolean =>
   stored !== null && tokenMatches(presented, stored);
 
-/** One refresh token per device, so signing out one device is possible at all (#90). */
+/** One refresh token per device, so signing out one device is possible at all (D-90). */
 export const issueRefreshToken = async (db: Db, deviceId: string): Promise<string> => {
   const refresh = newToken();
   await db.query(
@@ -371,7 +371,7 @@ export const issueRefreshToken = async (db: Db, deviceId: string): Promise<strin
 };
 
 /**
- * The device behind a refresh token — **and the moment it is marked seen** (#118).
+ * The device behind a refresh token — **and the moment it is marked seen** (D-118).
  *
  * `last_seen_at` was written when a device signed in, recovered or paired, and never again. A device
  * that paired a year ago and has synced every day since read as "last seen a year ago", which made the
@@ -446,7 +446,7 @@ export const setRecoveryCode = async (
  * Put this account behind a different passphrase: a new `wrapped_seed` and the verifier that
  * proves it, written together.
  *
- * **Built for recovery by code** (#34), which cannot work without it. Somebody who recovers
+ * **Built for recovery by code** (D-34), which cannot work without it. Somebody who recovers
  * with a code does not know the passphrase — that is why they used the code — so they must set
  * one, and the account's envelope has to become the one that new passphrase opens. Leaving the
  * server's copy under the forgotten phrase would mean an account recoverable only by its code,
@@ -515,14 +515,14 @@ export interface Recovered {
 /**
  * Return an account to a device that holds nothing, against proof it can open the envelope.
  *
- * The one bootstrap that needs no second device (#112). Two proofs reach it, because two
+ * The one bootstrap that needs no second device (D-112). Two proofs reach it, because two
  * different things get lost: the passphrase answers a lost device, the recovery code answers
  * a forgotten passphrase — and each is answered with **only** the envelope it opens. Handing
  * back both would give whoever guessed one a second target for free.
  *
  * `undefined` for every failure, deliberately undifferentiated: an unknown login, an account
  * with no recovery code, and a wrong proof are one answer, or the endpoint becomes the
- * enumeration oracle #73 closes everywhere else.
+ * enumeration oracle D-73 closes everywhere else.
  */
 export const recoverAccount = async (
   db: Db,

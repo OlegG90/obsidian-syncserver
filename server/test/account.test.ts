@@ -1,7 +1,7 @@
 /**
  * The account-scope predicates: "whose is this vault", shared by every route family.
  *
- * The rule behind them is "404, never 403" (#20) — the boolean is the answer, the routes
+ * The rule behind them is "404, never 403" (D-20) — the boolean is the answer, the routes
  * decide the status. This test pins the predicate itself, so the shared module cannot drift
  * without its own proof.
  *

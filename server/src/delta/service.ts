@@ -60,7 +60,7 @@ export const rejectionFor = (cursor: CursorPayload, at: VaultPosition): CursorRe
   // Both stale at once: `restore` wins. The instructions contradict each other over the
   // same local files, and the mistakes are not the same size — applying deletions after a
   // rollback destroys work that exists nowhere else, while skipping them after a reset
-  // costs the user one more deletion (#70).
+  // costs the user one more deletion (D-70).
   if (restored) return 'restore';
   if (reset) return 'reset';
 
@@ -80,7 +80,7 @@ export const rejectionFor = (cursor: CursorPayload, at: VaultPosition): CursorRe
  * a long absence from costing more than a short one.
  *
  * The upper bound is the **pinned snapshot**, never `now`: without it a resync of a large
- * vault will reliably either lose a change that happened mid-walk or apply it twice (#24).
+ * vault will reliably either lose a change that happened mid-walk or apply it twice (D-24).
  */
 export const readChanges = async (
   db: Db,

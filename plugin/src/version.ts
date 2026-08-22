@@ -1,7 +1,7 @@
 /**
  * What release this plugin is, and whether it can talk to the server it is pointed at.
  *
- * **One number for the whole solution** (#111). The server, the plugin, `shared/` and the
+ * **One number for the whole solution** (D-111). The server, the plugin, `shared/` and the
  * management console when it exists all ship the same `major.minor.patch`, bumped together.
  * They are one program split across two machines by necessity, not four products with
  * independent lives, and a compatibility matrix between them would be a fiction nobody

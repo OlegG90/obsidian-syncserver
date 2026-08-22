@@ -7,7 +7,7 @@
  * names three callers of the integrity check, and "whatever runs it nightly" was the missing
  * one.
  *
- * **Each scheduled run verifies the copy it just wrote.** That is the self-check of #74: a
+ * **Each scheduled run verifies the copy it just wrote.** That is the self-check of D-74: a
  * backup nobody can restore from is not a backup, and the moment it was written is the cheapest
  * moment to find out — the alternative is finding out at restore time, which is the one time
  * nothing can be done about it.
@@ -53,7 +53,7 @@ export const takeScheduledBackup = async (
   const runDir = backupRunDir(stamp);
   const runDestination = runDirOf(backup.destination, runDir);
 
-  // The self-check, on the copy this run just wrote (#74). Same reader the console's trigger
+  // The self-check, on the copy this run just wrote (D-74). Same reader the console's trigger
   // uses by default, so a scheduled backup is checked exactly as a hand-pressed one is.
   //
   // **The outcome is `runBackup`'s to describe, and this only says whose run it was.** It used

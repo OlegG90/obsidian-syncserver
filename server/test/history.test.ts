@@ -168,7 +168,7 @@ describe('restore', () => {
     assert.ok(versions[0].rev > original.rev);
   });
 
-  it('lifts the ancestor chain, because a file inside a deleted folder cannot be materialised (#59)', async () => {
+  it('lifts the ancestor chain, because a file inside a deleted folder cannot be materialised (D-59)', async () => {
     const folder = await createNode('box', rootId, 'folder');
     const file = await createNode('inside.md', folder.node_id);
     const version = (await app.inject({ method: 'GET', url: `/vaults/${vaultId}/versions/${file.node_id}`, headers: auth() })).json()[0];
@@ -191,7 +191,7 @@ describe('restore', () => {
     assert.equal(back!.deleted, null);
   });
 
-  it('refuses a name taken since, and names what is in the way (#36)', async () => {
+  it('refuses a name taken since, and names what is in the way (D-36)', async () => {
     const file = await createNode('contested.md', rootId);
     const version = (await app.inject({ method: 'GET', url: `/vaults/${vaultId}/versions/${file.node_id}`, headers: auth() })).json()[0];
     await del(file.node_id, file.rev);

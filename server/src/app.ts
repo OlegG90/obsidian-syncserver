@@ -49,11 +49,11 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   await app.register(import('@fastify/websocket'));
 
   // Registered before the routes so it runs before any of them: while there is no
-  // administrator, the only thing this server does is let one be made (#107).
+  // administrator, the only thing this server does is let one be made (D-107).
   // Answers whether this process can do its job, which means asking PostgreSQL — a
   // server that is listening but cannot reach the database is not healthy, and a port
   // check would call it so.
-  // It also reports the release (#111). This is the only endpoint that does, and the
+  // It also reports the release (D-111). This is the only endpoint that does, and the
   // only one that can: it is open before authentication and before an administrator
   // exists, which is precisely when a client has to decide whether it can talk to this
   // server at all. The version is reported on the unhealthy path too — it is a fact about
@@ -84,7 +84,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerShareRoutes(app, db, cfg);
 
   // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
-  // that owns the fact, so this and `index.ts` cannot ask separately and disagree (#89).
+  // that owns the fact, so this and `index.ts` cannot ask separately and disagree (D-89).
   const versionLine = cfg.backup ? await serverVersionLine(db) : '';
   registerAdminRoutes(app, db, {
     restoreStateFile: cfg.restoreStateFile,
@@ -95,7 +95,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
           // two runs never write into each other. The server's PostgreSQL version is read
           // once, here, and carried into every run's `assertReady` — which `runBackup` calls
           // before the lock, the row and the window, so a dump whose major disagrees is
-          // refused with none of them taken (docs/10, #73).
+          // refused with none of them taken (docs/10, D-73).
           makeLegs: (runDir: string) =>
             backupLegs(
               cfg.backup!.destination,
@@ -115,7 +115,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   // console (which carries the confirm screen) and the restore endpoints answers
   // `restore_pending`, so the one way out stays reachable.
   //
-  // Established here and held, not asked per request (#87). It was a database round-trip plus
+  // Established here and held, not asked per request (D-87). It was a database round-trip plus
   // a `readFile` on every call, to learn something that changes once — and could not have
   // changed in between, since a restore replaces the database under a STOPPED server. The
   // check belongs to this function rather than to the boot script because an app carrying the
@@ -135,7 +135,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     });
   });
 
-  // The refusal window (#114). One hook rather than a check in every write path: what the
+  // The refusal window (D-114). One hook rather than a check in every write path: what the
   // window turns away is *new* requests, and this is the one place all of them pass. It is
   // deliberately not a freeze — a request already inside a handler goes on to commit, which
   // is exactly why a backup dumps the database before it copies the blobs.

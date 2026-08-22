@@ -56,7 +56,7 @@ const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
  * the routes passed `'backup_not_configured'` as a string and this branched on it to choose a
  * sentence, which is the caller knowing the spelling AND this knowing the caller. The docblock
  * already claimed the routes "only have to know whether the thing is configured, not how to
- * say it is not"; two named refusals make that true (#89).
+ * say it is not"; two named refusals make that true (D-89).
  */
 const noBackup = (reply: FastifyReply): unknown =>
   reply.code(503).send({
@@ -142,7 +142,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     },
   );
 
-  // A procedure, not a button (#55). POST advances it as far as it can go and says what is
+  // A procedure, not a button (D-55). POST advances it as far as it can go and says what is
   // outstanding; GET only looks, because a poll that moved the state would make watching a
   // deletion indistinguishable from driving one.
   app.post<{ Params: { userId: string } }>('/admin/accounts/:userId/deletion', admin, async (req, reply) => {

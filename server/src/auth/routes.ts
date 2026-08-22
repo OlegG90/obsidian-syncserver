@@ -48,7 +48,7 @@ export const registerAuthRoutes = (
 ): void => {
   /**
    * Answers before authentication, so an unknown login must not be distinguishable.
-   * It gets a deterministic fake salt (#73) — never a 404, and never a random value,
+   * It gets a deterministic fake salt (D-73) — never a 404, and never a random value,
    * which would differ between two calls and give the answer away more plainly.
    */
   app.get<{ Querystring: { login?: string } }>('/auth/kdf', async (req, reply) => {
@@ -61,7 +61,7 @@ export const registerAuthRoutes = (
       [login],
     );
 
-    // The floor from #62, handed out with the fake salt so the shapes match too.
+    // The floor from D-62, handed out with the fake salt so the shapes match too.
     const fallback: KdfParams = { v: 19, m: 65536, t: 3, p: 1 };
     return {
       account_salt: (found?.accountSalt ?? fakeAccountSalt(cfg.serverSecret, login)).toString('base64'),
@@ -70,7 +70,7 @@ export const registerAuthRoutes = (
   });
 
   /**
-   * The first run, and the only thing this server answers until it is done (#107, #115).
+   * The first run, and the only thing this server answers until it is done (D-107, D-115).
    *
    * A password is CREATED here rather than replaced: the seeded administrator has none, so
    * there is no default that keeps working for anybody who never got round to changing it.
@@ -125,7 +125,7 @@ export const registerAuthRoutes = (
 
     // Checked here as well as in the schema, for the reason a 500 is not an answer.
     //
-    // `is_valid_kdf` enforces the 64 MiB floor (#62), and a client that registers below it
+    // `is_valid_kdf` enforces the 64 MiB floor (D-62), and a client that registers below it
     // hits a CHECK constraint — which surfaces as "Internal Server Error" and tells the one
     // person who can fix it nothing at all. The floor is a rule about the caller's input, so
     // it gets the status that says so, and names the parameter.
@@ -204,7 +204,7 @@ export const registerAuthRoutes = (
   });
 
   /**
-   * Sign in to the console (#115).
+   * Sign in to the console (D-115).
    *
    * Rate-limited on the same limiter as recovery, and for the same reason: this is the other
    * endpoint on this server where guessing pays, because the secret behind it is one a person
@@ -246,7 +246,7 @@ export const registerAuthRoutes = (
     async (req, reply) => {
       const account = await findActiveAccount(db, req.body.login);
       // Same answer whether the login is unknown or the secret is wrong — the pair is the
-      // credential, and telling them apart is the enumeration oracle #73 closes elsewhere.
+      // credential, and telling them apart is the enumeration oracle D-73 closes elsewhere.
       if (!account || !verifyAuthSecret(account.authSecretHash, req.body.auth_secret)) {
         return reply.code(401).send({ error: 'invalid_credentials' });
       }
@@ -300,12 +300,12 @@ export const registerAuthRoutes = (
   );
 
   /**
-   * Return an account to a device that has nothing (#112).
+   * Return an account to a device that has nothing (D-112).
    *
    * The proof comes first and the envelope second, which is the whole difference between
    * this and handing out seed envelopes by login name. Everything that can distinguish an
    * account from a non-account is deliberately flattened: an unknown login, an account with
-   * no recovery code, a wrong verifier and a wrong code are one refusal (#73), and the
+   * no recovery code, a wrong verifier and a wrong code are one refusal (D-73), and the
    * attempt limit is counted before any of them is evaluated.
    */
   app.post<{
@@ -385,7 +385,7 @@ export const registerAuthRoutes = (
 
   /**
    * Set this account's recovery verifier — the one thing only a client with the passphrase
-   * can compute (#112).
+   * can compute (D-112).
    *
    * One caller: an account that predates recovery, backfilling on its first unlock. A
    * passphrase change does NOT come through here — it moves the verifier and the envelope
@@ -488,7 +488,7 @@ export const registerAuthRoutes = (
     if (!row?.hash || !tokenMatches(req.body.kek_verifier, row.hash)) {
       attempts.fail(claims.sub);
       // The same refusal a wrong passphrase gets everywhere else. An account whose verifier is
-      // missing is indistinguishable from a wrong one here, deliberately (#73).
+      // missing is indistinguishable from a wrong one here, deliberately (D-73).
       return reply.code(401).send({ error: 'invalid_credentials' });
     }
     attempts.succeed(claims.sub);
@@ -496,7 +496,7 @@ export const registerAuthRoutes = (
   });
 
   /**
-   * Put the account behind a different passphrase (#34).
+   * Put the account behind a different passphrase (D-34).
    *
    * The caller sends the new `wrapped_seed` and the verifier for the same KEK; the server
    * stores both and reads neither. It exists because **recovery by code has nowhere to land
@@ -612,7 +612,7 @@ export const registerAuthRoutes = (
         name: d.name,
         platform: d.platform,
         // As fresh as the access token's lifetime, and no fresher: written on every refresh, never per
-        // request (D118). Labelled as such rather than made to sound more precise than it is.
+        // request (D-118). Labelled as such rather than made to sound more precise than it is.
         last_seen_at: d.lastSeenAt,
         current: d.id === claims.device,
       })),

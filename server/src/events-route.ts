@@ -29,7 +29,7 @@ export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void
         } catch {
           return undefined;
         }
-        // The same policy as every HTTP route: a token names an account AND a device (#90).
+        // The same policy as every HTTP route: a token names an account AND a device (D-90).
         return verifyCaller(claims);
       },
       onAuthenticated: (caller) => {

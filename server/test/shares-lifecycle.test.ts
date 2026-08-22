@@ -73,7 +73,7 @@ describe('opening a share over a folder', () => {
 
   it('refuses a node in a vault the caller does not own, without saying which half was wrong', async () => {
     // The composite foreign key fails; answering `not_found` keeps the endpoint from
-    // reporting on another account's tree (#20).
+    // reporting on another account's tree (D-20).
     const folder = await createNode('folder', `mine-${randomUUID()}`);
     const r = await openShare(folder, w.strangerAccess);
 
@@ -345,7 +345,7 @@ describe('inviting somebody', () => {
 
   it('answers an unknown account exactly as it answers one already invited', async () => {
     // Deliberate: two different situations, one answer. Telling them apart would say
-    // whether a login exists, which is the oracle #73 closed on /auth/kdf.
+    // whether a login exists, which is the oracle D-73 closed on /auth/kdf.
     const shareId = await activeShare('oracle');
     assert.equal((await inviteTo(shareId, w.strangerId)).statusCode, 204);
 
@@ -733,7 +733,7 @@ describe('accepting an invitation', () => {
 
   it('does not charge the joiner for bytes they already hold', async () => {
     // Content is stored once and `user_blobs` is a claim on it, not a copy — so a folder of
-    // files this account already has costs nothing to join (#46).
+    // files this account already has costs nothing to join (D-46).
     //
     // Asserted with **no room to spare**, and that is the whole point of the test. The
     // accounting asks one question of every distinct blob in the subtree at once, and a

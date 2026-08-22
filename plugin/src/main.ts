@@ -67,7 +67,7 @@ interface PluginData {
    * against the server whenever the share list is read.
    */
   sharedFolders?: Record<string, string>;
-  /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
+  /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
   syncObsidian?: boolean;
 }
 
@@ -376,7 +376,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The question a device answers before it binds to a vault (#117, #116).
+   * The question a device answers before it binds to a vault (D-117, D-116).
    *
    * Named vaults, because the point is that the person recognises the answer — the connected
    * screen has shown a raw `vaultId` since M1 and nobody has ever recognised one of those.
@@ -392,7 +392,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * Take the account back on a device that holds nothing (docs/07, #112).
+   * Take the account back on a device that holds nothing (docs/07, D-112).
    *
    * Not a second device joining a first — there is no first left. The passphrase proves
    * itself to the server, the account's own envelope comes back, and what follows is
@@ -407,7 +407,7 @@ export default class SyncServerPlugin extends Plugin {
           deviceName: 'obsidian',
           devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
           // The same hazard as pairing, through the same branch: recovering into an Obsidian
-          // vault other than the original merges the two. #117 names pairing; the code path is
+          // vault other than the original merges the two. D-117 names pairing; the code path is
           // one, and asking here costs a caller nothing.
           askVault: (v) => this.askVault(v),
         },
@@ -417,7 +417,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The other recovery: the code, for an account whose PASSPHRASE is what was lost (#34).
+   * The other recovery: the code, for an account whose PASSPHRASE is what was lost (D-34).
    *
    * Identical from here on — a session is a session — which is why both end in `adopt`. The
    * difference is entirely inside the session: this one sets the account's passphrase on the
@@ -536,7 +536,7 @@ export default class SyncServerPlugin extends Plugin {
      * Copy, because the second screen is not always a second device.
      *
      * This flow was written for a person walking between two machines, and typing was the
-     * only way a code could cross that gap. #116 made the ordinary case something else: two
+     * only way a code could cross that gap. D-116 made the ordinary case something else: two
      * Obsidian vaults on ONE computer, where the approving window is a keystroke away and
      * transcribing 26 characters by hand is friction the situation does not call for. The
      * feature created the need, and a live walk was where it showed.
@@ -1018,7 +1018,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * Point this connection at a different address (#113).
+   * Point this connection at a different address (D-113).
    *
    * An edit of one field, not a reconnection: the account, the seed, the device and every
    * key belong to the account and the vault, never to a URL. Moving from an IP to a host
@@ -1040,7 +1040,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * Leave this server, keeping every file (#113).
+   * Leave this server, keeping every file (D-113).
    *
    * What it ends is *this device's* participation: the local record goes, and the device is
    * revoked so a copy of it left running cannot mint another token. Nothing is deleted — not

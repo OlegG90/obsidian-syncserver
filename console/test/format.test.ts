@@ -3,7 +3,7 @@
  *
  * The rest of this workspace is drawing — `main.ts` reads answers the API already decided
  * and puts them on the page — so this is the one part with a judgement to get wrong, and the
- * judgement is #115's: a console account and a vault account are different things, and only
+ * judgement is D-115's: a console account and a vault account are different things, and only
  * one of them stores anything.
  */
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import {
 } from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
-// (#89) and the server always sends them. Leaving them out built a shape no response has —
+// (D-89) and the server always sends them. Leaving them out built a shape no response has —
 // which compiled while they were optional here and stopped compiling when the type stopped
 // being a copy.
 const line = (over: Partial<AccountLine> = {}): AccountLine => ({
@@ -36,11 +36,11 @@ describe('what a row of the accounts table says', () => {
     assert.equal(accountKind(line({ role: 'admin' })), 'console account');
   });
 
-  it('calls an invitation an invitation, because it is not an account yet (#115)', () => {
+  it('calls an invitation an invitation, because it is not an account yet (D-115)', () => {
     assert.equal(accountKind(line({ state: 'provisioned' })), 'invitation');
   });
 
-  it('leaves usage off a console account, which owns no vault (#115)', () => {
+  it('leaves usage off a console account, which owns no vault (D-115)', () => {
     // Its quota is zero by construction, so the honest number reads as a broken one. A dash
     // says "not a question about this row"; a zero would say "asked, and the answer is none".
     assert.equal(accountUsage(line({ role: 'admin', quotaBytes: '0', usedBytes: '0' })), '—');
@@ -214,7 +214,7 @@ describe('over the limit is not the same question as frozen', () => {
   });
 
   it('says a zero quota is not something to be over', () => {
-    // The console account: no vault, no limit to be a fraction of (#115).
+    // The console account: no vault, no limit to be a fraction of (D-115).
     assert.equal(isOver(account({ role: 'admin', quotaBytes: '0', usedBytes: '0' })), false);
   });
 

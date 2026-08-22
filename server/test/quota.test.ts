@@ -81,7 +81,7 @@ describe('the quota rule (AC-Q2)', () => {
     assert.equal(await fits(db, userId, sha(), 100), true, 'exactly full still fits');
   });
 
-  it('charges nothing for content the account already holds (#46)', async () => {
+  it('charges nothing for content the account already holds (D-46)', async () => {
     // The account is full. Sending the same bytes again must still be accepted: the address
     // IS the content, so a second copy adds nothing to the disk, and charging for it would
     // bill the same bytes twice at the boundary where being wrong refuses a legitimate write.

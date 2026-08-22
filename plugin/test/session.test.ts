@@ -27,7 +27,7 @@ const KNOWN_SEED = new Uint8Array(32).fill(0x42);
 const KNOWN_SALT = new Uint8Array(16).fill(0x01);
 /**
  * The KEK the fake "derived". Held rather than recomputed for the same reason the real one
- * is: it is what the recovery verifier is made from (#112), and a derivation that returned
+ * is: it is what the recovery verifier is made from (D-112), and a derivation that returned
  * an account without one would send an account into the world that cannot be recovered.
  */
 const KNOWN_KEK = new Uint8Array(32).fill(0x7e);
@@ -144,7 +144,7 @@ describe('Session.connect', () => {
     assert.equal(record.accountSalt, toBase64(KNOWN_SALT));
   });
 
-  it('sends KDF parameters that meet the server floor (#62)', async () => {
+  it('sends KDF parameters that meet the server floor (D-62)', async () => {
     // This test uses the fake derivation, so the kdf_params come from the fake. The *live*
     // proof that the real derivation meets the floor is in roundtrip.test.ts — the only
     // place real Argon2id runs against a real server. Here we assert the wiring: the params
@@ -244,7 +244,7 @@ describe('Session.create + open', () => {
 
 describe('an account that predates recovery repairs itself on login', () => {
   // The server can say `needs_kek_verifier` and can do nothing about it: making one takes the
-  // KEK, which exists only on a device holding the passphrase (#112). Every entrance has it
+  // KEK, which exists only on a device holding the passphrase (D-112). Every entrance has it
   // by the time it logs in, so every entrance files it — the repair used to be on the unlock
   // path alone, which left such an account unrecoverable until somebody happened to unlock on
   // the one device that still had it.
@@ -527,7 +527,7 @@ describe('Session.recover — the last device is gone', () => {
   });
 });
 
-describe('which vault a device binds to (#117, #116)', () => {
+describe('which vault a device binds to (D-117, D-116)', () => {
   // The same recover harness as above, because the branch under test is shared: `chooseVault`
   // is reached identically from pairing and from recovery, and recovery is the one with a
   // complete fake already built.
@@ -593,7 +593,7 @@ describe('which vault a device binds to (#117, #116)', () => {
   });
 
   it('binds to the one that was chosen, when several are offered', async () => {
-    // #116 point: two vaults on one account used to be an error message listing UUIDs with
+    // D-116 point: two vaults on one account used to be an error message listing UUIDs with
     // nowhere to type one. The choice is now an answer.
     const s = await run([labelled(VAULT, 'Work notes'), labelled(OTHER, 'Recipes')], async () => ({
       kind: 'use',

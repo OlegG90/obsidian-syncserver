@@ -11,13 +11,13 @@ import { PRESENT } from '../shares/membership.js';
 /**
  * > A hash is not a capability.
  *
- * Deduplication means the same address is visible to many accounts (#42). If a read
+ * Deduplication means the same address is visible to many accounts (D-42). If a read
  * checked only *existence*, anyone who learned an address — from their own copy of the
  * file, from a log — could read somebody else's content.
  *
  * So both `HEAD` and `GET` require a **live reference belonging to the caller**, and under
  * replication that is a single condition: `user_blobs.refs_own > 0`, the blob is held by
- * one of their own nodes or their own history (#20). A share grants no access that
+ * one of their own nodes or their own history (D-20). A share grants no access that
  * ownership does not already describe, which is why there is no second branch.
  */
 export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): Promise<boolean> => {
@@ -36,7 +36,7 @@ export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): P
  * way to ask for it. M0 never noticed, because nothing read anything back.
  *
  * Two conditions, and both are the same rule stated once each way. The caller must hold a
- * **live reference** to the blob — the identical test `GET /blobs` applies (#20), because an
+ * **live reference** to the blob — the identical test `GET /blobs` applies (D-20), because an
  * envelope is worth exactly as much as the bytes it opens. And the envelope must be in a
  * scope the caller holds: their own vault's, **and every share scope they are still in**.
  *
@@ -262,9 +262,9 @@ export class BlobService {
   /**
    * What both upload paths must clear before a byte is written (docs/04).
    *
-   * "An authenticated session AND a registered device" (#33). The access token names a
+   * "An authenticated session AND a registered device" (D-33). The access token names a
    * device, but a token outlives the row: signing a device out has to mean something before
-   * the token expires, or "sign out this device" is advice rather than an act (#90).
+   * the token expires, or "sign out this device" is advice rather than an act (D-90).
    *
    * Quota is answered from the blob's WHOLE size, not from what this request carries, so a
    * resumable upload that cannot fit is refused at its first part rather than at its last.
@@ -291,7 +291,7 @@ export class BlobService {
 
     // And the quota rule lives in quota.ts, which is also what `GET /usage` reports — so
     // the number the user is shown and the number that refuses their upload cannot drift
-    // apart. The zero-growth case for content already held (#46) is inside it.
+    // apart. The zero-growth case for content already held (D-46) is inside it.
     if (!(await fits(this.db, userId, sha256, size))) return { ok: false, reason: 'over_quota' };
     return { ok: true };
   }
@@ -316,7 +316,7 @@ export class BlobService {
     try {
       await this.db.tx(async (c) => {
         // The address IS the content, so a second upload of the same bytes is not a conflict:
-        // the row already there is correct by construction (#19).
+        // the row already there is correct by construction (D-19).
         //
         // `DO UPDATE`, not `DO NOTHING`, and the update is deliberately a no-op: what is wanted
         // is the **row lock** the update branch takes. `DO NOTHING` takes none, which leaves a

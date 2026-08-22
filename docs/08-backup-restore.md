@@ -21,7 +21,7 @@ account to a device that holds nothing at all.
 ## One state, not two copies
 
 > **New writes are refused for the duration of the backup, the database is dumped first and the blobs
-> are copied second, and only then is the window closed** (#114). Both halves are normative: the window,
+> are copied second, and only then is the window closed** (D-114). Both halves are normative: the window,
 > and the order inside it.
 
 Ordering the legs is not enough, and taking blobs first is the **dangerous** order. The invariant it leans
@@ -39,7 +39,7 @@ rule. A write that has already passed the check goes on to commit — the window
 it does not reach into the ones in flight — so the two legs describe two slightly different instants no
 matter what, and only one order is safe.
 
-> **The database is dumped first and the blobs are copied second** (#114). That makes the blob copy a
+> **The database is dumped first and the blobs are copied second** (D-114). That makes the blob copy a
 > *superset* of what the dump references: surplus blobs are harmless and the collector removes them,
 > while dangling references are neither. Blobs-first is safe only under a lock held across the whole
 > dump, which is the thing the window was chosen to avoid. Written this way round because the intuitive
@@ -125,7 +125,7 @@ current again, disabling the protection exactly when it is needed most.
 > cheaper than the alternative.
 >
 > The rule is about `restore_epoch` **only**. A `vaults.reset_epoch` change is the opposite instruction and
-> the resync that follows it *does* apply deletions (#79) — that is the entire reason there are two
+> the resync that follows it *does* apply deletions (D-79) — that is the entire reason there are two
 > counters rather than one. Never state this as "after an epoch change": that phrasing is what merges the
 > two back into one.
 
@@ -190,7 +190,7 @@ progress is refused, and a copy already gone is not an error.
 5. copy the configuration;
 6. write an operations log entry: time, sizes, checksums.
 
-Steps 2 and 3 are **not** interchangeable, for the reason above (#114): a window that only refuses new
+Steps 2 and 3 are **not** interchangeable, for the reason above (D-114): a window that only refuses new
 writes leaves the ones already running, and blobs-first is what turns one of those into a file that
 restores and cannot be opened. Steps 1 and 4 are not optional, and a run that records neither is not a
 usable copy no matter what its status column says.
@@ -204,7 +204,7 @@ usable copy no matter what its status column says.
    already seen — cursors from that generation would pass validation and the protection would be off
    precisely when it is needed. The new value is
    `max(state file, restored database) + 1`, where the state file is the copy the server keeps outside
-   every dump (#92) and which therefore still holds the newest epoch the server ever ran with;
+   every dump (D-92) and which therefore still holds the newest epoch the server ever ran with;
 4. run the integrity check and collect the list of lost blobs;
 5. start the service; clients will resync on their own;
 6. tell the users — not because it is required, but because they will see a long synchronisation and should

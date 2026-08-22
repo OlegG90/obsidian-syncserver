@@ -5,7 +5,7 @@
  * nothing has to be stitched (AC-12). Everything the client needs to resume is that
  * vault's `rev`.
  *
- * It is **signed** (#100), and it is worth being precise about what that buys. A client
+ * It is **signed** (D-100), and it is worth being precise about what that buys. A client
  * that raises its own `rev` only skips its own changes in its own vault: self-harm, not an
  * attack. What the signature protects is the **epoch** — a client that could edit that
  * would apply deletions it must not, or fail to resync after a restore, and the epoch is

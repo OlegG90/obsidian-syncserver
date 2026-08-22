@@ -133,7 +133,7 @@ class FakeSyncClient implements VaultWire {
   }
 
   /**
-   * The content precondition, modelled rather than waved through (#52).
+   * The content precondition, modelled rather than waved through (D-52).
    *
    * An earlier version of this fake accepted every PUT. That made it unable to catch the one
    * failure it most needed to — an engine sending the server its own current address as the

@@ -1,5 +1,5 @@
 /**
- * The `.obsidian/` switch and its per-device exceptions (#7, docs/01).
+ * The `.obsidian/` switch and its per-device exceptions (D-7, docs/01).
  *
  * Three gates share one filter: what the engine scans locally, what it pulls from the
  * server, and what it treats as vanished. The switch is off by default; turning it off

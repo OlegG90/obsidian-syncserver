@@ -48,7 +48,7 @@ The vault is a folder of files, so the boundary has to be stated explicitly rath
 
 Three notes on the middle row, because it is the one that surprises people.
 
-`.obsidian/` is **off by default** (#7): synchronising it wholesale makes desktop and mobile fight over
+`.obsidian/` is **off by default** (D-7): synchronising it wholesale makes desktop and mobile fight over
 window layout and plugin state forever. Someone arriving from Obsidian Sync expects the opposite and will
 wonder where their plugins went, so this belongs in the onboarding text and not only here.
 
@@ -117,7 +117,7 @@ nonce and a tag per frame — which is a format decision, not a limit ([10](10-r
 
 **Out of scope**
 
-- real-time collaborative editing (no CRDT; see decision #4 — the slot is left open, the feature is not);
+- real-time collaborative editing (no CRDT; see decision D-4 — the slot is left open, the feature is not);
 - a public multi-tenant service — the target is a family-sized self-hosted server behind a private
   network perimeter;
 - migration of history from other tools: version history begins with the first write to this server.

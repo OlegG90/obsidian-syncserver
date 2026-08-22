@@ -17,5 +17,5 @@ const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.
   version?: string;
 };
 
-/** `major.minor.patch`, reported by `/health` and by nothing else (#111). */
+/** `major.minor.patch`, reported by `/health` and by nothing else (D-111). */
 export const SERVER_VERSION: string = manifest.version ?? '0.0.0';

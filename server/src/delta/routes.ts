@@ -83,7 +83,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
       // The snapshot is pinned on the FIRST request of a series and carried in the cursor;
       // later pages read below the same bound, so a change made mid-walk is neither lost
-      // nor applied twice (#24).
+      // nor applied twice (D-24).
       const hwm = cursor.hwm ?? at.headRev;
       const limit = Math.min(Number(req.query.limit ?? MAX_LIMIT) || MAX_LIMIT, MAX_LIMIT);
 

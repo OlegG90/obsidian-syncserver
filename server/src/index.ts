@@ -29,7 +29,7 @@ const stopCollector = startCollector(db, collectorStore, cfg);
 
 // The PostgreSQL major a dump must match (docs/10), used by both the things here that need it:
 // the legs the schedule builds, and the advisory check below. Through the reader that owns the
-// fact — `buildApp` needs the same string, and this used to ask for it a second time (#89).
+// fact — `buildApp` needs the same string, and this used to ask for it a second time (D-89).
 const versionLine = cfg.backup ? await serverVersionLine(db) : '';
 
 // The periodic restore rehearsal (docs/10): reopen the latest backup and confirm it is
@@ -150,7 +150,7 @@ if (!(await hasActiveAdministrator(db))) {
 // `restore_pending` to everything but the confirm path — say so here, because a server
 // that answers only one endpoint is not a broken one.
 //
-// `buildApp` has already established whether this server is halted (#87); this read is for
+// `buildApp` has already established whether this server is halted (D-87); this read is for
 // the two things only a boot does — telling the operator, and bringing the file up. Both need
 // the numbers rather than the yes/no, so it asks for them rather than reusing a flag that
 // cannot answer.

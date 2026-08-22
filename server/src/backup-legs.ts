@@ -24,7 +24,7 @@ const run = (cmd: string, args: string[]): Promise<void> =>
   });
 
 /**
- * What `SELECT version()` says about the database this server is talking to, read once (#89).
+ * What `SELECT version()` says about the database this server is talking to, read once (D-89).
  *
  * One fact, and it was two queries at two sites: `app.ts` baked it into the legs the admin
  * routes build, and `index.ts` asked again at boot for `assertPgDumpMatches`. Neither was
@@ -121,7 +121,7 @@ export const backupLegs = (
    *
    * It used to be the first line of `dumpDatabase`, which reads as "before the work" and is
    * not: by then `runBackup` had taken the collector's lock, inserted a `backup_runs` row and
-   * set the server refusing writes. So a mismatched binary — the case #73 exists for —
+   * set the server refusing writes. So a mismatched binary — the case D-73 exists for —
    * announced itself with the window already open, which is the failure it was meant to
    * replace rather than relocate.
    */

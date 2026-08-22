@@ -1,5 +1,5 @@
 /**
- * The volume limit on uploads: bytes per minute, per account (#33).
+ * The volume limit on uploads: bytes per minute, per account (D-33).
  *
  * This is deliberately not the request rate limit. The problem it addresses is **volume** —
  * without it, filling the disk is the simplest thing anyone can do, and it takes no

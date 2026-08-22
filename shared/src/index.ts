@@ -13,10 +13,10 @@
  * Normative source: docs/04-sync-protocol.md.
  */
 
-/** A node is a file or a folder, and never changes from one to the other (#102). */
+/** A node is a file or a folder, and never changes from one to the other (D-102). */
 export type NodeType = 'file' | 'folder';
 
-/** The Argon2id parameters a redeem carries, and the floor the server enforces (#62). */
+/** The Argon2id parameters a redeem carries, and the floor the server enforces (D-62). */
 export interface KdfParams {
   v: number;
   m: number;
@@ -39,10 +39,10 @@ export interface KdfParams {
  * than *diagnosed*.
  */
 export type RefusalCode =
-  // The subject does not exist, or the caller may not know that it does (#20).
+  // The subject does not exist, or the caller may not know that it does (D-20).
   | 'not_found'
   | 'no_such_version'
-  // Authentication and the device behind it (#33, #90).
+  // Authentication and the device behind it (D-33, D-90).
   | 'unauthenticated'
   | 'invalid_credentials'
   | 'device_revoked'
@@ -197,7 +197,7 @@ export interface OpenedVault {
   scopes: Scope[];
 }
 
-/** The delta response: the changes since the cursor, and the cursor to carry next (#24). */
+/** The delta response: the changes since the cursor, and the cursor to carry next (D-24). */
 export interface Delta {
   changes: Change[];
   events: DeltaEvent[];
@@ -237,21 +237,21 @@ export interface Material {
  *                  moved FORWARDS, so the listing is current. Deletions ARE applied.
  *
  * When a cursor is stale in both epochs at once the reason is `restore`: the protective
- * instruction never loses to the destructive one (#70).
+ * instruction never loses to the destructive one (D-70).
  */
 export type CursorRejection = 'restore' | 'reset' | 'journal_ttl';
 
-/** Why a 400 was returned for a cursor rather than a 410 — a forged tag is malformed, not stale (#100). */
+/** Why a 400 was returned for a cursor rather than a 410 — a forged tag is malformed, not stale (D-100). */
 export type CursorFault =
   /** Not a token this server can verify: start again from an empty cursor, applying no deletions. */
   | 'cursor_unverifiable'
   /** Verifiable, but issued for another account or vault: the same restart, and never a hint of whose. */
   | 'cursor_wrong_subject';
 
-/** The 410 body: a stale cursor, and the reason that decides how the resync reads absence (#70). */
+/** The 410 body: a stale cursor, and the reason that decides how the resync reads absence (D-70). */
 export type CursorStaleBody = { reason: CursorRejection };
 
-/** The 400 body: a cursor the server cannot verify (#100). */
+/** The 400 body: a cursor the server cannot verify (D-100). */
 export type CursorFaultBody = { error: CursorFault };
 
 /**
@@ -274,7 +274,7 @@ export interface CursorPayload {
   };
   /** Position in this vault's journal. */
   rev: number;
-  /** High-watermark pinned on the first page of a series (#24). */
+  /** High-watermark pinned on the first page of a series (D-24). */
   hwm?: number;
 }
 
@@ -282,7 +282,7 @@ export interface CursorPayload {
 
 /**
  * The release the whole solution ships as: server, plugin, shared and — once it exists —
- * the management console all carry **one** number, bumped together (#111).
+ * the management console all carry **one** number, bumped together (D-111).
  *
  * It appears here because it appears literally in a response: `/health` reports the
  * server's, and that is the only way a client can learn it. The **comparison** is not
@@ -349,7 +349,7 @@ export type StorageTotals = {
 };
 
 /**
- * How far a deletion has got, and what it is waiting on (#55, #123).
+ * How far a deletion has got, and what it is waiting on (D-55, #123).
  *
  * Deletion is a state and not a button: it dissolves the shares the account initiated and then
  * WAITS for each participant to finalize their own copy, because only their client holds the
@@ -369,7 +369,7 @@ export type DeletionProgress = {
  * column renamed on one side has to fail on the other at compile time rather than arrive as
  * `undefined` in a table.
  *
- * **The logins are snapshots, not references** (#93). The row survives — and keeps naming —
+ * **The logins are snapshots, not references** (D-93). The row survives — and keeps naming —
  * an account that was later renamed or deleted, which is the whole point of a log that only
  * grows: "quota raised by an administrator who no longer exists" is still the answer to what
  * happened.

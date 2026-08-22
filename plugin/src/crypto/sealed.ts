@@ -8,7 +8,7 @@
  * only in where the base64 happened; in practice not even that, since every caller of the
  * raw form encoded it on the next line.
  *
- * **The two marker bytes are the whole header, and they are the `aad`** (#109; docs/06 has the
+ * **The two marker bytes are the whole header, and they are the `aad`** (D-109; docs/06 has the
  * reasoning and the offsets). A blob carries four more fields — magic, so bytes found in a
  * backup identify themselves, and a key id, because a blob has one `KC` and many envelopes.
  * Neither applies to a value that is never loose and never names a key the caller lacks.

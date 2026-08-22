@@ -14,7 +14,7 @@
  * — and most of them are enforced by `device_pairings_check_lifecycle` in the schema rather
  * than restated here (docs/03).
  *
- * **The pairing secret is made by the new device, not by the server** (#110). The server
+ * **The pairing secret is made by the new device, not by the server** (D-110). The server
  * stores only `pairing_token_hash`, and storing a hash of a value the server itself generated
  * and returned would be theatre: it would know the secret from the start. Made on the device,
  * the secret reaches the server only when it is presented — which is the moment it must be

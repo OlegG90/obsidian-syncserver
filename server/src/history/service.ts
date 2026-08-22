@@ -111,7 +111,7 @@ const blockingSibling = async (
  * version rather than rewinding to one. History is append-only in that sense: going back
  * is something that happened, not something that unhappened.
  *
- * It works in groups (#59): restoring a file inside a deleted folder lifts the folder too,
+ * It works in groups (D-59): restoring a file inside a deleted folder lifts the folder too,
  * because a file whose parent is in the trash is a file the client cannot materialise.
  * Every lifted node gets its own revision and journal entry, so other devices learn about
  * each one rather than inferring it.

@@ -49,7 +49,7 @@ export interface CursorRejected {
 
 /**
  * The client's marker for the **400** a cursor can draw: it is not a token this server can
- * verify, or it was issued for another subject (#100).
+ * verify, or it was issued for another subject (D-100).
  *
  * Returned rather than thrown, unlike every other 400, and the difference is which side
  * owns the decision. A malformed request is the caller's mistake; this is a *policy* — the
@@ -279,7 +279,7 @@ export class SyncClient {
 
   /**
    * Pre-auth, and it answers an unknown login with a deterministic fake rather than a 404
-   * (#73) — so a caller cannot read "no such account" out of it, and must not try.
+   * (D-73) — so a caller cannot read "no such account" out of it, and must not try.
    */
   kdf(login: string): Promise<{ account_salt: string; kdf_params: KdfParams }> {
     return this.json('GET', `/auth/kdf?login=${encodeURIComponent(login)}`, undefined, { auth: false });
@@ -295,7 +295,7 @@ export class SyncClient {
     pubkey: string;
     enc_privkey: string;
     wrapped_seed: string;
-    /** Proof this account can later be recovered from the passphrase alone (#112). */
+    /** Proof this account can later be recovered from the passphrase alone (D-112). */
     kek_verifier: string;
     /** The recovery code's envelope and verifier, or neither — never one of the two. */
     recovery_key?: string;
@@ -362,7 +362,7 @@ export class SyncClient {
   }
 
   /**
-   * Ask for the account back, holding nothing but a proof (#112).
+   * Ask for the account back, holding nothing but a proof (D-112).
    *
    * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to
    * authenticate with, which is the shape of the whole problem.
@@ -394,7 +394,7 @@ export class SyncClient {
   /**
    * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to
    * authenticate with. It registers where to send the seed and a hash of the code the
-   * human is about to carry — never the code itself (#110).
+   * human is about to carry — never the code itself (D-110).
    */
   beginPairing(body: { device_pubkey: string; pairing_token_hash: string }): Promise<{ pairing_id: string }> {
     return this.json('POST', '/auth/pairings', body, { auth: false });
@@ -402,7 +402,7 @@ export class SyncClient {
 
   /**
    * Put the account behind a different passphrase: the new envelope and the verifier for the
-   * same KEK, which move together or not at all (#34).
+   * same KEK, which move together or not at all (D-34).
    */
   setPassphrase(body: { wrapped_seed: string; kek_verifier: string }): Promise<void> {
     return this.json('PUT', '/auth/passphrase', body, { expect: [204] });
@@ -592,7 +592,7 @@ export class SyncClient {
   }
 
   /**
-   * The precondition is CONTENT, not a revision (#52): `rev` moves on a rename too, so using
+   * The precondition is CONTENT, not a revision (D-52): `rev` moves on a rename too, so using
    * it would make "renamed here, edited there" a conflict between changes that do not
    * overlap. A `409` comes back as a value, because it is the conflict path, not a failure.
    *
@@ -654,7 +654,7 @@ export class SyncClient {
    * A first sync uses this rather than a delta from nothing: the delta describes changes,
    * and a client with no state needs the state. The `snapshot` it returns is the cursor to
    * carry from then on — pinned, so a resync of a large vault cannot lose a change that
-   * happened mid-walk or apply it twice (#24).
+   * happened mid-walk or apply it twice (D-24).
    */
   listNodes(vaultId: string, under?: string): Promise<{ nodes: Change[]; snapshot: string }> {
     const q = under ? `?under=${encodeURIComponent(under)}` : '';
@@ -674,7 +674,7 @@ export class SyncClient {
       return { rejected: true, reason: (JSON.parse(res.text()) as CursorStaleBody).reason };
     }
     if (res.status === 400) {
-      // The only 400 this endpoint produces is about the cursor itself (#100), and the
+      // The only 400 this endpoint produces is about the cursor itself (D-100), and the
       // engine has an answer for it. Anything else here would be a defect on one side or
       // the other, and still throws.
       const fault = (parsedBody(res.text()) as Partial<CursorFaultBody>).error;
@@ -691,7 +691,7 @@ export class SyncClient {
   /**
    * Upload a sealed blob, by whichever of the two paths its size calls for (docs/04).
    *
-   * There is deliberately no "do you already have this" call before this one (#46): the
+   * There is deliberately no "do you already have this" call before this one (D-46): the
    * server never short-circuits, because answering "already have it" would turn the address
    * into an existence oracle. Sending twice is correct and costs the bytes.
    *
@@ -774,7 +774,7 @@ export class SyncClient {
     return JSON.parse(done.text()) as { sha256: string; size: number };
   }
 
-  /** `undefined` for 404, which here means "you hold no live reference to it" (#20), not "it is gone". */
+  /** `undefined` for 404, which here means "you hold no live reference to it" (D-20), not "it is gone". */
   async getBlob(sha256: string): Promise<Uint8Array | undefined> {
     const res = await this.send({ method: 'GET', path: `/blobs/${sha256}`, headers: {}, timeoutMs: BLOB_TIMEOUT_MS });
     if (res.status === 404) return undefined;
@@ -787,7 +787,7 @@ export class SyncClient {
    *
    * Batched because applying a delta means opening every file that changed, and one request
    * per note is a round trip per note. An address the caller cannot open is **absent** from
-   * the answer rather than an error — the same rule as a blob read (#20).
+   * the answer rather than an error — the same rule as a blob read (D-20).
    *
    * A **list** per address, carrying the scope each envelope belongs to. One blob can hold
    * envelopes in several scopes — the owner's `KV` and the `KS` of every share that sees it
@@ -890,7 +890,7 @@ export class SyncClient {
   /**
    * The recipient's public key, for sealing `KS` to them.
    *
-   * An unknown login gets a deterministic FAKE pair rather than a 404 (#73), so a caller
+   * An unknown login gets a deterministic FAKE pair rather than a 404 (D-73), so a caller
    * cannot read "no such account" out of it — and must not try.
    */
   recipientPubkey(shareId: string, login: string): Promise<{ user_id: string; pubkey: string }> {

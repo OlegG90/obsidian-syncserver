@@ -208,7 +208,7 @@ const alone = (...content: Node[]): void => {
 /**
  * The first run, and the only screen a fresh server has.
  *
- * It **creates** the administrator rather than changing one (#107): there is no default here
+ * It **creates** the administrator rather than changing one (D-107): there is no default here
  * to be left in place by somebody who never got round to it, which is why the wording says so
  * instead of asking for "a new password".
  *
@@ -372,7 +372,7 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
     card.append(bar, line);
   } else {
     // Said rather than left blank, because "no bar" and "a bar at zero" mean different things
-    // and only one of them is true here (#115).
+    // and only one of them is true here (D-115).
     card.append(
       el('div', {
         className: 'muted',
@@ -471,7 +471,7 @@ const enableForm = (a: AccountRow, done: () => Promise<void>, report: Report): H
  * ever.
  *
  * Names, platforms and times. No cursors, no keys: an administrator holds nothing that opens a vault
- * (#115), and a list of somebody's devices is not where that would start.
+ * (D-115), and a list of somebody's devices is not where that would start.
  *
  * Every revocation here lands in the audit log, because it is done TO an account rather than by it.
  */
@@ -519,7 +519,7 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
 };
 
 /**
- * Deleting an account, which is a **procedure and not a button** (#55).
+ * Deleting an account, which is a **procedure and not a button** (D-55).
  *
  * It dissolves the shares this account started and then waits: only each participant's own
  * client holds the key to convert their copy back to private files, so the server cannot
@@ -543,7 +543,7 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
  *
  * The confirmation leads with the half that surprises people — deleting one account ends
  * shared folders for everybody in them — and says what survives: the audit log keeps naming
- * this account, by design (#93), since a history that forgets who did what is worse than one
+ * this account, by design (D-93), since a history that forgets who did what is worse than one
  * naming somebody who has gone.
  */
 const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
@@ -810,15 +810,15 @@ const accountsScreen = (): void => {
 };
 
 /**
- * The audit log, newest first (#87, #94).
+ * The audit log, newest first (D-87, D-94).
  *
  * Read-only, and there is nothing here that could make it otherwise: the table refuses updates
  * and deletes at the schema level, so this screen has no button because there is no act. What
  * it shows is the answer to "who did what to whom", which is the whole reason a log with no
- * foreign keys keeps snapshot logins (#93) — an entry naming an account that has since been
+ * foreign keys keeps snapshot logins (D-93) — an entry naming an account that has since been
  * deleted is still the answer.
  *
- * **Nothing here reaches a vault's contents.** A console account holds no key (#115); the log
+ * **Nothing here reaches a vault's contents.** A console account holds no key (D-115); the log
  * records administrative acts, and administrative acts never touch a note.
  */
 const auditScreen = (): void => {
@@ -860,7 +860,7 @@ const auditScreen = (): void => {
  * The action is bold and the rest is not, because the action is what the eye is looking for
  * and the actor is what it checks once it has found one.
  *
- * Newest first, which is the server order (#87, #94) and not this screen to choose.
+ * Newest first, which is the server order (D-87, D-94) and not this screen to choose.
  */
 const auditLog = (entries: readonly AuditRow[]): HTMLElement => {
   const list = el('div', { className: 'log' });

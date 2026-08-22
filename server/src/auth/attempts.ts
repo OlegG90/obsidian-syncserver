@@ -1,7 +1,7 @@
 /**
  * The attempt limit on the endpoints where guessing pays.
  *
- * Recovery hands back a seed envelope to whoever proves they can open it (#112), so it is
+ * Recovery hands back a seed envelope to whoever proves they can open it (D-112), so it is
  * the one place in this API where an attacker has something to gain by trying repeatedly.
  * `Argon2id` at 64 MiB already makes each candidate expensive for them — this makes a
  * *series* of candidates expensive in wall-clock time as well, which is the half the client
@@ -12,7 +12,7 @@
  * logins from one — and neither is sufficient evidence on its own.
  *
  * **A refusal must not become an oracle.** The limiter answers only "wait this long"; who
- * decides what to say still owes an unknown login and a wrong proof the same refusal (#73),
+ * decides what to say still owes an unknown login and a wrong proof the same refusal (D-73),
  * which is why this module never sees whether the account exists.
  */
 

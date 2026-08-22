@@ -134,7 +134,7 @@ export class SyncServerSettings extends PluginSettingTab {
       });
 
       // Editable, because moving an address is an ordinary thing to do and nothing else in
-      // the record depends on it (#113). The alternative people expect — disconnect, then
+      // the record depends on it (D-113). The alternative people expect — disconnect, then
       // connect again — would cost a full bootstrap to undo, since the invitation that made
       // this account is one-time and spent.
       let url = conn.serverUrl;
@@ -358,7 +358,7 @@ export class SyncServerSettings extends PluginSettingTab {
   }
 
   /**
-   * The two release numbers, and whether they agree (#111).
+   * The two release numbers, and whether they agree (D-111).
    *
    * The plugin's is known here and now; the server's takes a request, so the line is
    * written twice — once immediately, so there is never a blank waiting for the network,
@@ -1334,7 +1334,7 @@ export class SyncServerSettings extends PluginSettingTab {
   }
 
   /**
-   * Leaving the server, and saying what it will take to come back (#113).
+   * Leaving the server, and saying what it will take to come back (D-113).
    *
    * Last on the screen, and behind a confirmation, because for an account whose only device
    * this is, disconnect and recovery are the same door in opposite directions: the way back

@@ -23,8 +23,8 @@ E2EE is not a milestone: it is day one, in every milestone above (AC-08).
 **M0 was walked end to end on the home server** (`scripts/run-smoke.sh`, build 4e47a15): claim, account
 surface, blob, node, `put` with the content precondition, `delete` with its revision precondition, the trash,
 and a delta reporting each. Including the three answers that look like faults and are not — `HEAD` on a
-freshly uploaded blob is `404` until a node references it ([#20](03-data-model.md)), re-uploading identical
-content is `201` rather than a short circuit (#46), and `HEAD` stays `200` after a **soft** delete because
+freshly uploaded blob is `404` until a node references it ([D-20](03-data-model.md)), re-uploading identical
+content is `201` rather than a short circuit (D-46), and `HEAD` stays `200` after a **soft** delete because
 the trash still holds the content. The collector and the schema's 117 assertions ride along; the server's
 own integration suite is run from a development machine, not from the NAS.
 
@@ -81,7 +81,7 @@ it is too late. Worse, `connect()` writes placeholder recovery values, so an acc
 recovery path it does not have.
 
 The design is settled in [06](06-key-model.md) and walked through in [07](07-onboarding.md); the decision and
-its cost are #112.
+its cost are D-112.
 
 - [x] **Schema.** `users.kek_verifier_hash`, **beside** `recovery_key` and `recovery_code_hash` rather than
       instead of them — the recovery code stays specified, and is now M7. The two of them
@@ -92,7 +92,7 @@ its cost are #112.
       to every check that looks, and nothing at all on the day it is needed.
 - [x] **`POST /auth/recover`.** Anonymous, shaped like pairing's claim: verify, create the device, return
       `wrapped_seed`, `enc_privkey`, `account_salt`, `kdf_params`, `user_id`, `device_id`. An unknown login and
-      a wrong phrase get the same refusal (#73).
+      a wrong phrase get the same refusal (D-73).
 - [x] **An attempt limit that is real.** Per login and per source, backing off, audit-logged. The endpoint is
       the one place in the product where guessing pays, and the documents already promise a limit here and on
       `/auth/kdf` that no code currently applies — this closes both.
@@ -131,13 +131,13 @@ so the recovery attempt went to an address nobody had chosen and failed before t
 
 ### The connection record — found by using it
 
-- [x] **The server address is editable in place** (#113). Moving from an IP to a host name changes one field;
+- [x] **The server address is editable in place** (D-113). Moving from an IP to a host name changes one field;
       nothing else in the record depends on it. The instinct to "disconnect and reconnect with the new
       address" must not be catered to, because reconnecting costs a full bootstrap that the one-time
       invitation token cannot pay for twice.
 - [x] **Disconnect**, which does not exist at all today: clear the local record, revoke this device, keep
       every file and everything on the server, and say what coming back will cost **before** doing any of it.
-      It ships after recovery, never before (#113).
+      It ships after recovery, never before (D-113).
 
 ### A shared folder that looks like any other — found by using it
 
@@ -218,7 +218,7 @@ behaviour that a web client merely calls.
 - [x] **Every administrative act is audited.** `audit_log` exists, is append-only by trigger, and is written
       from exactly two places in `auth/service.ts`. An action on somebody else's account that leaves no
       record is the one kind this table was built to refuse.
-- [x] **Deletion is a state, not a button** (#55): dissolve the shares the account initiated, wait for each
+- [x] **Deletion is a state, not a button** (D-55): dissolve the shares the account initiated, wait for each
       participant to finalize their copy (SH-29), reassign authorship to the **tombstone**, then remove the
       vaults. `versions.author_id` is `NOT NULL` with `ON DELETE RESTRICT`, so authorship must go somewhere
       before the account naming it can be removed — which is why the tombstone is seeded by `schema.sql`
@@ -319,21 +319,21 @@ found incomplete, a rehearsal that stopped for ever after one failed run, and a 
 - [x] **The bootstrap guard has to let it in.** It is an exact-match allowlist today — `/auth/kdf`,
       `/auth/redeem`, `/health` and nothing else — so a fresh server would answer `503` to the console's
       own assets, and the one screen that matters on a fresh server is the one that redeems the seeded
-      invitation (#107). Whatever widens it must widen it for **exactly** the static bundle, since the
+      invitation (D-107). Whatever widens it must widen it for **exactly** the static bundle, since the
       point of the guard is that a server with no administrator does nothing else.
 - [x] **`restore_pending` needs the same exemption**, for the same reason and preferably through the same
       list: a halt that also refuses the endpoint used to confirm the restore is a halt nobody can leave.
       `/admin/restore` and `/admin/restore/confirm` sit in both the bootstrap allowlist and the halt's
       open list (server/src/bootstrap.ts, server/src/app.ts).
-- [x] **The first administrator sets a password rather than redeeming an invitation** (#107, #115). The
+- [x] **The first administrator sets a password rather than redeeming an invitation** (D-107, D-115). The
       seeded row is a console account with none, the console's only screen until one exists is the setting
       of it, and setting it is what creates it — so no default ever works. A fresh server therefore needs
       no Obsidian to become usable, which is what made "the console shows a notice" a dead end before.
-- [x] **A console account is administered, not synced** (#115): it holds no key material, so it cannot be
+- [x] **A console account is administered, not synced** (D-115): it holds no key material, so it cannot be
       invited into a share and cannot open a vault. Inviting one must refuse in a sentence rather than on
       a null `pubkey`, and `role` stops being a column crossed with a keyed account — an administrator IS
       a console account.
-- [x] **The password gets a slow hash on the server** (#108, #115), which nothing else here needs: every
+- [x] **The password gets a slow hash on the server** (D-108, D-115), which nothing else here needs: every
       other verifier is at least 128 bits of CSPRNG and a person's password is not. `@noble/hashes` is
       already in the tree.
 - [x] **It does what [11](11-management-console.md) says it does.** That document opens by naming four
@@ -357,7 +357,7 @@ found incomplete, a rehearsal that stopped for ever after one failed run, and a 
       already refused. `assertReady` is a precondition of the run rather than a step in it; the startup
       check stayed, as the thing that tells an operator early, and enforcement is the one before the
       window.
-- [x] **Database first, blobs second** (#114). Not interchangeable here: the window refuses new writes and
+- [x] **Database first, blobs second** (D-114). Not interchangeable here: the window refuses new writes and
       does not reach the ones in flight, so blobs-first can copy a blob store that is missing a file the
       dump references — a restore that completes, looks whole, and cannot open a note.
 - [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
@@ -385,7 +385,7 @@ that happens on the weakest machine involved, and a server that holds the whole 
 just to build what it runs.
 
 - [x] **Publish the image from CI to a registry**, on a version tag rather than on every push to `main`
-      — one image per released version, matching the single version across six manifests (#111), and
+      — one image per released version, matching the single version across six manifests (D-111), and
       tagged by commit as well so a running container can be traced to a build. The runners are x86-64,
       which is the platform the trap is about. `docker-publish.yml` does this on a `v*` tag.
 - [x] **`docker compose pull` replaces `docker compose build`** in the procedure, with the image
@@ -498,7 +498,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       stays invisible: #117 exists because a pairing silently made a second one. The names are readable
       here — they are encrypted under each vault's own key and this device holds the seed, which is what
       `vaultLabel()` already does for the chooser.
-- [x] **A policy for the audit log** (#160) — which turned out to be a **decision that there is none**, D117. `retention.ts` thins versions, empties spent trash and drops
+- [x] **A policy for the audit log** (#160) — which turned out to be a **decision that there is none**, D-117. `retention.ts` thins versions, empties spent trash and drops
       spent claims. The audit log is in none of it and grows for ever. That may well be right — it is the
       one record of who did what — but it is currently a decision nobody made.
 
@@ -531,7 +531,7 @@ eighteen were milestones with a dozen moving parts each.
       server could show again would be a code the server could use. `GET` on the same path answers a
       **boolean**, which is the most a screen may ask.
 - [x] **The second proof at `/auth/recover`.** The endpoint's shape does not change: one endpoint, two
-      proofs, each returning only the envelope its own proof opens. The same generic refusal (#73) and the
+      proofs, each returning only the envelope its own proof opens. The same generic refusal (D-73) and the
       same attempt limit cover it, so a code cannot be used to distinguish an account from a stranger either.
       This half was built with M3.5 and had no way to acquire a code until now.
 - [x] **Regenerate**, which is another wrapping of the same seed and therefore cheap — and which
@@ -541,7 +541,7 @@ eighteen were milestones with a dozen moving parts each.
 - [x] **A screen that says what it is for**, because the value of this depends entirely on where the user
       puts it. It shows the code and offers to copy it, and it says the one thing that is not obvious: a copy
       kept inside this vault survives forgetting the passphrase and does not survive losing the device.
-- [x] **Redeeming it** (#34) — the client half of `/auth/recover` with a code instead of a passphrase, as a
+- [x] **Redeeming it** (D-34) — the client half of `/auth/recover` with a code instead of a passphrase, as a
       fourth route on the connect screen. It **sets a passphrase on the way through**, because somebody
       arriving with a code has none and an account left under the forgotten one would be openable by its code
       alone from then on. That took the one endpoint this milestone did not plan for — `PUT /auth/passphrase`,

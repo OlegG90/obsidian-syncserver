@@ -40,7 +40,7 @@ export interface VaultAdapter {
 }
 
 /**
- * `.obsidian/` is behind a switch, off by default (#7, docs/01). Off, the whole directory
+ * `.obsidian/` is behind a switch, off by default (D-7, docs/01). Off, the whole directory
  * is skipped. On, everything is synced EXCEPT the per-device exceptions — files that
  * describe *this screen*, not the vault: the workspace layout, its mobile twin, the graph
  * view, and the plugin cache. Propagating those is not synchronisation, it is interference:

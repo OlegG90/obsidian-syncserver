@@ -8,7 +8,7 @@
  *
  * **Three things are refused here by being impossible rather than by being checked.**
  * The last active administrator cannot be demoted, disabled or deleted — a trigger says so
- * (#88), because locking yourself out of your own server is otherwise one keystroke. An
+ * (D-88), because locking yourself out of your own server is otherwise one keystroke. An
  * account cannot be created server-side, only invited: `pubkey` and the wrapped seed are
  * born on the user's device, and no column here can produce them. And nobody can read
  * anybody's vault, administrator or not, since the server holds no key (AC-08).
@@ -137,7 +137,7 @@ export const revokeInvitation = async (db: Db, actor: Actor, userId: string): Pr
  * the operator — and until now the operator had no device surface at all.
  *
  * Names, platforms and times. No keys, no cursors: an administrator holds nothing that opens a vault
- * (#115), and a device row is not where that would start.
+ * (D-115), and a device row is not where that would start.
  */
 export const listDevices = async (db: Db, userId: string): Promise<DeviceRow[] | Refusal> => {
   // The account is checked here and nowhere in `activeDevices`: an operator naming an account that does
@@ -313,7 +313,7 @@ export const storage = async (db: Db): Promise<{
 /**
  * How much log there is, so the assumption under it stays visible (#160).
  *
- * The audit log has **no retention, deliberately** (D117) — it is the only record of who did what, and
+ * The audit log has **no retention, deliberately** (D-117) — it is the only record of who did what, and
  * every action that writes to it is administrative and rare: inviting, enabling, changing a quota,
  * recovering, revoking, confirming a restore. A real installation measured 20 rows across two days of
  * heavy testing, in a table whose 64 kB is mostly the minimum footprint of its own indexes.

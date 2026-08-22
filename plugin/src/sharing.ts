@@ -269,7 +269,7 @@ const asFinalizeNode = (r: Rekeyed): FinalizeNode => ({
  *
  * Two calls that must stay together: the recipient's public key, and the envelope made for
  * it. `/recipients/{login}/pubkey` answers an unknown login with a deterministic FAKE key
- * rather than a 404 (#73) — so this cannot be used to discover who has an account, and a
+ * rather than a 404 (D-73) — so this cannot be used to discover who has an account, and a
  * caller must not read anything into a successful seal. The invitation that follows fails
  * generically for the same reason.
  */
@@ -294,7 +294,7 @@ export const inviteTo = async (
  * The binding is the point. Without it an envelope could be handed to a different
  * participant, or presented under a different share, and would open perfectly — the AEAD
  * only ever proves that whoever sealed it held the recipient's public key, not what they
- * meant by it. There is deliberately **no key epoch** in it: `KS` is never rotated (#10), so
+ * meant by it. There is deliberately **no key epoch** in it: `KS` is never rotated (D-10), so
  * an epoch would name a generation that cannot exist.
  */
 export const shareEnvelopeAad = (shareId: string, recipientUserId: string): Uint8Array =>
@@ -379,7 +379,7 @@ export interface LeaveDeps {
  * "(name unavailable)" under their own vault key: a wrong name rather than a missing one,
  * with nothing downstream able to tell.
  *
- * **The one seam that hand-writes the shape instead of picking it** (#86). Every other caller
+ * **The one seam that hand-writes the shape instead of picking it** (D-86). Every other caller
  * says `Pick<VaultScopes, …>`, so that renaming a method fails at the seam itself. This one
  * cannot: `share-keys` imports this module, so importing back would close a cycle, and the
  * shape has to be spelled out.

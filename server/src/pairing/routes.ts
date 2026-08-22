@@ -26,7 +26,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    * Start a pairing: the new device registers where to send the seed, and a hash of the
    * secret the human is about to carry.
    *
-   * The secret itself is **not** sent here (#110). The server stores a hash, and a hash of
+   * The secret itself is **not** sent here (D-110). The server stores a hash, and a hash of
    * something it generated would prove nothing about who is asking later.
    */
   app.post<{ Body: { device_pubkey?: string; pairing_token_hash?: string } }>(

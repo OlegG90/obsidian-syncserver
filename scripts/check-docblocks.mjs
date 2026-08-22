@@ -1,5 +1,5 @@
 /**
- * Assert that no docblock sits above another docblock (#84).
+ * Assert that no docblock sits above another docblock (D-84).
  *
  * The prose in this repository is load-bearing — it is where the reasons live — so a block
  * that has drifted off its function is not untidy, it is wrong in the way a reader trusts.
@@ -53,7 +53,7 @@ if (problems.length > 0) {
   for (const p of problems) console.error(`  - ${p}`);
   console.error(
     '\nMove it above the code it belongs to, or merge it into the block below when both\n' +
-      'describe the same thing — see #84.',
+      'describe the same thing — see D-84.',
   );
   process.exit(1);
 }

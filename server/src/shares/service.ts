@@ -79,7 +79,7 @@ export const createShare = async (
   // `txGuarded` deliberately does not translate that: everywhere else a foreign key
   // violation means a defect on this side. Here it means "not yours", and answering
   // `not_found` rather than naming which half was wrong keeps the endpoint from reporting
-  // on another account's tree (#20).
+  // on another account's tree (D-20).
   try {
     return await txGuarded(db, async (c) => {
     // The scope row must exist before the share can reference it; both are one
@@ -834,7 +834,7 @@ export const joinShare = async (
  * nobody. That is why a share of one survives its three ordinary moments — preparing,
  * activated before anyone accepts, and after a decline.
  *
- * **Exported**, because deleting an account has to dissolve every share it is in (#55) and
+ * **Exported**, because deleting an account has to dissolve every share it is in (D-55) and
  * the question "who is left, and does this end it" must have one answer: a second
  * implementation of it would decide differently the first time the rule moved.
  *
@@ -1040,7 +1040,7 @@ export const finalizeLeave = async (
 /**
  * The public key a share key must be sealed to, for a login the initiator names.
  *
- * **An unknown login gets a deterministic fake pair, never a 404** (#73) — the same rule
+ * **An unknown login gets a deterministic fake pair, never a 404** (D-73) — the same rule
  * `/auth/kdf` follows, and for the same reason: this endpoint takes a login, so a distinct
  * answer for "no such account" is an enumeration oracle. The fake must also be *stable*, or
  * two calls would differ and give the answer away more plainly than a 404 would.
@@ -1070,7 +1070,7 @@ export const recipientPubkey = async (
        FROM users WHERE lower(login) = lower($1) AND state = 'active'`,
     [login],
   );
-  // A console account is `active` and has no `pubkey` at all (#115). Without this it fell
+  // A console account is `active` and has no `pubkey` at all (D-115). Without this it fell
   // through as a recipient carrying a null key, and the failure surfaced two calls later as
   // an envelope sealed to nothing — the initiator being told their share is broken, about an
   // account that was never a possible participant.
