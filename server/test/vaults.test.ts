@@ -124,7 +124,7 @@ describe('deleting a vault', () => {
 
   it('removes one that still holds a nested tree, deepest first', async () => {
     // It used to refuse anything but an empty vault, which made the vault somebody actually wants gone —
-    // the one a mistaken pairing filled with a copy of their notes (D-117) — reachable only through two
+    // the one a mistaken pairing filled with a copy of their notes (issue #117) — reachable only through two
     // disconnects (#175). `parent_id` is RESTRICT, so a folder inside a folder is the case that decides
     // whether this works at all: a single DELETE fails on the first parent it reaches.
     const id = randomUUID();

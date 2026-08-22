@@ -97,7 +97,7 @@ export class Panels {
    *
    * `GET /vaults` was called in exactly one place — the chooser, at pairing or recovery — so once a
    * device was connected, nobody could see what the account held. That is how a vault created **by
-   * mistake** stays invisible, which is the thing #117 exists because of.
+   * mistake** stays invisible, which is the thing issue #117 exists because of.
    *
    * The names are read **here**, with this session's seed. The server stores them encrypted and holds no
    * key, so a list from anywhere else would be a column of uuids.

@@ -398,7 +398,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The question a device answers before it binds to a vault (D-117, D-116).
+   * The question a device answers before it binds to a vault (issue #117, issue #116).
    *
    * Named vaults, because the point is that the person recognises the answer — the connected
    * screen has shown a raw `vaultId` since M1 and nobody has ever recognised one of those.
@@ -429,7 +429,7 @@ export default class SyncServerPlugin extends Plugin {
           deviceName: 'obsidian',
           devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
           // The same hazard as pairing, through the same branch: recovering into an Obsidian
-          // vault other than the original merges the two. D-117 names pairing; the code path is
+          // vault other than the original merges the two. Issue #117 names pairing; the code path is
           // one, and asking here costs a caller nothing.
           askVault: (v) => this.askVault(v),
         },
@@ -558,7 +558,7 @@ export default class SyncServerPlugin extends Plugin {
      * Copy, because the second screen is not always a second device.
      *
      * This flow was written for a person walking between two machines, and typing was the
-     * only way a code could cross that gap. D-116 made the ordinary case something else: two
+     * only way a code could cross that gap. Issue #116 made the ordinary case something else: two
      * Obsidian vaults on ONE computer, where the approving window is a keystroke away and
      * transcribing 26 characters by hand is friction the situation does not call for. The
      * feature created the need, and a live walk was where it showed.
