@@ -613,7 +613,9 @@ export class SyncServerSettings extends PluginSettingTab {
       .then((vaults) => {
         list.empty();
         for (const v of vaults) {
-          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}`;
+          // What it is USING, not only how many rows it has (#178) — which is the number somebody
+          // reads when they are deciding which vault to remove to make room.
+          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
           const row = new Setting(list)
             .setName(v.current ? `${v.name} — this device` : v.name)
             .setDesc(`${held} · ${v.id.slice(0, 8)}…`);

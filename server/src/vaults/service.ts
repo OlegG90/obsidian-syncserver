@@ -26,9 +26,17 @@ import { usageOf } from '../quota.js';
  * The name stays ciphertext here and is decrypted on the device, because that is the whole model: the
  * server holds `name_enc` and no key to open it.
  */
-export type VaultRow = { id: string; nameEnc: string; nodes: number; shared: boolean };
+export type VaultRow = { id: string; nameEnc: string; nodes: number; bytes: string; shared: boolean };
 
 /**
+ * `bytes` is what the vault is **using**, which is what #161 asked for and a node count is not (#178). It
+ * is answerable per vault only because keys are per vault: the same file in two vaults is two different
+ * blobs (AC-09), so nothing is shared between them and these numbers do not double-count each other.
+ *
+ * **They do not add up to `/usage`, and should not.** An upload that no node references yet is charged to
+ * the account and belongs to no vault, which is the whole point of the unbound-blob TTL — so the account
+ * total is the vault totals plus whatever is still in flight.
+ *
  * `shared` is here so a screen can say the refusal **before** the act rather than after it (#176).
  *
  * `deleteVault` refuses a vault a share names, and that refusal used to arrive as `named_by_a_share`
@@ -40,6 +48,12 @@ export const listVaults = (db: Db, userId: string): Promise<VaultRow[]> =>
   db.query<VaultRow>(
     `SELECT v.id, encode(v.name_enc, 'base64') AS "nameEnc",
             (SELECT count(*) FROM nodes n WHERE n.vault_id = v.id AND n.id <> v.root_node_id)::int AS nodes,
+            (SELECT COALESCE(SUM(b.size), 0) FROM blobs b
+              WHERE b.sha256 IN (
+                SELECT n.sha256 FROM nodes n
+                 WHERE n.vault_id = v.id AND n.sha256 IS NOT NULL AND n.deleted_at IS NULL
+                 UNION
+                SELECT ver.sha256 FROM versions ver WHERE ver.vault_id = v.id))::text AS bytes,
             (EXISTS (SELECT 1 FROM shares s WHERE s.initiator_vault_id = v.id)
              OR EXISTS (SELECT 1 FROM share_members m WHERE m.vault_id = v.id)) AS shared
        FROM vaults v

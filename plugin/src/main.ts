@@ -946,7 +946,7 @@ export default class SyncServerPlugin extends Plugin {
    * Through `unlocked()` rather than `withSession`, because naming them needs the seed: the server holds
    * `name_enc` and no key to open it, so the decryption is the session's own.
    */
-  async vaults(): Promise<{ id: string; name: string; nodes: number; shared: boolean; current: boolean }[]> {
+  async vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]> {
     return (await this.unlocked()).vaults();
   }
 
