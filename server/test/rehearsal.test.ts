@@ -172,6 +172,32 @@ describe('loading the newest backup into a scratch database', () => {
     assert.equal(written!.ok, false, 'and the record says so, so the console can stop saying "healthy"');
   });
 
+  it('remembers the last rehearsal that passed, across one failure and the next', async (t) => {
+    if (!pgDump) return t.skip('nothing has passed on this machine, so there is nothing to carry forward');
+    // The failure above replaced a pass. A single record would have taken the age of that pass with it,
+    // and a failure is exactly when somebody asks for it (#173).
+    const afterOne = await readRehearsal(stateFile());
+    assert.ok(afterOne);
+    assert.equal(afterOne.ok, false);
+    assert.ok(afterOne.lastGood, 'the failure kept the pass before it');
+    const good = afterOne.lastGood!;
+
+    // Two failures in a row is where carrying it forward stops being free: the second has no passing
+    // run to copy from, only the failed record it is replacing.
+    await rehearseRestore(db, {
+      databaseUrl: cfg.databaseUrl,
+      restoreCommand: cfg.restoreCommand,
+      stateFile: stateFile(),
+      stamp: 'corrupt-two',
+      log: () => undefined,
+      warn: () => undefined,
+    });
+
+    const afterTwo = await readRehearsal(stateFile());
+    assert.equal(afterTwo!.ok, false);
+    assert.deepEqual(afterTwo!.lastGood, good, 'still the same pass, two failures later');
+  });
+
   it('says nothing at all when there is nothing to rehearse', async () => {
     // No successful backup with a copy on disk is not a failure: a server that has never been backed up
     // has nothing to say about restoring, and saying it anyway would be noise on every fresh install.

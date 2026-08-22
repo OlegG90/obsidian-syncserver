@@ -1058,6 +1058,19 @@ const backupsScreen = (): void => {
       r.ok ? say(`Last rehearsed ${when(r.at)}.`) : say(`The last rehearsal FAILED, ${when(r.at)}.`, true),
       el('p', { className: 'muted', textContent: r.detail }),
     );
+    // On a failure the age of the last PASS is the number worth reading, and it used to be the one the
+    // failure overwrote (#173). Said only when it adds something: after a pass it would repeat the line
+    // above, and "never" is already what an absent record says.
+    if (!r.ok) {
+      rehearsed.append(
+        el('p', {
+          className: 'muted',
+          textContent: r.lastGood
+            ? `The last rehearsal that passed was ${when(r.lastGood.at)}, on backup ${r.lastGood.run}.`
+            : 'No rehearsal has ever passed on this server.',
+        }),
+      );
+    }
   };
 
   shell('backups', currentLogin(), page, rehearsed, list, runCard);

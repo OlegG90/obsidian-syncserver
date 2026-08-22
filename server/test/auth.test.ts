@@ -140,6 +140,33 @@ after(async () => {
   await db.close();
 });
 
+/**
+ * A device of this account that **can still sign in**.
+ *
+ * Ten places used to write `SELECT id FROM devices WHERE user_id = $1 LIMIT 1`, and it was fine for as
+ * long as every device in the fixture was live. The moment one test revoked one, that `LIMIT 1` became a
+ * lottery: PostgreSQL is free to hand back the revoked row, `/auth/login` answers `401`, and three tests
+ * that changed nothing fail on some runs and not others — which is how this suite went red on `main`
+ * twice and green in between.
+ *
+ * So the predicate that was assumed is written down, and the order is fixed rather than left to the
+ * planner. A test asking for "a device" gets one it can use.
+ */
+const aDevice = (userId: string) =>
+  db.one<{ id: string }>(
+    `SELECT id FROM devices WHERE user_id = $1 AND revoked_at IS NULL ORDER BY name, id LIMIT 1`,
+    [userId],
+  );
+
+/** The same, for the tests that hold a login rather than an id. */
+const aDeviceOf = (login: string) =>
+  db.one<{ id: string }>(
+    `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id
+      WHERE u.login = $1 AND d.revoked_at IS NULL
+      ORDER BY d.name, d.id LIMIT 1`,
+    [login],
+  );
+
 describe('first run', () => {
   it('answers nothing but the setting of the first password', async () => {
     const blocked = await app.inject({ method: 'POST', url: '/auth/login', payload: { login: 'admin', auth_secret: 'x' } });
@@ -365,7 +392,7 @@ describe('/auth/kdf does not enumerate accounts (#73)', () => {
 describe('login and refresh', () => {
   it('accepts the auth secret, not a passphrase, and rotates the refresh token', async () => {
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
-    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const device = await aDevice(account!.id);
 
     const ok = await app.inject({
       method: 'POST',
@@ -383,7 +410,7 @@ describe('login and refresh', () => {
     // The column exists to answer "which of these devices is gone", and it used to answer "when did
     // this one arrive": written at sign-in, at recovery and at pairing, and never again (#118).
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
-    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const device = await aDevice(account!.id);
     const seen = async (): Promise<string | null> =>
       (await db.one<{ at: string | null }>(`SELECT last_seen_at AS at FROM devices WHERE id = $1`, [device!.id]))
         ?.at ?? null;
@@ -413,7 +440,7 @@ describe('login and refresh', () => {
     // A refusal that still wrote the column would make a revoked device look alive in the very list an
     // operator reads to decide what to revoke.
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
-    const fixture = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const fixture = await aDevice(account!.id);
     const signedIn = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -448,7 +475,7 @@ describe('login and refresh', () => {
 
   it('refuses a refresh token that has been superseded', async () => {
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
-    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const device = await aDevice(account!.id);
     const payload = { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id };
 
     const first = (await app.inject({ method: 'POST', url: '/auth/login', payload })).json().refresh;
@@ -574,7 +601,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
     await db.query(`ALTER TABLE users ADD CONSTRAINT keys_match_state ${def!.def} NOT VALID`);
 
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
-    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1 LIMIT 1`, [account!.id]);
+    const device = await aDevice(account!.id);
 
     const login = await app.inject({
       method: 'POST',
@@ -638,10 +665,7 @@ describe('the recovery code an account can be given later', () => {
   const envelope = Buffer.alloc(48, 5).toString('base64');
 
   const signIn = async (): Promise<string> => {
-    const device = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const device = await aDeviceOf(VAULT_LOGIN);
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -764,10 +788,7 @@ describe('the passphrase an account can be given again', () => {
   const VERIFIER = 'n'.repeat(43);
 
   const signIn = async (): Promise<string> => {
-    const device = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const device = await aDeviceOf(VAULT_LOGIN);
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -959,10 +980,7 @@ describe('a console administrator changing their password', () => {
   it('refuses an account that has no password to change', async () => {
     // A vault account is not a console account. The endpoint is right, so this is a 409 and
     // not a 404 — the same distinction /auth/bootstrap makes once the first run is over.
-    const device = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const device = await aDeviceOf(VAULT_LOGIN);
     const vault = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -1005,10 +1023,7 @@ describe('the seed envelope, and knowing whose copy is current', () => {
   const NEW_VERIFIER = 'w'.repeat(43);
 
   const signIn = async () => {
-    const device = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const device = await aDeviceOf(VAULT_LOGIN);
     const res = await app.inject({
       method: 'POST',
       url: '/auth/login',
@@ -1095,13 +1110,35 @@ describe('the devices of an account', () => {
   const devicesOf = async (access: string) =>
     app.inject({ method: 'GET', url: '/auth/devices', headers: { authorization: `Bearer ${access}` } });
 
+  it('hands a test a device it can actually sign in with', async () => {
+    // The guard on this suite's own fixture, and the reason it exists is a flake that cost a red `main`
+    // twice: ten tests asked for "a device" with `LIMIT 1` and no predicate, one test left a revoked one
+    // behind, and PostgreSQL is free to return either. `/auth/login` then answers 401 and three tests
+    // that changed nothing fail. Three clean runs would prove nothing here — this asserts it instead.
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
+    const doomed = await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform, revoked_at)
+       VALUES ($1, 'aaa-first-by-name', 'test', now()) RETURNING id`,
+      [account!.id],
+    );
+
+    // Named to sort FIRST, so an unfiltered pick that happened to be ordered would still hand it back.
+    for (const picked of [await aDevice(account!.id), await aDeviceOf(VAULT_LOGIN)]) {
+      assert.notEqual(picked?.id, doomed!.id, 'a revoked device is not one a test can use');
+      const live = await db.one<{ revoked: boolean }>(
+        `SELECT (revoked_at IS NOT NULL) AS revoked FROM devices WHERE id = $1`,
+        [picked!.id],
+      );
+      assert.equal(live!.revoked, false);
+    }
+
+    await db.query(`DELETE FROM devices WHERE id = $1`, [doomed!.id]);
+  });
+
   it('lists them, and says which one is asking', async () => {
     // "Which of these am I" is the one thing a client cannot answer for itself once somebody is
     // looking at several — and it is what stops them revoking the device in their hand.
-    const mine = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const mine = await aDeviceOf(VAULT_LOGIN);
     await db.query(
       `INSERT INTO devices (user_id, name, platform, last_seen_at)
        SELECT id, 'the phone', 'android', now() - interval '2 days' FROM users WHERE login = $1`,
@@ -1122,10 +1159,7 @@ describe('the devices of an account', () => {
   it('leaves out the revoked, because they are history and not state', async () => {
     // Disconnecting revokes and reconnecting creates a new row, so listing the dead would turn an
     // ordinary reinstall into a graveyard nobody can tell apart.
-    const mine = await db.one<{ id: string }>(
-      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 AND revoked_at IS NULL LIMIT 1`,
-      [VAULT_LOGIN],
-    );
+    const mine = await aDeviceOf(VAULT_LOGIN);
     const access = await signIn(mine!.id);
     const before = (await devicesOf(access)).json().devices.length;
 
