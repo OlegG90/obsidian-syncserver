@@ -229,7 +229,7 @@ export const deletionProgress = (userId: string): Promise<DeletionProgress> =>
 export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage');
 
 /** The administrative log, newest first (#87, #94). Append-only on the server; read-only here. */
-export const audit = (limit = 100): Promise<{ entries: AuditRow[] }> =>
+export const audit = (limit = 100): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
   call('GET', `/admin/audit?limit=${limit}`);
 
 /** Start a backup now. Refused with `backup_not_configured` when the server has none. */

@@ -250,6 +250,25 @@ export const storage = async (db: Db): Promise<{
 };
 
 /** The log, newest first. Filterable by who it was about, which is how it is actually read. */
+/**
+ * How much log there is, so the assumption under it stays visible (#160).
+ *
+ * The audit log has **no retention, deliberately** (D117) — it is the only record of who did what, and
+ * every action that writes to it is administrative and rare: inviting, enabling, changing a quota,
+ * recovering, revoking, confirming a restore. A real installation measured 20 rows across two days of
+ * heavy testing, in a table whose 64 kB is mostly the minimum footprint of its own indexes.
+ *
+ * That decision rests on the frequency staying rare, and nothing enforces it: somebody adding a
+ * `record()` call to a path that runs on every sync would break it silently. So the console shows this
+ * number beside a page of the log, and it is the one that would look wrong.
+ */
+export const auditSize = async (db: Db): Promise<{ rows: number; bytes: string }> => {
+  const row = await db.one<{ rows: string; bytes: string }>(
+    `SELECT count(*)::text AS rows, pg_total_relation_size('audit_log'::regclass)::text AS bytes FROM audit_log`,
+  );
+  return { rows: Number(row?.rows ?? 0), bytes: row?.bytes ?? '0' };
+};
+
 export const listAudit = (db: Db, opts: { targetUserId?: string | undefined; limit: number }): Promise<AuditRow[]> =>
   db.query<AuditRow>(
     `SELECT id::text AS id, at, actor_login AS "actorLogin", action,

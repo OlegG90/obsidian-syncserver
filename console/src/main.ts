@@ -765,6 +765,7 @@ const accountsScreen = (): void => {
  */
 const auditScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Audit log' }));
+  const size = el('div', { className: 'usage' });
   const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
 
 
@@ -775,9 +776,19 @@ const auditScreen = (): void => {
         ? el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })
         : auditLog(out.entries),
     );
+    // **The whole log's size, beside a page of it** (#160). Nothing is ever deleted from here, by
+    // decision — every action it records is administrative and rare, and the record of who did what is
+    // worth more than the kilobytes. That rests on "rare" staying true, so the number that would look
+    // wrong if somebody ever recorded something frequent is on the screen rather than in a comment.
+    size.replaceChildren(
+      el('span', {
+        className: 'muted',
+        textContent: `${out.size.rows} entries in all, ${human(out.size.bytes)} on disk — nothing is ever removed.`,
+      }),
+    );
   };
 
-  shell('audit', currentLogin(), page, list);
+  shell('audit', currentLogin(), page, size, list);
   loads(list, fill);
 };
 
