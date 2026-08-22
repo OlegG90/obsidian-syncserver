@@ -1,5 +1,5 @@
 /**
- * Deleting an account, which is a **procedure and not a statement** (#55).
+ * Deleting an account, which is a **procedure and not a statement** (D-55).
  *
  * A `DELETE FROM users` cannot work, and the schema is what says so rather than a policy:
  * `versions.author_id` is `NOT NULL` with `ON DELETE RESTRICT`, because a share participant
@@ -35,7 +35,7 @@ import { departMember } from '../shares/service.js';
 import { record, type Actor } from './audit.js';
 import { PRESENT } from '../shares/membership.js';
 
-/** The reserved account authorship is reassigned to. Seeded by `schema.sql` (#55). */
+/** The reserved account authorship is reassigned to. Seeded by `schema.sql` (D-55). */
 const TOMBSTONE = '00000000-0000-0000-0000-000000000000';
 
 export interface DeletionProgress {

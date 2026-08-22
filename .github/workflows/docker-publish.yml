@@ -7,7 +7,7 @@
 # the server cannot be built for the wrong architecture by accident.
 #
 # It fires on tags, not on every push to main: one image per released version, matching
-# the single version across six manifests (#111). Every run also tags by commit, so a
+# the single version across six manifests (D-111). Every run also tags by commit, so a
 # running container can be traced to a build. The registry is GitHub's, and it is PUBLIC —
 # the server pulls with no credential, which is the whole point of the choice (docs/13).
 #
@@ -15,7 +15,7 @@
 # installed by pointing BRAT at this repository; it reads `manifest.json` out of a release's
 # assets, and Obsidian requires the release tag, the release name and the version inside that
 # manifest to be the same string. A `v` on the front makes two of the three disagree. So the
-# tag IS the version — which is also what #111 has said since M2, now with one more file
+# tag IS the version — which is also what D-111 has said since M2, now with one more file
 # forced to agree with the other six.
 name: publish
 
@@ -56,7 +56,7 @@ jobs:
       # **And the tag has to agree with the manifests.** `check-version.mjs` pins six files to
       # each other on every push; nothing pinned them to the tag, so tagging without bumping
       # produced an image called one thing containing another. That is the same quiet failure
-      # #111 was opened about, one layer out, and it is one line to refuse.
+      # D-111 was opened about, one layer out, and it is one line to refuse.
       - name: metadata
         id: meta
         run: |

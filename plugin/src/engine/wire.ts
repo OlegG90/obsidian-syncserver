@@ -40,7 +40,7 @@ export interface VaultWire {
     encAlg?: string,
   ): Promise<{ sha256: string; size: number }>;
 
-  /** `undefined` means the caller holds no live reference (#20), not that it is missing. */
+  /** `undefined` means the caller holds no live reference (D-20), not that it is missing. */
   getBlob(sha256: string): Promise<Uint8Array | undefined>;
 
   /** The content keys for these addresses, wrapped to the scopes this caller holds. */
@@ -60,7 +60,7 @@ export interface VaultWire {
     },
   ): Promise<{ node_id: string; rev: number }>;
 
-  /** A `409` comes back as a value: it is the conflict path, not a failure (#52). */
+  /** A `409` comes back as a value: it is the conflict path, not a failure (D-52). */
   putContent(
     vaultId: string,
     nodeId: string,

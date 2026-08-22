@@ -48,7 +48,7 @@ const branch = (seed: Uint8Array, info: string): Uint8Array =>
 /**
  * What the server receives as the account's password — and the only branch of the seed that
  * ever leaves the device. Base64 because it travels as a string and the server hashes the
- * string's UTF-8 bytes (docs/06, #108); the encoding is part of the contract.
+ * string's UTF-8 bytes (docs/06, D-108); the encoding is part of the contract.
  */
 export const authSecret = (seed: Uint8Array): string => toBase64(branch(seed, 'auth'));
 
@@ -126,7 +126,7 @@ export const unwrapIdentity = (seed: Uint8Array, encPrivkey: string): Uint8Array
 const IDENTITY = 'identity';
 
 /**
- * The floor the server enforces (#62), checked here too.
+ * The floor the server enforces (D-62), checked here too.
  *
  * Not duplication for its own sake: registering below it is refused by a CHECK constraint
  * inside a transaction, so the client that got it wrong learns least. Failing before the
@@ -157,7 +157,7 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
 };
 
 /**
- * Proof that whoever holds it can open `wrapped_seed` — without holding the seed (#112).
+ * Proof that whoever holds it can open `wrapped_seed` — without holding the seed (D-112).
  *
  * This is what lets a device with nothing at all recover the account: the server compares it
  * against a stored hash and returns the envelope, having learned nothing it did not already
@@ -200,7 +200,7 @@ const RECOVERY = 'recovery-code';
 export const wrapForRecovery = (seed: Uint8Array, code: string, accountSalt: Uint8Array): string =>
   seal(recoveryKek(code, accountSalt), seed);
 
-/** The other direction, on a device that has the code and nothing else (#34). */
+/** The other direction, on a device that has the code and nothing else (D-34). */
 export const unwrapWithRecovery = (
   recoveryKey: string,
   code: string,
@@ -211,7 +211,7 @@ export const unwrapWithRecovery = (
  * `recovery_code_hash` — what the server stores, and what it compares a presented code to.
  *
  * SHA-256 over the code's UTF-8 bytes, hex, exactly as every other stored verifier (docs/06,
- * #108). **Over the NORMALISED code**, because that is what the server will be handed at
+ * D-108). **Over the NORMALISED code**, because that is what the server will be handed at
  * recovery: the code crosses a human, arriving with or without dashes and with whatever they
  * made of a `0`. Hashing the displayed form here and the typed form there is the bug that
  * made pairing fail on real hardware, one layer down.

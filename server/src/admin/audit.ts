@@ -3,10 +3,10 @@
  *
  * One statement, in one place, for the reason the journal's statement is: a table written
  * from several modules is a table whose rows disagree about their own shape, and this one is
- * `INSERT`-only by trigger (#87) — there is no correcting a row later, so a field forgotten
+ * `INSERT`-only by trigger (D-87) — there is no correcting a row later, so a field forgotten
  * at the call site is forgotten for good.
  *
- * **The logins are snapshots, and the columns carry no foreign key** (#93). An account can be
+ * **The logins are snapshots, and the columns carry no foreign key** (D-93). An account can be
  * renamed or deleted, and the record has to keep naming who did what — "quota raised by an
  * account that no longer exists" is still the answer to the question somebody is asking six
  * months later, and a `CASCADE` would have erased exactly that.

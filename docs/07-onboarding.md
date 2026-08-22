@@ -123,7 +123,7 @@ problem.
 **The code is the credential, and the id is not.** The pairing's id is a handle for the device that created
 it — it polls its own claim with it. Approval is addressed by the **code alone**, because that is the only
 thing that crossed the human channel; requiring the id there would have meant carrying a UUID beside the
-code for nothing ([#110](09-decisions.md)). Claim answers a wrong code exactly as it answers an unknown id.
+code for nothing ([D-110](09-decisions.md)). Claim answers a wrong code exactly as it answers an unknown id.
 
 **The code is 128 bits**, in Crockford's base32 — 26 characters, grouped. Not shorter: nothing rate-limits
 approval or claim, and a pairing lives ten minutes ([04](04-sync-protocol.md)). Crockford's alphabet rather
@@ -158,7 +158,7 @@ The user has three things: the server address, their login, and the passphrase i
 
 | | What happens |
 |---|---|
-| 1 | `GET /auth/kdf?login=…` returns `account_salt` and `kdf_params`. Unknown logins get a deterministic fake, as everywhere (#73) |
+| 1 | `GET /auth/kdf?login=…` returns `account_salt` and `kdf_params`. Unknown logins get a deterministic fake, as everywhere (D-73) |
 | 2 | the client runs `Argon2id` once — the same pass it would run to unlock — and derives `KEK`, then `kek_verifier = HKDF(KEK, "recovery" ‖ login ‖ salt)` |
 | 3 | `POST /auth/recover` with the login, the verifier, and the new device's name and platform |
 | 4 | the server compares against `kek_verifier_hash`, creates the device as pairing's claim does, and returns the seed envelope, `enc_privkey`, `account_salt`, `kdf_params`, `user_id` and `device_id` |
@@ -223,7 +223,7 @@ the button is an exit with no handle on the outside.
 
 What happens when the plugin first meets a vault that **already contains something**.
 
-> This is not a migration nicety — it is a **base client mode** (#74), because "there are already files on
+> This is not a migration nicety — it is a **base client mode** (D-74), because "there are already files on
 > disk" covers the two most ordinary situations in the product's life:
 >
 > - **migration**: a vault of 10 000 files, an empty server;
@@ -377,7 +377,7 @@ the data. Other devices are still protected, because they quarantine rather than
 | **client-wins reset** | a cursor from a foreign epoch | resync **applying deletions**: otherwise it resurrects exactly what the user deliberately wiped |
 
 A cursor can be stale in both at once; then the reason is `restore` and deletions are not applied — the
-protective instruction never loses to the destructive one ([04](04-sync-protocol.md), #70). The third `410`
+protective instruction never loses to the destructive one ([04](04-sync-protocol.md), D-70). The third `410`
 reason, `journal_ttl`, is not an epoch at all and does apply deletions; it is in [04](04-sync-protocol.md).
 
 One signal, two opposite correct reactions. That is why the epoch must say **what happened**, and does so

@@ -183,7 +183,7 @@ takes that identity from the authenticated request, so attribution never needs t
 Three consequences, all of them costs, stated here so they are not rediscovered:
 
 - **A foreign user id lives in every participant's history.** This is what makes deleting an account a
-  procedure rather than a query (#55, `ON DELETE RESTRICT` on `versions.author_id`), and the anonymisation
+  procedure rather than a query (D-55, `ON DELETE RESTRICT` on `versions.author_id`), and the anonymisation
   pass has to walk up to eight vaults.
 - **Authorship survives the author's departure.** A revoked or withdrawn participant's name stays on the
   versions they wrote in everyone else's copies. Scrubbing it on exit would make attribution worthless
@@ -333,7 +333,7 @@ Three statements, and together they mean there is no link closure in the system:
 
 1. **The share is exactly its folder.** A file is inside it or outside it; there is no third category and no
    way for the share to reach beyond its own boundary. This is enforced, not assumed:
-   `nodes_share_membership_is_real` checks the mark **both ways** (#105) — a node inside a shared folder must
+   `nodes_share_membership_is_real` checks the mark **both ways** (D-105) — a node inside a shared folder must
    itself be marked, and a descendant probe refuses a subtree that was marked without its contents. A single
    unmarked node inside a replica would be invisible to propagation and swept in by a reset (SH-27), which is
    why the schema's share fixtures use a dedicated, fully-marked folder.

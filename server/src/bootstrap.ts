@@ -1,8 +1,8 @@
 /**
- * First run: the server answers one thing until it has an administrator (#107).
+ * First run: the server answers one thing until it has an administrator (D-107).
  *
  * `schema.sql` seeds the first administrator with NO credential at all: a console account
- * (#115) whose password column is null. `POST /auth/bootstrap` creates that password, and
+ * (D-115) whose password column is null. `POST /auth/bootstrap` creates that password, and
  * two properties make the window acceptable; this file is the second one.
  *
  *   1. there is nothing to guess. A seeded token or password keeps working for anybody who

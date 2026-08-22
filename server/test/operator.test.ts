@@ -4,8 +4,8 @@
  *
  * **Named to sort after `auth.test.ts`, and that is load-bearing.** This suite claims the
  * seeded administrator, and claiming is irreversible by design: the last active one cannot
- * be demoted or disabled (#88), and deleting an account is a procedure rather than a
- * statement (#55). So there is no route back to "no administrator exists" — the first-run
+ * be demoted or disabled (D-88), and deleting an account is a procedure rather than a
+ * statement (D-55). So there is no route back to "no administrator exists" — the first-run
  * state `auth.test.ts` is entirely about — and a file that reaches it first takes that
  * scenario away from everyone. Alphabetical order is the whole mechanism; see AGENTS.md.
  *
@@ -39,7 +39,7 @@ let userToken: string;
 let userId: string;
 
 /**
- * An account of either kind (#115).
+ * An account of either kind (D-115).
  *
  * A **console** account carries a password and not one byte of key material; a **vault**
  * account is the mirror. They are different shapes rather than one shape with a flag, and
@@ -84,16 +84,16 @@ before(async () => {
   app = await buildApp(db, cfg);
 
   // Claim the seeded administrator so this file stands on its own: until one exists the API
-  // answers 503 to everything but its redemption (#107).
+  // answers 503 to everything but its redemption (D-107).
   await db.query(
     `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
       WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
   );
 
   // The operator is the SEEDED administrator rather than a second one this file invents.
-  // "First run" means no active administrator exists (#107), and once one does the schema
-  // refuses every route back — demoting the last is refused (#88) and deleting an active
-  // account is a procedure (#55). A suite that left an extra administrator behind would
+  // "First run" means no active administrator exists (D-107), and once one does the schema
+  // refuses every route back — demoting the last is refused (D-88) and deleting an active
+  // account is a procedure (D-55). A suite that left an extra administrator behind would
   // therefore make first-run unreachable for whoever runs next, permanently.
   adminId = '00000000-0000-0000-0000-000000000001';
   const seededDevice = await db.one<{ id: string }>(
@@ -132,7 +132,7 @@ describe('who may act on somebody else', () => {
       200,
     );
 
-    // Switched off rather than demoted: an administrator IS a console account (#115), so
+    // Switched off rather than demoted: an administrator IS a console account (D-115), so
     // there is no "same row, lesser role" to move it to — it holds no key material to be a
     // vault account with. The guard's rule is the same either way, and it is the rule this
     // test is about: the answer comes from the database, not from the token.
@@ -197,7 +197,7 @@ describe('invitations', () => {
       204,
     );
     assert.equal(await db.one(`SELECT 1 AS x FROM users WHERE id = $1`, [id]), undefined);
-    // The record outlives the row it names — which is why it carries no foreign key (#93).
+    // The record outlives the row it names — which is why it carries no foreign key (D-93).
     assert.equal((await lastAudit(id))!.action, 'invitation.revoke');
   });
 
@@ -249,7 +249,7 @@ describe('disabling', () => {
   });
 
   it('will not switch off the last administrator, whoever asks', async () => {
-    // Enforced by a trigger rather than by this module (#88), because locking yourself out
+    // Enforced by a trigger rather than by this module (D-88), because locking yourself out
     // of your own server is otherwise one keystroke — and the refusal has to reach the
     // caller as something they can act on rather than as a 500.
     const r = await app.inject({
@@ -443,7 +443,7 @@ describe('deleting an account, which is a procedure', () => {
     const actions = entries.map((e) => e.action);
     assert.ok(actions.includes('account.delete.begin'), `expected a begin: ${actions.join(', ')}`);
     assert.ok(actions.includes('account.delete.finish'), `expected a finish: ${actions.join(', ')}`);
-    // The row outlives the account it names, which is why it carries no foreign key (#93).
+    // The row outlives the account it names, which is why it carries no foreign key (D-93).
     assert.equal(await db.one(`SELECT 1 AS x FROM users WHERE id = $1`, [doomed.id]), undefined);
   });
 
@@ -470,7 +470,7 @@ describe('deleting an account, which is a procedure', () => {
 /**
  * How much audit log there is (#160).
  *
- * The log has no retention by decision (D117), and that decision rests on every action it records being
+ * The log has no retention by decision (D-117), and that decision rests on every action it records being
  * rare. Nothing enforces that — a `record()` call on a path that runs per sync would break it silently —
  * so the size travels with the page, and this is the assertion that it does.
  */

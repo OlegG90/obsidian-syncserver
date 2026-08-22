@@ -190,7 +190,7 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       if (!done) return;
 
       // Deliberately not "invited <login>": the pubkey endpoint answers an unknown login
-      // with a deterministic fake rather than a 404 (#73), so a success here does not mean
+      // with a deterministic fake rather than a 404 (D-73), so a success here does not mean
       // the account exists — and a message claiming it does would turn this into the
       // enumeration oracle that endpoint exists to prevent.
       deps.notify('SyncServer: invitation sent, if that login exists.');

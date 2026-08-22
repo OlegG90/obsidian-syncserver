@@ -19,7 +19,7 @@ right and this is stale.
 | can sync a vault | no | yes |
 | can open the console | yes | no |
 
-They are separate on purpose ([#115](docs/09-decisions.md)). An administrator holds no key,
+They are separate on purpose ([D-115](docs/09-decisions.md)). An administrator holds no key,
 so "the administrator cannot read your notes" is a fact about the account rather than a
 promise about behaviour — there is nothing to read them with.
 
@@ -66,7 +66,7 @@ Open `http://<server>:<port>/` in a browser. On a fresh installation there is on
 asking for a password.
 
 **That password is created here, not changed.** There is no default to leave lying around
-— which is the point ([#107](docs/09-decisions.md)). Choose something you would choose for a
+— which is the point ([D-107](docs/09-decisions.md)). Choose something you would choose for a
 password manager; **at least 12 characters**, and nothing else is required of it. It is
 checked with Argon2id on the server, and it is the only credential here that a person
 invented — everything else is random.
@@ -87,7 +87,7 @@ Then in Obsidian:
 4. Press **Sync now**.
 
 Your keys are made on your device at step 3. The server never sees your passphrase and
-cannot recover it ([#61](docs/09-decisions.md)).
+cannot recover it ([D-61](docs/09-decisions.md)).
 
 > **The login must match the invitation.** It belongs to whoever issued it, so typing
 > anything else is refused with `this invitation is for "…"` rather than being quietly
@@ -158,7 +158,7 @@ Settings → SyncServer → **Server address** → edit → **Save**.
 
 That is all of it. Do **not** disconnect and reconnect: the invitation that created the
 account was single-use and is long gone, so reconnecting is not a thing you can do twice
-([#113](docs/09-decisions.md)). Changing the address locks the session, so the next sync
+([D-113](docs/09-decisions.md)). Changing the address locks the session, so the next sync
 asks for the passphrase again.
 
 ### Leaving a server, keeping the files

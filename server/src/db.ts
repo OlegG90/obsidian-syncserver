@@ -15,8 +15,8 @@ export interface Db {
    * Everything that writes more than one row goes through here.
    *
    * The data model leans on it hard: a node write is node + journal + version in one
-   * transaction (#14), redeeming an invitation is account + key scope + vault + root +
-   * device, and a shared write fans out to every participant or to none (#104). A helper
+   * transaction (D-14), redeeming an invitation is account + key scope + vault + root +
+   * device, and a shared write fans out to every participant or to none (D-104). A helper
    * that made a transaction optional would make forgetting one easy.
    */
   tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T>;

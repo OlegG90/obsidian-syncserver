@@ -1,7 +1,7 @@
 /**
  * The backup window, and the leg order that follows from what kind of window it is.
  *
- * The rule under test is #114: this server takes a **refusal window**, not a freeze, so a
+ * The rule under test is D-114: this server takes a **refusal window**, not a freeze, so a
  * write already running goes on to commit — and that is what makes database-first the only
  * safe order. Blobs-first under a real freeze would be equivalent; blobs-first under this one
  * produces a copy that restores cleanly and is missing files, discovered months later.
@@ -101,7 +101,7 @@ const seedWorld = async (): Promise<{ vaultId: string; sha: string }> => {
 };
 
 describe('the window a backup takes', () => {
-  it('dumps the database first and copies the blobs second (#114)', async () => {
+  it('dumps the database first and copies the blobs second (D-114)', async () => {
     // Not interchangeable here, and the comment is the test: the window refuses NEW writes
     // and leaves the ones in flight, so a blob uploaded after the copy can still reach a
     // dump taken before it. Database-first makes the blob copy a superset instead.
@@ -240,7 +240,7 @@ describe('the window a backup takes', () => {
 
 describe('what has to be true before a window is worth opening', () => {
   it('refuses without taking the lock, inserting a row or opening the window', async () => {
-    // #73's failure, one layer in: the pg_dump major check lived at the top of `dumpDatabase`,
+    // D-73's failure, one layer in: the pg_dump major check lived at the top of `dumpDatabase`,
     // which reads as "before the work" and is not — by then the collector's lock is held, a
     // `backup_runs` row exists and the server is refusing writes. A mismatched binary
     // announced itself with the window already open, which is the thing the check replaced
@@ -295,7 +295,7 @@ describe('what has to be true before a window is worth opening', () => {
     const out = await runBackup(db, recording(order), '/backups');
 
     assert.equal(out.status, 'ok');
-    assert.deepEqual(order, ['database', 'blobs'], 'and in the order #114 forces');
+    assert.deepEqual(order, ['database', 'blobs'], 'and in the order D-114 forces');
   });
 });
 
@@ -625,7 +625,7 @@ describe('the schedule that presses the button', () => {
   });
 
   it('takes a run into its own directory and verifies the copy it just wrote', async () => {
-    // The self-check of #74: the moment a copy is written is the cheapest moment to learn it
+    // The self-check of D-74: the moment a copy is written is the cheapest moment to learn it
     // is not restorable. The alternative is learning at restore time, which is the one time
     // nothing can be done about it.
     const ran: string[] = [];
@@ -637,7 +637,7 @@ describe('the schedule that presses the button', () => {
       () => ({ size: async () => 1 }),
     );
 
-    assert.deepEqual(ran, ['database', 'blobs'], 'both legs, in the order #114 forces');
+    assert.deepEqual(ran, ['database', 'blobs'], 'both legs, in the order D-114 forces');
     const row = await db.one<{ destination: string; status: string; verified: string | null }>(
       `SELECT destination, status::text AS status, verified_at AS verified
          FROM backup_runs ORDER BY started_at DESC LIMIT 1`,

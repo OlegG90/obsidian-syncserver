@@ -146,7 +146,7 @@ describe('change notifications', () => {
 
   it('refuses a token that names an account but no device', async () => {
     // The socket is held to the API's own policy: an access token names an account AND a
-    // device (#90). A token the HTTP guard would refuse is refused here too.
+    // device (D-90). A token the HTTP guard would refuse is refused here too.
     const ws = new WebSocket(`${base}/events`);
     const out: string[] = [];
     ws.on('message', (d) => out.push(d.toString()));

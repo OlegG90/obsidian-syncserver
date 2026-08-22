@@ -7,13 +7,13 @@
  * |---|---|---|
  * | only local | — | upload — unless the content is already known in this scope, in which case bind to the existing address and send nothing (docs/07, "nearly free") |
  * | — | only server | download |
- * | both, this device already knows the node | ordinary edit: the content precondition decides (#52) |
+ * | both, this device already knows the node | ordinary edit: the content precondition decides (D-52) |
  * | both, this device does NOT know the node | **adoption**: matching content binds silently; differing content is a conflict with no common ancestor (docs/07) |
  * | known here, gone from the server | a **delete** — but which side deleted is read from the epoch, below |
  *
  * The last row is the one that cannot be read from the trees alone. The same absence is a
  * deletion on one epoch and a rescue target on another, so before anything is removed the
- * stored cursor is presented to the delta endpoint and its answer decides (#70, docs/04):
+ * stored cursor is presented to the delta endpoint and its answer decides (D-70, docs/04):
  *
  * - `200` / `journal_ttl` — the server is continuous with what we saw, or ahead of it. A
  *   known node missing from the walk **was** deleted there; the local copy is removed.
@@ -21,7 +21,7 @@
  *   checked at all. Absence proves nothing: nothing is deleted locally, and what the server
  *   lost is uploaded as new.
  * - `reset` — another device won the vault. Its tree is the truth; local work it does not
- *   hold is quarantined to `_Reset <date>/`, never erased (#80, docs/07).
+ *   hold is quarantined to `_Reset <date>/`, never erased (D-80, docs/07).
  *
  * Local deletes (a synced file gone from disk) push `deleteNode` — safe under every epoch,
  * because the row soft-deletes into the trash and the content survives (docs/03).
@@ -66,7 +66,7 @@ export interface SyncReport {
   removed: { path: string }[];
   /**
    * A `410 reset` means another device won the vault. Local work that the reset tree does
-   * not hold is moved to `_Reset <date>/`, never erased (#80, docs/07).
+   * not hold is moved to `_Reset <date>/`, never erased (D-80, docs/07).
    */
   quarantined: { from: string; to: string }[];
   /**
@@ -90,7 +90,7 @@ export interface SyncReport {
    */
   vanished: { path: string }[];
   /**
-   * Shared folders this device holds no key for, one entry each (#115's cousin: a key that
+   * Shared folders this device holds no key for, one entry each (D-115's cousin: a key that
    * has not arrived, not a permission that was refused).
    *
    * **Not an error, and deliberately not part of the pass's mood.** Everything that could
@@ -171,7 +171,7 @@ const POLICY: Record<RemoteEpoch, SyncPolicy> = {
   journal_ttl: { pushDeletes: true, applyRemoteDeletes: true, preferLocal: false },
   // The server went backwards: absence proves nothing, and our copy may be the only one.
   restore: { pushDeletes: false, applyRemoteDeletes: false, preferLocal: true },
-  // The cursor cannot be checked at all: resync from empty, deleting nothing (#100).
+  // The cursor cannot be checked at all: resync from empty, deleting nothing (D-100).
   unverifiable: { pushDeletes: false, applyRemoteDeletes: false, preferLocal: true },
   // Not a flag change but a different algorithm (`resyncAfterReset`), so the flags it never
   // reads record its stance — never trust absence, never delete — and the table is total:
@@ -234,7 +234,7 @@ export class SyncEngine {
     private readonly store: StateStore,
     /** Named in a conflict file's filename (docs/04): `Note (conflict 2026-08-01 laptop).md`. */
     private readonly deviceLabel = 'device',
-    /** Synchronise `.obsidian/` configuration — off by default (#7, docs/01). */
+    /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
     private readonly syncObsidian = false,
   ) {}
 
@@ -271,7 +271,7 @@ export class SyncEngine {
     const shareScopes = this.scopes.shareScopes();
 
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
-    // what a missing node means (#70). The pages themselves are re-read through the walk —
+    // what a missing node means (D-70). The pages themselves are re-read through the walk —
     // the probe is the check, not the data.
     const probe = state.cursor ? await this.probeEpoch(state.cursor) : { epoch: 'continuous' as const, events: [] };
     const epoch: RemoteEpoch = probe.epoch;
@@ -397,7 +397,7 @@ export class SyncEngine {
    * not, why. `limit: 1` because we are after the verdict, not the page.
    *
    * A cursor this server cannot verify is one of the three answers `delta` declares, not an
-   * exception to be caught by status (#100). For the client that `400` is a refusal; for the
+   * exception to be caught by status (D-100). For the client that `400` is a refusal; for the
    * engine it is a policy — resync from an empty cursor, deleting nothing — and a policy
    * belongs on the type, where the next consumer of `VaultWire` can see it.
    */
@@ -739,11 +739,11 @@ export class SyncEngine {
   }
 
   /**
-   * Seal-or-bind, then PUT with the content precondition (#52).
+   * Seal-or-bind, then PUT with the content precondition (D-52).
    *
    * The base is **the version this device last synchronised** — `known.address` — and not
    * whatever the server holds at this instant. Sending the server its own current address
-   * would make the precondition a tautology: it could never fail, and #52's entire job is to
+   * would make the precondition a tautology: it could never fail, and D-52's entire job is to
    * fail when somebody else has written in the meantime.
    *
    * So a `409 base_mismatch` here is not an error to report; it is the answer arriving.
@@ -938,7 +938,7 @@ export class SyncEngine {
   /**
    * The server renamed a node we know: the id we track now lives at a different path. The
    * local file follows it, and if we had edits in hand they go up against the moved node —
-   * by node id, not by path, so a rename and an edit never collide into a conflict (#52).
+   * by node id, not by path, so a rename and an edit never collide into a conflict (D-52).
    */
   private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode, ctx: PassContext): Promise<void> {
     const localChanged = known.plainHash !== m.plainHash;
@@ -965,7 +965,7 @@ export class SyncEngine {
    * A `410 reset` means another device declared itself the source of truth and re-uploaded
    * the vault with new node ids. Its tree is the truth now. Local content the new tree holds
    * rebinds nearly free (the blobs are already on the server), and everything it does NOT
-   * hold is moved to `_Reset <date>/` — quarantined, never erased (#80, docs/07).
+   * hold is moved to `_Reset <date>/` — quarantined, never erased (D-80, docs/07).
    */
   private async resyncAfterReset(local: VaultFile[], ctx: PassContext): Promise<void> {
     const quarantineRoot = `_Reset ${new Date().toISOString().slice(0, 10)}`;

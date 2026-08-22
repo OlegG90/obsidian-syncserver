@@ -48,7 +48,7 @@ export const session = {
   /** The last device gone: take the account back with the passphrase alone (docs/07). */
   recover: (args: RecoverArgs, transport: Transport) =>
     Session.recover(args, { derivation: realDerivation, transport }),
-  /** The passphrase gone: take it back with the recovery code, and set a new one (#34). */
+  /** The passphrase gone: take it back with the recovery code, and set a new one (D-34). */
   recoverWithCode: (args: RecoverWithCodeArgs, transport: Transport) =>
     Session.recoverWithCode(args, { derivation: realDerivation, transport }),
 };

@@ -75,7 +75,7 @@ export const usageOf = async (q: Queryable, userId: string): Promise<Usage | und
 
 /**
  * Whether `size` more bytes fit, counting a blob the account already holds as **zero
- * growth** (#46).
+ * growth** (D-46).
  *
  * That exception is not an optimisation. The address is the content, so a second copy adds
  * nothing to the disk; charging for it would bill the same bytes twice at the very boundary

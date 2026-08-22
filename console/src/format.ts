@@ -10,7 +10,7 @@
 import type { AccountRow, AuditRow } from '@syncserver/shared';
 
 /**
- * An account as the admin API reports it — the fields this file reads (#89).
+ * An account as the admin API reports it — the fields this file reads (D-89).
  *
  * Picked from the shared row rather than re-declared. It was a field-for-field copy, in the
  * same milestone that moved `AccountRow` into `shared/` *because* the console depended on that
@@ -126,7 +126,7 @@ export const accountBadge = (a: AccountLine): { text: string; tone: 'active' | '
  * What kind of thing this row is.
  *
  * Three, not two, and the third is the one that matters: **an invitation is not an account
- * yet** (#115). It has a login and a quota and nothing else — no keys, no vault, nobody has
+ * yet** (D-115). It has a login and a quota and nothing else — no keys, no vault, nobody has
  * claimed it — so calling it an account in the kind column would be the table asserting
  * something the row does not support.
  */
@@ -149,7 +149,7 @@ export const accountState = (a: AccountLine): string => {
  * What this account is storing, or a dash where the question does not apply.
  *
  * **Omitted for a console account and for an invitation**, and not because it would look
- * untidy: a console account owns no vault and holds a zero quota (#115), so "0.0 MiB of
+ * untidy: a console account owns no vault and holds a zero quota (D-115), so "0.0 MiB of
  * 0.0 MiB" would be a true statement that reads as a broken one, and an invitation has not
  * become an account yet. A dash says "not a question about this row"; a zero says "this row
  * answered, and the answer is nothing".
@@ -240,7 +240,7 @@ const ACTIONS: Record<string, string> = {
  * **One number, not two.** The console is served BY the server — its assets are in the same
  * image — so its own build and the server's are the same string by construction, and printing
  * both would invite somebody to compare two numbers that cannot differ. That is the opposite
- * of the plugin's line, which shows both precisely because they can (#111).
+ * of the plugin's line, which shows both precisely because they can (D-111).
  *
  * A server too old to report one is not an unknown: `/health` has carried `version` since
  * 0.1.0, so its absence dates the server rather than hiding it. `undefined` from a failed

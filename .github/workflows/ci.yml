@@ -39,13 +39,16 @@ jobs:
       # they need no database — the only judgement in that workspace is what a line under a
       # login says, and that is a pure function.
       - run: npm test --workspace @syncserver/console
-      # One version across six manifests (#111), and a compose file that still says what
+      # One version across six manifests (D-111), and a compose file that still says what
       # docs/13 promises it says.
       - run: node scripts/check-version.mjs
       - run: node scripts/check-compose.mjs
       # Prose is load-bearing here, so a docblock that has drifted off its function is wrong
-      # in the way a reader trusts rather than merely untidy (#84).
+      # in the way a reader trusts rather than merely untidy (D-84).
       - run: node scripts/check-docblocks.mjs
+      # `D-N` is a decision and `#N` is a GitHub issue, which used to be one notation for both
+      # until they collided outright — D-111 and D-114 through D-119 are issue numbers too.
+      - run: node scripts/check-citations.mjs
 
   # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
   # only proves two numbers agree in two files; whether the pinned package actually exists in
@@ -147,7 +150,7 @@ jobs:
           cache: npm
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - run: npm ci
-      # Argon2id at 64 MiB runs for real here (#62). It is the one thing a live test may
+      # Argon2id at 64 MiB runs for real here (D-62). It is the one thing a live test may
       # never fake, so the suite is slow on purpose and the timeout allows for it.
       - run: npm run test:live
         timeout-minutes: 20

@@ -7,7 +7,7 @@
  * A session that survived a closed tab would be a session nobody chose to keep, so nothing is
  * written down — and because nothing is written down, a reload is a fresh sign-in.
  *
- * **No key material passes through here, ever.** A console account has none (#115) — that is
+ * **No key material passes through here, ever.** A console account has none (D-115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
 import type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
@@ -27,7 +27,7 @@ export class ApiError extends Error {
 }
 
 /**
- * Both halves of the session, in memory, for as long as the tab is open (#102).
+ * Both halves of the session, in memory, for as long as the tab is open (D-102).
  *
  * The access token expires in fifteen minutes; the refresh token is what buys another one. The
  * server has minted both from `/auth/console` since M4 and this file kept only the first — so
@@ -43,7 +43,7 @@ export class ApiError extends Error {
  * The refresh token is worth more than the access token, because it lasts longer, and it sits
  * in the same place under the same access: anything running script in this tab already holds
  * the access token. What it buys is bounded by the console device row, which is one row an
- * administrator can revoke (#90).
+ * administrator can revoke (D-90).
  */
 let access: string | undefined;
 let refresh: string | undefined;
@@ -67,7 +67,7 @@ export const forgetSession = (): void => {
  *
  * Never retried and never queued: a refresh that is refused means the device was revoked or
  * the token is spent, and asking again is asking the same question. The caller's next move is
- * the sign-in screen, which is #101's.
+ * the sign-in screen, which is D-101's.
  */
 const renew = async (): Promise<boolean> => {
   if (refresh === undefined) return false;
@@ -131,7 +131,7 @@ const call = async <T>(method: string, path: string, body?: unknown, renewed = f
 export const health = (): Promise<HealthResponse> => call('GET', '/health');
 
 /**
- * The first run: creates the administrator rather than replacing one (#107, #123).
+ * The first run: creates the administrator rather than replacing one (D-107, #123).
  *
  * The login travels with the password because naming the account is part of creating it — and
  * because a server whose most privileged login is the same word on every installation has given
@@ -142,7 +142,7 @@ export const bootstrap = (login: string, password: string): Promise<{ login: str
 
 export const signIn = async (login: string, password: string): Promise<void> => {
   // Both halves. The server has answered with both since M4; keeping only the access token is
-  // what made a console session fifteen minutes long instead of tab-long (#102).
+  // what made a console session fifteen minutes long instead of tab-long (D-102).
   const out = await call<{ access: string; refresh: string }>('POST', '/auth/console', { login, password });
   access = out.access;
   refresh = out.refresh;
@@ -169,7 +169,7 @@ export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_byt
  *
  * Reversible, and that is the whole reason it exists beside deletion: an account somebody has
  * stopped using and an account that must be erased are different decisions, and the first one
- * should not be spelled with the second one (#55).
+ * should not be spelled with the second one (D-55).
  */
 export const setEnabled = (userId: string, enabled: boolean): Promise<void> =>
   call('POST', `/admin/accounts/${userId}/enabled`, { enabled });
@@ -248,7 +248,7 @@ export const removeBackup = (id: string): Promise<void> => call('DELETE', `/admi
 /**
  * Push the deletion procedure as far as it can go right now, and say what is outstanding.
  *
- * Idempotent (#55): the operator's only handle on a wait is to ask again, so a second "begin"
+ * Idempotent (D-55): the operator's only handle on a wait is to ask again, so a second "begin"
  * that refused because the first had succeeded would make the honest thing to do look like a
  * mistake.
  */
@@ -267,7 +267,7 @@ export const deletionProgress = (userId: string): Promise<DeletionProgress> =>
 /** What the server holds, as only the server can count it: stored once, charged per account. */
 export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage');
 
-/** The administrative log, newest first (#87, #94). Append-only on the server; read-only here. */
+/** The administrative log, newest first (D-87, D-94). Append-only on the server; read-only here. */
 export const audit = (limit = 100): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
   call('GET', `/admin/audit?limit=${limit}`);
 

@@ -131,7 +131,7 @@ describe('uploading', () => {
     assert.equal(r.json().error, 'over_quota');
   });
 
-  it('has no "already have it" short circuit (#46)', async () => {
+  it('has no "already have it" short circuit (D-46)', async () => {
     const body = randomBytes(1024);
     const first = await upload(access, body);
     assert.equal(first.statusCode, 201);
@@ -143,7 +143,7 @@ describe('uploading', () => {
   });
 });
 
-describe('reading is authorised by the caller\'s own reference (#20)', () => {
+describe('reading is authorised by the caller\'s own reference (D-20)', () => {
   it('answers HEAD 404 for a blob the caller does not hold, even though it exists', async () => {
     const body = randomBytes(512);
     await upload(access, body);

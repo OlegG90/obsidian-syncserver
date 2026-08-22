@@ -130,7 +130,7 @@ after(async () => {
   await rm(STORE, { recursive: true, force: true });
 });
 
-describe('a write is node, journal and version together (#14)', () => {
+describe('a write is node, journal and version together (D-14)', () => {
   it('writes all three, and moves the blob from pending to owned', async () => {
     const file = await createFile(rootId, 'note.md');
 
@@ -172,7 +172,7 @@ describe('a write is node, journal and version together (#14)', () => {
   });
 });
 
-describe('the precondition for content is content (#52)', () => {
+describe('the precondition for content is content (D-52)', () => {
   it('accepts a write whose base matches, and rejects one whose base does not', async () => {
     const file = await createFile(rootId, 'edit-me.md');
     const next = randomBytes(80);

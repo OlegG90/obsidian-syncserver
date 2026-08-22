@@ -1,9 +1,9 @@
 /**
  * The one secret on this server that a **person** chose, and therefore the one that needs a
- * slow hash (#108, #115).
+ * slow hash (D-108, D-115).
  *
  * Every other stored verifier — `auth_secret_hash`, `kek_verifier_hash`, the invitation and
- * refresh tokens — is at least 128 bits of CSPRNG output, and #108 rests that decision on
+ * refresh tokens — is at least 128 bits of CSPRNG output, and D-108 rests that decision on
  * exactly that: a work factor buys nothing against an input nobody can guess, and costs
  * latency on every request. A console password is the opposite input, and no client-side KDF
  * can stand in for the work: the browser is not trusted to have run one, and a server that
@@ -13,7 +13,7 @@
  * of today is the joke of a decade from now — and a stored hash that did not say which cost
  * produced it could never be re-hashed on a later login without locking everyone out.
  *
- * The memory cost is deliberately below the client's 64 MiB floor (#62). That floor guards a
+ * The memory cost is deliberately below the client's 64 MiB floor (D-62). That floor guards a
  * key derived once per unlock on one person's machine; this runs on a shared server, on a
  * NAS, and once per sign-in — a cost chosen for a laptop would be a denial-of-service surface
  * here. Guessing is bounded by the attempt limiter instead, which is where a password's real

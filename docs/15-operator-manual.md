@@ -214,7 +214,7 @@ Nothing else moves: the database, the blobs, the backups and the state file are 
 containers. Users need nothing — BRAT offers them the matching plugin release.
 
 **Read the release notes first.** They name anything that is not a straight pull, and this project's
-version number carries the compatibility promise in the **minor** while the major is `0` (#111): `0.5.2`
+version number carries the compatibility promise in the **minor** while the major is `0` (D-111): `0.5.2`
 to `0.5.4` cannot break a client, `0.5.x` to `0.6.0` announces that it can.
 
 **There is no migration tool, deliberately.** The server applies the schema **once**, to a database that
@@ -284,7 +284,7 @@ Upgrading by this route is the same two commands with the new archive.
 4. verifies the copy it just wrote;
 5. closes the window and settles the row.
 
-Steps 2 and 3 are in that order and are not interchangeable ([08](08-backup-restore.md), #114). A window
+Steps 2 and 3 are in that order and are not interchangeable ([08](08-backup-restore.md), D-114). A window
 that only refuses *new* writes leaves the running ones, so blobs-first would produce a copy that restores
 without complaint and cannot open a file.
 

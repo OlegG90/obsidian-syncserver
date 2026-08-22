@@ -241,7 +241,7 @@ route it had never heard of, with nothing on screen to say why.
 
 Five files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
 requires one in `manifest.json`. `npm test` runs `scripts/check-version.mjs`, which fails when they
-disagree. The rule itself is [#111](docs/09-decisions.md).
+disagree. The rule itself is [D-111](docs/09-decisions.md).
 
 That check governs the repository, and its authority ends there. An **installed** plugin is two files
 Obsidian reads separately — `manifest.json`, which it parses and shows in its plugin list, and

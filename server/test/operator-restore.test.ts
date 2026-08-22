@@ -95,7 +95,7 @@ describe('confirming a restore', () => {
 describe('the halt after an unconfirmed restore', () => {
   it('answers restore_pending to ordinary endpoints, and keeps the confirm reachable', async () => {
     await writeFile(stateFile, '9', 'utf8'); // db is 6 from the previous confirm → pending
-    // What a start does, and the only thing that can raise the halt (#87). Writing the file
+    // What a start does, and the only thing that can raise the halt (D-87). Writing the file
     // under a running server is how a test says "a restore happened"; a real one replaces the
     // database while the server is stopped, so noticing is a boot-time act. Held in memory
     // afterwards rather than re-read per request, which was a query and a `readFile` for an

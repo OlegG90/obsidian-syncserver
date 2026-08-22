@@ -137,7 +137,7 @@ describe('sharing a folder', () => {
 describe('inviting', () => {
   it('never claims the login exists', async () => {
     // The pubkey endpoint answers an unknown login with a deterministic fake rather than a
-    // 404 (#73). A message saying "invited alice" would rebuild, in the interface, exactly
+    // 404 (D-73). A message saying "invited alice" would rebuild, in the interface, exactly
     // the enumeration oracle that endpoint exists to prevent.
     const h = harness();
     await h.flow.invite('share-1', 'alice');

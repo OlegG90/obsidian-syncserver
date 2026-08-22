@@ -10,7 +10,7 @@
  * existed.
  *
  * The encoding is a usability decision with a security floor under it. The floor wins:
- * **128 bits of CSPRNG**, the same entropy #108 requires of every stored verifier. For a
+ * **128 bits of CSPRNG**, the same entropy D-108 requires of every stored verifier. For a
  * pairing that is because the server does no rate limiting on approval or claim and a
  * pairing lives ten minutes; for a recovery code it is because the code wraps a second copy
  * of the seed, and an attacker holding a database dump can attack that copy offline for
@@ -30,7 +30,7 @@ import { randomBytes } from './bytes.js';
 /** Crockford base32: digits, then A–Z without `I`, `L`, `O`, `U`. */
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-/** The floor, in bytes: 16 × 8 = 128 bits (#108). */
+/** The floor, in bytes: 16 × 8 = 128 bits (D-108). */
 const SECRET_BYTES = 16;
 
 const encode = (bytes: Uint8Array): string => {

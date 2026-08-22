@@ -12,9 +12,13 @@ comments explain themselves; nothing else states a contract.
   implements it. A rule stated in two places is a contradiction waiting on a seam.
 - `db/schema.sql` is the executable half of `docs/03`. Its comments cite decision ids and are
   part of the record, not decoration.
-- Decision ids are cited, never re-explained: `#N` general and `AC-N` accounts/vaults live in
+- Decision ids are cited, never re-explained: `D-N` general and `AC-N` accounts/vaults live in
   `docs/09-decisions.md`, `SH-N` sharing in `docs/12-sharing-scenarios.md`. If you cite one,
-  it must exist there.
+  it must exist there — `scripts/check-citations.mjs` fails when it does not.
+- **`#N` means a GitHub issue and nothing else.** It used to mean a decision, which put two
+  numbering spaces in one notation until they collided: D-111 and D-114 through D-119 are all
+  real issue numbers as well. GitHub renders `#117` as a link to issue 117 whether or not the
+  repository agrees, so the platform owns that spelling and the decisions moved.
 - `docs/` carries the **current** state only — no changelogs, no "previously", no audit
   history. Git already keeps that.
 
@@ -83,9 +87,9 @@ broken over one that pins the current shape of the code. When a test and the des
 find out which is wrong before changing either.
 
 **One scenario is global, and it runs first.** "No administrator exists yet" is the server's
-first-run state (#107), and claiming the seeded administrator is **irreversible**: the last
-active one cannot be demoted or disabled (#88), and deleting an account is a procedure rather
-than a statement (#55). So `auth.test.ts` must meet a database no other suite has claimed —
+first-run state (D-107), and claiming the seeded administrator is **irreversible**: the last
+active one cannot be demoted or disabled (D-88), and deleting an account is a procedure rather
+than a statement (D-55). So `auth.test.ts` must meet a database no other suite has claimed —
 which alphabetical order is what actually delivers, since the runner takes files in the order
 the glob gives them. A new suite that needs an administrator therefore sorts **after** it, and
 says so in its own header; that is why the operator's suite is `operator.test.ts`.
@@ -140,7 +144,7 @@ must own their blob generate their content.
 
 1. **Every new constraint ships with a negative test.** A rule with no test is a comment.
 2. **A test that passes for the wrong reason is worse than no test.** `expect_fail` takes the
-   expected `SQLSTATE` **and** a fragment of the message, and compares both (#101). Neither is
+   expected `SQLSTATE` **and** a fragment of the message, and compares both (D-101). Neither is
    optional: nearly every trigger raises `check_violation`, exactly like a plain `CHECK`, so the
    code alone identifies nothing. The fragment is a constraint name for declarative constraints
    and a piece of the `RAISE` text for triggers.
@@ -165,5 +169,5 @@ migrations become the source and `schema.sql` is generated from them — never b
 - The content key `KC` is **random**, never derived from content. A convergent key hands the
   file to anyone who can guess it, and notes are guessable.
 - Blob reads require a **live reference belonging to the caller** — a hash is not a capability.
-- Argon2id at 64 MiB is a floor the server enforces (#62). Do not lower it "for tests"; build
+- Argon2id at 64 MiB is a floor the server enforces (D-62). Do not lower it "for tests"; build
   the fixture around it instead.

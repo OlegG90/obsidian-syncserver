@@ -18,7 +18,7 @@ declare module 'fastify' {
  *
  * The access token must name both the account and the **device**, because a caller that
  * is not attributed to a device cannot be throttled and a session that cannot be signed
- * out one device at a time is a session nobody signs out (#90).
+ * out one device at a time is a session nobody signs out (D-90).
  */
 export const verifyCaller = (
   claims: { sub?: string; device?: string } | undefined,

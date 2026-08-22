@@ -76,7 +76,7 @@ const converted = (n: WireName, envelopes: WireEnvelope[] = [], tags: WireTag[] 
 export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
   /**
    * Who to seal the share key to. Answers an unknown login with a deterministic fake rather
-   * than a 404 (#73) — the caller cannot read "no such account" out of it, and must not try.
+   * than a 404 (D-73) — the caller cannot read "no such account" out of it, and must not try.
    */
   app.get<{ Params: { shareId: string; login: string } }>(
     '/shares/:shareId/recipients/:login/pubkey',
@@ -332,7 +332,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     async (req, reply) => {
       const rows = await listMembers(db, req.caller!.userId, req.params.shareId);
       // One answer for "no such share" and "not yours to see", because distinguishing them
-      // would report on another account's shares (#20).
+      // would report on another account's shares (D-20).
       if (!rows) return reply.code(404).send({ error: 'not_found' });
 
       return rows.map((m) => ({

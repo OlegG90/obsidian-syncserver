@@ -109,7 +109,7 @@ export interface Derivation {
 
 /** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
 /**
- * What a caller may answer when asked which vault a device is for (#116).
+ * What a caller may answer when asked which vault a device is for (D-116).
  *
  * Three answers because there are three things a person can mean, and collapsing any two of
  * them would put the decision back where it was: `use` is "that one", `create` is "none of
@@ -132,7 +132,7 @@ export interface PairArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Ask which vault this device is for, by name (#117, #116).
+   * Ask which vault this device is for, by name (D-117, D-116).
    *
    * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
    * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
@@ -151,7 +151,7 @@ export interface RecoverArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Ask which vault this device is for, by name (#117, #116).
+   * Ask which vault this device is for, by name (D-117, D-116).
    *
    * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
    * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
@@ -234,7 +234,7 @@ interface LoginIdentity {
  * lines: log in, set the access token, set the refresh token. Written three times they drift,
  * and this pair had already begun to: the repair below existed on the unlock path alone.
  *
- * **The repair.** An account made before recovery existed (#112) has no `kek_verifier`, and
+ * **The repair.** An account made before recovery existed (D-112) has no `kek_verifier`, and
  * nothing on the server can make one — it takes the KEK, which exists only on a device
  * holding the passphrase, and only while it is held. Left undone, such an account is
  * unrecoverable forever with nobody told. Every entrance here has the KEK in hand by the time
@@ -316,14 +316,14 @@ export class Session {
   /**
    * Which vault this device is for, when the account may hold several (AC-10).
    *
-   * **One question with three answers, not two questions.** #117 gave this a yes/no for the
+   * **One question with three answers, not two questions.** D-117 gave this a yes/no for the
    * single-vault case; the moment an account can hold two, that same moment is also when
    * somebody might want a third. Asking "is it this one?" and then, separately, "or which of
-   * these?" would be two callbacks with overlapping duty — the shape #86 was opened about.
+   * these?" would be two callbacks with overlapping duty — the shape D-86 was opened about.
    * So the caller is handed the vaults and answers with what it wants done.
    *
    * The single-vault case is still ONE press: a list of one, plus the way to make another.
-   * That is #117's "one confirmation, not a form" — what makes a form is fields to fill in,
+   * That is D-117's "one confirmation, not a form" — what makes a form is fields to fill in,
    * not an option declined.
    *
    * **`ask` is optional, and its absence is the old behaviour**: one vault is taken silently,
@@ -426,7 +426,7 @@ export class Session {
     // The AEAD says "invalid tag", which is true and useless: it is what a wrong passphrase
     // produces, and the person holding a right one cannot act on it. The marker in the
     // wrapping format already separated "this client cannot read that version" from this
-    // case (#109), so what is left here has exactly one ordinary cause and should say so.
+    // case (D-109), so what is left here has exactly one ordinary cause and should say so.
     let account: OpenedAccount;
     try {
       account = this.derivation.open(
@@ -786,7 +786,7 @@ export class Session {
 
 
   /**
-   * Take the account back on a device that holds nothing at all (docs/07, #112).
+   * Take the account back on a device that holds nothing at all (docs/07, D-112).
    *
    * The flow `pair()` cannot be, because there is nobody left to approve anything: the last
    * device is gone, and what remains is the address, the login and the passphrase. It is the
@@ -809,7 +809,7 @@ export class Session {
     const client = new SyncClient(args.serverUrl, deps.transport);
 
     // Answered before authentication, and answered for unknown logins too — a deterministic
-    // fake (#73). So a wrong login gets this far and fails at the proof, which is exactly
+    // fake (D-73). So a wrong login gets this far and fails at the proof, which is exactly
     // where every other wrong thing fails.
     const { account_salt, kdf_params } = await client.kdf(args.login);
     const accountSalt = fromBase64(account_salt);
@@ -864,7 +864,7 @@ export class Session {
   }
 
   /**
-   * Take the account back with the **recovery code**, and give it a passphrase again (#34).
+   * Take the account back with the **recovery code**, and give it a passphrase again (D-34).
    *
    * The server has accepted a code as the second proof since M3.5 and nothing on the client
    * ever made the call, so a code created in the settings was redeemable with `curl` and not
@@ -978,7 +978,7 @@ export class Session {
       pubkey: account.pubkey,
       enc_privkey: account.encPrivkey,
       wrapped_seed: account.wrappedSeed,
-      // What makes this account recoverable at all (#112). The recovery PAIR is deliberately
+      // What makes this account recoverable at all (D-112). The recovery PAIR is deliberately
       // not sent: it answers a forgotten passphrase, is not built yet, and null is the honest
       // way to say an account has none — the placeholder that used to sit here made every
       // account claim a way back it did not have.

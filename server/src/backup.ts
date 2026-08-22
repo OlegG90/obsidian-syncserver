@@ -1,12 +1,12 @@
 /**
- * Taking a copy of both stores as one usable thing (docs/08, #114).
+ * Taking a copy of both stores as one usable thing (docs/08, D-114).
  *
  * A backup is **two stores captured as one window**: the database, and the blobs the
  * database points at. Getting them separately is easy and useless — a dump that references
  * bytes the copy does not hold restores cleanly, looks whole, and cannot open a note. Nobody
  * finds out at restore time; somebody opens an old note months later.
  *
- * **A refusal window, not a freeze** (#114), and the order follows from that. Holding a lock
+ * **A refusal window, not a freeze** (D-114), and the order follows from that. Holding a lock
  * across `pg_dump` would stop the writes already running; a window that answers new ones with
  * "the server is being backed up" does not. So a write in flight can still upload a blob
  * after the blob copy — which makes **database first, blobs second** the only safe order
@@ -40,7 +40,7 @@ export interface Legs {
    * **Runs before the lock, before the row, before `windowOpen`** — which is the whole point
    * of its existing separately from the legs it guards. The `pg_dump` major check lived inside
    * `dumpDatabase`, so a mismatched binary was discovered with writes already being refused
-   * and a `backup_runs` row already inserted: the exact failure #73 was opened to prevent,
+   * and a `backup_runs` row already inserted: the exact failure D-73 was opened to prevent,
    * reproduced one layer further in. A precondition that can only be checked by starting the
    * work is not a precondition.
    *
@@ -53,7 +53,7 @@ export interface Legs {
   assertReady(): Promise<void>;
   /** `pg_dump`, or whatever this deployment calls it. */
   dumpDatabase(): Promise<{ bytes: number }>;
-  /** A copy of the blob store, taken AFTER the dump (#114). */
+  /** A copy of the blob store, taken AFTER the dump (D-114). */
   copyBlobs(): Promise<{ bytes: number; count: number }>;
 }
 
@@ -196,7 +196,7 @@ export const runBackup = async (
     log(`backup ${id} started, writes refused until it finishes → ${destination}`);
 
     try {
-      // The database FIRST (#114). Reversing these two is the one mistake in this file that
+      // The database FIRST (D-114). Reversing these two is the one mistake in this file that
       // produces a copy which restores without complaint and is missing files.
       const dumped = await legs.dumpDatabase();
       await db.query(`UPDATE backup_runs SET db_done_at = now() WHERE id = $1`, [id]);
@@ -326,7 +326,7 @@ export const missingBlobs = async (
  *
  * The **one integrity check** the roadmap names, and the three callers share it: the
  * console's verify button, the periodic restore rehearsal, and the nightly run that checks
- * the backup it just took. A backup is two stores captured as one window (#114); this is
+ * the backup it just took. A backup is two stores captured as one window (D-114); this is
  * the question that proves they agree — for every `nodes.sha256` and `versions.sha256`,
  * the bytes exist in the blob copy under that address.
  *

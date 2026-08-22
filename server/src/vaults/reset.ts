@@ -11,7 +11,7 @@
  * exception, released on the unbound TTL instead — see `recountQuota`, which is where the
  * reason lives. The cost is that a mistaken reset cannot be undone from the server — only
  * re-uploaded from a client that still holds the data. Other devices are protected
- * separately: they receive `410 reset` and quarantine rather than delete (#80).
+ * separately: they receive `410 reset` and quarantine rather than delete (D-80).
  */
 import type { PoolClient } from 'pg';
 import { thawIfUnderQuota } from '../shares/thaw.js';
@@ -122,7 +122,7 @@ export const resetVault = async (db: Db, userId: string, vaultId: string): Promi
 
     // The epoch is what tells every other device this happened, and which of the two
     // opposite reactions is correct: apply the deletions rather than upload the local
-    // extras back (#79). It may only increase, enforced by a trigger.
+    // extras back (D-79). It may only increase, enforced by a trigger.
     const epoch = await c.query<{ epoch: string }>(
       `UPDATE vaults SET reset_epoch = reset_epoch + 1 WHERE id = $1 RETURNING reset_epoch::text AS epoch`,
       [vaultId],

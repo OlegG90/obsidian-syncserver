@@ -140,7 +140,7 @@ describe('reading the delta', () => {
     assert.equal(forThisNode.length, 1, 'four revisions, one change: the state it is in now');
   });
 
-  it('pins a snapshot, so a change made mid-walk is neither lost nor applied twice (#24)', async () => {
+  it('pins a snapshot, so a change made mid-walk is neither lost nor applied twice (D-24)', async () => {
     await createFile('page-a.md');
     await createFile('page-b.md');
 
@@ -169,7 +169,7 @@ describe('reading the delta', () => {
 });
 
 describe('a cursor that cannot be answered', () => {
-  it('rejects a forged tag with 400, not 410 — malformed is not stale (#100)', async () => {
+  it('rejects a forged tag with 400, not 410 — malformed is not stale (D-100)', async () => {
     const good = (await delta()).json().next_cursor as string;
     const forged = `${good.slice(0, good.indexOf('.'))}.${Buffer.from('nope').toString('base64url')}`;
 
@@ -209,7 +209,7 @@ describe('a cursor that cannot be answered', () => {
     assert.equal(r.json().reason, 'restore');
   });
 
-  it('answers RESTORE when both epochs are stale: the protective instruction wins (#70)', async () => {
+  it('answers RESTORE when both epochs are stale: the protective instruction wins (D-70)', async () => {
     const at = await db.one<{ restore: string; reset: string }>(
       `SELECT m.restore_epoch::text AS restore, v.reset_epoch::text AS reset
          FROM vaults v CROSS JOIN server_meta m WHERE v.id = $1`, [vaultId]);

@@ -30,11 +30,11 @@ export type Refusal =
   | { kind: 'address_mismatch' }
   | { kind: 'size_mismatch' }
   | { kind: 'share_boundary' }
-  /** The content precondition failed: someone else wrote first (#52). */
+  /** The content precondition failed: someone else wrote first (D-52). */
   | { kind: 'base_mismatch'; currentSha256: string | null; rev: number }
   /** The revision precondition failed: placement moved on, and it is the subject of the write. */
   | { kind: 'rev_mismatch'; rev: number }
-  /** Restoring into a name that has since been taken; no automatic renaming (#36). */
+  /** Restoring into a name that has since been taken; no automatic renaming (D-36). */
   | { kind: 'name_taken'; blockedBy: string }
   | { kind: 'rate_limited'; retryAfterSeconds: number }
   /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
@@ -48,7 +48,7 @@ export type Refusal =
   /** A pairing exists and nobody has approved it yet — a state to wait in, not a fault. */
   | { kind: 'not_approved' }
   /** A vault still holding nodes: emptying it is the caller's to do, not the server's. */
-  /** An ended share still names this vault, and will until the journal TTL prunes it (#44). */
+  /** An ended share still names this vault, and will until the journal TTL prunes it (D-44). */
   | { kind: 'named_by_a_share' }
   /** That vault id already exists for this account — the ordinary retry, not a fault. */
   | { kind: 'vault_exists' }
@@ -69,12 +69,12 @@ export type Refusal =
   /**
    * An invitation did not apply, and deliberately does not say why: no such account and
    * already a member answer identically, because distinguishing them would turn this into
-   * the login oracle #73 closed on /auth/kdf.
+   * the login oracle D-73 closed on /auth/kdf.
    */
   | { kind: 'invite_failed' }
   /**
    * That login belongs to a CONSOLE account, which has no key to seal an invitation to
-   * (#115). Named rather than folded into the deliberately-silent `invite_failed`, because
+   * (D-115). Named rather than folded into the deliberately-silent `invite_failed`, because
    * it is not the case that refusal protects: a console account's existence is not a secret
    * — `admin` is seeded on every installation and documented — while "your invitation went
    * nowhere and nobody will say why" is a bug report waiting to happen.

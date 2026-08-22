@@ -9,7 +9,7 @@
  * that run inside `db.tx` use the same functions the routes use, through the `Queryable`
  * seam, instead of restating the fact as a second query shape.
  *
- * The rule behind the boolean is "404, never 403" (#20): a caller that does not own the
+ * The rule behind the boolean is "404, never 403" (D-20): a caller that does not own the
  * vault must not learn whether it exists. That mapping stays in the routes — the predicate
  * answers the question, the route decides the status. Whether a **frozen** account may
  * perform an operation is the caller's decision too: a delete must proceed through a

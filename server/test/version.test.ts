@@ -1,5 +1,5 @@
 /**
- * The server's own version, read rather than compiled in (#111).
+ * The server's own version, read rather than compiled in (D-111).
  *
  * The interesting failure is not the number — it is the **path**. `version.ts` resolves
  * `../package.json` relative to itself, which has to mean `server/package.json` from three

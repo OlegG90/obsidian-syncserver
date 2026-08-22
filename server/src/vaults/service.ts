@@ -121,7 +121,7 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
  * Remove a vault **and whatever it holds** (#175).
  *
  * It used to refuse anything but an empty one, which read as caution and was closer to a dead end: the
- * vault somebody wants gone is the one a mistaken pairing filled with a copy of their notes (#117), and
+ * vault somebody wants gone is the one a mistaken pairing filled with a copy of their notes (D-117), and
  * emptying it meant connecting to it, deleting every note, emptying the trash, disconnecting, connecting
  * to the right vault, and only then pressing Remove. Two disconnects, and no screen said so.
  *
@@ -131,7 +131,7 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
  *
  * **The one refusal that stays** is a share, and the reason surprises people: an **ended** share still
  * names the vault it lived in until the collector takes its row after the journal TTL. Ending a share is
- * a state change rather than a delete (#44), because participants who were offline must still learn of it
+ * a state change rather than a delete (D-44), because participants who were offline must still learn of it
  * from their delta — so a vault that hosted a share stays undeletable for up to 90 days after it ends.
  * What a share holds is other people's access, which is not this account's to tidy away (SH-27).
  *

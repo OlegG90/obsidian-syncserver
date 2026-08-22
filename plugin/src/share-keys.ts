@@ -175,7 +175,7 @@ export const UNREADABLE_NAME = '(name unavailable)';
  * Not cached across operations: a share can be ended by somebody else between two syncs, and
  * a key kept from before would be offered for a scope nothing is named under any more.
  *
- * **How a seam asks for it** (#86). A function that needs the scopes takes exactly the
+ * **How a seam asks for it** (D-86). A function that needs the scopes takes exactly the
  * methods it uses — `Pick<VaultScopes, 'keyFor'>`, `Pick<VaultScopes, 'readName'>` — rather
  * than the whole class. Narrow, so a caller supplies nothing it does not use and a test can
  * satisfy it without opening a vault; anchored to this type, so the seam names the domain term

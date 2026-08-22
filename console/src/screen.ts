@@ -48,7 +48,7 @@ export const chooseScreen = async (deps: ScreenDeps): Promise<Screen> => {
 /**
  * Whether a refusal means the session is over rather than the act was refused.
  *
- * The console holds both tokens in memory and spends the refresh one automatically (#102), so
+ * The console holds both tokens in memory and spends the refresh one automatically (D-102), so
  * by the time a call reports `unauthenticated` the renewal has ALREADY been tried and refused:
  * the device was revoked, or the session was forgotten. There is nothing left to try.
  *

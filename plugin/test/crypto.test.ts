@@ -119,7 +119,7 @@ describe('the account hierarchy', () => {
     assert.deepEqual(deriveKek(nfc, salt, FAST), deriveKek(nfd, salt, FAST));
   });
 
-  it("refuses to create an account below the server's KDF floor (#62)", () => {
+  it("refuses to create an account below the server's KDF floor (D-62)", () => {
     // Registering with weak parameters is refused by a CHECK constraint inside a
     // transaction, so the client that chose them learns least. It fails here instead.
     assert.throws(() => createAccount('p', FAST), /below the server/);
@@ -132,7 +132,7 @@ describe('the wrapping format', () => {
   const key = randomBytes(32);
   const plaintext = utf8('the seed');
 
-  it('carries its version and algorithm at fixed offsets (#109)', () => {
+  it('carries its version and algorithm at fixed offsets (D-109)', () => {
     const raw = fromBase64(seal(key, plaintext));
     assert.equal(raw[0], WRAP_VERSION, 'the version is byte 0, where a later version must also put it');
     assert.equal(raw[1], ALG_XCHACHA20_POLY1305);

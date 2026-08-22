@@ -38,7 +38,7 @@ CREATE TYPE share_state   AS ENUM ('preparing', 'active', 'cancelled', 'ended');
 CREATE TYPE key_scope_kind AS ENUM ('vault', 'share');
 
 CREATE TYPE user_role     AS ENUM ('user', 'admin');
--- 'tombstone' is the one reserved account: the identity account deletion (#55) reassigns
+-- 'tombstone' is the one reserved account: the identity account deletion (D-55) reassigns
 -- authorship to, so other people's history stays readable after its writer is gone. It
 -- carries no key material, nobody can log into it, it owns nothing, and it is neither
 -- deleted nor changed once it exists. Exactly one row may hold it.
@@ -154,7 +154,7 @@ CREATE TABLE users (
     pubkey       bytea,
     enc_privkey  bytea,
     -- Proof that a caller can OPEN wrapped_seed, without holding it: HKDF of the same
-    -- passphrase-derived KEK, bound to the login and salt (#112). It is what lets a device
+    -- passphrase-derived KEK, bound to the login and salt (D-112). It is what lets a device
     -- with nothing at all recover the account — the server hands back the envelope only
     -- against evidence that whoever asks can already unwrap it.
     kek_verifier_hash text,
@@ -167,13 +167,13 @@ CREATE TABLE users (
     CONSTRAINT recovery_code_is_whole CHECK (
         (recovery_key IS NULL) = (recovery_code_hash IS NULL)),
 
-    -- `role` carries the KIND of account, not a permission crossed with one (#115). An
+    -- `role` carries the KIND of account, not a permission crossed with one (D-115). An
     -- administrator IS a console account: password, no key material, no vault. A user IS a
     -- vault account: keys born on their device, and no way into the console. Neither can be
     -- the other, and the shape check below is what makes that true rather than hoped for.
     role         user_role   NOT NULL DEFAULT 'user',
     -- Argon2id over a password a PERSON chose, which is why it is the one verifier on this
-    -- server that needs a slow hash (#108, #115): every other stored secret is at least 128
+    -- server that needs a slow hash (D-108, D-115): every other stored secret is at least 128
     -- bits of CSPRNG, and no client-side KDF can stand in here because the browser is not
     -- trusted to have run one. NULL only on the seeded row, before the first run sets one.
     password_hash text,
@@ -200,7 +200,7 @@ CREATE TABLE users (
     created_at   timestamptz NOT NULL DEFAULT now(),
 
     -- Storage is a vault account's business and nothing else's. An administrator owns no
-    -- vault (#115) and the tombstone owns nothing at all, so both hold zero rather than a
+    -- vault (D-115) and the tombstone owns nothing at all, so both hold zero rather than a
     -- token positive number that exists only to satisfy a `> 0` check and is never read.
     -- Stated here so the two seeded rows below need no such number.
     CONSTRAINT quota_matches_the_kind CHECK (
@@ -217,7 +217,7 @@ CREATE TABLE users (
             AND kek_verifier_hash IS NULL AND password_hash IS NULL
             AND invite_token_hash IS NOT NULL AND invite_expires_at IS NOT NULL)
         OR
-        -- The seeded first administrator, before the first run sets a password (#107). It
+        -- The seeded first administrator, before the first run sets a password (D-107). It
         -- has no token either: there is nothing to redeem, only a password to create, and
         -- creating it is what makes this row usable. A seeded PASSWORD would still work if
         -- nobody changed it, which is the property this shape exists to deny.
@@ -250,7 +250,7 @@ CREATE TABLE users (
         OR
         -- A live account carries every key it needs to be opened again, and the recovery
         -- PAIR is deliberately not among them: it answers a different loss and is optional
-        -- (#112). `kek_verifier_hash` is not optional — without it an account that loses
+        -- (D-112). `kek_verifier_hash` is not optional — without it an account that loses
         -- its last device cannot be recovered at all, which is the state this milestone
         -- exists to make impossible.
         (state NOT IN ('provisioned', 'tombstone') AND role = 'user'
@@ -269,7 +269,7 @@ CREATE UNIQUE INDEX users_login_key ON users (lower(login));
 CREATE UNIQUE INDEX users_single_tombstone ON users ((state)) WHERE state = 'tombstone';
 
 -- Locking yourself out of your own server is a one-keystroke mistake, so the last
--- usable administrator cannot be demoted, disabled, put into deletion — or DELETEd (#88).
+-- usable administrator cannot be demoted, disabled, put into deletion — or DELETEd (D-88).
 CREATE FUNCTION users_keep_one_admin() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -295,7 +295,7 @@ CREATE TRIGGER users_last_admin_stays
     BEFORE UPDATE OF role, state OR DELETE ON users
     FOR EACH ROW EXECUTE FUNCTION users_keep_one_admin();
 
--- Deleting an account is a PROCEDURE, not a statement (#55): end its shares, clear the
+-- Deleting an account is a PROCEDURE, not a statement (D-55): end its shares, clear the
 -- share marks from every replica, reassign authorship to a tombstone so other people's
 -- history stays readable. The STATE can be enforced: an account that ever held data must
 -- pass through 'deleting' first. An unclaimed invitation is exempt.
@@ -382,8 +382,8 @@ CREATE TRIGGER vaults_reset_epoch_forward
 
 -- ============================================================ admin audit + backups
 
--- Administrative actions on other people's accounts. Append-only (#87), and deliberately
--- free of foreign keys (#93): the logins are snapshots, so the record survives — and
+-- Administrative actions on other people's accounts. Append-only (D-87), and deliberately
+-- free of foreign keys (D-93): the logins are snapshots, so the record survives — and
 -- keeps naming — an account later renamed or deleted.
 CREATE TABLE audit_log (
     id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -399,7 +399,7 @@ CREATE TABLE audit_log (
 CREATE INDEX audit_log_target ON audit_log (target_user_id, at DESC);
 CREATE INDEX audit_log_at     ON audit_log (at DESC);
 
--- Backup history. A backup is TWO stores captured inside ONE refusal window (#114): new
+-- Backup history. A backup is TWO stores captured inside ONE refusal window (D-114): new
 -- writes are refused, both legs run inside the window, the window closes. CHECKs reject a
 -- leg outside it.
 --
@@ -407,7 +407,7 @@ CREATE INDEX audit_log_at     ON audit_log (at DESC);
 -- is a moment in which no NEW write starts — and `freeze` is the quota state (SH-20), which
 -- is a different thing entirely.
 --
--- The ORDER is a constraint and not a convention, for the reason #114 gives: an in-flight
+-- The ORDER is a constraint and not a convention, for the reason D-114 gives: an in-flight
 -- write can upload a blob after the blob copy while its node still reaches the dump.
 -- Database first makes the blob copy a superset of what the dump references, and the
 -- surplus is swept. Blobs first produces the silent failure — a restore that completes,
@@ -465,7 +465,7 @@ CREATE TABLE devices (
     platform     text NOT NULL,
     last_cursor  text,
     last_seen_at timestamptz,
-    refresh_token_hash text,                     -- one per device, so "sign out this device" works (#90)
+    refresh_token_hash text,                     -- one per device, so "sign out this device" works (D-90)
     revoked_at   timestamptz
 );
 
@@ -549,7 +549,7 @@ CREATE TABLE blobs (
 
 CREATE INDEX blobs_gc ON blobs (gc_marked_at) WHERE gc_marked_at IS NOT NULL;
 
--- The address IS the content, so a blob's identity never changes (#19). refcount and
+-- The address IS the content, so a blob's identity never changes (D-19). refcount and
 -- gc_marked_at are the collector's bookkeeping, outside the rule.
 CREATE FUNCTION blobs_reject_identity_change() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -587,7 +587,7 @@ CREATE INDEX blob_keys_by_scope ON blob_keys (scope_id);
 -- Deduplication. The content key is RANDOM, so identical content does not converge on
 -- one address by itself; this index converges it, per scope. Two vaults of one account
 -- have different scope keys, so they do not dedup against each other (AC-09). Reading it
--- is an oracle, so queries carry the same authorisation as a blob read (#65).
+-- is an oracle, so queries carry the same authorisation as a blob read (D-65).
 CREATE TABLE dedup_index (
     scope_id    uuid  NOT NULL REFERENCES key_scopes ON DELETE RESTRICT,
     content_tag bytea NOT NULL CHECK (octet_length(content_tag) = 32),  -- HMAC(scope key, sha256(plaintext))
@@ -775,7 +775,7 @@ CREATE TRIGGER nodes_no_cycles
     BEFORE INSERT OR UPDATE OF parent_id ON nodes
     FOR EACH ROW EXECUTE FUNCTION nodes_reject_cycle();
 
--- A file never becomes a folder and vice versa (#102): no operation does it, and every
+-- A file never becomes a folder and vice versa (D-102): no operation does it, and every
 -- rule that reads `type` assumes it.
 CREATE FUNCTION nodes_reject_type_change() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -845,7 +845,7 @@ CREATE CONSTRAINT TRIGGER nodes_ancestry_matches_parents
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION nodes_check_ancestry();
 
--- Version history (#14). Keyed by node, so a rename touches nothing here. Carries
+-- Version history (D-14). Keyed by node, so a rename touches nothing here. Carries
 -- vault_id for the composite FK to nodes.
 CREATE TABLE versions (
     vault_id  uuid        NOT NULL,
@@ -865,7 +865,7 @@ CREATE TABLE versions (
 CREATE INDEX versions_by_blob ON versions (sha256);
 CREATE INDEX versions_by_age  ON versions (at);
 
--- Delta log (#2), PER VAULT (AC-12). Append-only, 90-day TTL, never used to serve
+-- Delta log (D-2), PER VAULT (AC-12). Append-only, 90-day TTL, never used to serve
 -- history. node_id has no FK — the log outlives the node.
 CREATE TABLE journal (
     vault_id       uuid        NOT NULL REFERENCES vaults ON DELETE CASCADE,
@@ -885,7 +885,7 @@ CREATE INDEX journal_by_age ON journal (at);
 
 -- ============================================================ sharing
 --
--- REPLICATION, not mounting (#104). Every participant holds their own copy as ordinary
+-- REPLICATION, not mounting (D-104). Every participant holds their own copy as ordinary
 -- nodes in the vault THEY ACCEPTED IN (SH-02, AC-Q4); a write fans out to the corresponding node
 -- of every other participant (SH-11). The server never serves one user's node to another.
 
@@ -961,7 +961,7 @@ CREATE TABLE share_members (
     left_at     timestamptz,
     -- No freeze column here: over quota is an ACCOUNT state (users.frozen_at, SH-20),
     -- because the quota it reflects is per account. And no key epoch: the share key is
-    -- never rotated (#10), so there is no generation to name.
+    -- never rotated (D-10), so there is no generation to name.
     wrapped_key bytea,                            -- HPKE envelope carrying the share key
 
     PRIMARY KEY (share_id, user_id),
@@ -1137,7 +1137,7 @@ CREATE CONSTRAINT TRIGGER shares_ended_leaves_nobody
 
 -- At most 8 participants, the initiator included (SH-11) — what keeps synchronous fan-out
 -- honest.
--- A console account cannot be a participant (#115), and this is where that stops being a
+-- A console account cannot be a participant (D-115), and this is where that stops being a
 -- sentence in a document. It holds no `pubkey`, so there is nothing to seal a share key to
 -- — and the FK alone does not notice, because the row exists and is perfectly `active`.
 -- Without this the invitation lands, the envelope is sealed to nothing, and the failure
@@ -1259,7 +1259,7 @@ CREATE TRIGGER share_members_initiator_stays
     BEFORE UPDATE OF finalization_started_at, left_at OR DELETE ON share_members
     FOR EACH ROW EXECUTE FUNCTION share_members_protect_initiator();
 
--- A node's share mark is a FACT, not a claim (#105), checked BOTH ways (SH-26):
+-- A node's share mark is a FACT, not a claim (D-105), checked BOTH ways (SH-26):
 --   * a node inside a shared folder must ITSELF be marked — no unmarked node in a replica
 --     (else it is invisible to propagation and swept in by a reset, SH-27);
 --   * a marked node is the share's root item or has a parent in the same share, its owner
@@ -1901,7 +1901,7 @@ CREATE TRIGGER audit_log_no_delete
 --
 -- `disabled` means sessions revoked and writes refused, with the data untouched (docs/11);
 -- an account whose rows had to be removed before it could be switched off would make
--- disabling a destructive act and the reversible half of #55 impossible. `deleting` is the
+-- disabling a destructive act and the reversible half of D-55 impossible. `deleting` is the
 -- procedure itself running, and it has to be able to act on what it is dismantling.
 --
 -- So: INSERT and UPDATE need an active owner (or the deletion procedure). DELETE does not,
@@ -1952,7 +1952,7 @@ CREATE TRIGGER nodes_owner_is_active
 
 -- Two states must own NOTHING, and they are the two that are not an account in trouble but
 -- an account that is not there: `provisioned` is an unclaimed invitation, and the tombstone
--- holds no keys, no login and no data by construction (#55).
+-- holds no keys, no login and no data by construction (D-55).
 --
 -- `disabled` and `deleting` are deliberately absent from that list. Disabling keeps every
 -- byte (docs/11) and deletion is a procedure that runs *while* the account still owns what
@@ -1983,7 +1983,7 @@ CREATE FUNCTION versions_author_must_be_active() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
     -- The tombstone is admitted alongside active accounts, and it has to be: account
-    -- deletion (#55) reassigns authorship to it, and a rule that only accepted 'active'
+    -- deletion (D-55) reassigns authorship to it, and a rule that only accepted 'active'
     -- would make the anonymisation pass impossible — the procedure would block on its
     -- own guard.
     IF NOT EXISTS (SELECT 1 FROM users
@@ -2048,7 +2048,7 @@ CREATE CONSTRAINT TRIGGER versions_revision_within_node
 -- Two accounts have to exist before the system can do anything, and neither can be made
 -- by the procedures that make the others. server_meta above is seeded for the same reason.
 
--- The TOMBSTONE (#55). Account deletion reassigns authorship to it, so history keeps
+-- The TOMBSTONE (D-55). Account deletion reassigns authorship to it, so history keeps
 -- saying "written by an account that is gone" instead of losing its writer. It has to
 -- exist BEFORE the first deletion, and nothing else would ever insert it. The nil UUID is
 -- deliberate: gen_random_uuid() never produces it, so the id is unmistakable in a log.
@@ -2057,7 +2057,7 @@ CREATE CONSTRAINT TRIGGER versions_revision_within_node
 INSERT INTO users (id, login, role, state, quota_bytes)
 VALUES ('00000000-0000-0000-0000-000000000000', 'deleted', 'user', 'tombstone', 0);
 
--- The FIRST ADMINISTRATOR, as a CONSOLE account with NO PASSWORD (#107, #115). It cannot be
+-- The FIRST ADMINISTRATOR, as a CONSOLE account with NO PASSWORD (D-107, D-115). It cannot be
 -- an invitation: an invitation is redeemed on a device that makes keys, and a console
 -- account has none to make. What it is missing is the one thing a person can supply without
 -- a client, and `POST /auth/bootstrap` CREATES it rather than replacing a known value —

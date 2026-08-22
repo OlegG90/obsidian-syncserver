@@ -1,7 +1,7 @@
 -- SyncServer — schema tests (PostgreSQL 16+).
 --
 -- Mostly NEGATIVE tests: each fires a rule from the wrong side and asserts WHICH rule
--- rejected it — the expected SQLSTATE plus a fragment of the message (#101). SQLSTATE
+-- rejected it — the expected SQLSTATE plus a fragment of the message (D-101). SQLSTATE
 -- alone is not enough: nearly every trigger raises check_violation, like a plain CHECK.
 --
 -- Runs in one transaction ending in ROLLBACK, so it leaves the database as schema.sql
@@ -61,7 +61,7 @@ $$, '23001', 'cannot be deleted or replaced',
 -- ============================================================ fixtures
 
 -- Two accounts. Keys are dummy bytes: nothing here tests crypto, only the shape the
--- schema demands. state must be explicit (default 'provisioned' carries no keys, #83).
+-- schema demands. state must be explicit (default 'provisioned' carries no keys, D-83).
 INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
                     pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
 VALUES
@@ -124,7 +124,7 @@ VALUES ('aa000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000
         ARRAY['a0000000-0000-0000-0000-0000000000a1',
               'a0000000-0000-0000-0000-0000000000a2']::uuid[]);
 
--- ============================================================ accounts / KDF (#83)
+-- ============================================================ accounts / KDF (D-83)
 
 -- A provisioned account carries an invitation and no keys.
 SELECT expect_ok($$
@@ -214,7 +214,7 @@ SELECT expect_fail($$
 $$, '23514', 'recovery_code_is_whole',
    'an active account holding a recovery envelope with no verifier');
 
--- The recovery code answers a DIFFERENT loss and is optional (#112). An account without one
+-- The recovery code answers a DIFFERENT loss and is optional (D-112). An account without one
 -- must be expressible, because the alternative is the placeholder that made an account claim
 -- a way back it did not have.
 SELECT expect_ok($$
@@ -237,7 +237,7 @@ $$, '23514', 'keys_match_state',
    'an active account with no way to prove its passphrase');
 
 -- ---- last active administrator
--- A CONSOLE account (#115): a password and no key material. An administrator carrying keys
+-- A CONSOLE account (D-115): a password and no key material. An administrator carrying keys
 -- is now a shape the check refuses, which the negatives further down assert.
 INSERT INTO users (id, login, state, role, password_hash, quota_bytes)
 VALUES ('99999999-9999-9999-9999-999999999999', 'root', 'active', 'admin', '$argon2id$fake', 0);
@@ -297,7 +297,7 @@ $$, '23514', 'exactly one linked root',
 
 -- Disabling keeps every byte (docs/11): sessions go, writes stop, the data stays. An
 -- account that had to be emptied before it could be switched off would make disabling a
--- destructive act, and the reversible half of #55 would not exist.
+-- destructive act, and the reversible half of D-55 would not exist.
 SELECT expect_ok($$
     DO $inner$ BEGIN
         UPDATE users SET state = 'disabled' WHERE login = 'alice';
@@ -478,7 +478,7 @@ SELECT expect_fail($$
 $$, '23514', 'no name_key_id',
    'an encrypted name with no name_key_id');
 
--- Deleting frees the name (#36).
+-- Deleting frees the name (D-36).
 SELECT expect_ok($$
     UPDATE nodes SET deleted_at = now(), sha256 = NULL, size = NULL
      WHERE vault_id = 'aa000000-0000-0000-0000-000000000001'
@@ -680,7 +680,7 @@ SELECT expect_ok($$
                           AND state = 'tombstone' AND login = 'deleted') THEN
             RAISE EXCEPTION 'the tombstone was not seeded';
         END IF;
-        -- No token and no password (#107, #115): there is nothing to redeem here, only a
+        -- No token and no password (D-107, D-115): there is nothing to redeem here, only a
         -- password to create, and creating it is what makes the row usable. A seeded
         -- password would keep working if nobody changed it.
         IF NOT EXISTS (SELECT 1 FROM users
@@ -1399,7 +1399,7 @@ SELECT expect_ok($$
     END $inner$
 $$, 'terminal share cleanup cascades completed memberships');
 
--- ---- the two kinds of account (#115)
+-- ---- the two kinds of account (D-115)
 
 -- An administrator with key material is the shape that would have let a browser hold a
 -- seed. It is refused, which is what makes "the admin has no key" a fact about the row.
@@ -1419,7 +1419,7 @@ SELECT expect_fail($$
     UPDATE users SET password_hash = NULL WHERE login = 'root'
 $$, '23514', 'keys_match_state', 'an active console account with no password');
 
--- The seeded first administrator is the one row allowed to have neither (#107): it is
+-- The seeded first administrator is the one row allowed to have neither (D-107): it is
 -- `provisioned`, holds no token because there is nothing to redeem, and becomes usable by
 -- having a password CREATED rather than replaced.
 SELECT expect_ok($$
@@ -1429,7 +1429,7 @@ SELECT expect_ok($$
        AND password_hash IS NULL AND invite_token_hash IS NULL
 $$, 'the seeded administrator waits with no password and no token');
 
--- Quota belongs to accounts that store things. An administrator owns no vault (#115), so a
+-- Quota belongs to accounts that store things. An administrator owns no vault (D-115), so a
 -- positive quota on one is a number that would never be read — and zero on a vault account
 -- is an account frozen from the moment it was made.
 SELECT expect_fail($$
@@ -1458,7 +1458,7 @@ SELECT expect_ok($$
     UPDATE users SET history_days = 30 WHERE login = 'alice'
 $$, 'an account may keep less history than the default year');
 
--- A console account administers the server and holds no key material (#115), so there is
+-- A console account administers the server and holds no key material (D-115), so there is
 -- nothing to seal a share key to. The FK does not catch it — the row exists and is active —
 -- which is exactly why this is a trigger and not left to the one code path that knows.
 SELECT expect_fail($$
@@ -1469,7 +1469,7 @@ $$, '23514', 'administers the server', 'a console account invited into a share')
 
 -- ============================================================ backup runs
 
--- The dangerous order (#114), refused by the schema rather than by the one file that knows
+-- The dangerous order (D-114), refused by the schema rather than by the one file that knows
 -- about it. A run that copied blobs without a database leg behind them is the shape that
 -- restores cleanly and cannot open a file — months later, with no way back.
 SELECT expect_fail($$

@@ -53,7 +53,7 @@ const redeemBody = (token: string, login = 'admin') => ({
 /**
  * An invitation for a VAULT account, written straight in.
  *
- * The seeded row is a console account now (#115) and there is nothing to redeem on it, so
+ * The seeded row is a console account now (D-115) and there is nothing to redeem on it, so
  * these tests need an invitation the way every real one arrives: issued by an administrator.
  * Issuing it through `/admin/invitations` is `operator.test.ts`'s subject; here it is a
  * fixture, and going through the API would test that endpoint twice and this one not at all.
@@ -72,7 +72,7 @@ const seedInvitation = async (login: string, token: string): Promise<string> => 
 /**
  * The vault account the login, refresh and recovery tests are about.
  *
- * It used to be the seeded administrator, redeemed at the top of this file. Under #115 that
+ * It used to be the seeded administrator, redeemed at the top of this file. Under D-115 that
  * row is a CONSOLE account — a password and no key material — so it can no longer hold an
  * `auth_secret` to present or a seed envelope to hand back. These describes are about a
  * *vault* account, so they get one, seeded directly like every other suite's fixtures:
@@ -92,7 +92,7 @@ const seedVaultAccount = async (): Promise<void> => {
     [VAULT_LOGIN, sha256hex('a'.repeat(43)), sha256hex(KEK_VERIFIER), sha256hex(RECOVERY_CODE)],
   );
   // And a device, which redeeming used to create along the way: `/auth/login` names one,
-  // because a caller not attributed to a device cannot be throttled or signed out (#90).
+  // because a caller not attributed to a device cannot be throttled or signed out (D-90).
   await db.query(
     `INSERT INTO devices (user_id, name, platform)
      SELECT id, 'laptop', 'linux' FROM users WHERE login = $1`,
@@ -104,7 +104,7 @@ before(async () => {
   db = connect(cfg.databaseUrl);
   // Undo whatever an earlier run redeemed: these tests need the seeded first-run state.
   //
-  // `audit_log` is deliberately NOT among them. It is append-only by trigger (#87), so
+  // `audit_log` is deliberately NOT among them. It is append-only by trigger (D-87), so
   // wiping it only worked while it happened to be empty — a `DELETE` matching no rows
   // fires no per-row trigger — and it failed the moment any other suite recorded something
   // first. A test that has to break a rule to set itself up is asserting against the rule;
@@ -116,7 +116,7 @@ before(async () => {
   // in an inconsistent state until it commits.
   await db.query(`BEGIN; SET CONSTRAINTS ALL DEFERRED;
                   DELETE FROM nodes; DELETE FROM vaults; COMMIT;`);
-  // Back to what schema.sql seeds: a console account with no password and no token (#115).
+  // Back to what schema.sql seeds: a console account with no password and no token (D-115).
   // There is nothing to redeem on a fresh server — only a password to create.
   await db.query(`UPDATE users SET state = 'provisioned', role = 'admin', password_hash = NULL,
                          auth_secret_hash = NULL, account_salt = NULL, kdf_params = NULL,
@@ -126,8 +126,8 @@ before(async () => {
                          invite_token_hash = NULL, invite_expires_at = NULL
                    WHERE id = '00000000-0000-0000-0000-000000000001'`);
   // Demoted, not deleted. What "first run" means is that no ACTIVE ADMINISTRATOR exists
-  // (#107) — not that the table is empty — and deleting an active account is a procedure
-  // rather than a statement (#55), so a teardown that tried it was asking the schema to
+  // (D-107) — not that the table is empty — and deleting an active account is a procedure
+  // rather than a statement (D-55), so a teardown that tried it was asking the schema to
   // break its own rule on behalf of a fixture. Other suites' accounts are left alone.
   await db.query(`UPDATE users SET role = 'user'
                    WHERE state = 'active' AND id <> '00000000-0000-0000-0000-000000000001'`);
@@ -192,7 +192,7 @@ describe('first run', () => {
   });
 
   it('creates the first password rather than replacing one, and only once', async () => {
-    // The property a seeded default cannot have (#107): there is no value that works until
+    // The property a seeded default cannot have (D-107): there is no value that works until
     // somebody gets round to changing it, because until this call there is no value at all.
     const seeded = await db.one<{ hash: string | null; token: string | null }>(
       `SELECT password_hash AS hash, invite_token_hash AS token FROM users
@@ -222,11 +222,11 @@ describe('first run', () => {
         WHERE id = '00000000-0000-0000-0000-000000000001'`,
     );
     assert.equal(row!.state, 'active');
-    assert.match(row!.hash, /^\$argon2id\$/, 'a password a person chose gets a slow hash (#108)');
-    assert.equal(row!.keys, null, 'and a console account holds no key material at all (#115)');
+    assert.match(row!.hash, /^\$argon2id\$/, 'a password a person chose gets a slow hash (D-108)');
+    assert.equal(row!.keys, null, 'and a console account holds no key material at all (D-115)');
 
     // The line that says the administrator was made, which nothing checked and which used to
-    // be written by a second transaction of its own (#88). It commits with the password now:
+    // be written by a second transaction of its own (D-88). It commits with the password now:
     // an administrator existing with no record of its creation is the weakest the log can be,
     // on the single account whose creation is the most interesting entry it will ever hold.
     const logged = await db.one<{ n: string }>(
@@ -270,7 +270,7 @@ describe('first run', () => {
     // Put the file back as the next test expects it, stand-in included.
     await db.query(`UPDATE users SET login = 'admin' WHERE id = '00000000-0000-0000-0000-000000000001'`);
     // Through `deleting`, because the schema refuses to remove an account that never entered
-    // it — the same rule that makes deletion a procedure rather than a DELETE (#55).
+    // it — the same rule that makes deletion a procedure rather than a DELETE (D-55).
     await db.query(`UPDATE users SET state = 'deleting' WHERE id = $1`, [stand!.id]);
     await db.query(`DELETE FROM users WHERE id = $1`, [stand!.id]);
   });
@@ -286,7 +286,7 @@ describe('first run', () => {
   });
 
   it('signs the administrator in to the console on ONE device row, however often', async () => {
-    // A device row exists so a session can be revoked one at a time (#90) — it stands for
+    // A device row exists so a session can be revoked one at a time (D-90) — it stands for
     // something somebody installed. A browser is not that: it signs in, closes, signs in
     // again, and a row per sign-in is a list of devices nobody owns that grows for ever.
     const signIn = () =>
@@ -368,7 +368,7 @@ describe('first run', () => {
   });
 });
 
-describe('/auth/kdf does not enumerate accounts (#73)', () => {
+describe('/auth/kdf does not enumerate accounts (D-73)', () => {
   it('answers an unknown login with a salt of the right shape', async () => {
     const r = await app.inject({ method: 'GET', url: '/auth/kdf?login=nobody-here' });
     assert.equal(r.statusCode, 200);
@@ -408,7 +408,7 @@ describe('login and refresh', () => {
 
   it('marks the device seen on every refresh, not only when it signed in', async () => {
     // The column exists to answer "which of these devices is gone", and it used to answer "when did
-    // this one arrive": written at sign-in, at recovery and at pairing, and never again (#118).
+    // this one arrive": written at sign-in, at recovery and at pairing, and never again (D-118).
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
     const device = await aDevice(account!.id);
     const seen = async (): Promise<string | null> =>
@@ -482,7 +482,7 @@ describe('login and refresh', () => {
     await app.inject({ method: 'POST', url: '/auth/login', payload });
 
     const stale = await app.inject({ method: 'POST', url: '/auth/refresh', payload: { refresh: first } });
-    assert.equal(stale.statusCode, 401, 'one refresh token per device (#90) means the old one is dead');
+    assert.equal(stale.statusCode, 401, 'one refresh token per device (D-90) means the old one is dead');
   });
 
   it('gives the same answer for an unknown login and a wrong secret', async () => {
@@ -542,7 +542,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
   });
 
   it('answers an unknown login exactly as it answers a wrong proof', async () => {
-    // The refusal is the enumeration oracle if it differs by so much as a status (#73).
+    // The refusal is the enumeration oracle if it differs by so much as a status (D-73).
     const unknown = await recover({ login: `ghost-${randomUUID()}`, kek_verifier: VERIFIER });
     const wrong = await recover({ login: VAULT_LOGIN, kek_verifier: 'w'.repeat(43) });
     assert.equal(unknown.statusCode, 401);
@@ -636,7 +636,7 @@ describe('recovery — the account comes back to a device that holds nothing', (
   });
 
   it('refuses an account that has no recovery code, without saying that is why', async () => {
-    // Null is the honest shape for an account with no code (#112), and the refusal for one
+    // Null is the honest shape for an account with no code (D-112), and the refusal for one
     // must be indistinguishable from a wrong code — otherwise it reports on the account.
     await db.query(`UPDATE users SET recovery_key = NULL, recovery_code_hash = NULL WHERE login = $1`, [VAULT_LOGIN]);
     const none = await recover({ login: VAULT_LOGIN, recovery_code: CODE });
@@ -739,7 +739,7 @@ describe('the recovery code an account can be given later', () => {
     assert.equal(
       (await put({ recovery_key: envelope, recovery_code_hash: sha256hex(CODE).toUpperCase() })).statusCode,
       400,
-      'and the encoding is part of the contract (#108), so upper-case hex is not it',
+      'and the encoding is part of the contract (D-108), so upper-case hex is not it',
     );
   });
 
@@ -777,7 +777,7 @@ describe('the recovery code an account can be given later', () => {
 });
 
 /**
- * Putting the account behind a different passphrase (#34).
+ * Putting the account behind a different passphrase (D-34).
  *
  * Built because recovery by code has nowhere to land without it: somebody who recovered with a
  * code has no passphrase, and an account left under the forgotten one would be openable by its
@@ -884,7 +884,7 @@ describe('a console administrator changing their password', () => {
    * The account the schema seeds, put back into the state a bootstrapped server leaves it in.
    *
    * NOT a console account of its own, and the first attempt at one taught why: an active
-   * administrator cannot be deleted — deletion is a procedure, not a statement (#55) — and the
+   * administrator cannot be deleted — deletion is a procedure, not a statement (D-55) — and the
    * schema separately refuses to leave the server with no active administrator. So a fixture
    * that created one left it behind, and the NEXT run's `before` hook, which demotes every
    * active administrator but this row, was refused by that guard: `23001, refusing to remove
@@ -1246,7 +1246,7 @@ describe('an operator looking at somebody’s devices', () => {
 
   it('is silent about a device that is not that account’s', async () => {
     // A 404 that told "no such device" apart from "not theirs" would answer a question about
-    // another account (#20).
+    // another account (D-20).
     const access = await asAdmin();
     const out = await app.inject({
       method: 'DELETE',

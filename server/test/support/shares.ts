@@ -50,7 +50,7 @@ export const openWorld = async (label: string): Promise<void> => {
   w.app = await buildApp(w.db, { ...loadConfig(), blobStorePath: w.store });
 
   // Claim the seeded administrator, so each file stands on its own. Until one exists the API
-  // answers 503 to everything but its redemption (#107) — and this suite used to pass only
+  // answers 503 to everything but its redemption (D-107) — and this suite used to pass only
   // because another file had happened to run first and claim it.
   await w.db.query(
     `UPDATE users SET state = 'active', password_hash = '$argon2id$test'

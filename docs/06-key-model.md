@@ -83,7 +83,7 @@ makes an old blob readable after the layout changes.
 ### The wrapping format, byte for byte
 
 Everything encrypted that is **not file content** — the seed under the KEK, a content key under a scope key,
-a name under a scope key — uses the same AEAD in a second, smaller format (#109):
+a name under a scope key — uses the same AEAD in a second, smaller format (D-109):
 
 ```
 marker      = wrap_version ‖ alg_id
@@ -167,7 +167,7 @@ exists has no justification.
 
 The `aad` binds the envelope to the pair "share — recipient": it cannot be handed to a different
 participant or reused under a different share. There is **no key epoch** in it, because `KS` is never
-rotated (#10) — an epoch would name a generation that cannot exist.
+rotated (D-10) — an epoch would name a generation that cannot exist.
 
 ## Vault key derivation
 
@@ -286,7 +286,7 @@ Both are implemented. The passphrase proof arrived with M3.5; the code with M7.
 
     recovery_kek = HKDF(sha256, ikm = normalised code, salt = account_salt, info = "recovery-code")
     recovery_key = AEAD(recovery_kek, seed)              ← beside wrapped_seed, same 32 bytes
-    recovery_code_hash = sha256(normalised code), hex    ← like every other stored verifier (#108)
+    recovery_code_hash = sha256(normalised code), hex    ← like every other stored verifier (D-108)
 
 **HKDF and not Argon2id**, unlike the passphrase, and the asymmetry is the point: the code is 128 bits of
 CSPRNG (`human-code.ts`), so no work factor buys anything against it — it would only charge the person
@@ -340,7 +340,7 @@ candidate expensive — but the exposure is real and belongs on this list.
 
 `/auth/recover` is the one endpoint where a guess is worth making, so a limit on guesses is a rule and not a
 deployment choice: attempts are counted per login and per source, back off, and are recorded in the audit log.
-The refusal is the same for an unknown login and a wrong phrase (#73), so the limit never becomes an oracle
+The refusal is the same for an unknown login and a wrong phrase (D-73), so the limit never becomes an oracle
 of its own.
 
 ## Hashing the four secrets the server does store
@@ -349,7 +349,7 @@ The server holds no key, but it does hold a verifier for five things: `users.aut
 `users.recovery_code_hash`, `users.kek_verifier_hash`, `users.invite_token_hash` and
 `devices.refresh_token_hash`. All five are
 **SHA-256 over the token's UTF-8 bytes, hex-encoded, compared in constant time** — no salt, no pepper, no
-slow KDF (#108). The encoding is part of the contract, not an implementation detail: a token is a string on
+slow KDF (D-108). The encoding is part of the contract, not an implementation detail: a token is a string on
 the wire, and "hash the string" is ambiguous until it says which bytes.
 
 `kek_verifier_hash` is the only one whose input is **not** high-entropy, and it is stored the same way for a
@@ -359,7 +359,7 @@ before it can be tested. Adding a second slow KDF on the server would charge the
 attacker nothing extra, since the same dump already carries `wrapped_seed` — an equally expensive target for
 exactly the same guesses.
 
-Its name is chosen the way `auth_secret_hash` was (#67): it verifies knowledge of the **KEK**, not of a
+Its name is chosen the way `auth_secret_hash` was (D-67): it verifies knowledge of the **KEK**, not of a
 passphrase, and a column called `passphrase_hash` would sooner or later invite code that sends one.
 
 That is not the usual answer, so here is the reasoning, and the condition it rests on.
@@ -393,7 +393,7 @@ mostly does not arise, while the way to brick the server does.
 > choice and becomes a hole.
 >
 > The seeded bootstrap invitation is the **one deliberate exception**: its token is the literal `admin`
-> ([03](03-data-model.md), #107). It survives this rule because it is single use by construction and
+> ([03](03-data-model.md), D-107). It survives this rule because it is single use by construction and
 > because the server answers nothing but its redemption until it is used — the window is one first run of an
 > empty installation, where there is nothing to steal.
 
@@ -454,7 +454,7 @@ their private key. From then on their replica's names and content envelopes are 
 
 > **A mistyped login produces a key, not an error.** The endpoint that returns a public key answers a login
 > that names no account with a **deterministic fake pair** rather than a `404`, so that nobody can use it to
-> enumerate the server's accounts (#73, [04](04-sync-protocol.md)). The initiator therefore wraps `KS` under
+> enumerate the server's accounts (D-73, [04](04-sync-protocol.md)). The initiator therefore wraps `KS` under
 > a key nobody holds, and finds out only at the invite, which fails **generically** — deliberately, because a
 > specific "no such account" would be the same oracle one call later.
 >

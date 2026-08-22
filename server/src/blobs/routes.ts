@@ -25,7 +25,7 @@ export const registerBlobRoutes = (
   //
   // Widening it costs nothing real, because the server **never uses the media type**: it
   // hashes the bytes and verifies them against the address in the URL, and refuses a
-  // mismatch (#42). A declared type it had to trust could only ever be wrong. JSON is still
+  // mismatch (D-42). A declared type it had to trust could only ever be wrong. JSON is still
   // matched first by Fastify's own parser, so nothing about the rest of the protocol moves.
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
 
@@ -39,7 +39,7 @@ export const registerBlobRoutes = (
    * changed, and one request per file is a round trip per note over a home connection. The
    * answer omits rather than errors on an address the caller cannot open — an envelope they
    * do not hold is indistinguishable from one that does not exist, which is the same
-   * `404`-not-`403` rule the blob routes follow (#20).
+   * `404`-not-`403` rule the blob routes follow (D-20).
    */
   app.get<{ Params: { vaultId: string }; Querystring: { sha256?: string } }>(
     '/vaults/:vaultId/blob-keys',
@@ -63,7 +63,7 @@ export const registerBlobRoutes = (
   );
 
   /**
-   * "Do I have this", not "does the server have this" (#26).
+   * "Do I have this", not "does the server have this" (D-26).
    *
    * No reference means **404, not 403**: a 403 would confirm that a file with that address
    * exists, which is the same oracle the rule exists to close.
@@ -109,12 +109,12 @@ export const registerBlobRoutes = (
    * Upload. Possessing the content proves possession of the content, so this needs no
    * rights to a specific address — but it does need limits, because without them it is the
    * simplest way to fill a disk, and that takes no attacker, just a client stuck in a
-   * retry loop (#33).
+   * retry loop (D-33).
    *
    * **There is deliberately no short circuit.** Answering "already have it, skip the
    * upload" would reintroduce the existence oracle the `404` rule closes: the client
    * declares the address up front, so anyone with a copy of a file could test for it. The
-   * server accepts the bytes and deduplicates internally (#46).
+   * server accepts the bytes and deduplicates internally (D-46).
    *
    * This is the whole-blob path, for anything at or below the part size. Above it a client
    * uses the resumable calls below, which end in the same `recordUpload` (docs/04).
@@ -193,7 +193,7 @@ export const registerBlobRoutes = (
    *
    * **Never a 404, and never a word about the finished blob.** An address the caller never
    * started answers `{parts: []}`, exactly as an address that does not exist would: any
-   * other answer would make this the existence oracle that the `404`-not-`403` rule (#20)
+   * other answer would make this the existence oracle that the `404`-not-`403` rule (D-20)
    * and the missing short circuit on `POST /blobs` both exist to close. It reads the
    * caller's own staging directory and nothing else, so there is no other answer to give.
    */

@@ -38,7 +38,7 @@ export interface BlobStore {
    * Write bytes to a temp name, verify they hash to the address they claim, then rename.
    *
    * The verification is not ceremony. Deduplication means one address is shared by
-   * everyone who holds that content (#42), so a client allowed to store arbitrary bytes
+   * everyone who holds that content (D-42), so a client allowed to store arbitrary bytes
    * under an address of its choosing could poison what other accounts later resolve.
    */
   put(sha256Hex: string, body: Readable): Promise<{ storageKey: string; size: number }>;

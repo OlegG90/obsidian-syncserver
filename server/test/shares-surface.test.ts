@@ -257,7 +257,7 @@ describe('who to seal a share key to', () => {
     assert.ok(r.json().pubkey, 'and the key to seal to');
   });
 
-  it('answers an unknown login with a fake pair rather than a 404 (#73)', async () => {
+  it('answers an unknown login with a fake pair rather than a 404 (D-73)', async () => {
     // A distinct answer for "no such account" is an enumeration oracle, and this endpoint
     // takes a login. The fake must also be indistinguishable in shape from a real answer.
     const shareId = await activeShare('pubkey-unknown');
@@ -287,7 +287,7 @@ describe('who to seal a share key to', () => {
   });
 
   it('says plainly that a console account cannot be a recipient', async () => {
-    // #115: it holds no `pubkey`, so there is nothing to seal a share key to. Named rather
+    // D-115: it holds no `pubkey`, so there is nothing to seal a share key to. Named rather
     // than folded into the deliberately-silent answers around it, because a console
     // account's existence is not a secret — `admin` is seeded on every installation — while
     // an invitation that vanished with no reason is a bug report waiting to happen.
