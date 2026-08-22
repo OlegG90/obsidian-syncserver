@@ -21,6 +21,7 @@ import { cp, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { missingBlobs } from './backup.js';
 import type { Db } from './db.js';
+import { restoreArgv } from './restore-argv.js';
 
 /** What a restore found, said in the terms an operator acts on. */
 export interface RestoreOutcome {
@@ -48,6 +49,20 @@ export const otherConnections = async (db: Db): Promise<number> => {
       WHERE datname = current_database() AND pid <> pg_backend_pid()`,
   );
   return Number(row?.n ?? 0);
+};
+
+/**
+ * The database this restore will load into — **asked of the connection**, not configured (#171).
+ *
+ * `pg_restore -d` needs a name, and the only name that can be right is the one the server reads. Taking
+ * it from `DATABASE_URL` would be a second place to say it (and that variable may be unset, leaving the
+ * name to libpq), while a setting of its own could be pointed at a different database and report success
+ * for restoring into the wrong one.
+ */
+export const currentDatabase = async (db: Db): Promise<string> => {
+  const row = await db.one<{ name: string }>('SELECT current_database() AS name');
+  if (!row?.name) throw new Error('this connection names no database, so there is nothing to restore into');
+  return row.name;
 };
 
 /** Both halves have to be there before anything is touched: half a copy is not a copy. */
@@ -91,6 +106,12 @@ export const restoreFrom = async (
   },
 ): Promise<RestoreOutcome | RestoreRefusal> => {
   const log = deps.log ?? console.log;
+  // Settled before anything is touched: an empty `RESTORE_DB_COMMAND` is a misconfiguration rather than
+  // a refusal an operator can act on mid-restore, and finding it after the blob copy would leave the
+  // store written to by a restore that never ran (#171).
+  const database = await currentDatabase(db);
+  const dump = join(dir, 'database.dump');
+  const { cmd, args } = restoreArgv(deps.restoreCommand, database, dump);
 
   const wrong = await looksLikeABackup(dir);
   if (wrong) return { kind: 'not_a_backup', detail: wrong };
@@ -104,9 +125,8 @@ export const restoreFrom = async (
   log(`restoring blobs from ${join(dir, 'blobs')} → ${deps.blobStorePath}`);
   await cp(join(dir, 'blobs'), deps.blobStorePath, { recursive: true, force: true });
 
-  log(`restoring the database from ${join(dir, 'database.dump')}`);
-  const [cmd, ...args] = deps.restoreCommand;
-  await run(cmd!, [...args, join(dir, 'database.dump')]);
+  log(`restoring the database from ${dump} into ${database}`);
+  await run(cmd, args);
 
   // The report the decision in docs/08 promised and nothing produced. Asked of the LIVE store now that
   // both halves are back, which is the only moment the question means anything.

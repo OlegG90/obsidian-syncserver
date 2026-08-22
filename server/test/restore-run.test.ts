@@ -9,12 +9,16 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { looksLikeABackup, otherConnections, restoreFrom } from '../src/restore-run.js';
+import { restoreArgv } from '../src/restore-argv.js';
+import {
+  currentDatabase, looksLikeABackup, otherConnections, restoreFrom,
+} from '../src/restore-run.js';
 
 let db: Db;
 let root: string;
@@ -152,5 +156,81 @@ describe('the report a restore leaves behind', () => {
 
     assert.equal(await readFile(join(live, 'bb', 'bb'.repeat(32)), 'utf8'), 'restored bytes');
     assert.equal(await readFile(join(live, 'cc', 'cc'.repeat(32)), 'utf8'), 'was already here');
+  });
+});
+
+describe('the arguments pg_restore actually sees', () => {
+  // The defect this suite could not see: every test above injects `true` in place of the binary, so the
+  // argv went unread for as long as it was wrong. `RESTORE_DB_COMMAND` ends at `-d`, and the restore
+  // appended the dump straight after it — handing pg_restore the archive path where it expected a
+  // database name (#171).
+  it('puts the database before the archive', () => {
+    const { cmd, args } = restoreArgv(
+      ['pg_restore', '--clean', '--if-exists', '--no-owner', '-d'],
+      'syncserver',
+      '/backups/run/database.dump',
+    );
+    assert.equal(cmd, 'pg_restore');
+    assert.deepEqual(args, [
+      '--clean', '--if-exists', '--no-owner', '-d', 'syncserver', '/backups/run/database.dump',
+    ]);
+  });
+
+  it('treats an override that forgot `-d` the same as one that carries it', () => {
+    // The setting is an operator's to change, and the shape it has to end in is not something they
+    // should have to know. Both spellings, and `--dbname`, arrive at the same argv.
+    const expected = ['--no-owner', '-d', 'syncserver', '/dump'];
+    for (const command of [
+      ['pg_restore', '--no-owner'],
+      ['pg_restore', '--no-owner', '-d'],
+      ['pg_restore', '--no-owner', '--dbname'],
+    ]) {
+      assert.deepEqual(restoreArgv(command, 'syncserver', '/dump').args, expected);
+    }
+  });
+
+  it('refuses to run a command that names no binary', () => {
+    assert.throws(() => restoreArgv([], 'syncserver', '/dump'), /no restore binary/);
+  });
+
+  it('takes the database from the connection, so it cannot name a different one', async () => {
+    // Not from DATABASE_URL: that variable may be unset, leaving the name to libpq, and a second place
+    // to say which database this is would be a way to restore into the wrong one and be told it worked.
+    const [onDb] = await db.query<{ name: string }>('SELECT current_database() AS name');
+    assert.equal(await currentDatabase(db), onDb?.name);
+  });
+
+  it('hands those arguments to the binary it runs', async () => {
+    // Not a unit test of the helper twice over: this one goes through `restoreFrom` and execFile, so it
+    // fails if the restore ever stops asking. `sh -c` writes what it was given and exits zero.
+    const dir = await aBackup('argv');
+    const seen = join(root, 'argv-seen');
+    const out = await restoreFrom(db, dir, {
+      blobStorePath: join(root, 'live-argv'),
+      restoreCommand: ['sh', '-c', `printf '%s\n' "$@" > ${seen}`, 'sh', '-d'],
+      store: { size: async () => 1 },
+      log: () => undefined,
+    });
+
+    assert.ok(!('kind' in out), 'it ran');
+    assert.deepEqual((await readFile(seen, 'utf8')).trim().split('\n'), [
+      '-d', await currentDatabase(db), join(dir, 'database.dump'),
+    ]);
+  });
+
+  it('does not touch the blob store when the configuration cannot make a command', async () => {
+    // A misconfiguration found after the blob copy would leave the store written to by a restore that
+    // never ran — the half-applied state this file exists to keep harmless.
+    const dir = await aBackup('unconfigured', { ['dd'.repeat(32)]: 'should not arrive' });
+    const live = join(root, 'live-unconfigured');
+    await assert.rejects(
+      restoreFrom(db, dir, {
+        blobStorePath: live,
+        restoreCommand: [],
+          store: { size: async () => 1 },
+        log: () => undefined,
+      }),
+    );
+    assert.equal(existsSync(live), false, 'nothing was copied');
   });
 });
