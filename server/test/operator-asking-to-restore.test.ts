@@ -1,5 +1,5 @@
 /**
- * Asking for a restore from the console (D-92).
+ * The bad day, asked for: the console requests a restore and the server stops (D-92).
  *
  * The button is the heaviest act this surface carries: it replaces the database and stops the server.
  * So what is asserted here is mostly the **refusals** — which copies cannot be asked for, and why — plus
@@ -24,6 +24,15 @@ let app: FastifyInstance;
 let root: string;
 let token: string;
 let stopped = 0;
+/**
+ * Every run this suite invents, so it can take them away again.
+ *
+ * The alternative is a name chosen to sort after every suite that would notice them, which is how the
+ * ordering convention in this directory works and is one rename away from being wrong — it was, the
+ * moment this file was renamed for what it tests. A suite that leaves the tables as it found them does
+ * not care what it is called.
+ */
+const invented: string[] = [];
 
 const ADMIN = '00000000-0000-0000-0000-000000000001';
 
@@ -53,6 +62,9 @@ before(async () => {
 });
 
 after(async () => {
+  if (invented.length > 0) {
+    await db.query(`DELETE FROM backup_runs WHERE id = ANY($1::bigint[])`, [invented]);
+  }
   await app.close();
   await db.close();
   await rm(root, { recursive: true, force: true });
@@ -69,6 +81,7 @@ const aRun = async (name: string | null, status = 'ok'): Promise<string> => {
      VALUES ($1::backup_status, $2, $3, now(), now(), now(), now(), now()) RETURNING id::text AS id`,
     [status, dest, status === 'ok' ? null : 'a failure the schema insists is explained'],
   );
+  invented.push(row!.id);
   return row!.id;
 };
 
@@ -121,6 +134,7 @@ describe('asking for a restore from the console', () => {
       `INSERT INTO backup_runs (status, destination, window_opened_at, finished_at, db_done_at,
                                 blobs_done_at, window_closed_at)
        VALUES ('ok', '/etc', now(), now(), now(), now(), now()) RETURNING id::text AS id`);
+    invented.push(row!.id);
     const r = await app.inject({ method: 'POST', url: `/admin/backups/${row!.id}/restore`, headers: auth() });
     assert.equal(r.statusCode, 409, r.body);
     assert.equal(r.json().error, 'outside_destination');

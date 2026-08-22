@@ -1,5 +1,9 @@
 /**
- * The rehearsal that actually restores (#159).
+ * The bad day, rehearsed: the newest backup is loaded to prove it can be (#159).
+ *
+ * Named for what happens, not for `rehearsal.ts` (AGENTS.md). Kept in its own file for a reason that is
+ * not tidiness: this one creates and drops scratch databases, and the restore suite next door counts
+ * connections to the database — run together, each makes the other's answer wrong.
  *
  * Against a **real dump of a real database**, taken here with `pg_dump`, because the whole point is the
  * one thing a mocked archive cannot have: whether `pg_restore` can read it. The check this replaces

@@ -1,11 +1,18 @@
 /**
- * Putting a backup back (#155).
+ * The bad day: a backup is put back.
  *
- * The interesting parts are the two refusals and the report — not the copying, which is `cp` and
- * `pg_restore` doing what they do. A restore that runs under a live server, or against a directory that
- * is not a backup, is how an installation loses both the old data and the new; and a restore that cannot
- * bring everything back has to **say so**, which is a decision `docs/08` recorded and nothing implemented
- * until now.
+ * Named for what happens rather than for the module it reaches (AGENTS.md), and the name is the point.
+ * `restore-run.test.ts` asked "does this file work"; every unit did, while the argv contract lived
+ * *between* two files and no unit test was looking — which is how issue #171 shipped a restore that
+ * could not restore. A suite named for the day has to name the real command, and one of these does.
+ *
+ * The interesting parts are the two refusals and the report, not the copying: a restore under a live
+ * server, or against a directory that is not a backup, is how an installation loses both the old data
+ * and the new; and one that cannot bring everything back has to **say so**.
+ *
+ * **Its own process, and not by accident.** It counts connections to the database, and the rehearsal
+ * next door opens and drops scratch databases — run in one file, each makes the other's answer wrong.
+ * `tsx --test test/*.test.ts` gives a file a process, which is what keeps them apart.
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
