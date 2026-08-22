@@ -478,9 +478,14 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       showing**: `deleteVault` refuses a vault that still holds anything, so the screen offers removal only
       for an empty one and says what to do about the rest. Emptying a vault is a reset (#158), which is
       how these two turn out to be one path.
-- [ ] **Starting a reset** (#158). The half that *receives* one is built and walked: a client meeting `410`
+- [x] **Starting a reset** (#158). The half that *receives* one is built and walked: a client meeting `410`
       resyncs and quarantines whatever it displaced. The half that *begins* one — "my client is right,
-      take this tree" ([07](07-onboarding.md)) — has a method in the plugin's API client and **no caller**.
+      take this tree" ([07](07-onboarding.md)) — had a method in the plugin's API client and **no caller**.
+      **The question this item carried is answered by the server and always was**: a reset must not be
+      refused while the account is in a share, because it never touches one. `KEEP` excludes every shared
+      node *and the private chain it hangs from* (SH-27), so the one thing left to do about it was to say
+      so on the screen, where somebody pressing "my copy is the truth" can read which half is theirs to
+      give away.
 - [ ] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
       never been restored is not a backup, and prescribes a quarterly rehearsal by hand. The automatic one
       checks that the copy's blobs are all present — which is worth having and is not the same claim. A
