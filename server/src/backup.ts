@@ -293,6 +293,35 @@ export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
   );
 
 /**
+ * Every address the database references that a store does not have.
+ *
+ * Extracted from `verifyBackup` because it answers a second question with the same walk: pointed at a
+ * **backup copy** it asks "did this copy arrive whole", and pointed at the **live store** it asks "what
+ * did this restore fail to bring back" (#155). The decision that the second question gets an answer at
+ * all is [08](../../docs/08-backup-restore.md)'s — *"an honest report of '13 files not restored' beats a
+ * store that never frees space"* — and it had no implementation until the restore did.
+ */
+export const missingBlobs = async (
+  db: Db,
+  store: { size(storageKey: string): Promise<number | undefined> },
+): Promise<{ missing: string[]; checked: number }> => {
+  const addresses = await db.query<{ sha256: string }>(
+    `SELECT encode(sha256, 'hex') AS sha256
+       FROM nodes WHERE sha256 IS NOT NULL
+     UNION
+     SELECT encode(sha256, 'hex') AS sha256
+       FROM versions`,
+  );
+
+  const missing: string[] = [];
+  for (const { sha256 } of addresses) {
+    const key = storageKeyFor(sha256);
+    if ((await store.size(key)) === undefined) missing.push(sha256);
+  }
+  return { missing, checked: addresses.length };
+};
+
+/**
  * Whether every blob the database references is present at the copy's address.
  *
  * The **one integrity check** the roadmap names, and the three callers share it: the
@@ -313,19 +342,7 @@ export const verifyBackup = async (
   copy: { size(storageKey: string): Promise<number | undefined> },
   runId: string,
 ): Promise<{ missing: string[]; checked: number }> => {
-  const addresses = await db.query<{ sha256: string }>(
-    `SELECT encode(sha256, 'hex') AS sha256
-       FROM nodes WHERE sha256 IS NOT NULL
-     UNION
-     SELECT encode(sha256, 'hex') AS sha256
-       FROM versions`,
-  );
-
-  const missing: string[] = [];
-  for (const { sha256 } of addresses) {
-    const key = storageKeyFor(sha256);
-    if ((await copy.size(key)) === undefined) missing.push(sha256);
-  }
+  const { missing, checked } = await missingBlobs(db, copy);
 
   // **Only when it is whole.** `verified_at` was stamped unconditionally, so a copy this very
   // function had just found blobs missing from was listed in the console as verified — the
@@ -336,7 +353,7 @@ export const verifyBackup = async (
   if (missing.length === 0) {
     await db.query(`UPDATE backup_runs SET verified_at = now() WHERE id = $1`, [runId]);
   }
-  return { missing, checked: addresses.length };
+  return { missing, checked };
 };
 
 /**

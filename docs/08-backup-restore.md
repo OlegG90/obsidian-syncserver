@@ -138,7 +138,10 @@ then the effective quarantine is zero and every restore should expect the report
 - keep the quarantine longer than the backup retention — simple, but a quarantine measured in months means
   deleted space is not reclaimed for months;
 - **keep the quarantine short and verify integrity during the restore**, producing a list of lost blobs.
-  Chosen: an honest report of "13 files not restored" beats a store that never frees space.
+  Chosen: an honest report of "13 files not restored" beats a store that never frees space. **Built**
+  (#155): `restore-cli.js` ends by walking every address the restored database references and naming the
+  ones the restored store does not have — the same walk `verifyBackup` runs over a copy, pointed at the
+  live store, where it answers the other question.
 
 ## Removing a copy, and how many to keep
 
