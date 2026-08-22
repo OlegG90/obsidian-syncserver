@@ -589,7 +589,7 @@ export class Session {
    * The names are decrypted **here**, with the seed this session holds, exactly as the chooser does it.
    * The server cannot: it stores `name_enc` and no key to open it (docs/06).
    */
-  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+  async vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]> {
     if (!this.seed) throw new Error('session is locked');
     const seed = this.seed;
     const rows = await this.use((h) => h.client.listVaults());
@@ -597,6 +597,11 @@ export class Session {
       id: v.id,
       name: Session.vaultLabel(seed, v),
       nodes: v.nodes ?? 0,
+      // `bytes` crosses the wire as a string because it is a bigint on the server; narrowed here, where
+      // it is about to be rounded to one decimal place anyway. The exact comparison that decides whether
+      // a write fits stays in `quota.ts`, in bigint, and never comes near this number.
+      bytes: Number(v.bytes ?? '0'),
+      shared: v.shared === true,
       current: v.id === this.conn.vaultId,
     }));
   }

@@ -156,6 +156,44 @@ describe('reset', () => {
     assert.ok(after_ < before_, 'the accounting is right when the transaction commits');
   });
 
+  it('says what each vault is using, not only how many rows it has', async () => {
+    // #161 asked what each vault is using and shipped a node count, which answers a different question
+    // (#178). Per vault is well defined only because keys are per vault: the same file in two vaults is
+    // two different blobs (AC-09), so these numbers do not overlap.
+    const v = await freshVault();
+    const list = async (): Promise<{ nodes: number; bytes: string }> => {
+      const r = await app.inject({ method: 'GET', url: '/vaults', headers: auth() });
+      return (r.json() as { id: string; nodes: number; bytes: string }[]).find((x) => x.id === v.vaultId)!;
+    };
+
+    const empty = await list();
+    assert.equal(empty.bytes, '0', 'a vault holding nothing is using nothing');
+
+    await addNode(v, 'weighty.md', v.rootId);
+    const filled = await list();
+    assert.ok(filled.nodes > 0);
+    assert.ok(Number(filled.bytes) > 0, 'and a file in it costs bytes, not just a row');
+
+    // It travels as a string because it is a bigint on the server, and a quota is a question about the
+    // last byte — `number` stops being exact above 2^53.
+    assert.equal(typeof filled.bytes, 'string');
+  });
+
+  it('recounts quota when a whole vault goes, not only when it is reset', async () => {
+    // Removing a vault takes its tree and its history with it (#175), so the blobs it was the last to
+    // reference are held by nothing — and an account that deleted a vault to make room would otherwise
+    // still read as full until the sweep ran.
+    const v = await freshVault();
+    await addNode(v, 'heavy.md', v.rootId);
+
+    const before_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
+    const gone = await app.inject({ method: 'DELETE', url: `/vaults/${v.vaultId}`, headers: auth() });
+    assert.equal(gone.statusCode, 204, gone.body);
+    const after_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
+
+    assert.ok(after_ < before_, 'the accounting is right when the transaction commits');
+  });
+
   it('answers 404 for a vault of another account', async () => {
     const stranger = randomUUID();
     await db.query(

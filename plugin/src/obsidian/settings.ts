@@ -16,6 +16,7 @@ import { whatIsMissing, type ConnectDraft, type Route } from '../connect-form.js
 import { newestFirst } from '../history-flow.js';
 import { lastActionLine } from '../last-action.js';
 import { matching, showing } from '../trash-filter.js';
+import { removalWarning } from '../vault-removal.js';
 import { deviceLabel } from './device.js';
 import { shortStatus } from './status.js';
 import { busyLine } from '../gate.js';
@@ -597,7 +598,9 @@ export class SyncServerSettings extends PluginSettingTab {
    * key, so a list from anywhere else would be a column of uuids.
    *
    * **Removal is offered only where it is possible**, and the row says why when it is not: the server
-   * refuses a vault that still holds anything, one named by a share, and this device's own. Which makes
+   * refuses a vault that still holds anything, one named by a share, and this device's own. Each of those
+   * is read from the list rather than discovered by pressing the button — a refusal arriving after a
+   * confirmation that promised nothing would be lost is worse than no button at all (#176). Which makes
    * the honest use of this screen narrow and real — the empty vault somebody made by accident.
    */
   private vaultSection(host: HTMLElement): void {
@@ -610,16 +613,19 @@ export class SyncServerSettings extends PluginSettingTab {
       .then((vaults) => {
         list.empty();
         for (const v of vaults) {
-          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}`;
+          // What it is USING, not only how many rows it has (#178) — which is the number somebody
+          // reads when they are deciding which vault to remove to make room.
+          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
           const row = new Setting(list)
             .setName(v.current ? `${v.name} — this device` : v.name)
             .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
 
           if (v.current) continue;
-          if (v.nodes > 0) {
-            // Said rather than shown as a disabled button: "why can I not" is the question, and a grey
-            // button answers it with nothing. Emptying it is a reset (#158), which has no screen yet.
-            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — to remove it, empty it first`);
+          if (v.shared) {
+            // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share`
+            // once somebody had already read a confirmation promising that nothing would be lost — and
+            // what a share holds is other people's access, which is not this account's to tidy away.
+            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — a share names this vault, so it stays`);
             continue;
           }
           row.addButton((b) =>
@@ -630,8 +636,7 @@ export class SyncServerSettings extends PluginSettingTab {
                 new ConfirmModal(
                   this.app,
                   `Remove ${v.name}?`,
-                  'It holds nothing, so nothing is lost — the vault itself stops existing on the server. ' +
-                    'Any device still connected to it will find it gone.',
+                  removalWarning(v.nodes),
                   async () => {
                     try {
                       await this.plugin.deleteVault(v.id);

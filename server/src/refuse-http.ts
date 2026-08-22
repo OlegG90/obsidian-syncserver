@@ -50,7 +50,6 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
         .send({ error: 'rate_limited', retry_after: refusal.retryAfterSeconds });
     case 'parts_missing':
       return reply.code(409).send({ error: 'parts_missing', have: refusal.have });
-    case 'not_empty':
     case 'named_by_a_share':
     case 'vault_exists':
       // 409 rather than 403: nothing is forbidden, the vault is simply still in use — and

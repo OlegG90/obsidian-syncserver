@@ -15,7 +15,7 @@
  */
 import { Notice, Platform, Plugin, setIcon } from 'obsidian';
 
-import { SyncClient } from './api/client.js';
+import { ApiError, SyncClient } from './api/client.js';
 import { SyncEngine } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
@@ -42,6 +42,7 @@ import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openGate } from './gate.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
+import { VAULT_GONE } from './vault-removal.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
 
@@ -653,7 +654,14 @@ export default class SyncServerPlugin extends Plugin {
    * naming the folder rather than counting scopes (`SyncReport.unreadable`).
    */
   private async openVault(h: Handle): Promise<VaultScopes> {
-    return VaultScopes.open(await h.client.openVault(this.data.connection!.vaultId), this.keyDeps(h));
+    const opened = await h.client.openVault(this.data.connection!.vaultId).catch((e: unknown) => {
+      // A vault that is gone is not a broken server, and a bare `404 not_found` surfacing out of the
+      // middle of a sync reads exactly like one (#175). Said once, here, because every operation goes
+      // through this method to reach its tree.
+      if (e instanceof ApiError && e.status === 404) throw new Error(VAULT_GONE);
+      throw e;
+    });
+    return VaultScopes.open(opened, this.keyDeps(h));
   }
 
   /**
@@ -938,7 +946,7 @@ export default class SyncServerPlugin extends Plugin {
    * Through `unlocked()` rather than `withSession`, because naming them needs the seed: the server holds
    * `name_enc` and no key to open it, so the decryption is the session's own.
    */
-  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+  async vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]> {
     return (await this.unlocked()).vaults();
   }
 

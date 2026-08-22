@@ -480,7 +480,7 @@ export class SyncClient {
 
   // ---- vaults ------------------------------------------------------------------
 
-  listVaults(): Promise<{ id: string; name_enc: string; nodes?: number }[]> {
+  listVaults(): Promise<{ id: string; name_enc: string; nodes?: number; bytes?: string; shared?: boolean }[]> {
     return this.json('GET', '/vaults');
   }
 

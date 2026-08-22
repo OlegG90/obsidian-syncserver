@@ -48,7 +48,6 @@ export type Refusal =
   /** A pairing exists and nobody has approved it yet — a state to wait in, not a fault. */
   | { kind: 'not_approved' }
   /** A vault still holding nodes: emptying it is the caller's to do, not the server's. */
-  | { kind: 'not_empty' }
   /** An ended share still names this vault, and will until the journal TTL prunes it (#44). */
   | { kind: 'named_by_a_share' }
   /** That vault id already exists for this account — the ordinary retry, not a fault. */
