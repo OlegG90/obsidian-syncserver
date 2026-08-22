@@ -154,6 +154,14 @@ export interface Config {
       }
     | undefined;
   /**
+   * How to put a dump back (#155) — `pg_restore` and its flags, split into argv.
+   *
+   * Separate from `BACKUP_DB_COMMAND` rather than derived from it: it is a different binary with
+   * different flags, and the two are not symmetrical in the way the names suggest. The dump file is
+   * appended by the caller, so this ends at `-d`.
+   */
+  restoreCommand: string[];
+  /**
    * Where the server records the newest `restore_epoch` it has ever run with. This file is
    * what makes an unconfirmed restore detectable at the next start, and what the confirm
    * step raises the epoch ABOVE — it has to survive a restore, so it lives outside both
@@ -192,6 +200,11 @@ export const loadConfig = (): Config => {
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
     backupVerifyIntervalSeconds: int('BACKUP_VERIFY_INTERVAL_SECONDS', 24 * 60 * 60),
     backupEverySeconds: int('BACKUP_EVERY_SECONDS', 24 * 60 * 60),
+    // How to put a dump back (#155). Symmetric with BACKUP_DB_COMMAND, and separate because the
+    // restore is a different binary with different flags: `--clean --if-exists` is what makes it
+    // replace what is there rather than collide with it, and `--no-owner` is what lets a dump taken
+    // as one role load as another.
+    restoreCommand: str('RESTORE_DB_COMMAND', 'pg_restore --clean --if-exists --no-owner -d').split(/\s+/),
     restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
   };
 

@@ -459,7 +459,7 @@ and that what they meet says what happened.
 
 Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it needs no milestone.
 
-- [ ] **Restoring, as something the server helps with rather than describes** (#155). `pg_restore` appears
+- [x] **Restoring, as something the server helps with rather than describes** (#155). `pg_restore` appears
       nowhere in this repository — not in the code, not in the scripts, not in the documents. The manual's
       restore is three sentences of prose with no commands, and everything built around it is what happens
       *after*: the epoch guard, the halt, the console's confirmation. What is missing is the act itself and

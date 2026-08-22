@@ -884,9 +884,48 @@ const backupRow = (b: BackupRun): HTMLElement => {
   if (b.destination === null) {
     card.append(el('div', { className: 'muted', textContent: 'the copy has been removed; the run stays in the history' }));
   } else if (b.status !== 'running') {
+    if (b.status === 'ok') card.append(restoreFrom(b.destination));
     card.append(removeButton(b));
   }
   return card;
+};
+
+/**
+ * How to restore **this** copy — the exact command, not a paragraph (#155).
+ *
+ * **A button would be wrong here and the absence is the design.** A server that can overwrite itself
+ * from a web console is a new way to lose a vault, so restoring stays something a person types with the
+ * server stopped. What the console can honestly do is remove the part of that which is remembering:
+ * which directory this row is, and what order the steps go in.
+ *
+ * Shown folded, because on the ordinary day nobody wants it. What it says is exactly what
+ * [15](../../docs/15-operator-manual.md) says, with this row's destination already in it.
+ */
+const restoreFrom = (destination: string): HTMLElement => {
+  const box = el('details', {});
+  box.append(el('summary', { textContent: 'Restore from this copy' }));
+  box.append(
+    el('p', {
+      className: 'muted',
+      textContent:
+        'With the server stopped, in the directory that holds docker-compose.yml. The server notices by ' +
+        'itself afterwards and refuses everything until you confirm the restore here.',
+    }),
+    el('pre', {
+      textContent: [
+        'docker compose stop server',
+        `docker compose run --rm server node server/dist/restore-cli.js ${destination}`,
+        'docker compose start server',
+      ].join('\n'),
+    }),
+    el('p', {
+      className: 'muted',
+      textContent:
+        'It refuses while anything else is connected to the database, and it lists any file the restored ' +
+        'database references that the copy could not bring back.',
+    }),
+  );
+  return box;
 };
 
 /**

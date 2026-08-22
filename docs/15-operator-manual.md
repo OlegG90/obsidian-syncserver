@@ -300,11 +300,32 @@ has never been restored is not a backup** ([08](08-backup-restore.md) has the qu
 
 ## Restoring
 
-Never under load.
+```bash
+docker compose stop server
+docker compose run --rm server node server/dist/restore-cli.js /backups/backup-<the one you want>
+docker compose start server
+```
 
-1. **stop the service;**
-2. restore the blobs, then the database;
-3. start the service. It will notice.
+The console lists the copies and shows this command with the directory already in it — Backups → the row
+→ **Restore from this copy**.
+
+**It refuses while anything else is connected to the database**, naming how many. `pg_restore` drops and
+recreates what it restores, and doing that under a running server is not a race to be careful about: it is
+open transactions against tables being dropped, and the result is neither the old data nor the new.
+
+**Blobs first, then the database** — the opposite order to a backup, and for the same reason a backup runs
+the other way. A database restored ahead of its blobs references content that is not there yet; blobs
+restored ahead of their database are content nothing references, which is harmless and is what the
+collector sweeps. The half-applied state should be the harmless one.
+
+**It ends by saying what it could not bring back**: every address the restored database references that
+the restored store does not have. Those notes exist and their content does not, and this is the moment to
+learn it rather than one file at a time over the following weeks. The restore still happened — the list is
+information, not a failure.
+
+**Restoring is a command and not a button**, deliberately. A server that can overwrite itself from a web
+console is a new way to lose a vault. The console's part is the one only a person can take responsibility
+for: confirming it afterwards.
 
 The server keeps the newest epoch it has ever run with in a **state file outside the database**, so a
 restored database is *behind* that file — which is how a restore is detectable at all. The server then
