@@ -100,7 +100,22 @@ jobs:
           cache: npm
       # `createdb`, `dropdb` and `psql`: db-reset.sh applies schema.sql and tests.sql, and
       # those assertions are most of the rules this project has.
-      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      #
+      # **From PGDG, pinned to the major the service runs**, and that is not tidiness: `pg_dump`
+      # refuses a server newer than itself (docs/10), and Ubuntu's own `postgresql-client` is
+      # several majors behind the `postgres:18` above. With the distribution package the
+      # rehearsal tests — the ones that take a real dump and restore it — SKIPPED, and the job
+      # went green without running the thing it was added to prove.
+      - name: a psql and pg_dump of the major this job runs
+        run: |
+          set -euo pipefail
+          want=$(grep -oP 'image:\s*postgres:\K\d+' docker-compose.yml)
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc             https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc]             https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main"             | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-client-$want"
+          pg_dump --version
       - run: npm ci
       - run: npm run db:reset
       - run: npm test --workspace @syncserver/server

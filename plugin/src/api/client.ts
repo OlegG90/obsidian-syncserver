@@ -480,7 +480,7 @@ export class SyncClient {
 
   // ---- vaults ------------------------------------------------------------------
 
-  listVaults(): Promise<{ id: string; name_enc: string }[]> {
+  listVaults(): Promise<{ id: string; name_enc: string; nodes?: number }[]> {
     return this.json('GET', '/vaults');
   }
 
@@ -491,6 +491,16 @@ export class SyncClient {
   /** Where a client starts syncing: the root, the head, and the key scope per scope (docs/06). */
   openVault(vaultId: string): Promise<OpenedVault> {
     return this.json('GET', `/vaults/${vaultId}`);
+  }
+
+  /**
+   * Remove one of this account's vaults (#157).
+   *
+   * The server refuses one that still holds anything, one named by a share, and one that is not this
+   * account's — so the caller's job is to say which refusal came back rather than to decide any of it.
+   */
+  deleteVault(vaultId: string): Promise<void> {
+    return this.json('DELETE', `/vaults/${vaultId}`, undefined, { expect: [204] });
   }
 
   /**

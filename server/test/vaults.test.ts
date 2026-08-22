@@ -197,3 +197,45 @@ describe('usage', () => {
     assert.equal(r.statusCode, 401);
   });
 });
+
+/**
+ * What the vault list carries, now that somebody looks at it (#161).
+ *
+ * It was read in exactly one place — the plugin's chooser, at pairing or recovery — so nothing depended
+ * on it saying anything beyond "these exist". A person looking at their own account needs one number
+ * more: how much is in each, which is also the number that decides whether it can be removed at all.
+ */
+describe('the vault list', () => {
+  it('counts what each vault holds, not counting its root', async () => {
+    // An untouched vault must read as **empty**, because that is what "0" has to mean on the screen: a
+    // root counted as content would make every vault look occupied and every removal look refused.
+    const id = randomUUID();
+    const created = await createVault(id, 'counted');
+    const rootId = created.json().root_node_id;
+    const keyId = (await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [id]))!.id;
+
+    const list = async (): Promise<number> => {
+      const r = await app.inject({ method: 'GET', url: '/vaults', headers: auth() });
+      assert.equal(r.statusCode, 200, r.body);
+      return (r.json() as { id: string; nodes: number }[]).find((v) => v.id === id)!.nodes;
+    };
+
+    assert.equal(await list(), 0, 'a fresh vault is empty');
+
+    await db.query(
+      `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry)
+       VALUES ($1, $2, '\xaa', decode($3,'hex'), $4, 'folder', now(), 0, ARRAY[$2::uuid])`,
+      [id, rootId, sha(randomBytes(8)), keyId],
+    );
+    assert.equal(await list(), 1, 'and one folder is one item');
+  });
+
+  it('still carries the name as ciphertext, which is the whole point', async () => {
+    // The list is what a person reads to tell one vault from another, and the server cannot help with
+    // that: it holds `name_enc` and no key. The decryption is the device's (docs/06).
+    const r = await app.inject({ method: 'GET', url: '/vaults', headers: auth() });
+    const rows = r.json() as { name_enc: string }[];
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every((v) => typeof v.name_enc === 'string'));
+  });
+});

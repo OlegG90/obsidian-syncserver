@@ -14,8 +14,8 @@
  */
 import {
   accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, restoreStatus, revokeDevice,
-  revokeInvitation, runBackup,
+  changePassword, devicesOf, forgetSession, health, invite, rehearsal, reissue, removeBackup,
+  restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
   signedIn, signIn, storage, verify,
@@ -1031,8 +1031,38 @@ const backupsScreen = (): void => {
     list.replaceChildren(...out.backups.map(backupRow));
   };
 
-  shell('backups', currentLogin(), page, list, runCard);
+  /**
+   * Whether the newest copy has ever been **loaded**, which is not what "verified" on a row says (#159).
+   *
+   * Its own line rather than a badge on a row, because it is about the practice and not about one copy:
+   * the question an operator has is "when did we last prove we can restore", and "never" is a real and
+   * important answer that no row can carry.
+   */
+  const rehearsed = el('div', { className: 'card' });
+  const tellRehearsal = async (): Promise<void> => {
+    const { rehearsal: r } = await rehearsal();
+    rehearsed.replaceChildren(el('h1', { textContent: 'Restoring, rehearsed' }));
+    if (!r) {
+      rehearsed.append(
+        say('No backup has ever been loaded into a scratch database on this server.', true),
+        el('p', {
+          className: 'muted',
+          textContent:
+            'Set REHEARSE_RESTORE_EVERY_SECONDS to have the server do it, or restore a copy by hand ' +
+            'somewhere safe. A backup that has never been restored is not a backup.',
+        }),
+      );
+      return;
+    }
+    rehearsed.append(
+      r.ok ? say(`Last rehearsed ${when(r.at)}.`) : say(`The last rehearsal FAILED, ${when(r.at)}.`, true),
+      el('p', { className: 'muted', textContent: r.detail }),
+    );
+  };
+
+  shell('backups', currentLogin(), page, rehearsed, list, runCard);
   loads(list, fill);
+  loads(rehearsed, tellRehearsal);
 };
 
 const restoreScreen = (): void => {

@@ -382,7 +382,7 @@ export class Session {
    * a name is not a reason to refuse to connect, and the id is still an honest answer to
    * "which one" — just a worse one.
    */
-  private static vaultLabel(seed: Uint8Array, vault: { id: string; name_enc: string | null }): string {
+  static vaultLabel(seed: Uint8Array, vault: { id: string; name_enc: string | null }): string {
     if (!vault.name_enc) return `(unnamed) ${vault.id.slice(0, 8)}`;
     try {
       return decryptName(vaultKey(seed, vault.id), vault.name_enc);
@@ -577,6 +577,46 @@ export class Session {
     this.derivation.open(passphrase, accountSalt, this.conn.kdfParams, wrapped_seed);
     this.conn.wrappedSeed = wrapped_seed;
     this.stale = false;
+  }
+
+  /**
+   * The vaults this account has, named (#161).
+   *
+   * `listVaults` was called in exactly one place — inside `chooseVault`, at pairing or recovery — so once
+   * a device was connected nobody could see what the account held. Which is how a vault created **by
+   * mistake** stays invisible: #117 exists because a pairing silently made a second one.
+   *
+   * The names are decrypted **here**, with the seed this session holds, exactly as the chooser does it.
+   * The server cannot: it stores `name_enc` and no key to open it (docs/06).
+   */
+  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+    if (!this.seed) throw new Error('session is locked');
+    const seed = this.seed;
+    const rows = await this.use((h) => h.client.listVaults());
+    return rows.map((v) => ({
+      id: v.id,
+      name: Session.vaultLabel(seed, v),
+      nodes: v.nodes ?? 0,
+      current: v.id === this.conn.vaultId,
+    }));
+  }
+
+  /**
+   * Remove one, which the server allows only when it is empty (#157).
+   *
+   * Not a convenience wrapper: the rule it exposes is the server's and worth stating where somebody
+   * reads this — `deleteVault` refuses a vault holding anything at all, one named by a share, and one
+   * that is not this account's. So the way to remove a vault with notes in it is to empty it first,
+   * which is what a reset does (#158).
+   */
+  async deleteVault(vaultId: string): Promise<void> {
+    if (vaultId === this.conn.vaultId) {
+      // Refused here rather than by the server, which has no way to know: the connection lives on this
+      // device. Removing the vault this window syncs would leave a plugin writing into something that
+      // no longer exists, and the failure would arrive as a 404 on the next pass.
+      throw new Error('that is the vault this device syncs. Disconnect first, or remove a different one.');
+    }
+    await this.use((h) => h.client.deleteVault(vaultId));
   }
 
   /**

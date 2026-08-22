@@ -114,6 +114,8 @@ export interface Config {
    * database references. Independent of `sweepIntervalSeconds`, which thins history.
    */
   backupVerifyIntervalSeconds: number;
+  /** How often the newest backup is LOADED into a scratch database, rather than only checked; `0` is off (#159). */
+  rehearsalIntervalSeconds: number;
   /**
    * How often a backup is TAKEN, when one is configured at all (docs/10).
    *
@@ -199,6 +201,11 @@ export const loadConfig = (): Config => {
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
     backupVerifyIntervalSeconds: int('BACKUP_VERIFY_INTERVAL_SECONDS', 24 * 60 * 60),
+    // How often to LOAD the newest backup into a scratch database, rather than only checking that its
+    // blobs are present (#159). Weekly by default and not daily: it restores a whole dump, which on a
+    // NAS is minutes rather than the second the blob check takes. `0` turns it off for a deployment
+    // that rehearses by hand — the honest opt-out, since the whole point is that nobody remembers to.
+    rehearsalIntervalSeconds: int('REHEARSE_RESTORE_EVERY_SECONDS', 7 * 24 * 60 * 60),
     backupEverySeconds: int('BACKUP_EVERY_SECONDS', 24 * 60 * 60),
     // How to put a dump back (#155). Symmetric with BACKUP_DB_COMMAND, and separate because the
     // restore is a different binary with different flags: `--clean --if-exists` is what makes it
