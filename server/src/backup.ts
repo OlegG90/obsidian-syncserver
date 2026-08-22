@@ -325,7 +325,7 @@ export const missingBlobs = async (
  * Whether every blob the database references is present at the copy's address.
  *
  * The **one integrity check** the roadmap names, and the three callers share it: the
- * console's verify button, the periodic restore rehearsal, and the nightly run that checks
+ * console's verify button, the periodic verification, and the nightly run that checks
  * the backup it just took. A backup is two stores captured as one window (D-114); this is
  * the question that proves they agree — for every `nodes.sha256` and `versions.sha256`,
  * the bytes exist in the blob copy under that address.
@@ -357,14 +357,14 @@ export const verifyBackup = async (
 };
 
 /**
- * The periodic restore rehearsal (docs/10): reopen the latest backup's blob copy and confirm
+ * The periodic **verification** (docs/10): reopen the latest backup's blob copy and confirm
  * it is whole.
  *
  * One of `verifyBackup`'s three callers. It is deliberately separate from the collector's
- * history pass — the rehearsal walks every blob the database references, so it runs on its
+ * history pass — it walks every blob the database references, so it runs on its
  * own rare interval (`backupVerifyIntervalSeconds`), not on the sweep's.
  *
- * @returns `undefined` when no backup exists yet — nothing to rehearse, and that is not a
+ * @returns `undefined` when no backup exists yet — nothing to verify, and that is not a
  *   failure. A backup whose copy is missing blobs is returned whole=false rather than
  *   thrown, because it is an outcome the operator must see, not an exception to swallow.
  */
@@ -375,7 +375,7 @@ export const verifyLatestBackup = async (
 ): Promise<{ whole: boolean; checked: number; missing: number } | undefined> => {
   // The latest run that SUCCEEDED, not the latest run. `listBackups(db, 1)` fetched exactly one
   // row and then filtered it, so a single failed run at the head made the `find` match nothing
-  // and the rehearsal read that as "nothing to rehearse" — silently, and for ever after. The
+  // and the check read that as "nothing to verify" — silently, and for ever after. The
   // last good copy, the one that would actually be restored from, was never checked again, and
   // the silence was indistinguishable from a healthy installation with nothing to do.
   //

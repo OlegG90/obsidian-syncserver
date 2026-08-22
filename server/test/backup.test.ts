@@ -383,8 +383,8 @@ describe('verifying a backup', () => {
   });
 });
 
-describe('which backup the rehearsal reaches for', () => {
-  /** A finished run with a destination, so the rehearsal has something it could open. */
+describe('which backup the verification reaches for', () => {
+  /** A finished run with a destination, so the verification has something it could open. */
   const finishedRun = async (destination: string, status: 'ok' | 'failed'): Promise<void> => {
     await db.query(
       `INSERT INTO backup_runs (window_opened_at, db_done_at, blobs_done_at, window_closed_at,
@@ -396,7 +396,7 @@ describe('which backup the rehearsal reaches for', () => {
 
   it('reaches for the newest SUCCESSFUL run, not the newest run', async () => {
     // One failed run at the head made `listBackups(db, 1).find(ok)` match nothing — one row
-    // fetched, then filtered — and the caller read that as "nothing to rehearse". So the last
+    // fetched, then filtered — and the caller read that as "nothing to verify". So the last
     // good copy, the one that would actually be restored from, was never checked again:
     // silently, and indistinguishably from a healthy installation with nothing to do.
     await db.query(`DELETE FROM backup_runs`);
@@ -410,7 +410,7 @@ describe('which backup the rehearsal reaches for', () => {
     assert.equal(out!.whole, true);
   });
 
-  it('says there is nothing to rehearse only when nothing has ever succeeded', async () => {
+  it('says there is nothing to verify only when nothing has ever succeeded', async () => {
     await db.query(`DELETE FROM backup_runs`);
     await finishedRun('/backups/only-failure', 'failed');
 
@@ -586,10 +586,10 @@ describe('what a refusal window leaves in the log', () => {
   });
 });
 
-describe('the restore rehearsal', () => {
+describe('the periodic verification of the latest copy', () => {
   it('is silent when no backup exists yet', async () => {
     await db.query(`DELETE FROM backup_runs`);
-    assert.equal(await verifyLatestBackup(db, '/backups'), undefined, 'nothing to rehearse is not a failure');
+    assert.equal(await verifyLatestBackup(db, '/backups'), undefined, 'nothing to verify is not a failure');
   });
 
   it('reports the latest whole backup as whole', async () => {

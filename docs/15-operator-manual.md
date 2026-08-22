@@ -302,7 +302,8 @@ backup, and this is the difference between learning that now and learning it at 
 
 **Verify** re-runs that check on demand. The server also does it on its own: at every start, and
 periodically after, it reopens the newest backup and confirms every blob is present. That line is in the
-boot log. It is the **blob check** — see the next section for the other one, which is a different claim.
+boot log, and it says `backup verification`. That word is exact — see the next section for the
+**rehearsal**, which is the other claim (CONTEXT.md keeps the two apart).
 
 **Remove a copy** from its row, behind a confirmation naming it. The run stays in the history with no
 destination — the log keeps saying a backup ran, and the empty destination says its copy is gone. The
@@ -310,7 +311,7 @@ newest good copy cannot be removed, by that button or by `BACKUP_KEEP`.
 
 ### Rehearsing a restore
 
-The blob check above says the copy **arrived**. It does not say the dump can be **read** — a `pg_dump`
+The verification above says the copy **arrived**. It does not say the dump can be **read** — a `pg_dump`
 that fails to restore, from a version mismatch or a truncated file, passes the blob check and fails on
 the one day it is needed.
 

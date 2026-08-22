@@ -192,7 +192,7 @@ never be mistaken for a usable one.
 **Verification is a first-class step**, not an aside: a Verify button on each finished run asks
 the one integrity check — for every `nodes.sha256` and `versions.sha256`, does the copy hold
 the bytes at that address — and reports the missing blobs by name. The check lives in
-`server/src/backup.ts` (`verifyBackup`), shared with the restore rehearsal and any nightly
+`server/src/backup.ts` (`verifyBackup`), shared with the periodic verification and any nightly
 self-check that follows.
 
 **Downloading a backup through the console is deliberately not a feature.** The reason is operational rather

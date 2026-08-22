@@ -110,7 +110,7 @@ export interface Config {
   sweepIntervalSeconds: number;
   /**
    * How often the collector re-opens the latest backup's blob copy and confirms it is whole
-   * (docs/10, "periodic restore rehearsal"). Rare, because the check walks every blob the
+   * (docs/10, "periodic verification" — not the rehearsal, which loads the dump). Rare, because it walks every blob the
    * database references. Independent of `sweepIntervalSeconds`, which thins history.
    */
   backupVerifyIntervalSeconds: number;

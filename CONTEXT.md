@@ -51,3 +51,24 @@ expensive node→path resolution is due, and the badge decision; Obsidian, the s
 session are ports bound in `main.ts`. The guard compares `share_id:root_node_id` pairs, not
 ids alone — a re-materialised share keeps its id but changes its root, and the badge has to
 follow.
+
+## verification / rehearsal
+
+*(server)* **Two different claims about a backup, and never one word for both.**
+
+A **verification** reopens the newest copy and confirms that every blob the database references is
+present in it. It says the copy **arrived**. Daily, and at every start; it is what the console's
+**Verify** button runs, what `backup_runs.verified` records, and what `BACKUP_VERIFY_INTERVAL_SECONDS`
+paces.
+
+A **rehearsal** loads the newest dump into a scratch database and confirms that what comes out carries
+this build's functions and triggers and holds at least one account. It says the archive can be **read**.
+Weekly by default, paced by `REHEARSE_RESTORE_EVERY_SECONDS`, and `0` turns it off.
+
+A `pg_dump` that will not restore — a version mismatch, a truncated file, a corrupt archive — **passes
+the verification and fails the rehearsal**, which is the whole reason the second exists (#159).
+
+Both were called *rehearsal* for a while, including in the operator manual, where the sentence "the
+server rehearses on its own" described one of them and was read as the other. That is the failure D-114
+reserved the word `freeze` to prevent: one word for two things makes every sentence naming it ambiguous,
+and here it would mislead on the day somebody is reading the log to decide whether a backup is usable.
