@@ -42,6 +42,7 @@ import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openGate } from './gate.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
+import { SECTIONS, SYNCSERVER_VIEW, SyncServerView, type SectionName } from './obsidian/view.js';
 import { VAULT_GONE } from './vault-removal.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
@@ -184,6 +185,27 @@ export default class SyncServerPlugin extends Plugin {
     // Drawn from what was written down, so a shared folder looks shared from the moment the
     // tree appears — not only after something is unlocked.
     this.app.workspace.onLayoutReady(() => this.marks!.applyMarks());
+
+    // The window, registered before anything can ask for it — a leaf restored from the previous
+    // session is created during `onLayoutReady`, which is already running by the time a command
+    // could be typed (#163).
+    this.registerView(SYNCSERVER_VIEW, (leaf) => new SyncServerView(leaf, this));
+
+    this.addCommand({
+      id: 'open-window',
+      name: 'Open the SyncServer window',
+      callback: () => void this.openWindow(),
+    });
+
+    // One command per section, so somebody who wants the trash reaches the trash rather than
+    // whichever section the window was left on.
+    for (const name of SECTIONS) {
+      this.addCommand({
+        id: `open-window-${name}`,
+        name: `Open the SyncServer window: ${name}`,
+        callback: () => void this.openWindow(name),
+      });
+    }
 
     this.addCommand({
       id: 'sync-now',
@@ -938,6 +960,23 @@ export default class SyncServerPlugin extends Plugin {
       notify: (message, durationMs) => this.say(message, durationMs),
       done: () => this.settingsTab?.display(),
     });
+  }
+
+  /**
+   * Show the window, on the section asked for.
+   *
+   * **Reuses the leaf if one is open** rather than making a second: two of these would be two copies of
+   * the same lists, disagreeing the moment one of them acted. Right-hand sidebar because that is where
+   * Obsidian's own panels live, and because the left one is the file tree somebody is looking at while
+   * they use this.
+   */
+  async openWindow(section?: SectionName): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(SYNCSERVER_VIEW)[0];
+    const leaf = existing ?? this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    if (!existing) await leaf.setViewState({ type: SYNCSERVER_VIEW, active: true });
+    this.app.workspace.revealLeaf(leaf);
+    if (section && leaf.view instanceof SyncServerView) leaf.view.show(section);
   }
 
   /**
