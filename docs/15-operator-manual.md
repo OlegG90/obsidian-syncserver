@@ -350,14 +350,28 @@ has never been restored is not a backup** ([08](08-backup-restore.md) has the qu
 
 ## Restoring
 
+**Console → Backups → the row → Restore from this copy.** It asks twice, the second time naming the copy,
+and then the server **stops**. The restore itself runs on its next start, before it opens a connection
+for serving — which is the moment `pg_restore --clean` is safe, and exactly what the old instruction to
+stop the server first was buying.
+
+It comes back **only if your deployment restarts it**. `restart: unless-stopped` is in the compose file,
+so `docker compose up -d` has already arranged that; a deployment that turned it off has to start it.
+
+When it is back it refuses every request until you confirm — see below. That halt is the guard working,
+not a failed restore.
+
+### By hand instead
+
+The same thing, typed, for a server that cannot reach its console or an operator who would rather see it:
+
 ```bash
 docker compose stop server
 docker compose run --rm server node server/dist/restore-cli.js /backups/backup-<the one you want>
 docker compose start server
 ```
 
-The console lists the copies and shows this command with the directory already in it — Backups → the row
-→ **Restore from this copy**.
+The row also shows this command with the directory already in it, folded under the button.
 
 **It refuses while anything else is connected to the database**, naming how many. `pg_restore` drops and
 recreates what it restores, and doing that under a running server is not a race to be careful about: it is
