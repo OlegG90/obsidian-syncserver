@@ -19,7 +19,7 @@ import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
 import { deviceLabel } from './device.js';
 import { shortStatus } from './status.js';
-import { busyLine } from '../gate.js';
+import { Surface, section } from './surface.js';
 import { recoveryRow } from '../recovery-row.js';
 import { wayBack, whatIsWrong, type PassphraseDraft } from '../passphrase-form.js';
 
@@ -43,44 +43,19 @@ export class SyncServerSettings extends PluginSettingTab {
    * each registers itself and takes the current state at that moment rather than waiting for
    * a sweep that has already run.
    */
-  private waiting: ButtonComponent[] = [];
-  private busyNote: HTMLElement | undefined;
-  /** How to stop hearing about the gate. Called before the next display, and on hide. */
-  private unwatch: (() => void) | undefined;
+  private readonly surface: Surface;
 
   constructor(
     app: App,
     private readonly plugin: SyncServerPlugin,
   ) {
     super(app, plugin);
-  }
-
-  /**
-   * A control that cannot work while an operation is running — disabled with the reason on
-   * screen, instead of refusing after the press (#125).
-   *
-   * It is the same rule `gate.ts` enforces, said before it refuses rather than after. The
-   * gate stays the authority: this only mirrors it, so a press that slips through a redraw
-   * still meets the real guard.
-   */
-  private waits(b: ButtonComponent): ButtonComponent {
-    this.waiting.push(b);
-    if (this.plugin.busyWith() !== undefined) b.setDisabled(true);
-    return b;
-  }
-
-  /** Mirror the gate onto every registered control, and show or hide the reason. */
-  private showBusy(holding: string | undefined): void {
-    for (const b of this.waiting) b.setDisabled(holding !== undefined);
-    if (!this.busyNote) return;
-    this.busyNote.setText(holding === undefined ? '' : busyLine(holding));
-    this.busyNote.style.display = holding === undefined ? 'none' : '';
+    this.surface = new Surface(app, plugin, () => this.display());
   }
 
   /** Obsidian closes the tab; the gate must not keep a listener writing into dead elements. */
   override hide(): void {
-    this.unwatch?.();
-    this.unwatch = undefined;
+    this.surface.stop();
     super.hide();
   }
 
@@ -88,10 +63,8 @@ export class SyncServerSettings extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // Both belong to the elements about to be discarded.
-    this.unwatch?.();
-    this.waiting = [];
-    this.busyNote = undefined;
+    // Everything it holds belongs to the elements about to be discarded.
+    this.surface.reset();
 
     const conn = this.plugin.data.connection;
     if (conn) {
@@ -99,10 +72,7 @@ export class SyncServerSettings extends PluginSettingTab {
 
       // Above everything it explains, and before the sections that fill in over the network:
       // the reason has to be readable at the moment the buttons go grey, not below them.
-      this.busyNote = containerEl.createEl('p');
-      this.busyNote.style.display = 'none';
-      this.busyNote.style.color = 'var(--text-accent)';
-      this.busyNote.style.fontSize = 'var(--font-ui-smaller)';
+      this.surface.reasonLine(containerEl);
       this.statusHeader(containerEl, conn);
 
       /**
@@ -113,7 +83,7 @@ export class SyncServerSettings extends PluginSettingTab {
        * never again: an address is set when a server moves, and `.obsidian/` is decided once.
        * The screen opens on what somebody came to do instead.
        */
-      const options = this.section(
+      const options = section(
         containerEl,
         'Server and sync options',
         `${conn.serverUrl} · .obsidian ${this.plugin.data.syncObsidian === true ? 'on' : 'off'}`,
@@ -177,8 +147,7 @@ export class SyncServerSettings extends PluginSettingTab {
 
       // Last, so the sections have registered what they own — and applied straight away,
       // because an operation may already be running when the tab is opened.
-      this.unwatch = this.plugin.watchBusy((holding) => this.showBusy(holding));
-      this.showBusy(this.plugin.busyWith());
+      this.surface.watch();
       return;
     }
 
@@ -411,7 +380,7 @@ export class SyncServerSettings extends PluginSettingTab {
     // Summarised by the count now that there is one to count (#156). It was summarised by the ACT —
     // "add another device" — because nothing asked the server for the account's devices and a row
     // promising "mbp-14, iphone" would have been inventing them. The list is what changed, not the taste.
-    const containerEl = this.section(host, 'Devices', 'what can reach this account, and adding another');
+    const containerEl = section(host, 'Devices', 'what can reach this account, and adding another');
     this.deviceList(containerEl);
     containerEl.createEl('p', {
       text:
@@ -495,17 +464,6 @@ export class SyncServerSettings extends PluginSettingTab {
    * add another" has already answered. A section whose summary cannot say anything useful
    * should not be a section.
    */
-  private section(containerEl: HTMLElement, title: string, summary: string, open = false): HTMLElement {
-    const details = containerEl.createEl('details');
-    if (open) details.setAttribute('open', '');
-    const line = details.createEl('summary');
-    line.createEl('strong', { text: title });
-    line.createEl('span', { text: ` — ${summary}` }).style.opacity = '0.7';
-    details.style.margin = '0.75rem 0';
-    const body = details.createEl('div');
-    body.style.margin = '0.5rem 0 0 0.5rem';
-    return body;
-  }
 
   /**
    * The block at the top: what the sync is doing, what it last said, and how full the account
@@ -580,7 +538,7 @@ export class SyncServerSettings extends PluginSettingTab {
       .setName('Sync now')
       .setDesc('Also on the ribbon icon, and in the command palette.')
       .addButton((b) =>
-        this.waits(b)
+        this.surface.waits(b)
           .setButtonText('Sync now')
           .setCta()
           .onClick(() => void this.plugin.syncNow()),
@@ -604,7 +562,7 @@ export class SyncServerSettings extends PluginSettingTab {
    * the honest use of this screen narrow and real — the empty vault somebody made by accident.
    */
   private vaultSection(host: HTMLElement): void {
-    const containerEl = this.section(host, 'Vaults', 'what this account holds, beyond this one');
+    const containerEl = section(host, 'Vaults', 'what this account holds, beyond this one');
     const list = containerEl.createEl('div');
     list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
 
@@ -629,7 +587,7 @@ export class SyncServerSettings extends PluginSettingTab {
             continue;
           }
           row.addButton((b) =>
-            this.waits(b)
+            this.surface.waits(b)
               .setButtonText('Remove')
               .setWarning()
               .onClick(() => {
@@ -687,7 +645,7 @@ export class SyncServerSettings extends PluginSettingTab {
             continue;
           }
           row.addButton((b) =>
-            this.waits(b)
+            this.surface.waits(b)
               .setButtonText('Revoke')
               .setWarning()
               .onClick(() => {
@@ -742,7 +700,7 @@ export class SyncServerSettings extends PluginSettingTab {
           t.onChange((v) => (phrase = v));
         })
         .addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText('Catch up')
             .setCta()
             .onClick(async () => {
@@ -795,7 +753,7 @@ export class SyncServerSettings extends PluginSettingTab {
     new Setting(containerEl)
       .setDesc('Other devices keep opening with the old passphrase until each is told the new one.')
       .addButton((b) =>
-        this.waits(b)
+        this.surface.waits(b)
           .setButtonText('Change the passphrase')
           .setWarning()
           .onClick(async () => {
@@ -989,12 +947,12 @@ export class SyncServerSettings extends PluginSettingTab {
           .setName(`Invitation from ${inv.initiatorLogin}`)
           .setDesc('Accepting materialises a copy in this vault; it arrives on the next sync.');
         row.addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText('Accept')
             .setCta()
             .onClick(() => void flow.accept(inv.shareId)),
         );
-        row.addButton((b) => this.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
+        row.addButton((b) => this.surface.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }
 
       for (const share of out.joined) {
@@ -1014,7 +972,7 @@ export class SyncServerSettings extends PluginSettingTab {
           let login = '';
           row.addText((t) => t.setPlaceholder('login to invite').onChange((v) => (login = v)));
           row.addButton((b) =>
-            this.waits(b)
+            this.surface.waits(b)
               .setButtonText('Invite')
               .onClick(() => void flow.invite(share.shareId, login)),
           );
@@ -1022,7 +980,7 @@ export class SyncServerSettings extends PluginSettingTab {
         // Leaving is everybody's, the initiator included — for them it ends the share, and
         // the coordinator says which happened rather than guessing here.
         row.addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText('Leave')
             .setWarning()
             .onClick(() => void flow.leave(share.shareId)),
@@ -1054,7 +1012,7 @@ export class SyncServerSettings extends PluginSettingTab {
             // under two names.
             if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
             who.addButton((b) =>
-              this.waits(b)
+              this.surface.waits(b)
                 .setButtonText(m.joined_at ? 'Revoke' : 'Withdraw')
                 .setWarning()
                 .onClick(() => void flow.remove(share.shareId, m.user_id, m.login)),
@@ -1102,7 +1060,7 @@ export class SyncServerSettings extends PluginSettingTab {
         d.setValue(folder).onChange((v) => (folder = v));
       })
       .addButton((b) =>
-        this.waits(b)
+        this.surface.waits(b)
           .setButtonText('Share')
           .onClick(async () => {
             b.setDisabled(true);
@@ -1203,7 +1161,7 @@ export class SyncServerSettings extends PluginSettingTab {
         picker.style.margin = '0 0 0.75rem 1rem';
 
         setting.addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText(row.versions === 1 ? 'Restore' : 'Restore…')
             .onClick(async () => {
               const versions = await flow.versions(row.nodeId);
@@ -1227,7 +1185,7 @@ export class SyncServerSettings extends PluginSettingTab {
                   // same note apart at a glance when the timestamps are minutes from each other.
                   .setDesc(`${mib(v.size)}${i === 0 ? ' · newest' : ''}`)
                   .addButton((r) =>
-                    this.waits(r)
+                    this.surface.waits(r)
                       .setButtonText('Restore')
                       .setCta()
                       .onClick(async () => {
@@ -1241,7 +1199,7 @@ export class SyncServerSettings extends PluginSettingTab {
         );
 
         setting.addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText('Discard')
             .setWarning()
             .onClick(() => void flow.discard(row.nodeId, row.name)),
@@ -1267,7 +1225,7 @@ export class SyncServerSettings extends PluginSettingTab {
             'the rows shown. This is the only action that lowers what the account is using.',
         )
         .addButton((b) =>
-          this.waits(b)
+          this.surface.waits(b)
             .setButtonText('Empty')
             .setWarning()
             .onClick(() => void flow.empty(page.total)),
@@ -1296,7 +1254,7 @@ export class SyncServerSettings extends PluginSettingTab {
    * people. Somebody about to press this deserves to know which half is theirs to give away.
    */
   private resetSection(containerEl: HTMLElement): void {
-    const body = this.section(containerEl, 'Replace what the server holds', 'when this copy is the right one');
+    const body = section(containerEl, 'Replace what the server holds', 'when this copy is the right one');
     body.createEl('p', {
       text:
         'Removes this vault from the server and uploads what is on this device instead. For the case ' +
@@ -1312,7 +1270,7 @@ export class SyncServerSettings extends PluginSettingTab {
           'those replicas are other people’s copies.',
       )
       .addButton((b) =>
-        this.waits(b)
+        this.surface.waits(b)
           .setButtonText('Reset the server’s copy')
           .setWarning()
           .onClick(() => {
@@ -1342,7 +1300,7 @@ export class SyncServerSettings extends PluginSettingTab {
    * afterwards.
    */
   private disconnectSection(host: HTMLElement): void {
-    const containerEl = this.section(host, 'Disconnect', 'files stay, here and on the server');
+    const containerEl = section(host, 'Disconnect', 'files stay, here and on the server');
     containerEl.createEl('p', {
       text:
         'Stops this device syncing and forgets the connection. Every file stays — here and ' +
