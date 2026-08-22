@@ -467,7 +467,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       database references and the store does not have. That decision is on the page — *"an honest report of
       '13 files not restored' beats a store that never frees space"* — and today the only verification is
       over a backup **copy**, not over a restore.
-- [ ] **Devices that can be seen and revoked** (#156). `POST /auth/devices` creates one and
+- [x] **Devices that can be seen and revoked** (#156). `POST /auth/devices` creates one and
       `DELETE /auth/devices/:id` revokes one; **nothing lists them**. So the only device anybody can revoke
       is the one they are sitting at, which is what disconnect does — and a phone left in a taxi stays
       authorised for ever, for its owner and for the operator alike. It is also why the plugin's Devices

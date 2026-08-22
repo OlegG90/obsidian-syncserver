@@ -409,6 +409,18 @@ export class SyncClient {
   }
 
   /**
+   * The devices that can reach this account (#156).
+   *
+   * `current` is the server's answer and not this client's guess: the token carries which device it was
+   * issued to, and "which of these am I" is the one thing a person looking at several cannot be asked.
+   */
+  devices(): Promise<{
+    devices: { id: string; name: string; platform: string; last_seen_at: string | null; current: boolean }[];
+  }> {
+    return this.json('GET', '/auth/devices');
+  }
+
+  /**
    * Whether this account has a recovery code (M7). A boolean is all there is to ask for —
    * a code the server could show again would be a code the server could use.
    */

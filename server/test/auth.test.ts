@@ -1006,3 +1006,157 @@ describe('the seed envelope, and knowing whose copy is current', () => {
     assert.equal(anon.statusCode, 401);
   });
 });
+
+/**
+ * The devices that can reach an account (#156).
+ *
+ * Creating one and revoking one both existed; **listing them did not** — so the only device anybody
+ * could revoke was the one they were sitting at, whose id their own `data.json` happens to carry. A
+ * phone left in a taxi stayed authorised for ever.
+ */
+describe('the devices of an account', () => {
+  const signIn = async (deviceId: string) => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: deviceId },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    return res.json().access;
+  };
+
+  const devicesOf = async (access: string) =>
+    app.inject({ method: 'GET', url: '/auth/devices', headers: { authorization: `Bearer ${access}` } });
+
+  it('lists them, and says which one is asking', async () => {
+    // "Which of these am I" is the one thing a client cannot answer for itself once somebody is
+    // looking at several — and it is what stops them revoking the device in their hand.
+    const mine = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    await db.query(
+      `INSERT INTO devices (user_id, name, platform, last_seen_at)
+       SELECT id, 'the phone', 'android', now() - interval '2 days' FROM users WHERE login = $1`,
+      [VAULT_LOGIN],
+    );
+
+    const out = await devicesOf(await signIn(mine!.id));
+    assert.equal(out.statusCode, 200, out.body);
+    const list = out.json().devices as { id: string; name: string; current: boolean }[];
+
+    // Not a count: earlier describes in this file recover the same account several times, and each
+    // recovery mints a device. What matters is the property, not how many rows the fixtures left.
+    assert.equal(list.filter((d) => d.current).length, 1, 'exactly one is the caller');
+    assert.equal(list.find((d) => d.current)!.id, mine!.id);
+    assert.ok(list.some((d) => d.name === 'the phone'));
+  });
+
+  it('leaves out the revoked, because they are history and not state', async () => {
+    // Disconnecting revokes and reconnecting creates a new row, so listing the dead would turn an
+    // ordinary reinstall into a graveyard nobody can tell apart.
+    const mine = await db.one<{ id: string }>(
+      `SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.login = $1 AND revoked_at IS NULL LIMIT 1`,
+      [VAULT_LOGIN],
+    );
+    const access = await signIn(mine!.id);
+    const before = (await devicesOf(access)).json().devices.length;
+
+    await db.query(
+      `UPDATE devices SET revoked_at = now() WHERE user_id = (SELECT id FROM users WHERE login = $1)
+        AND name = 'the phone'`,
+      [VAULT_LOGIN],
+    );
+    assert.equal((await devicesOf(access)).json().devices.length, before - 1);
+  });
+
+  it('answers nobody who is not signed in', async () => {
+    assert.equal((await app.inject({ method: 'GET', url: '/auth/devices' })).statusCode, 401);
+  });
+});
+
+/**
+ * The same list for an operator, and taking one away (#156).
+ *
+ * The case it exists for is the one the owner cannot solve: their only device is the one that is gone,
+ * so there is nobody left to revoke it but the administrator.
+ */
+describe('an operator looking at somebody’s devices', () => {
+  const asAdmin = async () => {
+    const row = await db.one<{ login: string }>(`SELECT login FROM users WHERE id = $1`, [
+      '00000000-0000-0000-0000-000000000001',
+    ]);
+    await db.query(`UPDATE users SET state = 'active', role = 'admin', password_hash = $2 WHERE id = $1`, [
+      '00000000-0000-0000-0000-000000000001',
+      hashPassword('an administrator password'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/console',
+      payload: { login: row!.login, password: 'an administrator password' },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    return res.json().access;
+  };
+
+  const userId = async (): Promise<string> =>
+    (await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]))!.id;
+
+  it('lists them, and revoking one is recorded because it was done TO somebody', async () => {
+    // Every other revocation is an account acting on itself and needs no audit row to be
+    // explicable. This one is an administrator reaching into an account.
+    const access = await asAdmin();
+    const id = await userId();
+    await db.query(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'the lost phone', 'android')`,
+      [id],
+    );
+
+    const list = await app.inject({
+      method: 'GET',
+      url: `/admin/accounts/${id}/devices`,
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(list.statusCode, 200, list.body);
+    const lost = (list.json().devices as { id: string; name: string }[]).find((d) => d.name === 'the lost phone');
+    assert.ok(lost);
+
+    const gone = await app.inject({
+      method: 'DELETE',
+      url: `/admin/accounts/${id}/devices/${lost.id}`,
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(gone.statusCode, 204, gone.body);
+
+    const after = await app.inject({
+      method: 'GET',
+      url: `/admin/accounts/${id}/devices`,
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.ok(!(after.json().devices as { name: string }[]).some((d) => d.name === 'the lost phone'));
+
+    const row = await db.one<{ details: { device: string }; target: string }>(
+      `SELECT details, target_login AS target FROM audit_log WHERE action = 'device.revoke' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.equal(row!.target, VAULT_LOGIN);
+    // The name and not the id: an operator reading this later is trying to remember which machine.
+    assert.equal(row!.details.device, 'the lost phone');
+  });
+
+  it('is silent about a device that is not that account’s', async () => {
+    // A 404 that told "no such device" apart from "not theirs" would answer a question about
+    // another account (#20).
+    const access = await asAdmin();
+    const out = await app.inject({
+      method: 'DELETE',
+      url: `/admin/accounts/${await userId()}/devices/00000000-0000-0000-0000-0000000000ff`,
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(out.statusCode, 204);
+  });
+
+  it('takes nothing from a caller who is not an administrator', async () => {
+    const out = await app.inject({ method: 'GET', url: `/admin/accounts/${await userId()}/devices` });
+    assert.equal(out.statusCode, 401);
+  });
+});
