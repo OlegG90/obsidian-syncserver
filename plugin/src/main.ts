@@ -901,6 +901,20 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * The vaults this account has, and removing one (#157, #161).
+   *
+   * Through `unlocked()` rather than `withSession`, because naming them needs the seed: the server holds
+   * `name_enc` and no key to open it, so the decryption is the session's own.
+   */
+  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+    return (await this.unlocked()).vaults();
+  }
+
+  async deleteVault(vaultId: string): Promise<void> {
+    await (await this.unlocked()).deleteVault(vaultId);
+  }
+
+  /**
    * The devices of this account, and taking one away (#156).
    *
    * Through the session like everything else, and without the shared gate: reading a list and revoking
