@@ -230,6 +230,45 @@ describe('the vault list', () => {
     assert.equal(await list(), 1, 'and one folder is one item');
   });
 
+  it('says which vaults a share names, so the screen can refuse before the button', async () => {
+    // `deleteVault` refuses a vault a share names, and that refusal used to arrive AFTER a confirmation
+    // saying nothing would be lost (#176). The list already knows; it just never said.
+    const plain = randomUUID();
+    const named = randomUUID();
+    await createVault(plain, 'not shared');
+    const created = await createVault(named, 'shared');
+    const rootId = created.json().root_node_id as string;
+    const keyId = (await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [named]))!.id;
+
+    // A folder to share, because a share names a subtree and the schema refuses one that names the root
+    // without carrying its root item — the same shape `reset.test.ts` builds.
+    const folder = await db.one<{ id: string }>(
+      `INSERT INTO nodes (vault_id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry)
+       VALUES ($1, $2, 'ª', decode($3,'hex'), $4, 'folder', now(), 0, ARRAY[$2::uuid]) RETURNING id`,
+      [named, rootId, sha(randomBytes(8)), keyId],
+    );
+    const shareId = randomUUID();
+    const itemId = randomUUID();
+    await db.tx(async (c) => {
+      await c.query(`INSERT INTO key_scopes (id, kind) VALUES ($1, 'share')`, [randomUUID()]);
+      await c.query(
+        `INSERT INTO shares (id, initiator_id, initiator_vault_id, subtree_node_id, state, root_item_id)
+         VALUES ($1, $2, $3, $4, 'preparing', $5)`,
+        [shareId, userId, named, folder!.id, itemId],
+      );
+      await c.query(
+        `INSERT INTO share_members (share_id, user_id, vault_id, joined_at) VALUES ($1, $2, $3, now())`,
+        [shareId, userId, named],
+      );
+      await c.query(`UPDATE nodes SET share_id = $2, share_item_id = $3 WHERE id = $1`, [folder!.id, shareId, itemId]);
+    });
+
+    const r = await app.inject({ method: 'GET', url: '/vaults', headers: auth() });
+    const rows = r.json() as { id: string; shared: boolean }[];
+    assert.equal(rows.find((v) => v.id === named)?.shared, true);
+    assert.equal(rows.find((v) => v.id === plain)?.shared, false, 'and it is not simply true for everything');
+  });
+
   it('still carries the name as ciphertext, which is the whole point', async () => {
     // The list is what a person reads to tell one vault from another, and the server cannot help with
     // that: it holds `name_enc` and no key. The decryption is the device's (docs/06).

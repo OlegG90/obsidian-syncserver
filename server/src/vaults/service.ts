@@ -24,12 +24,22 @@ import { usageOf } from '../quota.js';
  * The name stays ciphertext here and is decrypted on the device, because that is the whole model: the
  * server holds `name_enc` and no key to open it.
  */
-export type VaultRow = { id: string; nameEnc: string; nodes: number };
+export type VaultRow = { id: string; nameEnc: string; nodes: number; shared: boolean };
 
+/**
+ * `shared` is here so a screen can say the refusal **before** the act rather than after it (#176).
+ *
+ * `deleteVault` refuses a vault a share names, and that refusal used to arrive as `named_by_a_share`
+ * after somebody had already read a confirmation saying nothing would be lost. The same query the list
+ * already runs can answer it, so the row that offers removal is the row that knows whether removal is
+ * possible — exactly as `nodes` already works for the emptiness rule.
+ */
 export const listVaults = (db: Db, userId: string): Promise<VaultRow[]> =>
   db.query<VaultRow>(
     `SELECT v.id, encode(v.name_enc, 'base64') AS "nameEnc",
-            (SELECT count(*) FROM nodes n WHERE n.vault_id = v.id AND n.id <> v.root_node_id)::int AS nodes
+            (SELECT count(*) FROM nodes n WHERE n.vault_id = v.id AND n.id <> v.root_node_id)::int AS nodes,
+            (EXISTS (SELECT 1 FROM shares s WHERE s.initiator_vault_id = v.id)
+             OR EXISTS (SELECT 1 FROM share_members m WHERE m.vault_id = v.id)) AS shared
        FROM vaults v
       WHERE v.user_id = $1
       ORDER BY v.created_at`,

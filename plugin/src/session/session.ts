@@ -589,7 +589,7 @@ export class Session {
    * The names are decrypted **here**, with the seed this session holds, exactly as the chooser does it.
    * The server cannot: it stores `name_enc` and no key to open it (docs/06).
    */
-  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+  async vaults(): Promise<{ id: string; name: string; nodes: number; shared: boolean; current: boolean }[]> {
     if (!this.seed) throw new Error('session is locked');
     const seed = this.seed;
     const rows = await this.use((h) => h.client.listVaults());
@@ -597,6 +597,7 @@ export class Session {
       id: v.id,
       name: Session.vaultLabel(seed, v),
       nodes: v.nodes ?? 0,
+      shared: v.shared === true,
       current: v.id === this.conn.vaultId,
     }));
   }
