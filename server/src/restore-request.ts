@@ -1,5 +1,5 @@
 /**
- * A restore asked for from the console, carried out at the **next start** (#4 of the backup review).
+ * A restore asked for from the console, carried out at the **next start** (D-92).
  *
  * The console used to refuse this outright, and the reason was sound: a server that can overwrite itself
  * from a web page is a new way to lose a vault. What the refusal left behind was a screen showing a
