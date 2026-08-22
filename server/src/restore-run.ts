@@ -16,12 +16,11 @@
  * restored ahead of their database are content nothing references, which is harmless and is what the
  * collector sweeps. The window where a copy is half-applied should be the harmless half.
  */
-import { execFile } from 'node:child_process';
 import { cp, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { missingBlobs } from './backup.js';
 import type { Db } from './db.js';
-import { restoreArgv } from './restore-argv.js';
+import { restoreArgv, runCommand } from './restore-argv.js';
 
 /** What a restore found, said in the terms an operator acts on. */
 export interface RestoreOutcome {
@@ -78,16 +77,6 @@ export const looksLikeABackup = async (dir: string): Promise<string | undefined>
   return undefined;
 };
 
-const run = (cmd: string, args: string[]): Promise<void> =>
-  new Promise((resolve, reject) => {
-    execFile(cmd, args, (err, _stdout, stderr) => {
-      // `pg_restore` writes warnings to stderr on a perfectly good restore, so only the exit code
-      // decides — but the text goes into the error, because it is where the reason lives.
-      if (err) reject(new Error(`${cmd} failed: ${stderr || err.message}`));
-      else resolve();
-    });
-  });
-
 /**
  * Put a backup back: the blobs, then the database, then the report.
  *
@@ -126,7 +115,7 @@ export const restoreFrom = async (
   await cp(join(dir, 'blobs'), deps.blobStorePath, { recursive: true, force: true });
 
   log(`restoring the database from ${dump} into ${database}`);
-  await run(cmd, args);
+  await runCommand(cmd, args);
 
   // The report the decision in docs/08 promised and nothing produced. Asked of the LIVE store now that
   // both halves are back, which is the only moment the question means anything.

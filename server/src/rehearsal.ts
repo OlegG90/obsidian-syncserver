@@ -22,10 +22,10 @@
  * into a file beside the restore epoch instead: the same directory, mounted for the same reason, and the
  * same property — it has to outlive the container that wrote it.
  */
-import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { connect, type Db } from './db.js';
+import { restoreArgv, runCommand } from './restore-argv.js';
 import { declaredNames, missingFrom, SCHEMA_FILE } from './schema.js';
 
 /** What the last rehearsal found, as the console reads it. */
@@ -37,12 +37,17 @@ export interface Rehearsal {
   ok: boolean;
   /** One sentence: what loaded, or what stopped it. */
   detail: string;
+  /**
+   * The last rehearsal that **passed**, carried forward across failures (#173).
+   *
+   * Without it one bad run erased the only number worth reading. `docs/08` names the question — *"the
+   * last successful rehearsal was 60 days ago"* — and a failure is precisely the moment somebody asks
+   * it: knowing the archive did not load today matters much less than knowing whether one ever did, and
+   * how long ago. Absent on a server that has never had a passing rehearsal, and on a record written
+   * before this field existed, which the console reads the same way — as "not known".
+   */
+  lastGood?: { at: string; run: string };
 }
-
-const run = (cmd: string, args: string[]): Promise<void> =>
-  new Promise((resolve, reject) => {
-    execFile(cmd, args, (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()));
-  });
 
 /** Beside the restore epoch, for the reason the module docblock gives. */
 export const rehearsalFile = (stateFile: string): string => join(dirname(stateFile), 'rehearsal.json');
@@ -96,8 +101,17 @@ export const rehearseRestore = async (
   if (!latest) return undefined;
 
   const scratch = `syncserver_rehearsal_${opts.stamp.replace(/[^0-9a-z]/gi, '_').toLowerCase()}`;
+  const previous = await readRehearsal(opts.stateFile);
   const record = async (ok: boolean, detail: string): Promise<Rehearsal> => {
-    const out: Rehearsal = { at: new Date().toISOString(), run: latest.id, ok, detail };
+    const at = new Date().toISOString();
+    // A pass is its own last-good; a failure inherits whatever the previous record knew — either the
+    // previous run itself, if that one passed, or the last-good it was already carrying.
+    const lastGood = ok
+      ? { at, run: latest.id }
+      : previous?.ok
+        ? { at: previous.at, run: previous.run }
+        : previous?.lastGood;
+    const out: Rehearsal = { at, run: latest.id, ok, detail, ...(lastGood ? { lastGood } : {}) };
     await writeRehearsal(opts.stateFile, out);
     return out;
   };
@@ -114,9 +128,10 @@ export const rehearseRestore = async (
 
   let scratchDb: Db | undefined;
   try {
-    const [cmd, ...args] = opts.restoreCommand;
-    // The restore command ends at `-d`, so the database goes here and the archive after it.
-    await run(cmd!, [...args.slice(0, -1), '-d', scratch, join(latest.destination, 'database.dump')]);
+    // The same argv the real restore uses, pointed at the scratch database (#171): the rehearsal is only
+    // worth anything if it exercises the command an operator would actually run.
+    const { cmd, args } = restoreArgv(opts.restoreCommand, scratch, join(latest.destination, 'database.dump'));
+    await runCommand(cmd, args);
 
     const url = new URL(opts.databaseUrl ?? 'postgres:///postgres');
     url.pathname = `/${scratch}`;

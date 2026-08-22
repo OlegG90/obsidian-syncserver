@@ -232,6 +232,8 @@ export interface RehearsalRow {
   run: string;
   ok: boolean;
   detail: string;
+  /** The last one that passed, carried across failures — absent when none ever has (#173). */
+  lastGood?: { at: string; run: string };
 }
 
 /**
