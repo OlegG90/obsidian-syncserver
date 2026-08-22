@@ -20,6 +20,39 @@ import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
 
+/**
+ * A list the server has to answer before it can be drawn (#182).
+ *
+ * The vault list and the device list had this shape each, written out twice: a placeholder while the
+ * network call is out, empty the placeholder and draw rows, a line for the empty case, and one sentence
+ * if the call fails. Two copies of a shape is two places to remember when the shape changes — and it did
+ * change, twice, once for what a row says about a vault and once for how fresh `last_seen_at` is.
+ *
+ * **The placeholder is not decoration.** Both lists arrive over the network after the surface is drawn,
+ * and a section that renders empty for a moment is one somebody reads as "you have none".
+ *
+ * **A failure is a sentence and not an empty list**, for the same reason: "the list could not be read"
+ * and "there is nothing in it" are different facts, and only one of them is worth acting on.
+ */
+const asked = <T>(
+  host: HTMLElement,
+  what: string,
+  fetch: () => Promise<readonly T[]>,
+  row: (item: T, list: HTMLElement) => void,
+  empty?: string,
+): HTMLElement => {
+  const list = host.createEl('div');
+  list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+  void fetch()
+    .then((items) => {
+      list.empty();
+      for (const item of items) row(item, list);
+      if (items.length === 0 && empty) list.createEl('p', { text: empty });
+    })
+    .catch(() => list.setText(`The ${what} could not be read.`));
+  return list;
+};
+
 export class Panels {
   constructor(private readonly s: Surface) {}
 
@@ -77,54 +110,51 @@ export class Panels {
    */
   vaultSection(host: HTMLElement): void {
     const containerEl = section(host, 'Vaults', 'what this account holds, beyond this one');
-    const list = containerEl.createEl('div');
-    list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+    asked(
+      containerEl,
+      'vault list',
+      () => this.s.plugin.vaults(),
+      (v, list) => {
+        // What it is USING, not only how many rows it has (#178) — which is the number somebody reads
+        // when they are deciding which vault to remove to make room.
+        const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
+        const row = new Setting(list)
+          .setName(v.current ? `${v.name} — this device` : v.name)
+          .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
 
-    void this.s.plugin
-      .vaults()
-      .then((vaults) => {
-        list.empty();
-        for (const v of vaults) {
-          // What it is USING, not only how many rows it has (#178) — which is the number somebody
-          // reads when they are deciding which vault to remove to make room.
-          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
-          const row = new Setting(list)
-            .setName(v.current ? `${v.name} — this device` : v.name)
-            .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
-
-          if (v.current) continue;
-          if (v.shared) {
-            // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share`
-            // once somebody had already read a confirmation promising that nothing would be lost — and
-            // what a share holds is other people's access, which is not this account's to tidy away.
-            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — a share names this vault, so it stays`);
-            continue;
-          }
-          row.addButton((b) =>
-            this.s.waits(b)
-              .setButtonText('Remove')
-              .setWarning()
-              .onClick(() => {
-                new ConfirmModal(
-                  this.s.app,
-                  `Remove ${v.name}?`,
-                  removalWarning(v.nodes),
-                  async () => {
-                    try {
-                      await this.s.plugin.deleteVault(v.id);
-                      new Notice(`SyncServer: ${v.name} was removed.`);
-                      this.s.refresh();
-                    } catch (e) {
-                      new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
-                    }
-                  },
-                  'Remove',
-                ).open();
-              }),
-          );
+        if (v.current) return;
+        if (v.shared) {
+          // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share` once
+          // somebody had already read a confirmation promising that nothing would be lost — and what a
+          // share holds is other people's access, which is not this account's to tidy away.
+          row.setDesc(`${held} · ${v.id.slice(0, 8)}… — a share names this vault, so it stays`);
+          return;
         }
-      })
-      .catch(() => list.setText('The vault list could not be read.'));
+        row.addButton((b) =>
+          this.s
+            .waits(b)
+            .setButtonText('Remove')
+            .setWarning()
+            .onClick(() => {
+              new ConfirmModal(
+                this.s.app,
+                `Remove ${v.name}?`,
+                removalWarning(v.nodes),
+                async () => {
+                  try {
+                    await this.s.plugin.deleteVault(v.id);
+                    new Notice(`SyncServer: ${v.name} was removed.`);
+                    this.s.refresh();
+                  } catch (e) {
+                    new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+                  }
+                },
+                'Remove',
+              ).open();
+            }),
+        );
+      },
+    );
   }
 
   /**
@@ -139,48 +169,45 @@ export class Panels {
    * as something unrelated. Disconnect is the act that means "this one", and it says what it keeps.
    */
   deviceList(containerEl: HTMLElement): void {
-    const list = containerEl.createEl('div');
-    list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+    asked(
+      containerEl,
+      'device list',
+      () => this.s.plugin.devices(),
+      (d, list) => {
+        const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
+        const row = new Setting(list)
+          .setName(d.current ? `${d.name} — this device` : d.name)
+          // As fresh as the access token's lifetime and no fresher (D-118): written on every refresh,
+          // never per request. Labelled as such rather than made to sound more precise than it is.
+          .setDesc(`${d.platform} — last seen ${when}`);
 
-    void this.s.plugin
-      .devices()
-      .then((devices) => {
-        list.empty();
-        for (const d of devices) {
-          const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
-          const row = new Setting(list)
-            .setName(d.current ? `${d.name} — this device` : d.name)
-            // "Signed in", not "synced": the time is written when a token is issued or renewed, and a
-            // label that claimed more than the column holds would be read as more precise than it is.
-            .setDesc(`${d.platform} · last signed in ${when}`);
-
-          if (d.current) {
-            row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));
-            continue;
-          }
-          row.addButton((b) =>
-            this.s.waits(b)
-              .setButtonText('Revoke')
-              .setWarning()
-              .onClick(() => {
-                new ConfirmModal(
-                  this.s.app,
-                  `Revoke ${d.name}?`,
-                  'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
-                    'already holds stay where they are, and this account simply stops answering it.',
-                  async () => {
-                    await this.s.plugin.revokeDevice(d.id);
-                    new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
-                    this.s.refresh();
-                  },
-                  'Revoke',
-                ).open();
-              }),
-          );
+        if (d.current) {
+          row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));
+          return;
         }
-        if (devices.length === 0) list.createEl('p', { text: 'No devices — which should be impossible from one.' });
-      })
-      .catch(() => list.setText('The device list could not be read.'));
+        row.addButton((b) =>
+          this.s
+            .waits(b)
+            .setButtonText('Revoke')
+            .setWarning()
+            .onClick(() => {
+              new ConfirmModal(
+                this.s.app,
+                `Revoke ${d.name}?`,
+                'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
+                  'already holds stay where they are, and this account simply stops answering it.',
+                async () => {
+                  await this.s.plugin.revokeDevice(d.id);
+                  new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
+                  this.s.refresh();
+                },
+                'Revoke',
+              ).open();
+            }),
+        );
+      },
+      'No devices — which should be impossible from one.',
+    );
   }
 
   /**
