@@ -109,6 +109,14 @@ services:
       # Where the restore epoch lives — must survive a restore, so it is a host path, not
       # inside the database or the blobs.
       RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/state/restore.epoch}
+      # How the restore container puts a dump back. `pg_restore` is in the image at the
+      # database's own major, so this has a working default and exists to be overridden —
+      # which it could not be, because it never reached the container (#174).
+      RESTORE_DB_COMMAND: ${RESTORE_DB_COMMAND:-}
+      # How often the newest backup is loaded into a scratch database to prove it reads.
+      # 0 turns it off. Carried here ahead of the server that reads it, so that landing the
+      # rehearsal cannot land it unreachable (#159).
+      REHEARSE_RESTORE_EVERY_SECONDS: ${REHEARSE_RESTORE_EVERY_SECONDS:-}
     volumes:
       - ${BLOB_DIR:?set BLOB_DIR in .env — the directory the encrypted files live in}:/data/blobs
       # Where a backup can actually land. Without this the destination could only be a path

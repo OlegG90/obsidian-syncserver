@@ -60,24 +60,25 @@ for (const [name, value] of Object.entries({ ...(db?.environment ?? {}), ...(ser
   check(String(value).startsWith('${'), `${name} must come from the environment, not be written here`);
 }
 
-// The backup variables are all-or-nothing, defaulted to empty so an unset deployment is a
-// truthful "not configured" rather than a secret or a path written here.
+// **Every** variable an operator is told about must reach the deployment.
 //
-// **Read from `.env.example` rather than listed here**, because a list is what let `BACKUP_KEEP`
-// ship without ever reaching a container: the server read it, the example documented it, the
-// manual explained it — and compose, which is how every real deployment passes environment, did
-// not carry it. A variable documented for an operator and dropped on the way in is worse than
-// one that does not exist, because it looks like it works.
+// This used to read only `BACKUP_*`, which is how `RESTORE_DB_COMMAND` came to be documented in
+// `.env.example`, read by the server, explained in the manual — and passed by nothing (#174). The
+// narrower rule caught `BACKUP_KEEP` and then watched the same failure happen one prefix over. A
+// variable documented for an operator and dropped on the way in is worse than one that does not
+// exist, because setting it looks like it works.
+//
+// So the rule is the general one: if it is in `.env.example`, compose must mention it. A setting that
+// genuinely is not this deployment's business does not belong in the file that describes it.
 const documented = new Set(
-  [...readFileSync('.env.example', 'utf8').matchAll(/^#?\s*(BACKUP_[A-Z_]+)=/gm)].map((m) => m[1]),
+  [...readFileSync('.env.example', 'utf8').matchAll(/^#?\s*([A-Z][A-Z0-9_]+)=/gm)].map((m) => m[1]),
 );
-check(documented.size > 0, '.env.example must document the backup variables');
+check(documented.size > 0, '.env.example must document the deployment variables');
 for (const name of documented) {
   // Referenced ANYWHERE in the file, not in `environment` specifically: some of these are the
-  // container's settings and some are host paths that appear under `volumes`. The property
-  // worth holding is the one `BACKUP_KEEP` broke — a variable documented for an operator that
-  // never reaches the deployment — and being strict about WHERE it is referenced turned that
-  // into a false positive against `BACKUP_DIR` the moment it stopped being a commented example.
+  // container's settings and some are host paths that appear under `volumes`. Being strict about
+  // WHERE it is referenced turned this into a false positive against `BACKUP_DIR` the moment it
+  // stopped being a commented example.
   check(
     text.includes(`\${${name}`),
     `${name} is documented in .env.example, so compose must reference it — otherwise setting it does nothing`,
