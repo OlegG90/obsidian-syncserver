@@ -214,7 +214,26 @@ usable copy no matter what its status column says.
 
 > **A backup that has never been restored is not a backup.**
 
-Quarterly: restore into a separate instance and run the check —
+**The server rehearses two things, and the difference between them is the sentence above** (#159):
+
+- at every start and on a daily interval it reopens the newest copy and confirms that every blob the
+  database references is present in it. That says the copy **arrived**;
+- on a much rarer interval — `REHEARSE_RESTORE_EVERY_SECONDS`, weekly by default, `0` to turn it off — it
+  **loads the dump into a scratch database** created for the purpose and dropped afterwards, and confirms
+  that what comes out carries this build's functions and triggers and holds at least one account. That
+  says the archive can be **read**.
+
+A `pg_dump` that fails to restore — a version mismatch, a truncated file, a corrupt archive — passes the
+first and fails the second, which is the whole reason the second exists. It needs the database role to be
+able to `CREATE DATABASE`; where it cannot, the server says so and carries on, because a check that
+stopped the thing it checks would be the worst trade here. The outcome is written beside the restore
+epoch, so *"the last successful rehearsal was 60 days ago"* survives a restart, and the console says it on
+the Backups screen.
+
+What neither can claim is that the data is **correct** — nothing outside the vaults' own keys could tell.
+That is what the quarterly check below is still for.
+
+Quarterly, by hand: restore into a separate instance and run the check —
 
 - every `nodes.sha256` is present in the blob store;
 - **every `versions.sha256` as well**;
