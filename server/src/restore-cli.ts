@@ -1,9 +1,9 @@
 /**
  * The command an operator runs to put a backup back (#155).
  *
- * Deliberately a **one-off container and not an endpoint**: a server that can overwrite itself from a
- * web console is a new way to lose a vault. The console's part is what it already does — confirming the
- * restore afterwards, which is the act only a person can take responsibility for.
+ * The typed half of D-92. The console's button asks for the same thing and lets the server carry it out
+ * on its next start; this is for an installation whose console cannot be reached, and for an operator
+ * who would rather watch it happen.
  *
  *     docker compose stop server
  *     docker compose run --rm server node server/dist/restore-cli.js /backups/backup-2026-08-21T…

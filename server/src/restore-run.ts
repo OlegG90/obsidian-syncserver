@@ -6,10 +6,9 @@
  * request `restore_pending`, the console's confirmation. The operator having the worst morning of their
  * year was handed a paragraph.
  *
- * **This is a command and not a button, deliberately.** A server that can overwrite itself from a web
- * console is a new way to lose a vault — so this runs as a one-off container, with the server stopped,
- * by somebody who typed it. What the code contributes is the part a person should not have to remember:
- * the order, the refusal, and the report.
+ * **It runs with the server stopped, and both ways in arrange that** (D-92): the CLI because a person
+ * stopped it, the console's button because the server exits and does this on the way back up. What the
+ * code contributes is the part nobody should have to remember: the order, the refusal, and the report.
  *
  * **Blobs first, then the database** — the opposite of a backup, and for the same reason the backup runs
  * the other way. A database restored ahead of its blobs references content that is not there yet; blobs

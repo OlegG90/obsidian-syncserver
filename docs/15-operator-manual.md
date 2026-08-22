@@ -387,9 +387,9 @@ the restored store does not have. Those notes exist and their content does not, 
 learn it rather than one file at a time over the following weeks. The restore still happened — the list is
 information, not a failure.
 
-**Restoring is a command and not a button**, deliberately. A server that can overwrite itself from a web
-console is a new way to lose a vault. The console's part is the one only a person can take responsibility
-for: confirming it afterwards.
+**Neither route lets the server overwrite itself while running**, which is the part of this that is a
+decision rather than a convenience (D-92). And neither one finishes the job: confirming afterwards is
+the act only a person can take responsibility for.
 
 The server keeps the newest epoch it has ever run with in a **state file outside the database**, so a
 restored database is *behind* that file — which is how a restore is detectable at all. The server then

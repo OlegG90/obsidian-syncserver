@@ -93,9 +93,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
         // Bounded here rather than trusted: the log is the one table that only grows.
         limit: Math.min(Number(req.query.limit) || 100, 500),
       }),
-      // The size of the whole thing, beside a page of it. The log grows without limit by decision
-      // (#160), and a decision that rests on "these actions are rare" needs the number that would look
-      // wrong if somebody ever recorded something frequent.
+      // The size of the whole thing, beside a page of it (D-117).
       size: await auditSize(db),
     }),
   );

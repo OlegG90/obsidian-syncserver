@@ -834,10 +834,8 @@ const auditScreen = (): void => {
         ? el('p', { className: 'muted', textContent: 'Nothing has been done to an account yet.' })
         : auditLog(out.entries),
     );
-    // **The whole log's size, beside a page of it** (#160). Nothing is ever deleted from here, by
-    // decision — every action it records is administrative and rare, and the record of who did what is
-    // worth more than the kilobytes. That rests on "rare" staying true, so the number that would look
-    // wrong if somebody ever recorded something frequent is on the screen rather than in a comment.
+    // The whole log's size, beside a page of it (D-117). The sentence is for the reader; the number is
+    // for the assumption underneath, which is the part nothing enforces.
     size.replaceChildren(
       el('span', {
         className: 'muted',
@@ -901,13 +899,11 @@ const backupRow = (b: BackupRun): HTMLElement => {
 /**
  * How to restore **this** copy — the exact command, not a paragraph (#155).
  *
- * **A button would be wrong here and the absence is the design.** A server that can overwrite itself
- * from a web console is a new way to lose a vault, so restoring stays something a person types with the
- * server stopped. What the console can honestly do is remove the part of that which is remembering:
+ * Kept beside the button (D-92) for the server whose console cannot be reached when it matters, and for
+ * the operator who would rather see the steps than press one thing. What it removes is the remembering:
  * which directory this row is, and what order the steps go in.
  *
- * Shown folded, because on the ordinary day nobody wants it. What it says is exactly what
- * [15](../../docs/15-operator-manual.md) says, with this row's destination already in it.
+ * Shown folded, because on the ordinary day nobody wants it.
  */
 const restoreFrom = (destination: string): HTMLElement => {
   const box = el('details', {});
