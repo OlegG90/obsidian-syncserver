@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
 import { fakeAccountSalt, hashToken, tokenMatches } from '../crypto.js';
 import type { Db } from '../db.js';
+import { activeDevices } from '../devices.js';
 import {
   changePassword,
   findActiveAccount,
@@ -603,21 +604,15 @@ export const registerAuthRoutes = (
     const claims = await req.jwtVerify<{ sub: string; device?: string }>().catch(() => undefined);
     if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
 
-    const rows = await db.query<{ id: string; name: string; platform: string; lastSeenAt: string | null }>(
-      `SELECT id::text AS id, name, platform, last_seen_at AS "lastSeenAt"
-         FROM devices
-        WHERE user_id = $1 AND revoked_at IS NULL
-        ORDER BY last_seen_at DESC NULLS LAST, name`,
-      [claims.sub],
-    );
+    const rows = await activeDevices(db, claims.sub);
 
     return {
       devices: rows.map((d) => ({
         id: d.id,
         name: d.name,
         platform: d.platform,
-        // Written when a refresh token is issued — a sign-in or a renewal — so it is "last signed in"
-        // and not "last synced". Labelled as such rather than made to sound more precise than it is.
+        // As fresh as the access token's lifetime, and no fresher: written on every refresh, never per
+        // request (D118). Labelled as such rather than made to sound more precise than it is.
         last_seen_at: d.lastSeenAt,
         current: d.id === claims.device,
       })),
