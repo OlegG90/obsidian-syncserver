@@ -216,8 +216,9 @@ usable copy no matter what its status column says.
 
 **The server checks two different things, and the difference between them is the sentence above** (#159):
 
-- the **verification**: at every start and on a daily interval it reopens the newest copy and confirms
-  that every blob the database references is present in it. That says the copy **arrived**;
+- the **verification**, on demand: the console's Verify button reopens one copy and confirms that every
+  blob the database references is present in it. That says the copy **arrived**. It runs on no schedule
+  and not at boot — verifying a backup is not part of serving one;
 - the **rehearsal**: on a much rarer interval — `REHEARSE_RESTORE_EVERY_SECONDS`, weekly by default, `0`
   to turn it off — it **loads the dump into a scratch database** created for the purpose and dropped
   afterwards, and confirms

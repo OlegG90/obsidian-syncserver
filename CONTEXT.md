@@ -56,10 +56,11 @@ follow.
 
 *(server)* **Two different claims about a backup, and never one word for both.**
 
-A **verification** reopens the newest copy and confirms that every blob the database references is
-present in it. It says the copy **arrived**. Daily, and at every start; it is what the console's
-**Verify** button runs, what `backup_runs.verified` records, and what `BACKUP_VERIFY_INTERVAL_SECONDS`
-paces.
+A **verification** reopens one copy and confirms that every blob the database references is present in
+it. It says the copy **arrived**. **On demand only** — it is what the console's **Verify** button runs
+and what `backup_runs.verified` records. It used to also run at boot and daily; checking a backup is not
+part of serving one, and a server doing it unasked was work nobody had asked for at a moment nobody
+chose.
 
 A **rehearsal** loads the newest dump into a scratch database and confirms that what comes out carries
 this build's functions and triggers and holds at least one account. It says the archive can be **read**.

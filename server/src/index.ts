@@ -1,5 +1,5 @@
 import { buildApp } from './app.js';
-import { settleInterruptedRuns, verifyLatestBackup } from './backup.js';
+import { settleInterruptedRuns } from './backup.js';
 import { assertPgDumpMatches, backupLegs, pgDumpVersion, serverVersionLine } from './backup-legs.js';
 import { startBackupSchedule } from './backup-schedule.js';
 import { hasActiveAdministrator } from './bootstrap.js';
@@ -32,39 +32,11 @@ const stopCollector = startCollector(db, collectorStore, cfg);
 // fact — `buildApp` needs the same string, and this used to ask for it a second time (D-89).
 const versionLine = cfg.backup ? await serverVersionLine(db) : '';
 
-// **Verification**, not rehearsal: this reopens the latest backup and confirms every blob the
-// database references is present in the copy — that the copy ARRIVED. The rehearsal below is the
-// other claim, and one word for both made every sentence naming it ambiguous (CONTEXT.md, D-114's
-// rule about `freeze`). The word matches what the setting, the column and the console button have
-// always called it. Lives here rather than in the collector so backup.ts and collector.ts do not
-// import each other. Runs once now, then on the interval; a server with no backups stays silent.
-let verifyTimer: ReturnType<typeof setInterval> | undefined;
-if (cfg.backup) {
-  const verifyLatest = async (): Promise<void> => {
-    try {
-      const out = await verifyLatestBackup(db, cfg.backup!.destination);
-      if (!out) return;
-      if (out.whole) {
-        console.log(`backup verification: the latest backup is whole (${out.checked} blobs checked)`);
-      } else {
-        console.warn(
-          `backup verification: the latest backup is MISSING ${out.missing} of ${out.checked} blobs — not restorable`,
-        );
-      }
-    } catch (e) {
-      console.warn(`backup verification failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-  void verifyLatest();
-  verifyTimer = setInterval(() => void verifyLatest(), cfg.backupVerifyIntervalSeconds * 1000);
-  verifyTimer.unref?.();
-}
-
 /**
- * The **rehearsal**, and the difference from the verification above is the whole of #159: this one
- * *loads* the newest dump into a scratch database, where that one only confirms the copy's blobs are
- * all present. "The copy arrived" and "the archive can be read" are two claims, and only the second is
- * what docs/08 means by *"a backup that has never been restored is not a backup"*.
+ * The **rehearsal**: it *loads* the newest dump into a scratch database, where a verification only
+ * confirms the copy's blobs are all present. "The copy arrived" and "the archive can be read" are two
+ * claims, and only the second is what docs/08 means by *"a backup that has never been restored is not a
+ * backup"* — which is why this one runs on a schedule and the verification does not run on one at all.
  *
  * On its own, much rarer interval, and NOT at boot: restoring a whole dump on a NAS is minutes, and a
  * server that spent them before it started serving would be paying for the check at the worst moment.
@@ -182,7 +154,6 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
     stopBackupSchedule();
-    if (verifyTimer) clearInterval(verifyTimer);
     if (rehearsalTimer) clearInterval(rehearsalTimer);
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });

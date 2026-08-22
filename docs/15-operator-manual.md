@@ -300,10 +300,11 @@ when the self-check found the copy whole.
 whole — some blob the database references is missing from it. A backup nobody can restore from is not a
 backup, and this is the difference between learning that now and learning it at restore time.
 
-**Verify** re-runs that check on demand. The server also does it on its own: at every start, and
-periodically after, it reopens the newest backup and confirms every blob is present. That line is in the
-boot log, and it says `backup verification`. That word is exact — see the next section for the
-**rehearsal**, which is the other claim (CONTEXT.md keeps the two apart).
+**Verify** re-runs that check, and **only when asked**. The server does not verify on a schedule and does
+not verify at boot: checking a backup is not part of serving one, and a server doing it unasked spends
+minutes walking every blob at a moment nobody chose. What it *does* run on a schedule is the
+**rehearsal** — the other claim entirely, and the one worth paying for (see the next section; CONTEXT.md
+keeps the two words apart).
 
 **Remove a copy** from its row, behind a confirmation naming it. The run stays in the history with no
 destination — the log keeps saying a backup ran, and the empty destination says its copy is gone. The
