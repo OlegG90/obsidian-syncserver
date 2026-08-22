@@ -170,6 +170,7 @@ export class SyncServerSettings extends PluginSettingTab {
       this.recoverySection(containerEl);
       this.shareSection(containerEl);
       this.trashSection(containerEl);
+      this.resetSection(containerEl);
       this.disconnectSection(containerEl);
       this.versionSection(containerEl);
 
@@ -1269,6 +1270,62 @@ export class SyncServerSettings extends PluginSettingTab {
 
       draw();
     });
+  }
+
+  /**
+   * "My copy is the truth" — starting a reset (#158).
+   *
+   * The receiving half of this has been built and walked since M1: a device answered `410 reset` resyncs
+   * from the winning tree and quarantines what it displaced, keeping every byte. The **beginning** half
+   * had no screen at all, so the act `docs/07` describes as a person's decision could only be performed
+   * with `curl`.
+   *
+   * Beside Disconnect, and behind the same kind of confirmation, because they are the two acts on this
+   * screen that change what other devices see. The confirmation is written in consequences rather than
+   * in mechanism: what happens to the other devices, what happens to shared folders, and what happens
+   * next here.
+   *
+   * **Shared folders are not swept, and saying so is the point.** A reset removes this vault's own tree
+   * and leaves every replica alone (SH-27) — a participant's replica IS their own nodes in their own
+   * vault, so a reset that took "everything of mine" would empty the shared folders of up to seven other
+   * people. Somebody about to press this deserves to know which half is theirs to give away.
+   */
+  private resetSection(containerEl: HTMLElement): void {
+    const body = this.section(containerEl, 'Replace what the server holds', 'when this copy is the right one');
+    body.createEl('p', {
+      text:
+        'Removes this vault from the server and uploads what is on this device instead. For the case ' +
+        'where the server’s copy has become something nobody wants — a bad merge, a half-finished ' +
+        'migration — and this Obsidian window has the version you trust.',
+    });
+
+    new Setting(body)
+      .setName('Make this device the source of truth')
+      .setDesc(
+        'Every other device resyncs on its next pass. Anything they hold that this copy does not is moved ' +
+          'into a “_Reset” folder on their side — kept, never deleted. Shared folders are left alone: ' +
+          'those replicas are other people’s copies.',
+      )
+      .addButton((b) =>
+        this.waits(b)
+          .setButtonText('Reset the server’s copy')
+          .setWarning()
+          .onClick(() => {
+            new ConfirmModal(
+              this.app,
+              'Replace the server’s copy with this one?',
+              'The server keeps nothing of what it holds for this vault except shared folders. Your other ' +
+                'devices keep their files — anything this copy lacks is set aside on those devices rather ' +
+                'than removed. This device then uploads everything, which can take a while.',
+              // Everything past the question belongs to the flow: what it says, when the state may be
+              // forgotten, and which of the two acts holds the gate (`reset-flow.ts`).
+              async () => {
+                await this.plugin.reset().start();
+              },
+              'Reset it',
+            ).open();
+          }),
+      );
   }
 
   /**
