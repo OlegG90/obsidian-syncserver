@@ -280,13 +280,25 @@ export const settleInterruptedRuns = async (db: Db): Promise<number> => {
   return rows.length;
 };
 
-/** The previous runs, newest first — what the console's backup list shows. */
+/**
+ * The backups this server **has**, newest first — what the console's list shows.
+ *
+ * **A run whose copy is gone is not one of them.** The row survives a removal, because forgetting the
+ * run while its files stayed would leave an operator watching free space vanish with nothing that
+ * explains it (#136) — but a list of backups is a list of things that can be restored, and a row that
+ * cannot be is a stub somebody has to learn to read past. What happened to it is in the audit log, which
+ * is where the record of an act belongs.
+ *
+ * The filter also settles the rows an upgrade brings with it: an installation that removed copies under
+ * the old rule has them already, and there is no migration tool to go and tidy them (docs/13).
+ */
 export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
   db.query<BackupRun>(
     `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
             status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
             verified_at AS "verifiedAt", error, destination
        FROM backup_runs
+      WHERE destination IS NOT NULL OR status = 'running'
       ORDER BY started_at DESC
       LIMIT $1`,
     [limit],
@@ -356,42 +368,3 @@ export const verifyBackup = async (
   return { missing, checked };
 };
 
-/**
- * The periodic **verification** (docs/10): reopen the latest backup's blob copy and confirm
- * it is whole.
- *
- * One of `verifyBackup`'s three callers. It is deliberately separate from the collector's
- * history pass — it walks every blob the database references, so it runs on its
- * own rare interval (`backupVerifyIntervalSeconds`), not on the sweep's.
- *
- * @returns `undefined` when no backup exists yet — nothing to verify, and that is not a
- *   failure. A backup whose copy is missing blobs is returned whole=false rather than
- *   thrown, because it is an outcome the operator must see, not an exception to swallow.
- */
-export const verifyLatestBackup = async (
-  db: Db,
-  destination: string,
-  openCopy: (runDestination: string) => CopyReader = (d) => openStore(join(d, 'blobs')),
-): Promise<{ whole: boolean; checked: number; missing: number } | undefined> => {
-  // The latest run that SUCCEEDED, not the latest run. `listBackups(db, 1)` fetched exactly one
-  // row and then filtered it, so a single failed run at the head made the `find` match nothing
-  // and the check read that as "nothing to verify" — silently, and for ever after. The
-  // last good copy, the one that would actually be restored from, was never checked again, and
-  // the silence was indistinguishable from a healthy installation with nothing to do.
-  //
-  // Filtered in SQL rather than by fetching more rows and picking: "the newest usable one" is
-  // one question, and answering it in two steps is what produced the bug.
-  const [latest] = await db.query<BackupRun>(
-    `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
-            status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
-            verified_at AS "verifiedAt", error, destination
-       FROM backup_runs
-      WHERE status = 'ok' AND destination IS NOT NULL
-      ORDER BY started_at DESC
-      LIMIT 1`,
-  );
-  if (!latest) return undefined;
-  const copy = openCopy(latest.destination!);
-  const out = await verifyBackup(db, copy, latest.id);
-  return { whole: out.missing.length === 0, checked: out.checked, missing: out.missing.length };
-};

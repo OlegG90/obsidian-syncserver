@@ -108,12 +108,6 @@ export interface Config {
    * how promptly a swept blob disappears, never what gets swept.
    */
   sweepIntervalSeconds: number;
-  /**
-   * How often the collector re-opens the latest backup's blob copy and confirms it is whole
-   * (docs/10, "periodic verification" — not the rehearsal, which loads the dump). Rare, because it walks every blob the
-   * database references. Independent of `sweepIntervalSeconds`, which thins history.
-   */
-  backupVerifyIntervalSeconds: number;
   /** How often the newest backup is LOADED into a scratch database, rather than only checked; `0` is off (#159). */
   rehearsalIntervalSeconds: number;
   /**
@@ -200,7 +194,6 @@ export const loadConfig = (): Config => {
       pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
-    backupVerifyIntervalSeconds: int('BACKUP_VERIFY_INTERVAL_SECONDS', 24 * 60 * 60),
     // How often to LOAD the newest backup into a scratch database, rather than only checking that its
     // blobs are present (#159). Weekly by default and not daily: it restores a whole dump, which on a
     // NAS is minutes rather than the second the blob check takes. `0` turns it off for a deployment

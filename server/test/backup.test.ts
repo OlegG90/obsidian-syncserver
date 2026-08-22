@@ -16,7 +16,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, verifyLatestBackup, type Legs } from '../src/backup.js';
+import { backupInProgress, listBackups, runBackup, settleInterruptedRuns, verifyBackup, type Legs } from '../src/backup.js';
 import { assertPgDumpMatches, backupLegs, pgMajor } from '../src/backup-legs.js';
 import { startBackupSchedule, takeScheduledBackup } from '../src/backup-schedule.js';
 
@@ -383,45 +383,6 @@ describe('verifying a backup', () => {
   });
 });
 
-describe('which backup the verification reaches for', () => {
-  /** A finished run with a destination, so the verification has something it could open. */
-  const finishedRun = async (destination: string, status: 'ok' | 'failed'): Promise<void> => {
-    await db.query(
-      `INSERT INTO backup_runs (window_opened_at, db_done_at, blobs_done_at, window_closed_at,
-                                finished_at, status, destination, error)
-       VALUES (now(), now(), now(), now(), now(), $1, $2, $3)`,
-      [status, destination, status === 'failed' ? 'something broke' : null],
-    );
-  };
-
-  it('reaches for the newest SUCCESSFUL run, not the newest run', async () => {
-    // One failed run at the head made `listBackups(db, 1).find(ok)` match nothing — one row
-    // fetched, then filtered — and the caller read that as "nothing to verify". So the last
-    // good copy, the one that would actually be restored from, was never checked again:
-    // silently, and indistinguishably from a healthy installation with nothing to do.
-    await db.query(`DELETE FROM backup_runs`);
-    await finishedRun('/backups/good', 'ok');
-    await new Promise((r) => setTimeout(r, 5));
-    await finishedRun('/backups/failed-after', 'failed');
-
-    const out = await verifyLatestBackup(db, '/backups', () => ({ size: async () => 1 }));
-
-    assert.ok(out, 'a failed run at the head does not hide the good one behind it');
-    assert.equal(out!.whole, true);
-  });
-
-  it('says there is nothing to verify only when nothing has ever succeeded', async () => {
-    await db.query(`DELETE FROM backup_runs`);
-    await finishedRun('/backups/only-failure', 'failed');
-
-    assert.equal(
-      await verifyLatestBackup(db, '/backups', () => ({ size: async () => 1 })),
-      undefined,
-      'which is a different silence from the one above',
-    );
-  });
-});
-
 describe('listing backups', () => {
   it('returns the runs newest first', async () => {
     // A clean slate: the verify tests above have left rows behind, and this asserts an
@@ -437,6 +398,35 @@ describe('listing backups', () => {
     assert.equal(rows.length, 2);
     assert.equal(rows[0]!.status, 'running', 'the newest (the later insert) is first');
     assert.equal(rows[1]!.id, older!.id);
+  });
+
+  it('leaves out a run whose copy is gone, because it is not a backup this server has', async () => {
+    // A list of backups is a list of things that can be restored. The row survives a removal — losing it
+    // while its files stayed would leave free space vanishing with nothing to explain it (#136) — but
+    // what happened to it belongs in the audit log, not as a stub every reader learns to skip.
+    await db.query(`DELETE FROM backup_runs`);
+    const kept = await db.one<{ id: string }>(
+      `INSERT INTO backup_runs (status, destination, window_opened_at, finished_at, db_done_at,
+                                blobs_done_at, window_closed_at)
+       VALUES ('ok', '/still-here', now(), now(), now(), now(), now()) RETURNING id::text AS id`);
+    await db.query(
+      `INSERT INTO backup_runs (status, destination, window_opened_at, finished_at, db_done_at,
+                                blobs_done_at, window_closed_at)
+       VALUES ('ok', NULL, now(), now(), now(), now(), now())`);
+
+    const rows = await listBackups(db);
+    assert.deepEqual(rows.map((r) => r.id), [kept!.id], 'only the one with a copy');
+    // Still in the table, which is what makes the audit entry naming it resolvable.
+    const all = await db.query(`SELECT 1 FROM backup_runs`);
+    assert.equal(all.length, 2);
+  });
+
+  it('still lists a run in progress, which has no copy yet', async () => {
+    // The filter is "has a copy OR is still making one". A running row dropping out of the list would
+    // make the button somebody just pressed look like it did nothing.
+    await db.query(`DELETE FROM backup_runs`);
+    await db.query(`INSERT INTO backup_runs (status, destination) VALUES ('running', NULL)`);
+    assert.equal((await listBackups(db)).length, 1);
   });
 });
 
@@ -583,28 +573,6 @@ describe('what a refusal window leaves in the log', () => {
 
     assert.ok(said.some((m) => /started/.test(m)), `it announced itself: ${said.join(' | ')}`);
     assert.ok(said.some((m) => /ok in/.test(m)), `and settled: ${said.join(' | ')}`);
-  });
-});
-
-describe('the periodic verification of the latest copy', () => {
-  it('is silent when no backup exists yet', async () => {
-    await db.query(`DELETE FROM backup_runs`);
-    assert.equal(await verifyLatestBackup(db, '/backups'), undefined, 'nothing to verify is not a failure');
-  });
-
-  it('reports the latest whole backup as whole', async () => {
-    // The reader is injected so the test does not have to stage real files under the
-    // run's destination — a copy where every referenced blob is present is whole.
-    await db.query(`DELETE FROM backup_runs`);
-    const r = await runBackup(
-      db,
-      { assertReady: async () => {}, dumpDatabase: async () => ({ bytes: 1 }), copyBlobs: async () => ({ bytes: 1, count: 0 }) },
-      '/backups/rehearsal',
-    );
-    assert.equal(r.status, 'ok');
-    const out = await verifyLatestBackup(db, '/backups/rehearsal', () => ({ size: async () => 1 }));
-    assert.ok(out, 'the latest run is found');
-    assert.equal(out!.whole, true);
   });
 });
 

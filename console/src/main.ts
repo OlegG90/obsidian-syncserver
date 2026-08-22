@@ -890,11 +890,8 @@ const backupRow = (b: BackupRun): HTMLElement => {
   if (b.verifiedAt) card.append(el('div', { className: 'muted', textContent: `verified ${when(b.verifiedAt)}` }));
   if (b.status === 'ok') card.append(verifyButton(b));
 
-  // Said before it is offered: a row whose copy is gone still stands in the history, and
-  // without this line "no Remove button" would read as a console that forgot to draw one.
-  if (b.destination === null) {
-    card.append(el('div', { className: 'muted', textContent: 'the copy has been removed; the run stays in the history' }));
-  } else if (b.status !== 'running') {
+  // A run whose copy is gone is no longer listed at all, so every row here has something to act on.
+  if (b.destination !== null && b.status !== 'running') {
     if (b.status === 'ok') card.append(restoreFrom(b.destination));
     card.append(removeButton(b));
   }
