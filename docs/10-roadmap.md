@@ -486,7 +486,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       node *and the private chain it hangs from* (SH-27), so the one thing left to do about it was to say
       so on the screen, where somebody pressing "my copy is the truth" can read which half is theirs to
       give away.
-- [ ] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
+- [x] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
       never been restored is not a backup, and prescribes a quarterly rehearsal by hand. The automatic one
       checks that the copy's blobs are all present — which is worth having and is not the same claim. A
       rehearsal that restores the dump into a scratch database and reports is the one that would have

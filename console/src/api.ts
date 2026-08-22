@@ -219,6 +219,22 @@ export interface DeviceRow {
 }
 
 /**
+ * When the newest backup was last **loaded** into a scratch database, and whether it read (#159).
+ *
+ * A different claim from the one on a backup row: `verified` says the copy's blobs are all present,
+ * this says the archive can actually be restored. `null` means it has never been tried, which is the
+ * answer a fresh installation should give rather than a reassuring silence.
+ */
+export const rehearsal = (): Promise<{ rehearsal: RehearsalRow | null }> => call('GET', '/admin/rehearsal');
+
+export interface RehearsalRow {
+  at: string;
+  run: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
  * Remove one backup's copy from disk, keeping the run in the history (#136).
  *
  * The server refuses the newest successful copy, a run still in progress, and any destination

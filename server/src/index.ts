@@ -10,6 +10,7 @@ import { connect } from './db.js';
 import { openEventsHub } from './events.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema } from './schema.js';
+import { rehearseRestore } from './rehearsal.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
@@ -55,6 +56,33 @@ if (cfg.backup) {
   void rehearse();
   rehearsalTimer = setInterval(() => void rehearse(), cfg.backupVerifyIntervalSeconds * 1000);
   rehearsalTimer.unref?.();
+}
+
+/**
+ * The other rehearsal, and the difference between them is the whole of #159: this one **loads** the
+ * newest dump into a scratch database, where the one above only confirms that the copy's blobs are all
+ * present. "The copy arrived" and "the archive can be read" are two claims, and only the second is the
+ * one docs/08 means by *"a backup that has never been restored is not a backup"*.
+ *
+ * On its own, much rarer interval, and NOT at boot: restoring a whole dump on a NAS is minutes, and a
+ * server that spent them before it started serving would be paying for the check at the worst moment.
+ */
+let restoreRehearsalTimer: ReturnType<typeof setInterval> | undefined;
+if (cfg.backup && cfg.rehearsalIntervalSeconds > 0) {
+  const rehearseRestoring = async (): Promise<void> => {
+    try {
+      await rehearseRestore(db, {
+        databaseUrl: cfg.databaseUrl,
+        restoreCommand: cfg.restoreCommand,
+        stateFile: cfg.restoreStateFile,
+        stamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn(`rehearsal failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  restoreRehearsalTimer = setInterval(() => void rehearseRestoring(), cfg.rehearsalIntervalSeconds * 1000);
+  restoreRehearsalTimer.unref?.();
 }
 
 // The caller docs/10 named and nothing was: whatever runs a backup nightly. Off when no backup
@@ -153,6 +181,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     stopCollector();
     stopBackupSchedule();
     if (rehearsalTimer) clearInterval(rehearsalTimer);
+    if (restoreRehearsalTimer) clearInterval(restoreRehearsalTimer);
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
 }
