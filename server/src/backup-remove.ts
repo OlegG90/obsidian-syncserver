@@ -9,7 +9,7 @@
  *
  * So the row survives every removal here, and `destination` becomes NULL: the history keeps
  * saying a backup ran, and the null says its copy is no longer on disk. That is also what makes
- * the restore rehearsal skip it, since it already asks for `destination IS NOT NULL`.
+ * the rehearsal skip it, since it already asks for `destination IS NOT NULL`.
  *
  * **What is refused, and why each one:**
  *

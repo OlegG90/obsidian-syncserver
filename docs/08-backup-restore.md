@@ -158,12 +158,12 @@ the one that matters:
 **The run stays in the history and its `destination` becomes null.** Dropping the row would leave the files
 behind with nothing referencing them, which is exactly the state an operator watching free space disappear
 cannot investigate. A row with no destination says what happened: this backup ran, and its copy is gone.
-It is also what makes the restore rehearsal skip it, since that already asks for a destination.
+It is also what makes the verification skip it, since that already asks for a destination.
 
 **Four refusals, each a decision rather than a check.** A destination outside this deployment's backup
 directory is refused, because `destination` is a text column and a value from a restored dump or another
 host would otherwise become a recursive delete of whatever that path names *here*. The **newest good copy**
-is refused, because it is what a restore would use and what the rehearsal verifies — a server that will not
+is refused, because it is what a restore would use and what the verification reads — a server that will not
 leave itself without a backup is worth more than one that does exactly as it is told. A run still in
 progress is refused, and a copy already gone is not an error.
 
@@ -214,12 +214,13 @@ usable copy no matter what its status column says.
 
 > **A backup that has never been restored is not a backup.**
 
-**The server rehearses two things, and the difference between them is the sentence above** (#159):
+**The server checks two different things, and the difference between them is the sentence above** (#159):
 
-- at every start and on a daily interval it reopens the newest copy and confirms that every blob the
-  database references is present in it. That says the copy **arrived**;
-- on a much rarer interval — `REHEARSE_RESTORE_EVERY_SECONDS`, weekly by default, `0` to turn it off — it
-  **loads the dump into a scratch database** created for the purpose and dropped afterwards, and confirms
+- the **verification**: at every start and on a daily interval it reopens the newest copy and confirms
+  that every blob the database references is present in it. That says the copy **arrived**;
+- the **rehearsal**: on a much rarer interval — `REHEARSE_RESTORE_EVERY_SECONDS`, weekly by default, `0`
+  to turn it off — it **loads the dump into a scratch database** created for the purpose and dropped
+  afterwards, and confirms
   that what comes out carries this build's functions and triggers and holds at least one account. That
   says the archive can be **read**.
 
