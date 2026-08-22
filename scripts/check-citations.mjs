@@ -3,8 +3,12 @@
  *
  * The rule existed in AGENTS.md and nothing enforced it, which is how the decisions came to share a
  * notation with GitHub issue numbers and then to collide with them outright — `D-111` and `D-114`
- * through `D-119` are all real issue numbers too. A reader following `#117` landed somewhere
- * plausible and wrong, and no check could tell them apart because both were spelled the same.
+ * through `D-119` are all real issue numbers too. A reader following the bare hash form of 117 landed
+ * somewhere plausible and wrong, and no check could tell them apart because both were spelled alike.
+ *
+ * **It scans tracked files**, which is why it could not see itself until it was committed: the first
+ * run that read this docblock was the one in CI, and it failed on a sentence in it. That is the check
+ * working, and it is worth knowing before wondering why a green local run went red.
  *
  * Two things are checked, and the second is the one that keeps the split honest:
  *
