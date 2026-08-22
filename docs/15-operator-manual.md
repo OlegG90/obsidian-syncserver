@@ -154,6 +154,23 @@ There is **no plugin in the image and there never will be** — the server holds
 every one of them. It installs through [BRAT](https://github.com/TfTHacker/obsidian42-brat), pointed at
 this repository, which offers each release. [14](14-user-manual.md) is the page to send them.
 
+### Somebody lost a device
+
+**Console → the account → Devices.** Names, platforms, and when each was last seen — no keys and no
+cursors, because an administrator holds nothing that opens a vault and a device row is not where that
+would start.
+
+`last seen` is as fresh as the access token's lifetime, fifteen minutes by default: it moves every time a
+device renews its session, not on every sync and not only when it signed in. A device that has not been
+seen in weeks has not been used in weeks.
+
+**Revoke** kills that device's refresh token. Its next renewal fails and it can do nothing further; the
+files already on it stay on it, because nothing here reaches a disk somebody else owns.
+
+This exists for the person the account's owner cannot be — their only device is the one that is gone, so
+nobody but you can take it away. Revoking here is written to the audit log, because it is done **to**
+somebody rather than by them; a person revoking their own device from the plugin is not.
+
 ### Turn on backups
 
 Backups are **off until a destination is named**, and nothing else decides it. In `.env`:
@@ -283,12 +300,43 @@ when the self-check found the copy whole.
 whole — some blob the database references is missing from it. A backup nobody can restore from is not a
 backup, and this is the difference between learning that now and learning it at restore time.
 
-**Verify** re-runs that check on demand. The server also rehearses on its own: at every start, and
-periodically after, it reopens the newest backup and confirms it. That line is in the boot log.
+**Verify** re-runs that check on demand. The server also does it on its own: at every start, and
+periodically after, it reopens the newest backup and confirms every blob is present. That line is in the
+boot log. It is the **blob check** — see the next section for the other one, which is a different claim.
 
 **Remove a copy** from its row, behind a confirmation naming it. The run stays in the history with no
 destination — the log keeps saying a backup ran, and the empty destination says its copy is gone. The
 newest good copy cannot be removed, by that button or by `BACKUP_KEEP`.
+
+### Rehearsing a restore
+
+The blob check above says the copy **arrived**. It does not say the dump can be **read** — a `pg_dump`
+that fails to restore, from a version mismatch or a truncated file, passes the blob check and fails on
+the one day it is needed.
+
+So the server can also load the newest backup into a scratch database it creates and drops, and report
+what came out. Off by default; in `.env`:
+
+```bash
+REHEARSE_RESTORE_EVERY_SECONDS=604800   # weekly; 0 turns it off
+RESTORE_DB_COMMAND=...                  # optional, and normally leave it alone
+```
+
+`RESTORE_DB_COMMAND` defaults to `pg_restore --clean --if-exists --no-owner`, with `pg_restore` in the
+image at the database's own major. The database name and the archive are appended by the server, in that
+order — an override may end with `-d` or leave it off, and both behave the same.
+
+**Console → Restoring, rehearsed** says when it last ran, what came out, and — when the last run failed —
+**when one last passed**. That second line is the one worth reading on a bad day: that today's archive did
+not load matters less than whether one ever did, and how long ago.
+
+**What it claims, precisely.** That the archive loads, that what comes out carries this build's functions
+and triggers, and that the account table is not empty. It does **not** claim the data is correct; nothing
+outside the vaults' own keys could tell, and it must not be read as saying so.
+
+The scratch database is named after the moment and dropped afterwards, never the live one. The role has to
+be allowed to create databases; if it is not, the rehearsal reports that rather than failing the server —
+a server that refused to run because it could not rehearse would be trading the thing for the check on it.
 
 ### What a backup is not
 
@@ -357,6 +405,8 @@ Then, the parts only you can do:
 | `N backup run(s) were still marked running` at boot | a run whose process died. The window went with it; those rows are recorded failed |
 | every client resyncing at length after a restore | expected — see above |
 | an account over its quota that is **not** frozen | ordinary: a freeze is raised when somebody else's write crosses the boundary. New files are refused either way |
+| a rehearsal saying `could not create a scratch database` | the database role may not create databases. The rehearsal is off, the server is fine |
+| a failed rehearsal after a good backup row | the copy arrived whole and the dump will not load. **This is the row to act on** — take a fresh backup and rehearse again |
 
 And the ones that are faults, with what each looks like:
 
