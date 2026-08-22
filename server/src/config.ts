@@ -210,7 +210,9 @@ export const loadConfig = (): Config => {
     // How to put a dump back (#155). Symmetric with BACKUP_DB_COMMAND, and separate because the
     // restore is a different binary with different flags: `--clean --if-exists` is what makes it
     // replace what is there rather than collide with it, and `--no-owner` is what lets a dump taken
-    // as one role load as another.
+    // as one role load as another. The database and the archive are appended by the caller, in that
+    // order and through `restoreArgv` — a trailing `-d` here is optional because that is where the
+    // two callers used to disagree (#171).
     restoreCommand: str('RESTORE_DB_COMMAND', 'pg_restore --clean --if-exists --no-owner -d').split(/\s+/),
     restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
   };
