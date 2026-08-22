@@ -14,16 +14,43 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { pgMajor, serverVersionLine } from '../src/backup-legs.js';
 import { readRehearsal, rehearsalFile, rehearseRestore } from '../src/rehearsal.js';
 
 const cfg = loadConfig();
 let db: Db;
 let root: string;
+/** The matching `pg_dump`, or nothing — see `findPgDump`. */
+let pgDump: string | undefined;
 
-const run = (cmd: string, args: string[]): Promise<void> =>
+const run = (cmd: string, args: string[]): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(cmd, args, (err, _o, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()));
+    execFile(cmd, args, (err, stdout, stderr) =>
+      err ? reject(new Error(stderr || err.message)) : resolve(stdout),
+    );
   });
+
+/**
+ * A `pg_dump` of the SAME major as the server, or nothing.
+ *
+ * The fixture here takes a real dump, and `pg_dump` refuses a server newer than itself — the platform
+ * trap this project has a guard for (`assertPgDumpMatches`, docs/10). CI runs `postgres:18` as a service
+ * while the runner's own client is whatever Ubuntu ships, so a bare `pg_dump` aborts with "server version
+ * mismatch" and the failure looks like the feature rather than the fixture.
+ *
+ * Versioned paths are tried because a runner usually carries several majors side by side. When none
+ * matches, the tests that need a dump **skip and say so** — a machine that cannot take one is not a
+ * broken rehearsal, and a silent pass would be worse than either.
+ */
+const findPgDump = async (): Promise<string | undefined> => {
+  const want = pgMajor(await serverVersionLine(db));
+  if (want === undefined) return undefined;
+  for (const candidate of ['pg_dump', `/usr/lib/postgresql/${want}/bin/pg_dump`]) {
+    const line = await run(candidate, ['--version']).catch(() => undefined);
+    if (line && pgMajor(line) === want) return candidate;
+  }
+  return undefined;
+};
 
 /**
  * Any scratch database an earlier run left behind.
@@ -43,6 +70,7 @@ const dropStrayScratchDatabases = async (): Promise<void> => {
 before(async () => {
   db = connect(cfg.databaseUrl);
   root = await mkdtemp(join(tmpdir(), 'syncserver-rehearsal-'));
+  pgDump = await findPgDump();
   await dropStrayScratchDatabases();
 });
 
@@ -63,7 +91,7 @@ const aBackupOf = async (name: string, dump: 'real' | 'corrupt'): Promise<string
   await mkdir(join(dir, 'blobs'), { recursive: true });
 
   if (dump === 'real') {
-    await run('pg_dump', ['--format=custom', '--file', join(dir, 'database.dump'), cfg.databaseUrl ?? '']);
+    await run(pgDump!, ['--format=custom', '--file', join(dir, 'database.dump'), cfg.databaseUrl ?? '']);
   } else {
     await writeFile(join(dir, 'database.dump'), 'this is not an archive at all');
   }
@@ -83,7 +111,8 @@ const aBackupOf = async (name: string, dump: 'real' | 'corrupt'): Promise<string
 const stateFile = (): string => join(root, 'state', 'restore.epoch');
 
 describe('loading the newest backup into a scratch database', () => {
-  it('says what came out, and leaves no database behind', async () => {
+  it('says what came out, and leaves no database behind', async (t) => {
+    if (!pgDump) return t.skip('no pg_dump of the server’s own major on this machine');
     await aBackupOf('good', 'real');
     const said: string[] = [];
 
@@ -108,7 +137,8 @@ describe('loading the newest backup into a scratch database', () => {
     assert.deepEqual(left, []);
   });
 
-  it('records the outcome where a restart cannot lose it', async () => {
+  it('records the outcome where a restart cannot lose it', async (t) => {
+    if (!pgDump) return t.skip('the case above did not run, so there is no record to read');
     // "The last successful rehearsal was 60 days ago" has to be answerable after the container has been
     // replaced, which is why this is a file beside the restore epoch and not a variable.
     const written = await readRehearsal(stateFile());
