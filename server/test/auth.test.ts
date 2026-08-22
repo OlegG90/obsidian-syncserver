@@ -379,6 +379,73 @@ describe('login and refresh', () => {
     assert.ok(refreshed.json().access);
   });
 
+  it('marks the device seen on every refresh, not only when it signed in', async () => {
+    // The column exists to answer "which of these devices is gone", and it used to answer "when did
+    // this one arrive": written at sign-in, at recovery and at pairing, and never again (#118).
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
+    const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const seen = async (): Promise<string | null> =>
+      (await db.one<{ at: string | null }>(`SELECT last_seen_at AS at FROM devices WHERE id = $1`, [device!.id]))
+        ?.at ?? null;
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: device!.id },
+    });
+    // Backdated rather than waited on: the question is whether a refresh moves it at all, and a test
+    // that slept long enough to see the clock tick would be a slow test proving the same thing.
+    await db.query(`UPDATE devices SET last_seen_at = now() - interval '3 days' WHERE id = $1`, [device!.id]);
+    const before = await seen();
+
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      payload: { refresh: ok.json().refresh },
+    });
+    assert.equal(refreshed.statusCode, 200);
+    const after = await seen();
+    assert.ok(before !== null && after !== null);
+    assert.ok(new Date(after!).getTime() > new Date(before!).getTime(), 'the refresh moved it forward');
+  });
+
+  it('does not mark a revoked device seen when its token is presented', async () => {
+    // A refusal that still wrote the column would make a revoked device look alive in the very list an
+    // operator reads to decide what to revoke.
+    const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
+    const fixture = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);
+    const signedIn = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: fixture!.id },
+    });
+    // Its own device, never the fixture: revoking the one every other test signs in with would make this
+    // test's cleanup somebody else's failure.
+    const made = await app.inject({
+      method: 'POST',
+      url: '/auth/devices',
+      headers: { authorization: `Bearer ${signedIn.json().access}` },
+      payload: { name: 'a device that will be revoked', platform: 'test' },
+    });
+    assert.equal(made.statusCode, 201, made.body);
+    const id = made.json().device_id as string;
+
+    const its = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { login: VAULT_LOGIN, auth_secret: 'a'.repeat(43), device_id: id },
+    });
+    assert.equal(its.statusCode, 200, its.body);
+    await db.query(`UPDATE devices SET revoked_at = now(), last_seen_at = now() - interval '3 days' WHERE id = $1`, [id]);
+    const before = await db.one<{ at: string }>(`SELECT last_seen_at AS at FROM devices WHERE id = $1`, [id]);
+
+    const denied = await app.inject({ method: 'POST', url: '/auth/refresh', payload: { refresh: its.json().refresh } });
+    assert.equal(denied.statusCode, 401);
+    const after = await db.one<{ at: string }>(`SELECT last_seen_at AS at FROM devices WHERE id = $1`, [id]);
+    // Compared as instants: pg hands back Date objects, and two equal ones are not the same object.
+    assert.equal(new Date(after!.at).getTime(), new Date(before!.at).getTime(), 'a revoked device is not seen');
+  });
+
   it('refuses a refresh token that has been superseded', async () => {
     const account = await db.one<{ id: string }>(`SELECT id FROM users WHERE login = $1`, [VAULT_LOGIN]);
     const device = await db.one<{ id: string }>(`SELECT id FROM devices WHERE user_id = $1`, [account!.id]);

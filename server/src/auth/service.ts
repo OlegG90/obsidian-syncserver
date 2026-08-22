@@ -370,11 +370,26 @@ export const issueRefreshToken = async (db: Db, deviceId: string): Promise<strin
   return refresh;
 };
 
+/**
+ * The device behind a refresh token — **and the moment it is marked seen** (#118).
+ *
+ * `last_seen_at` was written when a device signed in, recovered or paired, and never again. A device
+ * that paired a year ago and has synced every day since read as "last seen a year ago", which made the
+ * device list a list of *first* seen and the operator's question — which of these is gone? — unanswerable
+ * from the column that exists to answer it.
+ *
+ * Refreshing is the right moment and syncing is not: a refresh happens about once per access-token
+ * lifetime per live session, so the write rate is bounded by a setting rather than by how busy a vault
+ * is, and it means something exact — this device held a working session then. Done as one `UPDATE …
+ * RETURNING` because the lookup had to happen anyway, so freshness costs a statement, not a round trip.
+ */
 export const findDeviceByRefresh = async (db: Db, refresh: string) =>
   db.one<{ id: string; userId: string }>(
-    `SELECT d.id, d.user_id AS "userId"
-       FROM devices d JOIN users u ON u.id = d.user_id
-      WHERE d.refresh_token_hash = $1 AND d.revoked_at IS NULL AND u.state = 'active'`,
+    `UPDATE devices d SET last_seen_at = now()
+       FROM users u
+      WHERE u.id = d.user_id
+        AND d.refresh_token_hash = $1 AND d.revoked_at IS NULL AND u.state = 'active'
+      RETURNING d.id, d.user_id AS "userId"`,
     [hashToken(refresh)],
   );
 
