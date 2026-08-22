@@ -472,9 +472,12 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       is the one they are sitting at, which is what disconnect does — and a phone left in a taxi stays
       authorised for ever, for its owner and for the operator alike. It is also why the plugin's Devices
       section is summarised by its *act*: there is no list to summarise (#130).
-- [ ] **Removing one vault** (#157). An account holds many (AC-10) and `DELETE /vaults/:id` is implemented
+- [x] **Removing one vault** (#157). An account holds many (AC-10) and `DELETE /vaults/:id` is implemented
       — with no caller anywhere. Today the only way to remove a vault is to delete the account that owns
-      it, which is the whole-server answer to a single-room question.
+      it, which is the whole-server answer to a single-room question. **Built with the server's own limit
+      showing**: `deleteVault` refuses a vault that still holds anything, so the screen offers removal only
+      for an empty one and says what to do about the rest. Emptying a vault is a reset (#158), which is
+      how these two turn out to be one path.
 - [ ] **Starting a reset** (#158). The half that *receives* one is built and walked: a client meeting `410`
       resyncs and quarantines whatever it displaced. The half that *begins* one — "my client is right,
       take this tree" ([07](07-onboarding.md)) — has a method in the plugin's API client and **no caller**.
@@ -483,7 +486,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       checks that the copy's blobs are all present — which is worth having and is not the same claim. A
       rehearsal that restores the dump into a scratch database and reports is the one that would have
       caught a dump nobody can read.
-- [ ] **The vaults an account has, shown to the person who owns them** (#161). `GET /vaults` is called in
+- [x] **The vaults an account has, shown to the person who owns them** (#161). `GET /vaults` is called in
       exactly one place — inside `chooseVault`, at pairing or recovery, to ask which vault this device is
       for. Once connected nothing lists them again, so somebody with three vaults sees the id of the one
       this window is and nothing about the other two. Which is also how a vault created **by mistake**

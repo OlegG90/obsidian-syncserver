@@ -165,6 +165,7 @@ export class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.vaultSection(containerEl);
       this.passphraseSection(containerEl);
       this.recoverySection(containerEl);
       this.shareSection(containerEl);
@@ -582,6 +583,70 @@ export class SyncServerSettings extends PluginSettingTab {
           .setCta()
           .onClick(() => void this.plugin.syncNow()),
       );
+  }
+
+  /**
+   * The vaults this account holds, and removing one (#157, #161).
+   *
+   * `GET /vaults` was called in exactly one place — the chooser, at pairing or recovery — so once a
+   * device was connected, nobody could see what the account held. That is how a vault created **by
+   * mistake** stays invisible, which is the thing #117 exists because of.
+   *
+   * The names are read **here**, with this session's seed. The server stores them encrypted and holds no
+   * key, so a list from anywhere else would be a column of uuids.
+   *
+   * **Removal is offered only where it is possible**, and the row says why when it is not: the server
+   * refuses a vault that still holds anything, one named by a share, and this device's own. Which makes
+   * the honest use of this screen narrow and real — the empty vault somebody made by accident.
+   */
+  private vaultSection(host: HTMLElement): void {
+    const containerEl = this.section(host, 'Vaults', 'what this account holds, beyond this one');
+    const list = containerEl.createEl('div');
+    list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+
+    void this.plugin
+      .vaults()
+      .then((vaults) => {
+        list.empty();
+        for (const v of vaults) {
+          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}`;
+          const row = new Setting(list)
+            .setName(v.current ? `${v.name} — this device` : v.name)
+            .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
+
+          if (v.current) continue;
+          if (v.nodes > 0) {
+            // Said rather than shown as a disabled button: "why can I not" is the question, and a grey
+            // button answers it with nothing. Emptying it is a reset (#158), which has no screen yet.
+            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — to remove it, empty it first`);
+            continue;
+          }
+          row.addButton((b) =>
+            this.waits(b)
+              .setButtonText('Remove')
+              .setWarning()
+              .onClick(() => {
+                new ConfirmModal(
+                  this.app,
+                  `Remove ${v.name}?`,
+                  'It holds nothing, so nothing is lost — the vault itself stops existing on the server. ' +
+                    'Any device still connected to it will find it gone.',
+                  async () => {
+                    try {
+                      await this.plugin.deleteVault(v.id);
+                      new Notice(`SyncServer: ${v.name} was removed.`);
+                      this.display();
+                    } catch (e) {
+                      new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+                    }
+                  },
+                  'Remove',
+                ).open();
+              }),
+          );
+        }
+      })
+      .catch(() => list.setText('The vault list could not be read.'));
   }
 
   /**

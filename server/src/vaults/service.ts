@@ -14,11 +14,25 @@ import { refusalFromDatabase, type Refusal } from '../refusal.js';
 const UNIQUE_VIOLATION = '23505';
 import { usageOf } from '../quota.js';
 
-export type VaultRow = { id: string; nameEnc: string };
+/**
+ * A vault as its owner's client sees it: the id, the name it cannot read, and how much is in it.
+ *
+ * `nodes` counts everything **except the root**, so an untouched vault is `0` — which is the number that
+ * decides whether it can be removed at all (`deleteVault` refuses a vault with anything in it), and the
+ * one a person needs to tell a vault made by mistake from the one holding their notes (#161, #157).
+ *
+ * The name stays ciphertext here and is decrypted on the device, because that is the whole model: the
+ * server holds `name_enc` and no key to open it.
+ */
+export type VaultRow = { id: string; nameEnc: string; nodes: number };
 
 export const listVaults = (db: Db, userId: string): Promise<VaultRow[]> =>
   db.query<VaultRow>(
-    `SELECT id, encode(name_enc, 'base64') AS "nameEnc" FROM vaults WHERE user_id = $1 ORDER BY created_at`,
+    `SELECT v.id, encode(v.name_enc, 'base64') AS "nameEnc",
+            (SELECT count(*) FROM nodes n WHERE n.vault_id = v.id AND n.id <> v.root_node_id)::int AS nodes
+       FROM vaults v
+      WHERE v.user_id = $1
+      ORDER BY v.created_at`,
     [userId],
   );
 
