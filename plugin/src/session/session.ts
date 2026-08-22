@@ -109,7 +109,7 @@ export interface Derivation {
 
 /** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
 /**
- * What a caller may answer when asked which vault a device is for (D-116).
+ * What a caller may answer when asked which vault a device is for (issue #116).
  *
  * Three answers because there are three things a person can mean, and collapsing any two of
  * them would put the decision back where it was: `use` is "that one", `create` is "none of
@@ -132,7 +132,7 @@ export interface PairArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Ask which vault this device is for, by name (D-117, D-116).
+   * Ask which vault this device is for, by name (issue #117, issue #116).
    *
    * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
    * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
@@ -151,7 +151,7 @@ export interface RecoverArgs {
   /** Only needed when the account holds more than one vault. */
   vaultId?: string;
   /**
-   * Ask which vault this device is for, by name (D-117, D-116).
+   * Ask which vault this device is for, by name (issue #117, issue #116).
    *
    * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
    * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
@@ -316,14 +316,14 @@ export class Session {
   /**
    * Which vault this device is for, when the account may hold several (AC-10).
    *
-   * **One question with three answers, not two questions.** D-117 gave this a yes/no for the
+   * **One question with three answers, not two questions.** Issue #117 gave this a yes/no for the
    * single-vault case; the moment an account can hold two, that same moment is also when
    * somebody might want a third. Asking "is it this one?" and then, separately, "or which of
    * these?" would be two callbacks with overlapping duty — the shape D-86 was opened about.
    * So the caller is handed the vaults and answers with what it wants done.
    *
    * The single-vault case is still ONE press: a list of one, plus the way to make another.
-   * That is D-117's "one confirmation, not a form" — what makes a form is fields to fill in,
+   * That is issue #117's "one confirmation, not a form" — what makes a form is fields to fill in,
    * not an option declined.
    *
    * **`ask` is optional, and its absence is the old behaviour**: one vault is taken silently,
@@ -584,7 +584,7 @@ export class Session {
    *
    * `listVaults` was called in exactly one place — inside `chooseVault`, at pairing or recovery — so once
    * a device was connected nobody could see what the account held. Which is how a vault created **by
-   * mistake** stays invisible: #117 exists because a pairing silently made a second one.
+   * mistake** stays invisible: issue #117 exists because a pairing silently made a second one.
    *
    * The names are decrypted **here**, with the seed this session holds, exactly as the chooser does it.
    * The server cannot: it stores `name_enc` and no key to open it (docs/06).

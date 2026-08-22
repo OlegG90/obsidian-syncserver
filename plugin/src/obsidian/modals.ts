@@ -240,10 +240,10 @@ export class StatusModal extends Modal {
   }
 }
 /**
- * Which vault on the account this device should sync, and what each answer will do (D-116).
+ * Which vault on the account this device should sync, and what each answer will do (issue #116).
  *
  * **One screen that reads two ways.** With one vault it is a confirmation with a way out —
- * the ordinary "second laptop, same notes" case, still one press (D-117). With several it is
+ * the ordinary "second laptop, same notes" case, still one press (issue #117). With several it is
  * a list. Two dialogues for one question would drift, and the person is asking the same
  * thing either way: which of these, or none of them.
  *

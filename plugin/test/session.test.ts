@@ -527,7 +527,7 @@ describe('Session.recover — the last device is gone', () => {
   });
 });
 
-describe('which vault a device binds to (D-117, D-116)', () => {
+describe('which vault a device binds to (issue #117, issue #116)', () => {
   // The same recover harness as above, because the branch under test is shared: `chooseVault`
   // is reached identically from pairing and from recovery, and recovery is the one with a
   // complete fake already built.
@@ -593,7 +593,7 @@ describe('which vault a device binds to (D-117, D-116)', () => {
   });
 
   it('binds to the one that was chosen, when several are offered', async () => {
-    // D-116 point: two vaults on one account used to be an error message listing UUIDs with
+    // Issue #116's point: two vaults on one account used to be an error message listing UUIDs with
     // nowhere to type one. The choice is now an answer.
     const s = await run([labelled(VAULT, 'Work notes'), labelled(OTHER, 'Recipes')], async () => ({
       kind: 'use',

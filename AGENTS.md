@@ -17,8 +17,9 @@ comments explain themselves; nothing else states a contract.
   it must exist there — `scripts/check-citations.mjs` fails when it does not.
 - **`#N` means a GitHub issue and nothing else.** It used to mean a decision, which put two
   numbering spaces in one notation until they collided: D-111 and D-114 through D-119 are all
-  real issue numbers as well. GitHub renders `#117` as a link to issue 117 whether or not the
-  repository agrees, so the platform owns that spelling and the decisions moved.
+  real issue numbers as well. GitHub renders `#N` as a link to issue N whether or not the
+  repository agrees, so the platform owns that spelling and the decisions moved. Where the issue
+  is genuinely meant and its number collides, write `issue #N` — `check-citations.mjs` insists.
 - `docs/` carries the **current** state only — no changelogs, no "previously", no audit
   history. Git already keeps that.
 

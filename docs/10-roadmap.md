@@ -495,7 +495,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       exactly one place — inside `chooseVault`, at pairing or recovery, to ask which vault this device is
       for. Once connected nothing lists them again, so somebody with three vaults sees the id of the one
       this window is and nothing about the other two. Which is also how a vault created **by mistake**
-      stays invisible: #117 exists because a pairing silently made a second one. The names are readable
+      stays invisible: issue #117 exists because a pairing silently made a second one. The names are readable
       here — they are encrypted under each vault's own key and this device holds the seed, which is what
       `vaultLabel()` already does for the chooser.
 - [x] **A policy for the audit log** (#160) — which turned out to be a **decision that there is none**, D-117. `retention.ts` thins versions, empties spent trash and drops

@@ -3,7 +3,7 @@
  *
  * The rule existed in AGENTS.md and nothing enforced it, which is how the decisions came to share a
  * notation with GitHub issue numbers and then to collide with them outright — `D-111` and `D-114`
- * through `D-119` are all real issue numbers too. A reader following the bare hash form of 117 landed
+ * through `D-119` are all real issue numbers too. A reader following the bare hash form landed
  * somewhere plausible and wrong, and no check could tell them apart because both were spelled alike.
  *
  * **It scans tracked files AND untracked ones that are not ignored.** The first version read `git
@@ -16,8 +16,11 @@
  *
  * 1. every `D-N` names a row that exists — a citation of a decision nobody wrote is a claim with no
  *    referent, and it reads exactly like a real one;
- * 2. no `#N` in the tree matches a decision row's number, because that spelling now belongs to
- *    GitHub. An id that is both would put the ambiguity straight back.
+ * 2. no **bare** `#N` matches a decision row's number — it has to be written `issue #N`. That is not a
+ *    formality: fourteen citations in the plugin meant the pairing bug, a mechanical
+ *    rename turned them into `D-117` meaning the audit log, and nothing in the tree could tell them
+ *    apart. **This check cannot catch that**; what it can do is keep the two spellings distinct, so the
+ *    next rename has something to read.
  *
  * `#N` for an actual issue is left alone: it is what GitHub links, and it is how a commit closes one.
  */
@@ -43,12 +46,14 @@ for (const file of files) {
     for (const m of line.matchAll(/\bD-(\d+)\b/g)) {
       if (!rows.has(m[1])) problems.push(`${file}:${i + 1} cites D-${m[1]}, which is not a row in ${DECISIONS}`);
     }
-    // The decisions file itself carries issue numbers in its prose, exactly like every other file.
-    for (const m of line.matchAll(/#(\d{1,3})\b/g)) {
-      if (rows.has(m[1]) && !/exists because|the issue|GitHub/i.test(line)) {
+    // An issue number that collides with a decision must say so — the `issue` prefix, not a bare hash.
+    // The first version sniffed the line for phrases like "exists because", which is guessing — and a
+    // heuristic that guesses right is still one somebody will word around by accident.
+    for (const m of line.matchAll(/(issues?\s+)?#(\d{1,3})\b/gi)) {
+      if (rows.has(m[2]) && !m[1]) {
         problems.push(
-          `${file}:${i + 1} writes #${m[1]}, which is also decision D-${m[1]} — ` +
-            'use D-N for the decision, or say plainly that the issue is meant',
+          `${file}:${i + 1} writes #${m[2]}, which is also decision D-${m[2]} — ` +
+            `write \`D-${m[2]}\` for the decision, or \`issue #${m[2]}\` when the issue is meant`,
         );
       }
     }
