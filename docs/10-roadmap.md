@@ -478,7 +478,7 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
 - [ ] **Starting a reset** (#158). The half that *receives* one is built and walked: a client meeting `410`
       resyncs and quarantines whatever it displaced. The half that *begins* one — "my client is right,
       take this tree" ([07](07-onboarding.md)) — has a method in the plugin's API client and **no caller**.
-- [ ] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
+- [x] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
       never been restored is not a backup, and prescribes a quarterly rehearsal by hand. The automatic one
       checks that the copy's blobs are all present — which is worth having and is not the same claim. A
       rehearsal that restores the dump into a scratch database and reports is the one that would have
