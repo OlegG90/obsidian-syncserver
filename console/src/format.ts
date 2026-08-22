@@ -263,7 +263,9 @@ export const serverLine = (version: string | null | undefined, reachable = true)
 export const backupRefusal = (code: string): string =>
   ({
     newest_copy:
-      'that is the newest good copy — the one a restore would use, and the one the nightly check verifies. Take a new backup first.',
+      'that is the newest good copy — the one a restore would use. Take a new backup first.',
+    not_a_good_copy: 'that run did not finish successfully, so there is nothing in it to restore from.',
+    already_gone: 'that copy has been removed from disk; there is nothing left to restore from.',
     still_running: 'that backup is still being written. It has no finished copy to remove.',
     outside_destination:
       'that run points outside this server’s backup directory, so it will not be deleted from here. Remove it by hand if it is really yours.',

@@ -27,6 +27,9 @@ import {
   storage,
 } from './service.js';
 import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
+import { insideDestination } from '../backup-remove.js';
+import { record } from './audit.js';
+import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
 import { readRehearsal } from '../rehearsal.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
@@ -43,6 +46,13 @@ export interface BackupDeps {
   destination?: string;
   /** Where the restore epoch lives — see `restore.ts`. */
   restoreStateFile?: string;
+  /**
+   * How this server stops itself once a restore has been asked for.
+   *
+   * Injected for one reason and it is not elegance: the real one is `process.exit`, and a test that
+   * exercised this route without it would end the run rather than assert anything.
+   */
+  stop?(): void;
 }
 
 /** A week to redeem an invitation, matching the one the schema seeds for the first administrator. */
@@ -266,6 +276,59 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     const copy = openStore(join(run.destination, 'blobs'));
     const out = await verifyBackup(db, copy, req.params.id);
     return { checked: out.checked, missing: out.missing, whole: out.missing.length === 0 };
+  });
+
+  /**
+   * Ask for this copy to be restored, and stop the server so it can be.
+   *
+   * **This does not restore anything.** It writes the request beside the restore epoch and exits; the
+   * restore itself runs on the way back up, before this server opens a connection for serving, which is
+   * the only moment `pg_restore --clean` is safe (`restore-request.ts`). The old instruction to run
+   * `docker compose stop server` first said the same thing in a form somebody had to remember.
+   *
+   * The half of D-92 that does the work is untouched: the epoch guard still notices the database went
+   * backwards, still halts, and still waits for a person to confirm. What the button removes is the
+   * typing, not the deciding.
+   *
+   * Recorded before the server goes, because after it goes there is nobody to record it.
+   */
+  app.post<{ Params: { id: string } }>('/admin/backups/:id/restore', admin, async (req, reply) => {
+    if (!backup.destination) return noBackup(reply);
+    if (!backup.restoreStateFile) return noRestoreFile(reply);
+
+    const run = await db.one<{ destination: string | null; status: string }>(
+      `SELECT destination, status::text AS status FROM backup_runs WHERE id = $1`, [req.params.id]);
+    if (!run) return reply.code(404).send({ error: 'not_found' });
+    if (run.status !== 'ok') return reply.code(409).send({ error: 'not_a_good_copy' });
+    if (!run.destination) return reply.code(409).send({ error: 'already_gone' });
+    // The same guard the removal uses, and for the same reason: `destination` is a text column, and a
+    // value from a restored dump or another deployment would otherwise name a path on THIS host.
+    if (!insideDestination(backup.destination, run.destination)) {
+      return reply.code(409).send({ error: 'outside_destination' });
+    }
+
+    await db.tx(async (c) => {
+      await record(c, { actor: req.admin!, action: 'restore.request', details: { run: req.params.id } });
+    });
+    await writeRestoreRequest(backup.restoreStateFile, {
+      runId: req.params.id,
+      destination: run.destination,
+      by: req.admin!.login,
+      at: new Date().toISOString(),
+    });
+
+    // After the reply is on the wire, not before: the console has to be able to say what is happening,
+    // and a socket closed by a process that has already gone says nothing at all.
+    const stop = backup.stop ?? ((): void => process.exit(0));
+    // `once`, not `on`: the raw response can emit `finish` more than once, and a second stop is a second
+    // exit — harmless against `process.exit` and not against anything else somebody wires here later.
+    reply.raw.once('finish', () => {
+      setTimeout(() => {
+        console.log('restore: stopping so the request can be carried out on the next start');
+        stop();
+      }, 250);
+    });
+    return reply.code(202).send({ status: 'restarting' });
   });
 
   // The restore surface: what the server knows, and the one act that resolves it. Both are

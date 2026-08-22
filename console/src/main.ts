@@ -15,7 +15,7 @@
 import {
   accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
   changePassword, devicesOf, forgetSession, health, invite, rehearsal, reissue, removeBackup,
-  restoreStatus, revokeDevice, revokeInvitation, runBackup,
+  restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
   signedIn, signIn, storage, verify,
@@ -892,7 +892,7 @@ const backupRow = (b: BackupRun): HTMLElement => {
 
   // A run whose copy is gone is no longer listed at all, so every row here has something to act on.
   if (b.destination !== null && b.status !== 'running') {
-    if (b.status === 'ok') card.append(restoreFrom(b.destination));
+    if (b.status === 'ok') card.append(restoreButton(b), restoreFrom(b.destination));
     card.append(removeButton(b));
   }
   return card;
@@ -975,6 +975,64 @@ const removeButton = (run: BackupRun): HTMLElement => {
     confirm.remove();
     cancel.remove();
     where.append(say('The copy is gone. This run stays in the history.'));
+  });
+
+  return el('div', {}, button, where);
+};
+
+/**
+ * Restore from **this** copy (D-92).
+ *
+ * This surface used to refuse the act and show the command to type instead — correct, and it left the
+ * part somebody gets wrong at three in the morning. So the button asks, and the server carries the
+ * request out **on its way back up**, before it opens a connection for serving, which is the moment
+ * `pg_restore --clean` is safe. A server able to overwrite itself *while running* is still refused.
+ *
+ * **Two presses, and the second one names the copy.** A dialogue that does not say which copy is a speed
+ * bump rather than a check — the same shape the removal uses, for a heavier act.
+ *
+ * The confirmation says the two things somebody cannot see from here: the server stops now, and it comes
+ * back only if the deployment restarts it. And it says what happens after, because the halt that follows
+ * would otherwise read as a failed restore rather than as the guard doing its job.
+ */
+const restoreButton = (run: BackupRun): HTMLElement => {
+  const where = el('div', {});
+  const button = el('button', { className: 'danger', textContent: 'Restore from this copy' });
+  const confirm = el('button', {
+    className: 'danger',
+    textContent: `Yes, restore from ${when(run.startedAt)} and stop the server`,
+  });
+  const cancel = el('button', { className: 'link', textContent: 'Leave it alone' });
+
+  button.onclick = (): void => {
+    where.replaceChildren(
+      say(
+        'This replaces the database and adds the copy’s files back. The server stops immediately and ' +
+          'restores on its next start, so it returns only if your deployment restarts it (docker compose ' +
+          'up -d does). When it is back it will refuse every request until you confirm the restore here.',
+        true,
+      ),
+    );
+    button.replaceWith(confirm, cancel);
+  };
+  cancel.onclick = (): void => {
+    confirm.replaceWith(button);
+    cancel.remove();
+    where.replaceChildren();
+  };
+
+  submits(confirm, where, async () => {
+    try {
+      await restoreFromCopy(run.id);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) throw new Error(backupRefusal(e.code));
+      throw e;
+    }
+    confirm.remove();
+    cancel.remove();
+    where.replaceChildren(
+      say('Asked for. The server is stopping; reload this page once it is back, and confirm the restore.'),
+    );
   });
 
   return el('div', {}, button, where);

@@ -197,7 +197,9 @@ usable copy no matter what its status column says.
 
 **Restore:**
 
-1. stop the service — never restore under load;
+1. stop the service — never restore under load. **Asking from the console does this**: the button writes
+   the request down and the server exits, so the restore runs on the way back up, before a connection is
+   opened for serving (D-92). Typing the command with the server stopped is the same step by hand;
 2. restore blobs, then the database;
 3. **raise `restore_epoch` above every epoch that has ever been handed out.** Not `+ 1`: the restored
    database brings back an *old* epoch with it, and a blind increment can land on a value clients have

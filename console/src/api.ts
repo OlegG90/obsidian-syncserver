@@ -282,6 +282,16 @@ export const backups = (): Promise<{ backups: BackupRun[] }> => call('GET', '/ad
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>
   call('POST', `/admin/backups/${id}/verify`);
 
+/**
+ * Ask for this copy to be restored, and let the server stop so it can be.
+ *
+ * The server writes the request down, replies, and exits; the restore happens on the way back up,
+ * before it opens a connection for serving. So a `202` here means "it is going", not "it is done", and
+ * the next thing the console will see is a server that is not answering yet.
+ */
+export const restoreFromCopy = (id: string): Promise<{ status: string }> =>
+  call('POST', `/admin/backups/${id}/restore`, {});
+
 /** What the server knows about a possible restore. Reachable even in the halt state. */
 export const restoreStatus = (): Promise<RestoreStatus> => call('GET', '/admin/restore');
 

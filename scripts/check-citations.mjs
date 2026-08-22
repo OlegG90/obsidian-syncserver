@@ -6,9 +6,11 @@
  * through `D-119` are all real issue numbers too. A reader following the bare hash form of 117 landed
  * somewhere plausible and wrong, and no check could tell them apart because both were spelled alike.
  *
- * **It scans tracked files**, which is why it could not see itself until it was committed: the first
- * run that read this docblock was the one in CI, and it failed on a sentence in it. That is the check
- * working, and it is worth knowing before wondering why a green local run went red.
+ * **It scans tracked files AND untracked ones that are not ignored.** The first version read `git
+ * ls-files` alone, so a file it could not see was exactly the file most likely to be wrong: a new one,
+ * whose author has just written its docblock. It failed on its own docblock that way, and then on a new
+ * module's, both times in CI and never locally. `--others --exclude-standard` is what makes a local run
+ * mean something.
  *
  * Two things are checked, and the second is the one that keeps the split honest:
  *
@@ -29,7 +31,7 @@ if (rows.size === 0) {
   process.exit(1);
 }
 
-const files = execSync('git ls-files', { encoding: 'utf8' })
+const files = execSync('git ls-files --cached --others --exclude-standard', { encoding: 'utf8' })
   .split('\n')
   .filter((f) => /\.(ts|md|sql|mjs|ya?ml)$/.test(f) && !f.startsWith('shared/dist'));
 

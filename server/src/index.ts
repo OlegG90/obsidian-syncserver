@@ -8,12 +8,41 @@ import { openStore } from './blobs/store.js';
 import { loadConfig } from './config.js';
 import { connect } from './db.js';
 import { openEventsHub } from './events.js';
+import { clearRestoreRequest, readRestoreRequest } from './restore-request.js';
+import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema } from './schema.js';
 import { rehearseRestore } from './rehearsal.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
+
+// **Before the schema, before anything is served, and that is the whole point.** A restore asked for
+// from the console is carried out here, on the way back up: `pg_restore --clean` drops and recreates
+// what it restores, and the only moment nothing else holds a connection to this database is the moment
+// before this server opens one for serving. The request is cleared BEFORE the attempt — a marker that
+// survived a failure would turn one bad restore into a restart loop.
+const asked = await readRestoreRequest(cfg.restoreStateFile);
+if (asked) {
+  console.log(`restore: carrying out the request made by ${asked.by} at ${asked.at}, from ${asked.destination}`);
+  await clearRestoreRequest(cfg.restoreStateFile);
+  const out = await restoreFrom(db, asked.destination, {
+    blobStorePath: cfg.blobStorePath,
+    restoreCommand: cfg.restoreCommand,
+    store: openStore(cfg.blobStorePath),
+  }).catch((e: unknown) => {
+    // Reported and not rethrown: a server that refused to start because a restore failed would leave
+    // an operator with neither the old data reachable nor a way in to see why.
+    console.error(`restore FAILED: ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  });
+  if (out && 'kind' in out) {
+    console.error(`restore refused: ${out.kind === 'server_running' ? `${out.connections} other connection(s)` : out.detail}`);
+  } else if (out) {
+    for (const address of out.missing) console.error(`not restored: ${address}`);
+    console.log(`restore: done — ${out.checked} referenced file(s) walked, ${out.missing.length} not restored`);
+  }
+}
 
 // **First, before anything queries a table.** On a fresh installation there is nothing to query
 // until this has run: the schema travels inside this image now, not as a file the operator has

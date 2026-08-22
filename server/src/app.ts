@@ -37,12 +37,20 @@ export interface AppDeps {
    * out the next suite's honest ones unless it can bring its own.
    */
   attempts?: AttemptLimiter;
+  /**
+   * How the server stops itself once a restore has been asked for (D-92).
+   *
+   * Here only so a test can exercise that route: the real one is `process.exit`, and a test without a
+   * seam would end the run rather than assert anything.
+   */
+  stop?(): void;
 }
 
 export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = {}): Promise<FastifyInstance> => {
   // The events hub used to be the only seam and was passed positionally; both shapes are
   // accepted so every existing caller keeps working.
-  const { events, attempts } = 'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined } : deps;
+  const { events, attempts, stop } =
+    'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined, stop: undefined } : deps;
   const app = Fastify({ logger: false });
 
   await app.register(fastifyJwt, { secret: cfg.serverSecret });
@@ -88,6 +96,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   const versionLine = cfg.backup ? await serverVersionLine(db) : '';
   registerAdminRoutes(app, db, {
     restoreStateFile: cfg.restoreStateFile,
+    ...(stop ? { stop } : {}),
     ...(cfg.backup
       ? {
           destination: cfg.backup.destination,
