@@ -20,6 +20,7 @@
 import type { AccountRow, AuditRow } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import type { Db } from '../db.js';
+import { activeDevices, type DeviceRow } from '../devices.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { record, type Actor } from './audit.js';
 
@@ -138,19 +139,13 @@ export const revokeInvitation = async (db: Db, actor: Actor, userId: string): Pr
  * Names, platforms and times. No keys, no cursors: an administrator holds nothing that opens a vault
  * (#115), and a device row is not where that would start.
  */
-export const listDevices = async (
-  db: Db,
-  userId: string,
-): Promise<{ id: string; name: string; platform: string; lastSeenAt: string | null }[] | Refusal> => {
+export const listDevices = async (db: Db, userId: string): Promise<DeviceRow[] | Refusal> => {
+  // The account is checked here and nowhere in `activeDevices`: an operator naming an account that does
+  // not exist has asked a wrong question, while a person asking for their own devices arrived with a
+  // token that already proves the account is there.
   const user = await db.one<{ id: string }>(`SELECT id FROM users WHERE id = $1`, [userId]);
   if (!user) return { kind: 'not_found' };
-  return db.query(
-    `SELECT id::text AS id, name, platform, last_seen_at AS "lastSeenAt"
-       FROM devices
-      WHERE user_id = $1 AND revoked_at IS NULL
-      ORDER BY last_seen_at DESC NULLS LAST, name`,
-    [userId],
-  );
+  return activeDevices(db, userId);
 };
 
 /**
