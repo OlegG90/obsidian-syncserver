@@ -31,6 +31,7 @@ import { session, type Connection, type Handle, type Session, type VaultChoice }
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
+import { openResetFlow, type ResetFlow } from './reset-flow.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
@@ -898,6 +899,51 @@ export default class SyncServerPlugin extends Plugin {
   /** Whether this device is behind a passphrase the account has stopped using (#138). */
   passphraseChangedElsewhere(): boolean {
     return this.sess?.envelopeIsStale === true;
+  }
+
+  /**
+   * Declare this device's copy the truth, and empty the server's (#158).
+   *
+   * The half that RECEIVES a reset has been built and walked since M1: a client answered `410 reset`
+   * resyncs from the winning tree and quarantines whatever it displaced. The half that BEGINS one had a
+   * method in the API client and no caller at all.
+   *
+   * The rules — the gate, and when this device may forget what it synced — live in `reset-flow.ts`,
+   * where a test can watch them. This is the binding: Obsidian on one side, the session on the other.
+   */
+  reset(): ResetFlow {
+    return openResetFlow({
+      gate: this.gate,
+      reset: async () => {
+        const conn = this.data.connection;
+        if (!conn) throw new Error('this vault is not connected');
+        const out = await this.withSession((h) => h.client.resetVault(conn.vaultId));
+        return { removed: out.removed, epoch: out.reset_epoch };
+      },
+      // `state.nodes` maps every path to a node id the reset has just deleted. Cleared, the next pass
+      // sees a vault it has never synced and uploads it, which is what "my copy is the truth" means.
+      forgetState: async () => {
+        this.data.state = emptyState();
+        await this.save();
+      },
+      sync: () => this.syncNow(),
+      notify: (message, durationMs) => this.say(message, durationMs),
+      done: () => this.settingsTab?.display(),
+    });
+  }
+
+  /**
+   * The vaults this account has, and removing one (#157, #161).
+   *
+   * Through `unlocked()` rather than `withSession`, because naming them needs the seed: the server holds
+   * `name_enc` and no key to open it, so the decryption is the session's own.
+   */
+  async vaults(): Promise<{ id: string; name: string; nodes: number; current: boolean }[]> {
+    return (await this.unlocked()).vaults();
+  }
+
+  async deleteVault(vaultId: string): Promise<void> {
+    await (await this.unlocked()).deleteVault(vaultId);
   }
 
   /**

@@ -10,7 +10,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
   app.get('/vaults', { preHandler: requireAuth }, async (req) => {
     const rows = await listVaults(db, req.caller!.userId);
-    return rows.map((v) => ({ id: v.id, name_enc: v.nameEnc }));
+    return rows.map((v) => ({ id: v.id, name_enc: v.nameEnc, nodes: v.nodes }));
   });
 
   app.post<{ Body: { id: string; name_enc: string } }>('/vaults', { preHandler: requireAuth }, async (req, reply) => {

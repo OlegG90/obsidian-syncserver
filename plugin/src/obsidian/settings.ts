@@ -165,10 +165,12 @@ export class SyncServerSettings extends PluginSettingTab {
         );
 
       this.approveSection(containerEl);
+      this.vaultSection(containerEl);
       this.passphraseSection(containerEl);
       this.recoverySection(containerEl);
       this.shareSection(containerEl);
       this.trashSection(containerEl);
+      this.resetSection(containerEl);
       this.disconnectSection(containerEl);
       this.versionSection(containerEl);
 
@@ -582,6 +584,70 @@ export class SyncServerSettings extends PluginSettingTab {
           .setCta()
           .onClick(() => void this.plugin.syncNow()),
       );
+  }
+
+  /**
+   * The vaults this account holds, and removing one (#157, #161).
+   *
+   * `GET /vaults` was called in exactly one place — the chooser, at pairing or recovery — so once a
+   * device was connected, nobody could see what the account held. That is how a vault created **by
+   * mistake** stays invisible, which is the thing #117 exists because of.
+   *
+   * The names are read **here**, with this session's seed. The server stores them encrypted and holds no
+   * key, so a list from anywhere else would be a column of uuids.
+   *
+   * **Removal is offered only where it is possible**, and the row says why when it is not: the server
+   * refuses a vault that still holds anything, one named by a share, and this device's own. Which makes
+   * the honest use of this screen narrow and real — the empty vault somebody made by accident.
+   */
+  private vaultSection(host: HTMLElement): void {
+    const containerEl = this.section(host, 'Vaults', 'what this account holds, beyond this one');
+    const list = containerEl.createEl('div');
+    list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+
+    void this.plugin
+      .vaults()
+      .then((vaults) => {
+        list.empty();
+        for (const v of vaults) {
+          const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}`;
+          const row = new Setting(list)
+            .setName(v.current ? `${v.name} — this device` : v.name)
+            .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
+
+          if (v.current) continue;
+          if (v.nodes > 0) {
+            // Said rather than shown as a disabled button: "why can I not" is the question, and a grey
+            // button answers it with nothing. Emptying it is a reset (#158), which has no screen yet.
+            row.setDesc(`${held} · ${v.id.slice(0, 8)}… — to remove it, empty it first`);
+            continue;
+          }
+          row.addButton((b) =>
+            this.waits(b)
+              .setButtonText('Remove')
+              .setWarning()
+              .onClick(() => {
+                new ConfirmModal(
+                  this.app,
+                  `Remove ${v.name}?`,
+                  'It holds nothing, so nothing is lost — the vault itself stops existing on the server. ' +
+                    'Any device still connected to it will find it gone.',
+                  async () => {
+                    try {
+                      await this.plugin.deleteVault(v.id);
+                      new Notice(`SyncServer: ${v.name} was removed.`);
+                      this.display();
+                    } catch (e) {
+                      new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+                    }
+                  },
+                  'Remove',
+                ).open();
+              }),
+          );
+        }
+      })
+      .catch(() => list.setText('The vault list could not be read.'));
   }
 
   /**
@@ -1204,6 +1270,62 @@ export class SyncServerSettings extends PluginSettingTab {
 
       draw();
     });
+  }
+
+  /**
+   * "My copy is the truth" — starting a reset (#158).
+   *
+   * The receiving half of this has been built and walked since M1: a device answered `410 reset` resyncs
+   * from the winning tree and quarantines what it displaced, keeping every byte. The **beginning** half
+   * had no screen at all, so the act `docs/07` describes as a person's decision could only be performed
+   * with `curl`.
+   *
+   * Beside Disconnect, and behind the same kind of confirmation, because they are the two acts on this
+   * screen that change what other devices see. The confirmation is written in consequences rather than
+   * in mechanism: what happens to the other devices, what happens to shared folders, and what happens
+   * next here.
+   *
+   * **Shared folders are not swept, and saying so is the point.** A reset removes this vault's own tree
+   * and leaves every replica alone (SH-27) — a participant's replica IS their own nodes in their own
+   * vault, so a reset that took "everything of mine" would empty the shared folders of up to seven other
+   * people. Somebody about to press this deserves to know which half is theirs to give away.
+   */
+  private resetSection(containerEl: HTMLElement): void {
+    const body = this.section(containerEl, 'Replace what the server holds', 'when this copy is the right one');
+    body.createEl('p', {
+      text:
+        'Removes this vault from the server and uploads what is on this device instead. For the case ' +
+        'where the server’s copy has become something nobody wants — a bad merge, a half-finished ' +
+        'migration — and this Obsidian window has the version you trust.',
+    });
+
+    new Setting(body)
+      .setName('Make this device the source of truth')
+      .setDesc(
+        'Every other device resyncs on its next pass. Anything they hold that this copy does not is moved ' +
+          'into a “_Reset” folder on their side — kept, never deleted. Shared folders are left alone: ' +
+          'those replicas are other people’s copies.',
+      )
+      .addButton((b) =>
+        this.waits(b)
+          .setButtonText('Reset the server’s copy')
+          .setWarning()
+          .onClick(() => {
+            new ConfirmModal(
+              this.app,
+              'Replace the server’s copy with this one?',
+              'The server keeps nothing of what it holds for this vault except shared folders. Your other ' +
+                'devices keep their files — anything this copy lacks is set aside on those devices rather ' +
+                'than removed. This device then uploads everything, which can take a while.',
+              // Everything past the question belongs to the flow: what it says, when the state may be
+              // forgotten, and which of the two acts holds the gate (`reset-flow.ts`).
+              async () => {
+                await this.plugin.reset().start();
+              },
+              'Reset it',
+            ).open();
+          }),
+      );
   }
 
   /**
