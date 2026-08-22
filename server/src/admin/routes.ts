@@ -17,7 +17,9 @@ import {
   invite,
   listAccounts,
   listAudit,
+  listDevices,
   reissue,
+  revokeDevice,
   revokeInvitation,
   setEnabled,
   setQuota,
@@ -148,6 +150,26 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     if ('kind' in out) return refuse(reply, out);
     return { state: out.state, awaiting: out.awaiting, finished: out.finished };
   });
+
+  // The devices of one account, and taking one away. For the person the owner cannot be: their only
+  // device is the one that is gone, so nobody but the operator can revoke it (#156).
+  app.get<{ Params: { userId: string } }>('/admin/accounts/:userId/devices', admin, async (req, reply) => {
+    const out = await listDevices(db, req.params.userId);
+    if ('kind' in out) return refuse(reply, out);
+    return {
+      devices: out.map((d) => ({ id: d.id, name: d.name, platform: d.platform, last_seen_at: d.lastSeenAt })),
+    };
+  });
+
+  app.delete<{ Params: { userId: string; deviceId: string } }>(
+    '/admin/accounts/:userId/devices/:deviceId',
+    admin,
+    async (req, reply) => {
+      const out = await revokeDevice(db, req.admin!, req.params.userId, req.params.deviceId);
+      if (out) return refuse(reply, out);
+      return reply.code(204).send();
+    },
+  );
 
   app.put<{ Params: { userId: string }; Body: { quota_bytes: string } }>(
     '/admin/accounts/:userId/quota',

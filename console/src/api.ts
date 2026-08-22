@@ -198,6 +198,27 @@ export const revokeInvitation = (userId: string): Promise<void> =>
   call('DELETE', `/admin/invitations/${userId}`);
 
 /**
+ * The devices of one account, and taking one away (#156).
+ *
+ * For the person the owner cannot be: their only device is the one that is gone, so nobody but the
+ * operator can revoke it. Revoking here is recorded in the audit log, because it is done TO somebody
+ * rather than by them.
+ */
+export const devicesOf = (userId: string): Promise<{ devices: DeviceRow[] }> =>
+  call('GET', `/admin/accounts/${userId}/devices`);
+
+export const revokeDevice = (userId: string, deviceId: string): Promise<void> =>
+  call('DELETE', `/admin/accounts/${userId}/devices/${deviceId}`);
+
+/** What the device list carries. Names and times — an administrator holds no key and needs none here. */
+export interface DeviceRow {
+  id: string;
+  name: string;
+  platform: string;
+  last_seen_at: string | null;
+}
+
+/**
  * Remove one backup's copy from disk, keeping the run in the history (#136).
  *
  * The server refuses the newest successful copy, a run still in progress, and any destination

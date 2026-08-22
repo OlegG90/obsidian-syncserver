@@ -584,6 +584,47 @@ export const registerAuthRoutes = (
   );
 
   /**
+   * The devices that can reach this account (#156).
+   *
+   * `POST /auth/devices` created them and `DELETE` revoked them, and **nothing listed them** — so the
+   * only device anybody could revoke was the one they were sitting at, whose id their own `data.json`
+   * happens to hold. A phone left in a taxi stayed authorised for ever: its owner could not name it, and
+   * the operator had no device surface at all.
+   *
+   * **Active ones only.** A revoked row can do nothing, so it is history rather than state, and this
+   * screen answers "what can reach my account". Disconnecting revokes and reconnecting creates a new row,
+   * so listing the dead would turn an ordinary reinstall into a graveyard nobody can tell apart.
+   *
+   * `current` comes from the token's own `device` claim, because "which of these am I" is the one thing a
+   * client cannot answer for itself once a person is looking at several — and it is what stops somebody
+   * revoking the device they are holding.
+   */
+  app.get('/auth/devices', async (req, reply) => {
+    const claims = await req.jwtVerify<{ sub: string; device?: string }>().catch(() => undefined);
+    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+
+    const rows = await db.query<{ id: string; name: string; platform: string; lastSeenAt: string | null }>(
+      `SELECT id::text AS id, name, platform, last_seen_at AS "lastSeenAt"
+         FROM devices
+        WHERE user_id = $1 AND revoked_at IS NULL
+        ORDER BY last_seen_at DESC NULLS LAST, name`,
+      [claims.sub],
+    );
+
+    return {
+      devices: rows.map((d) => ({
+        id: d.id,
+        name: d.name,
+        platform: d.platform,
+        // Written when a refresh token is issued — a sign-in or a renewal — so it is "last signed in"
+        // and not "last synced". Labelled as such rather than made to sound more precise than it is.
+        last_seen_at: d.lastSeenAt,
+        current: d.id === claims.device,
+      })),
+    };
+  });
+
+  /**
    * Retire a device of the caller's own account — what disconnecting does on its way out.
    *
    * **Revoked, not deleted.** `versions.author_id` and the audit log point at devices'

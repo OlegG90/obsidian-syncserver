@@ -223,6 +223,7 @@ const ACTIONS: Record<string, string> = {
   'account.recover': 'account recovered',
   'account.recovery_code': 'recovery code set',
   'account.password': 'console password changed',
+  'device.revoke': 'device revoked',
   'account.delete.begin': 'deletion started',
   'account.delete.finish': 'deletion finished',
   'account.enable': 'enabled',

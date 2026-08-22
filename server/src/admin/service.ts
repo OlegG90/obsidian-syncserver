@@ -129,6 +129,71 @@ export const revokeInvitation = async (db: Db, actor: Actor, userId: string): Pr
   });
 
 /**
+ * The devices of one account, for an operator helping somebody who cannot reach their own (#156).
+ *
+ * The case this exists for is the one the account owner cannot solve: their only device is the one that
+ * is gone. A person with a working device revokes from the plugin; a person without one has nobody but
+ * the operator — and until now the operator had no device surface at all.
+ *
+ * Names, platforms and times. No keys, no cursors: an administrator holds nothing that opens a vault
+ * (#115), and a device row is not where that would start.
+ */
+export const listDevices = async (
+  db: Db,
+  userId: string,
+): Promise<{ id: string; name: string; platform: string; lastSeenAt: string | null }[] | Refusal> => {
+  const user = await db.one<{ id: string }>(`SELECT id FROM users WHERE id = $1`, [userId]);
+  if (!user) return { kind: 'not_found' };
+  return db.query(
+    `SELECT id::text AS id, name, platform, last_seen_at AS "lastSeenAt"
+       FROM devices
+      WHERE user_id = $1 AND revoked_at IS NULL
+      ORDER BY last_seen_at DESC NULLS LAST, name`,
+    [userId],
+  );
+};
+
+/**
+ * Revoke one of somebody else's devices, and record it.
+ *
+ * **Recorded because it is done to a person rather than by them.** Every other revocation in this system
+ * is the account acting on itself — disconnecting, or picking a device out of its own list — and needs no
+ * audit row to be explicable. This one is an administrator reaching into an account, which is exactly
+ * what the log exists to make visible afterwards.
+ *
+ * Idempotent, and silent about a device that is not this account's: a 404 that distinguished "no such
+ * device" from "not theirs" would answer a question about another account.
+ */
+export const revokeDevice = async (
+  db: Db,
+  actor: Actor,
+  userId: string,
+  deviceId: string,
+): Promise<Refusal | undefined> =>
+  txGuarded(db, async (c) => {
+    const target = await c.query<{ login: string }>(`SELECT login FROM users WHERE id = $1`, [userId]);
+    if (target.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+    const done = await c.query<{ name: string }>(
+      `UPDATE devices SET revoked_at = now(), refresh_token_hash = NULL
+        WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+        RETURNING name`,
+      [deviceId, userId],
+    );
+    if (done.rowCount === 0) return undefined;
+
+    await record(c, {
+      actor,
+      action: 'device.revoke',
+      target: { id: userId, login: target.rows[0]!.login },
+      // The name and not the id: an operator reading this later is trying to remember which machine
+      // that was, and a uuid answers nothing.
+      details: { device: done.rows[0]!.name },
+    });
+    return undefined;
+  });
+
+/**
  * Switch an account off, or back on. Data is untouched either way.
  *
  * **Sessions go first, and the order is not cosmetic.** A disabled account may not own or

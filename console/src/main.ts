@@ -14,7 +14,8 @@
  */
 import {
   accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, forgetSession, health, invite, reissue, removeBackup, restoreStatus, revokeInvitation, runBackup,
+  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, restoreStatus, revokeDevice,
+  revokeInvitation, runBackup,
   setEnabled,
   setQuota,
   signedIn, signIn, storage, verify,
@@ -412,6 +413,7 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
     act('Deletion…', opens(() => deletionForm(a, done, report)), true);
   } else if (a.role !== 'admin') {
     act('Change quota', opens(() => quotaControl(a, done, report, () => drawer.replaceChildren())));
+    act('Devices…', opens(() => deviceList(a, report)));
     act(a.state === 'disabled' ? 'Enable' : 'Disable', opens(() => enableForm(a, done, report)));
     act('Delete…', opens(() => deletionForm(a, done, report)), true);
   }
@@ -458,6 +460,62 @@ const enableForm = (a: AccountRow, done: () => Promise<void>, report: Report): H
       await done();
     },
   );
+};
+
+/**
+ * The devices of one account, and taking one away (#156).
+ *
+ * **This exists for the person the owner cannot be.** Somebody with a working device revokes from their
+ * own plugin; somebody whose only device is the one that was lost has nobody but the operator — and
+ * until now the operator had no device surface at all, so a phone left in a taxi stayed authorised for
+ * ever.
+ *
+ * Names, platforms and times. No cursors, no keys: an administrator holds nothing that opens a vault
+ * (#115), and a list of somebody's devices is not where that would start.
+ *
+ * Every revocation here lands in the audit log, because it is done TO an account rather than by it.
+ */
+const deviceList = (a: AccountRow, report: Report): HTMLElement => {
+  const box = el('div', {});
+  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+  box.append(
+    el('p', {
+      className: 'muted',
+      textContent:
+        `What can reach ${a.login} right now. Revoking one stops it syncing at once and it cannot sign ` +
+        'in again; nothing on it is deleted.',
+    }),
+    list,
+  );
+
+  const fill = async (): Promise<void> => {
+    const out = await devicesOf(a.id);
+    list.replaceChildren();
+    if (out.devices.length === 0) {
+      list.append(el('p', { className: 'muted', textContent: 'No devices reach this account.' }));
+      return;
+    }
+    for (const d of out.devices) {
+      const row = el('div', { className: 'entry' });
+      row.append(
+        el('strong', { textContent: d.name }),
+        el('span', { className: 'muted', textContent: d.platform }),
+        // "Signed in" and not "synced": the column is written when a token is issued or renewed.
+        el('span', { className: 'when', textContent: d.last_seen_at ? `signed in ${when(d.last_seen_at)}` : 'never signed in' }),
+      );
+      const go = el('button', { className: 'danger', textContent: 'Revoke' });
+      submits(go, list, async () => {
+        await revokeDevice(a.id, d.id);
+        report(`${d.name} can no longer reach ${a.login}.`);
+        await fill();
+      });
+      row.append(go);
+      list.append(row);
+    }
+  };
+
+  loads(list, fill);
+  return box;
 };
 
 /**

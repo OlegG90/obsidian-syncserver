@@ -901,6 +901,20 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * The devices of this account, and taking one away (#156).
+   *
+   * Through the session like everything else, and without the shared gate: reading a list and revoking
+   * one row touch nothing a sync touches (#131).
+   */
+  async devices(): Promise<{ id: string; name: string; platform: string; last_seen_at: string | null; current: boolean }[]> {
+    return (await this.withSession((h) => h.client.devices())).devices;
+  }
+
+  async revokeDevice(deviceId: string): Promise<void> {
+    await this.withSession((h) => h.client.revokeDevice(deviceId));
+  }
+
+  /**
    * Whether this account has a recovery code, and making one (M7).
    *
    * Both go through the session for the same reason `/auth/recovery-code` is authenticated at

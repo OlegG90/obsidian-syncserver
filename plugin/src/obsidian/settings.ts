@@ -405,10 +405,11 @@ export class SyncServerSettings extends PluginSettingTab {
    * why it may ask for the passphrase — the same question a sync asks, for the same reason.
    */
   private approveSection(host: HTMLElement): void {
-    // Summarised by what it is FOR rather than by what is in it: this device cannot list the
-    // account's other devices (nothing asks the server for them), and a summary that promised
-    // "mbp-14, iphone" would be inventing it. What it can say is the act.
-    const containerEl = this.section(host, 'Devices', 'add another device to this account');
+    // Summarised by the count now that there is one to count (#156). It was summarised by the ACT —
+    // "add another device" — because nothing asked the server for the account's devices and a row
+    // promising "mbp-14, iphone" would have been inventing them. The list is what changed, not the taste.
+    const containerEl = this.section(host, 'Devices', 'what can reach this account, and adding another');
+    this.deviceList(containerEl);
     containerEl.createEl('p', {
       text:
         'On the other device, choose “Join an existing account” and read the code it shows. ' +
@@ -581,6 +582,62 @@ export class SyncServerSettings extends PluginSettingTab {
           .setCta()
           .onClick(() => void this.plugin.syncNow()),
       );
+  }
+
+  /**
+   * What can reach this account, and taking one away (#156).
+   *
+   * The gap this closes is not cosmetic: `POST /auth/devices` and `DELETE /auth/devices/:id` both
+   * existed, and **nothing listed them** — so the only device anybody could revoke was the one they were
+   * sitting at, whose id its own `data.json` carries. A phone left in a taxi stayed authorised for ever.
+   *
+   * **This device is marked and cannot be revoked from here.** Revoking it would kill the refresh token
+   * under a plugin that still believes it is connected, and the failure would arrive at the next unlock
+   * as something unrelated. Disconnect is the act that means "this one", and it says what it keeps.
+   */
+  private deviceList(containerEl: HTMLElement): void {
+    const list = containerEl.createEl('div');
+    list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+
+    void this.plugin
+      .devices()
+      .then((devices) => {
+        list.empty();
+        for (const d of devices) {
+          const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
+          const row = new Setting(list)
+            .setName(d.current ? `${d.name} — this device` : d.name)
+            // "Signed in", not "synced": the time is written when a token is issued or renewed, and a
+            // label that claimed more than the column holds would be read as more precise than it is.
+            .setDesc(`${d.platform} · last signed in ${when}`);
+
+          if (d.current) {
+            row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));
+            continue;
+          }
+          row.addButton((b) =>
+            this.waits(b)
+              .setButtonText('Revoke')
+              .setWarning()
+              .onClick(() => {
+                new ConfirmModal(
+                  this.app,
+                  `Revoke ${d.name}?`,
+                  'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
+                    'already holds stay where they are, and this account simply stops answering it.',
+                  async () => {
+                    await this.plugin.revokeDevice(d.id);
+                    new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
+                    this.display();
+                  },
+                  'Revoke',
+                ).open();
+              }),
+          );
+        }
+        if (devices.length === 0) list.createEl('p', { text: 'No devices — which should be impossible from one.' });
+      })
+      .catch(() => list.setText('The device list could not be read.'));
   }
 
   /**
