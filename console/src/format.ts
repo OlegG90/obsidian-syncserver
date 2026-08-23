@@ -7,7 +7,7 @@
  * say it is over its limit. Those are the parts worth a test, and they are pure.
  */
 
-import type { AccountRow, AuditRow } from '@syncserver/shared';
+import type { AccountRow, AuditRow, OperatorRefusalCode } from '@syncserver/shared';
 
 /**
  * An account as the admin API reports it — the fields this file reads (D-89).
@@ -260,13 +260,36 @@ export const serverLine = (version: string | null | undefined, reachable = true)
  * An unknown code falls through as itself — a console that swallowed one would be hiding the
  * only clue that the two sides disagree about what can happen.
  */
-export const backupRefusal = (code: string): string =>
-  ({
-    newest_copy:
-      'that is the newest good copy — the one a restore would use. Take a new backup first.',
-    not_a_good_copy: 'that run did not finish successfully, so there is nothing in it to restore from.',
-    already_gone: 'that copy has been removed from disk; there is nothing left to restore from.',
-    still_running: 'that backup is still being written. It has no finished copy to remove.',
-    outside_destination:
-      'that run points outside this server’s backup directory, so it will not be deleted from here. Remove it by hand if it is really yours.',
-  })[code] ?? code;
+export const operatorRefusal = (code: string): string =>
+  (SENTENCES as Record<string, string | undefined>)[code] ?? code;
+
+/**
+ * A sentence for every refusal the operator surface can send.
+ *
+ * `Record` over the union rather than a lookup with a fallback: the fallback is still there for a code
+ * from an older or newer server, but it can no longer cover a code **this** build sends. A new refusal
+ * fails to compile until somebody writes the words, which is the point — the console used to print
+ * `newest_copy` on the screen an operator reads at three in the morning, and nothing objected.
+ *
+ * Written as what to do next wherever there is something to do. "Refused" is not information.
+ */
+const SENTENCES: Record<OperatorRefusalCode, string> = {
+  not_found: 'that is no longer there — the page may be showing something the server has since removed.',
+  already_gone: 'that copy has been removed from disk; there is nothing left to restore from.',
+  newest_copy:
+    'that is the newest good copy — the one a restore would use. Take a new backup first.',
+  still_running: 'that backup is still being written. It has no finished copy to remove.',
+  outside_destination:
+    'that run points outside this server’s backup directory, so it will not be touched from here. Deal with it by hand if it is really yours.',
+  not_a_good_copy: 'that run did not finish successfully, so there is nothing in it to restore from.',
+  backup_not_configured:
+    'this server has no backup destination set, so it cannot take one. See the operator manual.',
+  backup_not_ready: 'the server cannot take a backup right now — the detail says what is in the way.',
+  backup_in_progress: 'a backup is already being written. Wait for it to finish.',
+  backup_failed: 'the backup started and did not finish. The detail is what went wrong.',
+  restore_not_configured: 'this server has no restore state file, so it cannot track a restore.',
+  nothing_to_confirm: 'there is no restore waiting to be confirmed — the database is not behind its state file.',
+  login_required: 'that needs a login.',
+  quota_bytes_required: 'that needs a quota, as a positive number of bytes.',
+  enabled_required: 'that needs to say whether the account is enabled.',
+};

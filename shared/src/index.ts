@@ -79,6 +79,40 @@ export type RefusalCode =
   | 'finalization_incomplete';
 
 /**
+ * What the **operator** surface refuses, and why it is a union rather than free strings.
+ *
+ * The sync family below has been one since the beginning, with a compile-time guard in the server that
+ * fails when a `kind` grows without a name here. The operator family had neither: `admin/routes.ts` sent
+ * string literals, the console mapped five of them to sentences and printed the rest **as identifiers**,
+ * on the screen somebody reads at three in the morning. A rename on either side was silent.
+ *
+ * Being a union buys two things that only work together: the server cannot send a code this file does
+ * not declare, and the console cannot ship a code without words for it — its map is typed `Record` over
+ * this union, so a new refusal fails to compile until somebody writes the sentence.
+ */
+export type OperatorRefusalCode =
+  // The request named something that is not there, or not there any more.
+  | 'not_found'
+  | 'already_gone'
+  // What a backup can refuse, from its own module (`backup-remove.ts`).
+  | 'newest_copy'
+  | 'still_running'
+  | 'outside_destination'
+  | 'not_a_good_copy'
+  // The backup surface itself, when the deployment has not configured one or is mid-run.
+  | 'backup_not_configured'
+  | 'backup_not_ready'
+  | 'backup_in_progress'
+  | 'backup_failed'
+  // Restoring, and the epoch guard that follows it (D-92).
+  | 'restore_not_configured'
+  | 'nothing_to_confirm'
+  // A malformed administrative request — the field that was missing.
+  | 'login_required'
+  | 'quota_bytes_required'
+  | 'enabled_required';
+
+/**
  * One item of preparation's work list: a node that is not ready to be shared, and why.
  *
  * Here rather than in the server because the client reads it — the whole reason the server

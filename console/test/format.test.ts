@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  accountBadge, accountKind, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, isOver,
+  accountBadge, accountKind, accountState, accountUsage, auditAction, operatorRefusal, freezeWarning, human, isOver,
   mib, serverLine, usageFraction, usageMarker, type AccountLine,
 } from '../src/format.js';
 
@@ -170,15 +170,23 @@ describe('why a backup copy was not removed', () => {
   it('gives a reason, not a code', () => {
     // Each refusal is a decision the server made on purpose. "newest_copy" teaches an operator
     // nothing about why a server would protect that one.
-    assert.match(backupRefusal('newest_copy'), /a restore would use/);
-    assert.match(backupRefusal('still_running'), /still being written/);
-    assert.match(backupRefusal('outside_destination'), /outside this server/);
+    assert.match(operatorRefusal('newest_copy'), /a restore would use/);
+    assert.match(operatorRefusal('still_running'), /still being written/);
+    assert.match(operatorRefusal('outside_destination'), /outside this server/);
+  });
+
+  it('has words for every refusal this build can send', () => {
+    // The `Record` over the union is the guard; this is the assertion that the guard is over the RIGHT
+    // set. A code the server can send and the console cannot say is what put `newest_copy` on a screen.
+    for (const code of ['backup_not_configured', 'nothing_to_confirm', 'not_a_good_copy', 'already_gone']) {
+      assert.notEqual(operatorRefusal(code), code, `${code} has no sentence`);
+    }
   });
 
   it('passes an unknown code through as itself', () => {
     // A console that swallowed one would hide the only clue that the two sides disagree about
     // what can happen.
-    assert.equal(backupRefusal('something_new'), 'something_new');
+    assert.equal(operatorRefusal('something_new'), 'something_new');
   });
 });
 
