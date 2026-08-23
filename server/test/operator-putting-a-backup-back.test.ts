@@ -23,9 +23,8 @@ import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { restoreArgv } from '../src/restore-argv.js';
-import {
-  currentDatabase, looksLikeABackup, otherConnections, restoreFrom,
-} from '../src/restore-run.js';
+import { copyAt, whatIsMissing } from '../src/backup-copy.js';
+import { currentDatabase, otherConnections, restoreFrom } from '../src/restore-run.js';
 
 let db: Db;
 let root: string;
@@ -56,7 +55,7 @@ describe('what is not a backup', () => {
   it('refuses a directory with no dump, naming the file', async () => {
     const dir = join(root, 'empty');
     await mkdir(join(dir, 'blobs'), { recursive: true });
-    const wrong = await looksLikeABackup(dir);
+    const wrong = await whatIsMissing(copyAt(dir));
     assert.match(wrong!, /database\.dump is missing/);
   });
 
@@ -64,11 +63,11 @@ describe('what is not a backup', () => {
     const dir = join(root, 'dump-only');
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'database.dump'), 'x');
-    assert.match((await looksLikeABackup(dir))!, /blobs is missing/);
+    assert.match((await whatIsMissing(copyAt(dir)))!, /blobs is missing/);
   });
 
   it('accepts one that has both', async () => {
-    assert.equal(await looksLikeABackup(await aBackup('whole')), undefined);
+    assert.equal(await whatIsMissing(copyAt(await aBackup('whole'))), undefined);
   });
 
   it('checks before it touches anything', async () => {

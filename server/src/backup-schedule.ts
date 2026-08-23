@@ -21,6 +21,7 @@
  * same way a console-triggered one does.
  */
 import { join } from 'node:path';
+import { copyAt } from './backup-copy.js';
 import { openStore } from './blobs/store.js';
 import { runBackup, type CopyReader, type Legs } from './backup.js';
 import { pruneBackupCopies } from './backup-remove.js';
@@ -48,7 +49,7 @@ export const takeScheduledBackup = async (
    * blob store is on this host is a deployment fact, while "verify what you just wrote" is the
    * rule — and a test that cannot supply one has to create real directories to say anything.
    */
-  openCopy: (runDestination: string) => CopyReader = (dest) => openStore(join(dest, 'blobs')),
+  openCopy: (runDestination: string) => CopyReader = (dest) => openStore(copyAt(dest).blobs),
 ): Promise<void> => {
   const runDir = backupRunDir(stamp);
   const runDestination = runDirOf(backup.destination, runDir);

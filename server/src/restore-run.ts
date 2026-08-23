@@ -18,6 +18,7 @@
 import { cp, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { missingBlobs } from './backup.js';
+import { copyAt, whatIsMissing } from './backup-copy.js';
 import type { Db } from './db.js';
 import { restoreArgv, runCommand } from './restore-argv.js';
 
@@ -63,19 +64,6 @@ export const currentDatabase = async (db: Db): Promise<string> => {
   return row.name;
 };
 
-/** Both halves have to be there before anything is touched: half a copy is not a copy. */
-export const looksLikeABackup = async (dir: string): Promise<string | undefined> => {
-  const dump = join(dir, 'database.dump');
-  const blobs = join(dir, 'blobs');
-  const found = async (path: string, what: 'file' | 'directory'): Promise<boolean> => {
-    const s = await stat(path).catch(() => undefined);
-    return s !== undefined && (what === 'file' ? s.isFile() : s.isDirectory());
-  };
-  if (!(await found(dump, 'file'))) return `${dump} is missing — that directory is not a backup`;
-  if (!(await found(blobs, 'directory'))) return `${blobs} is missing — that directory is not a backup`;
-  return undefined;
-};
-
 /**
  * Put a backup back: the blobs, then the database, then the report.
  *
@@ -98,10 +86,11 @@ export const restoreFrom = async (
   // a refusal an operator can act on mid-restore, and finding it after the blob copy would leave the
   // store written to by a restore that never ran (#171).
   const database = await currentDatabase(db);
-  const dump = join(dir, 'database.dump');
+  const copy = copyAt(dir);
+  const dump = copy.dump;
   const { cmd, args } = restoreArgv(deps.restoreCommand, database, dump);
 
-  const wrong = await looksLikeABackup(dir);
+  const wrong = await whatIsMissing(copy);
   if (wrong) return { kind: 'not_a_backup', detail: wrong };
 
   const others = await otherConnections(db);
@@ -110,8 +99,8 @@ export const restoreFrom = async (
   // Copied INTO the live store rather than over it: a blob the store has and the copy does not is
   // unreferenced content, which the collector already knows how to remove. Deleting it here would be a
   // restore taking away something it was never asked about.
-  log(`restoring blobs from ${join(dir, 'blobs')} → ${deps.blobStorePath}`);
-  await cp(join(dir, 'blobs'), deps.blobStorePath, { recursive: true, force: true });
+  log(`restoring blobs from ${copy.blobs} → ${deps.blobStorePath}`);
+  await cp(copy.blobs, deps.blobStorePath, { recursive: true, force: true });
 
   log(`restoring the database from ${dump} into ${database}`);
   await runCommand(cmd, args);

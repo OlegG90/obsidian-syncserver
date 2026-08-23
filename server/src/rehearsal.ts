@@ -25,6 +25,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { connect, type Db } from './db.js';
+import { copyAt } from './backup-copy.js';
 import { restoreArgv, runCommand } from './restore-argv.js';
 import { declaredNames, missingFrom, SCHEMA_FILE } from './schema.js';
 
@@ -130,7 +131,7 @@ export const rehearseRestore = async (
   try {
     // The same argv the real restore uses, pointed at the scratch database (#171): the rehearsal is only
     // worth anything if it exercises the command an operator would actually run.
-    const { cmd, args } = restoreArgv(opts.restoreCommand, scratch, join(latest.destination, 'database.dump'));
+    const { cmd, args } = restoreArgv(opts.restoreCommand, scratch, copyAt(latest.destination).dump);
     await runCommand(cmd, args);
 
     const url = new URL(opts.databaseUrl ?? 'postgres:///postgres');
