@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  accountBadge, accountKind, accountState, accountUsage, auditAction, operatorRefusal, freezeWarning, human, isOver,
+  accountBadge, accountKind, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver,
   mib, serverLine, usageFraction, usageMarker, type AccountLine,
 } from '../src/format.js';
 
@@ -247,5 +247,20 @@ describe('over the limit is not the same question as frozen', () => {
     const thawing = account({ frozenAt: '2026-08-20T15:00:00Z' });
     assert.equal(isOver(thawing), false);
     assert.match(usageMarker(thawing)!, /^frozen/);
+  });
+});
+
+describe('the second press names what it is about to do', () => {
+  it('repeats the verb and names the subject', () => {
+    // D-119: "remove" and "remove 1,204 items" are different decisions. On this screen the difference is
+    // WHICH copy, and a dialogue that does not say is a speed bump rather than a check.
+    assert.equal(confirmLabel('remove the copy from', '21 August'), 'Yes, remove the copy from 21 August');
+    assert.match(confirmLabel('restore from', '21 August'), /^Yes, restore from /);
+  });
+
+  it('never says only "yes"', () => {
+    // The failure this guards is a label that shrinks to "Are you sure?" under a later edit — at which
+    // point the two presses are one press with a pause in it.
+    assert.ok(confirmLabel('remove', 'x').length > 'Yes, '.length + 1);
   });
 });
