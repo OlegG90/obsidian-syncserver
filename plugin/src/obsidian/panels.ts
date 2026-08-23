@@ -84,7 +84,7 @@ export class Panels {
       b.setButtonText('Approve').onClick(async () => {
         b.setDisabled(true);
         try {
-          await this.s.plugin.pairing(containerEl).approve(code);
+          await this.s.plugin.pairing(containerEl, () => this.s.refresh()).approve(code);
         } finally {
           b.setDisabled(false);
         }
@@ -222,7 +222,7 @@ export class Panels {
     const list = containerEl.createEl('div');
     list.createEl('p', { text: 'Loading…' });
 
-    const flow = this.s.plugin.sharing();
+    const flow = this.s.plugin.sharing(() => this.s.refresh());
     // Filled in once the share list has answered, because what may be shared depends on what
     // already is — and drawn above that list, where it was.
     const offer = containerEl.createEl('div');
@@ -392,7 +392,7 @@ export class Panels {
     const list = containerEl.createEl('div');
     list.createEl('p', { text: 'Loading…' });
 
-    const flow = this.s.plugin.history();
+    const flow = this.s.plugin.history(() => this.s.refresh());
 
     void flow.trash().then((page) => {
       list.empty();
@@ -581,7 +581,7 @@ export class Panels {
               // Everything past the question belongs to the flow: what it says, when the state may be
               // forgotten, and which of the two acts holds the gate (`reset-flow.ts`).
               async () => {
-                await this.s.plugin.reset().start();
+                await this.s.plugin.reset(() => this.s.refresh()).start();
               },
               'Reset it',
             ).open();

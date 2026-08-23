@@ -88,7 +88,6 @@ export default class SyncServerPlugin extends Plugin {
   /** The sync coordinator (sync.ts) — owns unlock → one pass → render, and the re-entry guard. */
   private sync: SyncCoordinator | undefined;
   /** Kept so a finished pairing can rebuild the screen that was showing its code. */
-  private settingsTab: SyncServerSettings | undefined;
   /** One unlock in flight at a time, so a screen that asks for three things asks once. */
   private unlocking: Promise<Session> | undefined;
   /** One operation at a time across sync, sharing and the trash — created once, shared by all three. */
@@ -100,8 +99,7 @@ export default class SyncServerPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
-    this.settingsTab = new SyncServerSettings(this.app, this);
-    this.addSettingTab(this.settingsTab);
+    this.addSettingTab(new SyncServerSettings(this.app, this));
 
     // The shared-folder subsystem, bound at the edge exactly like the coordinators: the
     // module owns the map and the reconcile guard, and Obsidian or the session is a port.
@@ -523,12 +521,19 @@ export default class SyncServerPlugin extends Plugin {
    *
    * The flow is created once; every call after the first just re-binds the element and
    * redraws. That is what makes the settings tab's rebuilds harmless instead of fatal.
+   *
+   * **The redraw is re-bound with the target**, because this is the one flow with two surfaces: the
+   * settings tab opens it to connect, the window opens it to approve a second device. A held flow
+   * whose `done` was fixed at creation would redraw whichever surface happened to ask first.
    */
   private pairingFlow: PairingFlow | undefined;
   private pairingTarget: HTMLElement | undefined;
+  /** Re-bound on every `pairing()` exactly as the target is, and for the same reason. */
+  private pairingDone: (() => void) | undefined;
 
-  pairing(target: HTMLElement): PairingFlow {
+  pairing(target: HTMLElement, done: () => void): PairingFlow {
     this.pairingTarget = target;
+    this.pairingDone = done;
     this.pairingFlow ??= openPairingFlow({
       newCode: () => newHumanCode(),
       join: (args, waiting) => this.pair(args, waiting),
@@ -537,7 +542,7 @@ export default class SyncServerPlugin extends Plugin {
       setStatus: (text) => this.renderPairingStatus(text),
       notify: (message, durationMs) => this.say(message, durationMs),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
-      done: () => this.settingsTab?.display(),
+      done: () => this.pairingDone?.(),
     });
     this.pairingFlow.redraw();
     return this.pairingFlow;
@@ -712,12 +717,17 @@ export default class SyncServerPlugin extends Plugin {
   /**
    * The trash and the version list, bound to this vault's session.
    *
+   * `done` is the caller's redraw, and a parameter rather than a field for the reason #163 made
+   * expensive: this plugin has two surfaces now, and a flow that named one of them redrew a settings
+   * tab nobody had open while the window that acted stayed stale. Required, so it cannot be left out —
+   * the compiler asks every caller which surface it is.
+   *
    * Every one of these needs the vault key: the listing's names are ciphertext, and a
    * trashed node of a shared folder is still named under `KS`. So the scopes are opened
    * once per operation and the right key is chosen per row — which is a decision only this
    * side can make, since the server holds no key and says only which scope each name is in.
    */
-  history(): HistoryFlow {
+  history(done: () => void): HistoryFlow {
     return openHistoryFlow({
       gate: this.gate,
       trash: () =>
@@ -749,7 +759,7 @@ export default class SyncServerPlugin extends Plugin {
 
       confirm: (question) => askConfirmation(this.app, question),
       notify: (message, durationMs) => this.say(message, durationMs),
-      done: () => this.settingsTab?.display(),
+      done,
     });
   }
 
@@ -759,7 +769,7 @@ export default class SyncServerPlugin extends Plugin {
    * Every one of these needs the vault key, so every one needs an open session — the
    * passphrase is asked for exactly as a sync asks, and once, before the first request.
    */
-  sharing(): ShareFlow {
+  sharing(done: () => void): ShareFlow {
     return openShareFlow({
       gate: this.gate,
       list: () =>
@@ -904,7 +914,7 @@ export default class SyncServerPlugin extends Plugin {
       folders: () => this.app.vault.getAllFolders().map((f) => f.path),
 
       notify: (message, durationMs) => this.say(message, durationMs),
-      done: () => this.settingsTab?.display(),
+      done,
     });
   }
 
@@ -941,7 +951,7 @@ export default class SyncServerPlugin extends Plugin {
    * The rules — the gate, and when this device may forget what it synced — live in `reset-flow.ts`,
    * where a test can watch them. This is the binding: Obsidian on one side, the session on the other.
    */
-  reset(): ResetFlow {
+  reset(done: () => void): ResetFlow {
     return openResetFlow({
       gate: this.gate,
       reset: async () => {
@@ -958,7 +968,7 @@ export default class SyncServerPlugin extends Plugin {
       },
       sync: () => this.syncNow(),
       notify: (message, durationMs) => this.say(message, durationMs),
-      done: () => this.settingsTab?.display(),
+      done,
     });
   }
 
