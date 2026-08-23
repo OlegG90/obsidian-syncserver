@@ -291,7 +291,7 @@ export default class SyncServerPlugin extends Plugin {
     return this.phase;
   }
 
-  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
+  /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
   syncNow(): Promise<void> {
     return this.sync?.run() ?? Promise.resolve();
   }

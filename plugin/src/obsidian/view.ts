@@ -22,6 +22,7 @@
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type SyncServerPlugin from '../main.js';
 import { Panels } from './panels.js';
+import { statusHeader } from './status-header.js';
 import { Surface } from './surface.js';
 
 export const SYNCSERVER_VIEW = 'syncserver-view';
@@ -90,6 +91,12 @@ export class SyncServerView extends ItemView {
       });
       return;
     }
+
+    // **What this window is looking at, before what it lists.** The same block the settings tab opens
+    // with, and the reason it is here: this view can be opened from the ribbon or a command and read on
+    // its own, and a panel of lists with nothing above them does not say whose account it lists, on
+    // which server, or whether the sync is working at all.
+    statusHeader(host, this.surface, this.plugin.data.connection);
 
     const tabs = host.createEl('div');
     tabs.style.display = 'flex';

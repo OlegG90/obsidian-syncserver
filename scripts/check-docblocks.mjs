@@ -30,7 +30,14 @@
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
-const files = execSync('git ls-files "*.ts" "*.mjs"', { encoding: 'utf8' }).trim().split('\n');
+// Tracked files AND untracked ones that are not ignored. Reading `git ls-files` alone made the blind
+// spot exactly the wrong shape: a file this cannot see is most often a NEW one, whose docblock was
+// written minutes ago by somebody who has not yet met this rule. That happened three times in one day —
+// twice to `check-citations.mjs` before it was fixed there, and once here, each time found by CI.
+const files = execSync('git ls-files --cached --others --exclude-standard', { encoding: 'utf8' })
+  .trim()
+  .split('\n')
+  .filter((f) => /\.(ts|mjs)$/.test(f));
 const problems = [];
 
 for (const file of files) {
