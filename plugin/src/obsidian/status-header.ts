@@ -7,29 +7,27 @@ import { shortStatus } from './status.js';
 import type { Surface } from './surface.js';
 
 /**
- * What this vault's sync is doing, and whose account it is — the block both surfaces open with.
+ * What this vault's sync is doing, whose account it is, and how full — the block both surfaces open with.
+ *
+ * **Three facts in one place because they are asked as one question** — *is this working?* — and they
+ * were three rows down three separate parts of the screen (#130). The usage bar is drawn rather than
+ * written because "how close am I" is the only thing anybody wants from it, and a percentage makes that
+ * a subtraction.
  *
  * It lived in the settings tab, which was fine while that was the only place anything happened. It is
- * not fine now: the window can be opened from the ribbon or a command and then read on its own, and a
- * panel of lists with nothing above them is a panel that does not say which account it is listing, which
- * server, or whether the sync is even working. Somebody who closed the settings tab was left with rows
- * and no context.
+ * not fine now: the window can be opened from the ribbon or a command and read on its own, and a panel
+ * of lists with nothing above it does not say whose account it lists, on which server, or whether the
+ * sync works at all. Somebody who closed the settings tab was left with rows and no context.
  *
- * **One block in one place rather than two that agree today.** The status wording, the last action and
- * the identity line are the same facts wherever they are read; a second copy is a second wording waiting
- * to happen — which is exactly what the device row did while nobody was looking.
+ * **One block rather than two that agree today.** These are the same facts wherever they are read; a
+ * second copy is a second wording waiting to happen, which is what the device row did while nobody was
+ * looking.
+ *
+ * It takes a `Surface` and not the plugin because it carries a control the one-at-a-time gate refuses —
+ * Sync now — and the gate belongs to whichever surface is drawing.
  *
  * **Identity as one line, not a table**: it is a thing to recognise, not to read. The vault id is
  * shortened for the same reason — nobody compares thirty-six characters.
- */
-/**
- * The block at the top: what the sync is doing, what it last said, and how full the account
- * is (#130).
- *
- * Three facts in one place because they are asked as one question — "is this working?" —
- * and they were three separate rows down three separate parts of the screen. The usage bar
- * is drawn rather than written because "how close am I" is the only thing anybody wants
- * from it, and a percentage makes that a subtraction.
  */
 export const statusHeader = (containerEl: HTMLElement, s: Surface, conn: Connection): void => {
   const plugin = s.plugin;
