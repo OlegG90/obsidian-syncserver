@@ -34,6 +34,7 @@
  */
 import type { DeltaEvent } from '@syncserver/shared';
 import { resolveContent } from './content.js';
+import { treeFrom, type UnreadableFolder } from './tree.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
@@ -107,19 +108,6 @@ export interface SyncReport {
 }
 
 
-/**
- * A shared folder this pass could not read, and therefore must leave alone on both sides.
- *
- * One entry per SHARE, not per file: one undelivered key makes every name inside a folder
- * unreadable together, so a list per node would be the same fact repeated as many times as
- * the folder has files. The `path` is the folder itself, which is readable because a share
- * root's own label is under `KV` (SH-01) — it is both what a person needs told and what the
- * walk must not treat as its business.
- */
-export interface UnreadableFolder {
-  path: string;
-  scopeId: string;
-}
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
 interface LocalMeta {
@@ -444,51 +432,7 @@ export class SyncEngine {
     rootNodeId: string,
   ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: UnreadableFolder[] }> {
     const res = await this.client.listNodes(this.vaultId);
-    const pathOf = new Map<string, string>([[rootNodeId, '']]);
-    const tree = new Map<string, ServerNode>();
-    const skipped = new Set<string>();
-    const unreadable: UnreadableFolder[] = [];
-
-    for (const n of res.nodes) {
-      if (n.node_id === rootNodeId) continue;
-      // Below something already skipped: no path to build one from, and nothing to read.
-      if (n.parent_id && skipped.has(n.parent_id)) {
-        skipped.add(n.node_id);
-        continue;
-      }
-      const parentPath = pathOf.get(n.parent_id ?? '') ?? '';
-      // A node's name is encrypted under the scope it is named in — the vault's, or a
-      // share's `KS` for a node inside a shared folder (SH-28). The wire names that scope.
-      const key = n.name_enc ? this.scopes.keyIfOpenable(n.name_key_id) : this.scopes.vaultKey;
-      if (!key) {
-        skipped.add(n.node_id);
-        // An empty parent path would mean excluding the whole vault, which no missing share
-        // key can justify. It is also unreachable — a node named under a share scope has a
-        // share root above it, and that root is never the vault root.
-        const scopeId = n.name_key_id!;
-        if (parentPath && !unreadable.some((u) => u.scopeId === scopeId)) {
-          unreadable.push({ path: parentPath, scopeId });
-        }
-        continue;
-      }
-      const name = n.name_enc ? decryptName(key, n.name_enc) : n.node_id;
-      const path = parentPath ? `${parentPath}/${name}` : name;
-      pathOf.set(n.node_id, path);
-
-      tree.set(path, {
-        nodeId: n.node_id,
-        parentId: n.parent_id,
-        path,
-        rev: n.rev,
-        address: n.sha256,
-        // A folder is a node with no content. The server does not label them either.
-        isFile: n.sha256 !== null,
-        nameKeyId: n.name_key_id,
-        shareId: n.share_id,
-      });
-    }
-
-    return { tree, cursor: res.snapshot, unreadable };
+    return { ...treeFrom(res.nodes, rootNodeId, this.scopes), cursor: res.snapshot };
   }
 
   // ---- one local file -----------------------------------------------------------
