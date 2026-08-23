@@ -88,11 +88,16 @@
       .usage { display: flex; font-size: 0.9em; }
       .usage .right { margin-left: auto; }
 
-      /* ---- the audit log: one line each, the time in a column of its own ---- */
+      /* ---- a row of one thing: the audit log, and the devices of an account ----
+         `.entry` used to be styled only as `.log .entry`, so the device list — which is not
+         inside a `.log` — got no flex and no gap, and its name, platform and time ran
+         together into one word. A class whose layout depends on an ancestor is a class that
+         works until somebody reuses it, which is what happened. */
+      .entry { display: flex; gap: 1rem; align-items: baseline; padding: 0.6rem 1rem; }
+      .when { margin-left: auto; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85em; opacity: 0.6; white-space: nowrap; }
       .log { border: 1px solid var(--edge); border-radius: 10px; }
-      .log .entry { display: flex; gap: 1rem; align-items: baseline; padding: 0.6rem 1rem; border-bottom: 1px solid var(--edge); }
+      .log .entry { border-bottom: 1px solid var(--edge); }
       .log .entry:last-child { border-bottom: none; }
-      .log .when { margin-left: auto; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85em; opacity: 0.6; white-space: nowrap; }
 
       /* ---- forms and buttons ---- */
       label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.9em; }
