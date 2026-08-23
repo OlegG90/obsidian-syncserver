@@ -529,10 +529,19 @@ export class SyncServerSettings extends PluginSettingTab {
    * be invited to change anything until it has caught up — changing from here would put the
    * account behind a phrase the OTHER devices have never heard of either.
    */
-  private passphraseSection(containerEl: HTMLElement): void {
-    containerEl.createEl('h3', { text: 'Passphrase' });
+  private passphraseSection(host: HTMLElement): void {
+    // **Open when this device is behind, folded otherwise.** Folding is right for something set once and
+    // rarely revisited — but a device that has not heard the new passphrase has something to do, and a
+    // thing to do hidden behind a triangle is a thing nobody does.
+    const behind = this.plugin.passphraseChangedElsewhere();
+    const containerEl = section(
+      host,
+      'Passphrase',
+      behind ? 'this device is still on the old one' : 'the only thing that opens this account',
+      behind,
+    );
 
-    if (this.plugin.passphraseChangedElsewhere()) {
+    if (behind) {
       containerEl.createEl('p', {
         text:
           'The passphrase was changed on another device. This one still opens with the old one, and will ' +
@@ -639,8 +648,11 @@ export class SyncServerSettings extends PluginSettingTab {
    * Shown once because there is no second showing: the server holds a hash, and a code it
    * could show again would be a code it could use.
    */
-  private recoverySection(containerEl: HTMLElement): void {
-    containerEl.createEl('h3', { text: 'Recovery code' });
+  private recoverySection(host: HTMLElement): void {
+    // Folded like the rest. Not opened when there is no code: that is a state, not a task — the account
+    // works without one — and a section that insisted on itself every visit would be nagging rather than
+    // informing. The row inside says plainly whether there is one.
+    const containerEl = section(host, 'Recovery code', 'a second way in, if the passphrase is lost');
     containerEl.createEl('p', {
       text:
         'The passphrase is the only thing that opens this account, and the server never sees it — ' +
