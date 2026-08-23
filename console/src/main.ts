@@ -895,47 +895,28 @@ const backupRow = (b: BackupRun): HTMLElement => {
 
   // A run whose copy is gone is no longer listed at all, so every row here has something to act on.
   if (b.destination !== null && b.status !== 'running') {
-    if (b.status === 'ok') card.append(restoreButton(b), restoreFrom(b.destination));
+    card.append(whereItIs(b.destination));
+    if (b.status === 'ok') card.append(restoreButton(b));
     card.append(removeButton(b));
   }
   return card;
 };
 
 /**
- * How to restore **this** copy — the exact command, not a paragraph (#155).
+ * Where this copy is, on the server's side of the mount (issue #218).
  *
- * Kept beside the button (D-92) for the server whose console cannot be reached when it matters, and for
- * the operator who would rather see the steps than press one thing. What it removes is the remembering:
- * which directory this row is, and what order the steps go in.
+ * This line used to be a folded block holding three commands to type — and they were the *reference*
+ * deployment's commands: a shell in the directory that holds `docker-compose.yml`, a project and a
+ * service named the way that file names them. Installed from a stack manager there is no such directory
+ * and the project is the stack's, so the commands did not run, and a block of commands that do not run
+ * reads more authoritative than the button beside it that does. The button (D-92) is what replaced the
+ * typing; the block was what remained of the answer it replaced.
  *
- * Shown folded, because on the ordinary day nobody wants it.
+ * The path stays, and alone: it is the one thing only the console knows about a row, the by-hand route in
+ * docs/15 asks for it by name, and nothing else on this screen says which directory a run wrote to.
  */
-const restoreFrom = (destination: string): HTMLElement => {
-  const box = el('details', {});
-  box.append(el('summary', { textContent: 'Restore from this copy' }));
-  box.append(
-    el('p', {
-      className: 'muted',
-      textContent:
-        'With the server stopped, in the directory that holds docker-compose.yml. The server notices by ' +
-        'itself afterwards and refuses everything until you confirm the restore here.',
-    }),
-    el('pre', {
-      textContent: [
-        'docker compose stop server',
-        `docker compose run --rm server node server/dist/restore-cli.js ${destination}`,
-        'docker compose start server',
-      ].join('\n'),
-    }),
-    el('p', {
-      className: 'muted',
-      textContent:
-        'It refuses while anything else is connected to the database, and it lists any file the restored ' +
-        'database references that the copy could not bring back.',
-    }),
-  );
-  return box;
-};
+const whereItIs = (destination: string): HTMLElement =>
+  el('div', { className: 'muted', textContent: destination });
 
 /**
  * A control that asks twice, and says which subject on the second press.
