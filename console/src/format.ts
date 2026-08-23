@@ -253,12 +253,24 @@ export const serverLine = (version: string | null | undefined, reachable = true)
 };
 
 /**
- * Why the server refused to remove a backup's copy, as a sentence (#136).
+ * What the second press says, and why it is not "Are you sure?".
  *
- * Each refusal is a decision the server made on purpose, so each gets a reason rather than a
- * code: an operator reading "newest_copy" learns nothing about why a server would protect it.
- * An unknown code falls through as itself — a console that swallowed one would be hiding the
- * only clue that the two sides disagree about what can happen.
+ * D-119 puts it as *remove* and *remove 1,204 items* being different decisions. The same holds here for
+ * copies: the question an operator has is **which one**, and a dialogue that does not answer it is a
+ * speed bump rather than a check. So the confirming label repeats the verb and names the subject.
+ *
+ * Pure and here rather than inline in the button, because the wording IS the safeguard on an
+ * irreversible act — and a safeguard nothing watches is one that drifts.
+ */
+export const confirmLabel = (verb: string, subject: string): string => `Yes, ${verb} ${subject}`;
+
+/**
+ * Why the server refused, as a sentence.
+ *
+ * Each refusal is a decision the server made on purpose, so each gets a reason rather than a code: an
+ * operator reading `newest_copy` learns nothing about why a server would protect it. An unknown code
+ * falls through as itself — a console that swallowed one would hide the only clue that the two sides
+ * disagree about what can happen.
  */
 export const operatorRefusal = (code: string): string =>
   (SENTENCES as Record<string, string | undefined>)[code] ?? code;

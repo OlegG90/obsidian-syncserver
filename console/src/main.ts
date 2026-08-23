@@ -22,7 +22,7 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, isOver, mib,
+  accountBadge, accountState, accountUsage, auditAction, confirmLabel, freezeWarning, human, isOver, mib,
   serverLine, usageFraction, usageMarker,
 } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
@@ -933,6 +933,52 @@ const restoreFrom = (destination: string): HTMLElement => {
 };
 
 /**
+ * A control that asks twice, and says which subject on the second press.
+ *
+ * Two buttons on this screen do irreversible things to one named copy, and each had built the swap
+ * itself: primary → confirm + cancel, then cancel restores the primary. **They had already drifted in
+ * the cancel path** — one cleared what the first press had written into the message area and the other
+ * did not, so cancelling a restore left its warning standing under a button that was no longer offered.
+ *
+ * The cancel path is exactly where this kind of duplication rots: it is the branch nobody demonstrates.
+ *
+ * `warning` is shown on the first press and taken back by cancel, so "pressed once and changed my mind"
+ * always ends where it started.
+ */
+const twoPress = (opts: {
+  label: string;
+  verb: string;
+  subject: string;
+  warning?: string;
+  after: string;
+  run: () => Promise<void>;
+}): HTMLElement => {
+  const where = el('div', {});
+  const button = el('button', { className: 'danger', textContent: opts.label });
+  const confirm = el('button', { className: 'danger', textContent: confirmLabel(opts.verb, opts.subject) });
+  const cancel = el('button', { className: 'link', textContent: 'Leave it alone' });
+
+  button.onclick = (): void => {
+    if (opts.warning) where.replaceChildren(say(opts.warning, true));
+    button.replaceWith(confirm, cancel);
+  };
+  cancel.onclick = (): void => {
+    confirm.replaceWith(button);
+    cancel.remove();
+    where.replaceChildren();
+  };
+
+  submits(confirm, where, async () => {
+    await opts.run();
+    confirm.remove();
+    cancel.remove();
+    where.replaceChildren(say(opts.after));
+  });
+
+  return el('div', {}, button, where);
+};
+
+/**
  * Remove one copy, per row, behind a confirmation that names it (#136).
  *
  * **Per row and not a selection with one button.** Checkboxes plus Delete is the most destructive
@@ -943,29 +989,14 @@ const restoreFrom = (destination: string): HTMLElement => {
  * The confirmation names the date rather than asking "are you sure": the question is which
  * copy, and a dialogue that does not answer it is a speed bump instead of a check.
  */
-const removeButton = (run: BackupRun): HTMLElement => {
-  const where = el('div', {});
-  const button = el('button', { className: 'danger', textContent: 'Remove the copy' });
-  const confirm = el('button', { className: 'danger', textContent: `Yes, remove the copy from ${when(run.startedAt)}` });
-  const cancel = el('button', { className: 'link', textContent: 'Keep it' });
-
-  button.onclick = (): void => {
-    button.replaceWith(confirm, cancel);
-  };
-  cancel.onclick = (): void => {
-    confirm.replaceWith(button);
-    cancel.remove();
-  };
-
-  submits(confirm, where, async () => {
-    await removeBackup(run.id);
-    confirm.remove();
-    cancel.remove();
-    where.append(say('The copy is gone. This run stays in the history.'));
+const removeButton = (run: BackupRun): HTMLElement =>
+  twoPress({
+    label: 'Remove the copy',
+    verb: 'remove the copy from',
+    subject: when(run.startedAt),
+    after: 'The copy is gone. This run stays in the history.',
+    run: () => removeBackup(run.id),
   });
-
-  return el('div', {}, button, where);
-};
 
 /**
  * Restore from **this** copy (D-92).
@@ -982,43 +1013,18 @@ const removeButton = (run: BackupRun): HTMLElement => {
  * back only if the deployment restarts it. And it says what happens after, because the halt that follows
  * would otherwise read as a failed restore rather than as the guard doing its job.
  */
-const restoreButton = (run: BackupRun): HTMLElement => {
-  const where = el('div', {});
-  const button = el('button', { className: 'danger', textContent: 'Restore from this copy' });
-  const confirm = el('button', {
-    className: 'danger',
-    textContent: `Yes, restore from ${when(run.startedAt)} and stop the server`,
+const restoreButton = (run: BackupRun): HTMLElement =>
+  twoPress({
+    label: 'Restore from this copy',
+    verb: 'restore from',
+    subject: `${when(run.startedAt)} and stop the server`,
+    warning:
+      'This replaces the database and adds the copy’s files back. The server stops immediately and ' +
+      'restores on its next start, so it returns only if your deployment restarts it (docker compose ' +
+      'up -d does). When it is back it will refuse every request until you confirm the restore here.',
+    after: 'Asked for. The server is stopping; reload this page once it is back, and confirm the restore.',
+    run: () => restoreFromCopy(run.id).then(() => undefined),
   });
-  const cancel = el('button', { className: 'link', textContent: 'Leave it alone' });
-
-  button.onclick = (): void => {
-    where.replaceChildren(
-      say(
-        'This replaces the database and adds the copy’s files back. The server stops immediately and ' +
-          'restores on its next start, so it returns only if your deployment restarts it (docker compose ' +
-          'up -d does). When it is back it will refuse every request until you confirm the restore here.',
-        true,
-      ),
-    );
-    button.replaceWith(confirm, cancel);
-  };
-  cancel.onclick = (): void => {
-    confirm.replaceWith(button);
-    cancel.remove();
-    where.replaceChildren();
-  };
-
-  submits(confirm, where, async () => {
-    await restoreFromCopy(run.id);
-    confirm.remove();
-    cancel.remove();
-    where.replaceChildren(
-      say('Asked for. The server is stopping; reload this page once it is back, and confirm the restore.'),
-    );
-  });
-
-  return el('div', {}, button, where);
-};
 
 const verifyButton = (run: BackupRun): HTMLElement => {
   const button = el('button', { textContent: 'Verify' });
