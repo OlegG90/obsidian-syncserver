@@ -500,8 +500,13 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
       row.append(
         el('strong', { textContent: d.name }),
         el('span', { className: 'muted', textContent: d.platform }),
-        // "Signed in" and not "synced": the column is written when a token is issued or renewed.
-        el('span', { className: 'when', textContent: d.last_seen_at ? `signed in ${when(d.last_seen_at)}` : 'never signed in' }),
+        // "Last seen" and not "signed in": D-118 made the column move on every refresh, so the old
+        // label claimed LESS than it holds. The plugin's copy of this row was corrected then and this
+        // one was not — two screens, one column, and only one of them told the truth about it.
+        el('span', {
+          className: 'when',
+          textContent: d.last_seen_at ? `last seen ${when(d.last_seen_at)}` : 'not seen since it was added',
+        }),
       );
       const go = el('button', { className: 'danger', textContent: 'Revoke' });
       submits(go, list, async () => {
