@@ -1,5 +1,12 @@
 /**
- * One vault, opened once, carried as a value.
+ * One vault, opened once, with everything bound to it for the length of one operation.
+ *
+ * **Not `OpenedVault`, and the near-miss is the point.** `shared` has carried that name since the
+ * beginning for what `GET /vaults/:id` returns — the root, the head and the key scopes — and this value
+ * *contains* one of those, as `scopes.opened`. Two types one letter apart in meaning and identical in
+ * name is how a reader ends up importing the wrong one and only finding out from a field that is not
+ * there. **Bound** is what this adds: the client, the scopes and the engine, all bound to one vault id
+ * and to one moment.
  *
  * Every operation this plugin performs needs the same four things, and each one used to assemble them by
  * hand: borrow a session handle, read `data.connection!.vaultId`, open the vault to get its
@@ -23,7 +30,7 @@ import type { SyncEngine } from './engine/engine.js';
 import type { Handle } from './session/session.js';
 import type { VaultScopes } from './share-keys.js';
 
-export interface OpenedVault {
+export interface BoundVault {
   /** The vault this operation is about — read once, from the connection, and never again by a caller. */
   id: string;
   /** The authenticated client, straight from the session handle. */

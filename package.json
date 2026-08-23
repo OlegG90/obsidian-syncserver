@@ -16,11 +16,12 @@
   "scripts": {
     "db:reset": "./scripts/db-reset.sh",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run check:version && npm run check:citations && npm run test --workspaces --if-present",
+    "test": "npm run check:version && npm run check:citations && npm run check:names && npm run test --workspaces --if-present",
     "check:compose": "node scripts/check-compose.mjs",
     "check:version": "node scripts/check-version.mjs",
     "check:docblocks": "node scripts/check-docblocks.mjs",
     "check:citations": "node scripts/check-citations.mjs",
+    "check:names": "node scripts/check-names.mjs",
     "pack": "./scripts/pack.sh",
     "test:live": "SYNCSERVER_DB=syncserver_plugin ./scripts/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin"
   },

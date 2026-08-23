@@ -49,6 +49,8 @@ jobs:
       # `D-N` is a decision and `#N` is a GitHub issue, which used to be one notation for both
       # until they collided outright — D-111 and D-114 through D-119 are issue numbers too.
       - run: node scripts/check-citations.mjs
+      # One workspace, one name, two things — how a second `OpenedVault` reached a release.
+      - run: node scripts/check-names.mjs
 
   # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
   # only proves two numbers agree in two files; whether the pinned package actually exists in
