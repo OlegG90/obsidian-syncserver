@@ -259,7 +259,7 @@ export class SyncServerSettings extends PluginSettingTab {
     const pairingTarget = containerEl.createEl('div');
     // Re-bound on every rebuild, which is what makes a live pairing survive one: the flow is
     // held by the plugin precisely so the wait it began outlives the element it drew into.
-    this.plugin.pairing(pairingTarget);
+    this.plugin.pairing(pairingTarget, () => this.display());
 
     let chosen: Route = 'claim';
 
@@ -388,7 +388,7 @@ export class SyncServerSettings extends PluginSettingTab {
     if (route === 'pair') {
       // The held flow, re-bound to this element: the tab is rebuilt constantly and a live
       // pairing's code and cancel button have to be drawn back into the fresh one.
-      await this.plugin.pairing(pairingTarget).join({
+      await this.plugin.pairing(pairingTarget, () => this.display()).join({
         serverUrl: draft.serverUrl,
         login: draft.login,
         passphrase: draft.passphrase,
@@ -486,7 +486,9 @@ export class SyncServerSettings extends PluginSettingTab {
     usage.style.margin = '0.25rem 0 0';
 
     void this.plugin
-      .history()
+      // Only reads, so `done` never fires — but it is bound to this tab anyway rather than to a no-op:
+      // a no-op is correct until somebody adds an act here, and then it is silently wrong.
+      .history(() => this.display())
       .usage()
       .then((u) => {
         if (!u) return;
