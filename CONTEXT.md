@@ -39,6 +39,24 @@ nothing is named under any more.
 **Not** the rule about which scope a node's content *belongs* to — that is placement, it lives
 in `engine/scopes.ts`, and the two were kept apart on purpose.
 
+## OpenedVault
+
+*(plugin)* **One vault, opened once, for the length of one operation.**
+
+Every act this plugin performs against the server needs the same four things: the session's client, the
+vault id, that vault's [VaultScopes](#vaultscopes), and a `SyncEngine` built from all three. Seven call
+sites used to assemble them by hand, and nine read the vault id out of `data.connection` directly.
+
+The rule that made the assembly correct — *one opening per operation, shared by everything in it* — lived
+in a docblock. An operation that opened twice would hold two `VaultScopes` for one vault, and the second
+could disagree with the first about which share keys arrived: the exact failure `VaultScopes` exists to
+prevent **within** one opening. `withVault` hands the value out, so there is no assembly left to get
+wrong.
+
+**`runPass` deliberately does not use it.** A pass runs on a session that is already open and must never
+be the thing that asks for the passphrase; `withVault` goes through `unlocked()`, which would put a
+prompt in the middle of a background sync.
+
 ## SharedFolderMarks
 
 *(plugin)* The mapping from each live share to the path of its folder **in this vault**, plus

@@ -33,6 +33,7 @@ import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
+import type { OpenedVault } from './opened-vault.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
 import {
@@ -110,9 +111,8 @@ export default class SyncServerPlugin extends Plugin {
         await this.save();
       },
       resolve: (joined) =>
-        this.withSession(async (h) => {
-          const scopes = await this.openVault(h);
-          const pathOfNode = await this.pathsByNode(h, scopes);
+        this.withVault(async (v) => {
+          const pathOfNode = await v.paths();
           const rootOf = new Map<string, string>();
           for (const s of joined) {
             const folder = s.root_node_id ? pathOfNode.get(s.root_node_id) : undefined;
@@ -138,6 +138,9 @@ export default class SyncServerPlugin extends Plugin {
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
       runPass: async () => {
+        // `sess.use` and not `withVault`: a pass runs on an already-open session and must never be the
+        // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
+        // prompt in the middle of a background sync.
         const report = await this.sess!.use(async (h) => {
           const scopes = await this.openVault(h);
           const out = await this.engineFor(h, scopes).sync();
@@ -605,6 +608,33 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * One vault, opened once, for the length of one operation (`opened-vault.ts`).
+   *
+   * This replaces a four-step preamble every operation used to write out: borrow a handle, read the
+   * vault id, open the vault, build an engine. Seven callers did it, and the rule that made it correct —
+   * *one opening per operation, shared by everything in it* — was a sentence in a docblock. It is the
+   * value now, so the second opening a caller could once have made is no longer a thing to remember not
+   * to do.
+   */
+  private async withVault<T>(fn: (v: OpenedVault) => Promise<T>): Promise<T> {
+    return this.withSession(async (h) => {
+      const scopes = await this.openVault(h);
+      const engine = this.engineFor(h, scopes);
+      return fn({
+        id: this.data.connection!.vaultId,
+        client: h.client,
+        scopes,
+        engine,
+        paths: async () => {
+          const tree = await engine.readTree();
+          return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
+        },
+        handle: h,
+      });
+    });
+  }
+
+  /**
    * The session, open — asking for the passphrase once if it is not.
    *
    * Separate from `withSession` because one caller does not want a handle: approving a
@@ -692,19 +722,6 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * Where each node of this vault lives, by node id.
-   *
-   * The engine reads the tree the other way round — paths are what a sync compares — and
-   * both callers here start from a node id the server named: the root of a shared folder,
-   * and every node a departure has to convert. Turning the map around is one expression,
-   * which is exactly why it was written twice.
-   */
-  private async pathsByNode(h: Handle, scopes: VaultScopes): Promise<Map<string, string>> {
-    const tree = await this.engineFor(h, scopes).readTree();
-    return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
-  }
-
-  /**
    * What opening a wrapped share key takes, from the session that holds it.
    *
    * `openIdentity` stays a function all the way down, so the seed never leaves the session
@@ -731,11 +748,9 @@ export default class SyncServerPlugin extends Plugin {
     return openHistoryFlow({
       gate: this.gate,
       trash: () =>
-        this.withSession(async (h) => {
-          const scopes = await this.openVault(h);
-
-          const page = await h.client.trash(this.data.connection!.vaultId);
-          return { rows: trashRows(page.entries, scopes), total: page.total };
+        this.withVault(async (v) => {
+          const page = await v.client.trash(v.id);
+          return { rows: trashRows(page.entries, v.scopes), total: page.total };
         }),
 
       versions: (nodeId) =>
@@ -793,12 +808,10 @@ export default class SyncServerPlugin extends Plugin {
         }),
 
       share: (folderPath) =>
-        this.withSession(async (h) => {
+        this.withVault(async (v) => {
           // The tree comes from the engine, which is the one place that turns encrypted
           // names back into paths — and a share is rooted at a node id.
-          const scopes = await this.openVault(h);
-          const engine = this.engineFor(h, scopes);
-          const tree = await engine.readTree();
+          const tree = await v.engine.readTree();
           const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({
             path,
             nodeId: n.nodeId,
@@ -807,11 +820,11 @@ export default class SyncServerPlugin extends Plugin {
           }));
           const out = await shareFolder(
             {
-              client: h.client,
+              client: v.client,
               read: (p) => this.vault().read(p),
-              vaultId: this.data.connection!.vaultId,
-              vaultKey: h.kv,
-              vaultScopeId: scopes.vaultScopeId,
+              vaultId: v.id,
+              vaultKey: v.handle.kv,
+              vaultScopeId: v.scopes.vaultScopeId,
               newScopeId: () => crypto.randomUUID(),
             },
             folderPath,
@@ -822,35 +835,33 @@ export default class SyncServerPlugin extends Plugin {
         }),
 
       invite: (shareId, login) =>
-        this.withSession(async (h) => {
-          const key = shareKeyFor((await this.openVault(h)).opened.scopes, shareId, this.keyDeps(h)).key;
-          await inviteTo({ client: h.client }, shareId, login, key);
+        this.withVault(async (v) => {
+          const key = shareKeyFor(v.scopes.opened.scopes, shareId, this.keyDeps(v.handle)).key;
+          await inviteTo({ client: v.client }, shareId, login, key);
         }),
 
       accept: (shareId) =>
-        this.withSession(async (h) => {
-          const scopes = await this.openVault(h);
-          const engine = this.engineFor(h, scopes);
-          const tree = await engine.readTree();
+        this.withVault(async (v) => {
+          const tree = await v.engine.readTree();
           const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
 
           // Asked, not invented. The initiator's own label for that folder is under THEIR
           // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
           // docs/05 says they do. Offering who shared it is the one fact this side holds.
-          const from = (await h.client.shares()).invitations.find((i) => i.share_id === shareId);
+          const from = (await v.client.shares()).invitations.find((i) => i.share_id === shareId);
           const chosen = await askFolderName(this.app, freeName(`Shared by ${from?.initiator_login ?? 'someone'}`, siblings));
           if (!chosen) throw new Error('a name is needed for the folder before it can land here');
 
           const name = freeName(chosen, siblings);
           await acceptInvitation(
             {
-              client: h.client,
-              vaultId: this.data.connection!.vaultId,
-              vaultKey: h.kv,
-              vaultScopeId: scopes.vaultScopeId,
+              client: v.client,
+              vaultId: v.id,
+              vaultKey: v.handle.kv,
+              vaultScopeId: v.scopes.vaultScopeId,
             },
             shareId,
-            scopes.opened.root_node_id,
+            v.scopes.opened.root_node_id,
             name,
           );
           // The replica's root lands directly under the vault root, so its path is its name.
@@ -860,9 +871,8 @@ export default class SyncServerPlugin extends Plugin {
       decline: (shareId) => this.withSession((h) => h.client.declineShare(shareId)),
 
       leave: (shareId) =>
-        this.withSession(async (h) => {
-          const scopes = await this.openVault(h);
-          const { key, keyId: scopeId } = shareKeyFor(scopes.opened.scopes, shareId, this.keyDeps(h));
+        this.withVault(async (v) => {
+          const { key, keyId: scopeId } = shareKeyFor(v.scopes.opened.scopes, shareId, this.keyDeps(v.handle));
           // Asked of the server rather than assembled from the tree: the set that must be
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
@@ -870,24 +880,24 @@ export default class SyncServerPlugin extends Plugin {
           // has no paths at all. The dedup tag is over a file's plaintext, so leaving reads
           // it from disk — and a bare name is not a path. `Baby.md` was looked for at the
           // vault root while it sat inside the shared folder.
-          const pathOfNode = await this.pathsByNode(h, scopes);
+          const pathOfNode = await v.paths();
 
-          const rows = await h.client.shareReplica(shareId);
+          const rows = await v.client.shareReplica(shareId);
 
           // Before anything starts, and it has to be before: `leaveShare` opens by stopping
           // propagation, and past that point there is no unaltered share left to refuse on
           // behalf of.
-          requireEveryNameReadable(rows, scopes);
+          requireEveryNameReadable(rows, v.scopes);
 
-          const replica = replicaForLeave(rows, scopes, pathOfNode);
+          const replica = replicaForLeave(rows, v.scopes, pathOfNode);
 
           const out = await leaveShare(
             {
-              client: h.client,
+              client: v.client,
               read: (p) => this.vault().read(p),
-              vaultId: this.data.connection!.vaultId,
-              vaultKey: h.kv,
-              vaultScopeId: scopes.vaultScopeId,
+              vaultId: v.id,
+              vaultKey: v.handle.kv,
+              vaultScopeId: v.scopes.vaultScopeId,
             },
             shareId,
             key,
