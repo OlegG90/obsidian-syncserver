@@ -39,19 +39,25 @@ nothing is named under any more.
 **Not** the rule about which scope a node's content *belongs* to — that is placement, it lives
 in `engine/scopes.ts`, and the two were kept apart on purpose.
 
-## OpenedVault
+## BoundVault
 
-*(plugin)* **One vault, opened once, for the length of one operation.**
+*(plugin)* **One vault, opened once, with everything bound to it for the length of one operation.**
 
-Every act this plugin performs against the server needs the same four things: the session's client, the
-vault id, that vault's [VaultScopes](#vaultscopes), and a `SyncEngine` built from all three. Seven call
-sites used to assemble them by hand, and nine read the vault id out of `data.connection` directly.
+Every act against the server needs the same four things: the session's client, the vault id, that vault's
+[VaultScopes](#vaultscopes), and a `SyncEngine` built from all three. Seven call sites used to assemble
+them by hand, and nine read the vault id out of `data.connection` directly.
 
 The rule that made the assembly correct — *one opening per operation, shared by everything in it* — lived
 in a docblock. An operation that opened twice would hold two `VaultScopes` for one vault, and the second
 could disagree with the first about which share keys arrived: the exact failure `VaultScopes` exists to
 prevent **within** one opening. `withVault` hands the value out, so there is no assembly left to get
 wrong.
+
+**It is not `OpenedVault`, and the near-miss is why it is named at all.** `shared` has carried
+`OpenedVault` since the beginning for what `GET /vaults/:id` returns — root, head, key scopes — and a
+`BoundVault` *contains* one of those, as `scopes.opened`. The first name given to this value was
+`OpenedVault` too, which put two types with identical names and different shapes in one plugin; **bound**
+is what this one adds beyond the opening.
 
 **`runPass` deliberately does not use it.** A pass runs on a session that is already open and must never
 be the thing that asks for the passphrase; `withVault` goes through `unlocked()`, which would put a

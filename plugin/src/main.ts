@@ -33,7 +33,7 @@ import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
 import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
-import type { OpenedVault } from './opened-vault.js';
+import type { BoundVault } from './bound-vault.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
 import {
@@ -608,7 +608,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * One vault, opened once, for the length of one operation (`opened-vault.ts`).
+   * One vault, opened once, for the length of one operation (`bound-vault.ts`).
    *
    * This replaces a four-step preamble every operation used to write out: borrow a handle, read the
    * vault id, open the vault, build an engine. Seven callers did it, and the rule that made it correct —
@@ -616,7 +616,7 @@ export default class SyncServerPlugin extends Plugin {
    * value now, so the second opening a caller could once have made is no longer a thing to remember not
    * to do.
    */
-  private async withVault<T>(fn: (v: OpenedVault) => Promise<T>): Promise<T> {
+  private async withVault<T>(fn: (v: BoundVault) => Promise<T>): Promise<T> {
     return this.withSession(async (h) => {
       const scopes = await this.openVault(h);
       const engine = this.engineFor(h, scopes);
