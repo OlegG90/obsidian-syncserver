@@ -33,6 +33,7 @@
  * only the provenance check (incremental application is M2).
  */
 import type { DeltaEvent } from '@syncserver/shared';
+import { resolveContent } from './content.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
@@ -237,6 +238,13 @@ export class SyncEngine {
   }
 
   /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
+  /** `content.ts`, with this engine's key for the scope and its client's upload. */
+  private content(plain: Uint8Array, scopeId: string, ctx: PassContext) {
+    return resolveContent(plain, { id: scopeId, key: this.scopeKeyFor(scopeId) }, ctx.dedup, (sealed) =>
+      this.client.putBlob(sealed),
+    );
+  }
+
   private contentScopeId(ctx: PassContext, path: string): string {
     const parent = parentOf(path);
     return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
@@ -708,7 +716,8 @@ export class SyncEngine {
     const plain = await this.vault.read(file.path);
     // The edited content lives under the node's scope — the vault's, or a share's for a
     // node inside a shared folder — so its envelope and tag go to that scope, not a fixed one.
-    const { sha256: address, material } = await this.resolveContent(plain, this.contentScopeId(ctx, file.path), ctx);
+    const scopeId = this.contentScopeId(ctx, file.path);
+    const { sha256: address, material } = await this.content(plain, scopeId, ctx);
 
     const out = await this.client.putContent(this.vaultId, onServer.nodeId, {
       sha256: address,
@@ -762,7 +771,7 @@ export class SyncEngine {
   private async pushNew(file: VaultFile, m: LocalMeta, ctx: PassContext): Promise<void> {
     const plain = await this.vault.read(file.path);
     const scopeId = this.contentScopeId(ctx, file.path);
-    const { sha256: address, material } = await this.resolveContent(plain, scopeId, ctx);
+    const { sha256: address, material } = await this.content(plain, scopeId, ctx);
     const parentId = await this.ensureFolders(file.path, ctx);
     const name = basename(file.path);
     const nameKey = this.scopeKeyFor(scopeId);
@@ -792,27 +801,6 @@ export class SyncEngine {
    * Both the envelope and the dedup tag are scoped to `scopeId` — the vault's own scope or a
    * share's — because the trigger checks them together under the node's scope.
    */
-  private async resolveContent(
-    plain: Uint8Array,
-    scopeId: string,
-    ctx: PassContext,
-  ): Promise<{ sha256: string; material: { blob_envelopes: { sha256: string; scope_id: string; wrapped_key: string }[]; dedup_tags: { sha256: string; scope_id: string; content_tag: string }[] } }> {
-    const scopeKey = this.scopeKeyFor(scopeId);
-    const tag = dedupTag(scopeKey, plain);
-    const dedupMatch = ctx.dedup.get(tag);
-    if (dedupMatch) {
-      return { sha256: dedupMatch, material: { blob_envelopes: [], dedup_tags: [] } };
-    }
-    const sealed = sealBlob(plain);
-    await this.client.putBlob(sealed);
-    return {
-      sha256: sealed.sha256,
-      material: {
-        blob_envelopes: [{ sha256: sealed.sha256, scope_id: scopeId, wrapped_key: wrapContentKey(scopeKey, sealed.contentKey) }],
-        dedup_tags: [{ sha256: sealed.sha256, scope_id: scopeId, content_tag: tag }],
-      },
-    };
-  }
 
   /**
    * No common ancestor (docs/07): the server version becomes the file at this path, and the
