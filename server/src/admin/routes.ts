@@ -8,6 +8,7 @@
  * rather than a permission somebody could grant later.
  */
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { OperatorRefusalCode } from '@syncserver/shared';
 import { copyAt } from '../backup-copy.js';
 import { join } from 'node:path';
 import type { Db } from '../db.js';
@@ -69,13 +70,28 @@ const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
  * say it is not"; two named refusals make that true (D-89).
  */
 const noBackup = (reply: FastifyReply): unknown =>
-  reply.code(503).send({
-    error: 'backup_not_configured',
-    detail: 'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups',
-  });
+  refuseWith(reply, 503, 'backup_not_configured',
+    'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups');
 
 const noRestoreFile = (reply: FastifyReply): unknown =>
-  reply.code(503).send({ error: 'restore_not_configured', detail: 'no restore state file configured' });
+  refuseWith(reply, 503, 'restore_not_configured', 'no restore state file configured');
+
+/**
+ * Refuse with a code `shared` declares, and nothing else.
+ *
+ * This exists so a route cannot invent one. Every operator refusal used to be a string literal typed
+ * straight into `send()`, which meant a rename on this side reached the console as an identifier printed
+ * on screen — the console maps codes to sentences, and an unmapped one falls through as itself.
+ *
+ * The union is the seam; this is the only way through it. A new refusal has to be declared before it can
+ * be sent, and declaring it makes the console fail to compile until it has words.
+ */
+const refuseWith = (
+  reply: FastifyReply,
+  status: number,
+  error: OperatorRefusalCode,
+  detail?: string,
+): unknown => reply.code(status).send(detail === undefined ? { error } : { error, detail });
 
 export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps = {}): void => {
   const admin = { preHandler: requireAdmin(db) };
@@ -103,9 +119,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     admin,
     async (req, reply) => {
       const { login, quota_bytes: quota } = req.body ?? {};
-      if (!login || typeof login !== 'string') return reply.code(400).send({ error: 'login_required' });
+      if (!login || typeof login !== 'string') return refuseWith(reply, 400, 'login_required');
       if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
-        return reply.code(400).send({ error: 'quota_bytes_required', detail: 'a positive number of bytes' });
+        return refuseWith(reply, 400, 'quota_bytes_required', 'a positive number of bytes');
       }
 
       const out = await invite(db, req.admin!, {
@@ -143,7 +159,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     '/admin/accounts/:userId/enabled',
     admin,
     async (req, reply) => {
-      if (typeof req.body?.enabled !== 'boolean') return reply.code(400).send({ error: 'enabled_required' });
+      if (typeof req.body?.enabled !== 'boolean') return refuseWith(reply, 400, 'enabled_required');
       const out = await setEnabled(db, req.admin!, req.params.userId, req.body.enabled);
       if (out) return refuse(reply, out);
       return reply.code(204).send();
@@ -191,7 +207,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     async (req, reply) => {
       const quota = req.body?.quota_bytes;
       if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
-        return reply.code(400).send({ error: 'quota_bytes_required', detail: 'a positive number of bytes' });
+        return refuseWith(reply, 400, 'quota_bytes_required', 'a positive number of bytes');
       }
       const out = await setQuota(db, req.admin!, req.params.userId, String(quota));
       if ('kind' in out) return refuse(reply, out);
@@ -220,9 +236,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     // Refused is not failed and not busy: nothing ran, so there is no row and nothing to
     // retry until the deployment is fixed. 503, like `unconfigured` — the same family of
     // answer, "this installation cannot do this yet", with the sentence that says what to fix.
-    if (out.status === 'refused') return reply.code(503).send({ error: 'backup_not_ready', detail: out.error });
-    if (out.status === 'skipped') return reply.code(409).send({ error: 'backup_in_progress', detail: out.error });
-    if (out.status === 'failed') return reply.code(500).send({ error: 'backup_failed', detail: out.error });
+    if (out.status === 'refused') return refuseWith(reply, 503, 'backup_not_ready', out.error);
+    if (out.status === 'skipped') return refuseWith(reply, 409, 'backup_in_progress', out.error);
+    if (out.status === 'failed') return refuseWith(reply, 500, 'backup_failed', out.error);
     return {
       id: out.id,
       status: out.status,
@@ -253,12 +269,12 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.delete<{ Params: { id: string } }>('/admin/backups/:id', admin, async (req, reply) => {
     if (!backup.destination) return noBackup(reply);
     const refused = await removeBackupCopy(db, backup.destination, req.params.id);
-    if (refused === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (refused === 'not_found') return refuseWith(reply, 404, 'not_found');
     if (refused === 'already_gone') return reply.code(204).send();
     if (refused) {
       // 409 for all three: the request is well formed and the server is refusing THIS one,
       // for a reason the console prints as a sentence rather than a code.
-      return reply.code(409).send({ error: refused });
+      return refuseWith(reply, 409, refused);
     }
     return reply.code(204).send();
   });
@@ -267,7 +283,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     if (!backup.destination) return noBackup(reply);
     const run = await db.one<{ destination: string }>(
       `SELECT destination FROM backup_runs WHERE id = $1`, [req.params.id]);
-    if (!run?.destination) return reply.code(404).send({ error: 'not_found' });
+    if (!run?.destination) return refuseWith(reply, 404, 'not_found');
 
     // The COPY, not the live store: the run's destination names its own blob directory,
     // and verifying against the live data would always answer yes.
@@ -296,13 +312,13 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
 
     const run = await db.one<{ destination: string | null; status: string }>(
       `SELECT destination, status::text AS status FROM backup_runs WHERE id = $1`, [req.params.id]);
-    if (!run) return reply.code(404).send({ error: 'not_found' });
-    if (run.status !== 'ok') return reply.code(409).send({ error: 'not_a_good_copy' });
-    if (!run.destination) return reply.code(409).send({ error: 'already_gone' });
+    if (!run) return refuseWith(reply, 404, 'not_found');
+    if (run.status !== 'ok') return refuseWith(reply, 409, 'not_a_good_copy');
+    if (!run.destination) return refuseWith(reply, 409, 'already_gone');
     // The same guard the removal uses, and for the same reason: `destination` is a text column, and a
     // value from a restored dump or another deployment would otherwise name a path on THIS host.
     if (!insideDestination(backup.destination, run.destination)) {
-      return reply.code(409).send({ error: 'outside_destination' });
+      return refuseWith(reply, 409, 'outside_destination');
     }
 
     await db.tx(async (c) => {
@@ -343,7 +359,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     // there is nothing to resolve.
     const status = await restoreStatus(db, backup.restoreStateFile);
     if (!status.pending) {
-      return reply.code(409).send({ error: 'nothing_to_confirm', detail: 'the database is not behind its state file' });
+      return refuseWith(reply, 409, 'nothing_to_confirm', 'the database is not behind its state file');
     }
     const out = await confirmRestore(db, req.admin!, backup.restoreStateFile);
     return { epoch: out.epoch };

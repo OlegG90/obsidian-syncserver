@@ -11,6 +11,7 @@
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
 import type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
+import { operatorRefusal } from './format.js';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
@@ -22,9 +23,25 @@ export class ApiError extends Error {
     readonly code: string,
     readonly detail?: string,
   ) {
-    super(detail ? `${code}: ${detail}` : code);
+    super(sentenceFor(code, detail));
   }
 }
+
+/**
+ * The words a refusal is read as, decided **here** and once.
+ *
+ * Three buttons used to turn a `409` into a sentence themselves — two of them with the same two lines,
+ * and the third not at all, so **Verify** printed `newest_copy` at somebody. A translation every caller
+ * repeats is a translation one caller will forget, and the one that forgets is the one nobody tested.
+ *
+ * The code stays on the error for anything that needs to branch on it; what changes is that the
+ * *message* is already the sentence, so a caller that does nothing but rethrow is already right.
+ */
+const sentenceFor = (code: string, detail?: string): string => {
+  const said = operatorRefusal(code);
+  if (said !== code) return detail ? `${said} (${detail})` : said;
+  return detail ? `${code}: ${detail}` : code;
+};
 
 /**
  * Both halves of the session, in memory, for as long as the tab is open (D-102).

@@ -22,7 +22,7 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, accountState, accountUsage, auditAction, backupRefusal, freezeWarning, human, isOver, mib,
+  accountBadge, accountState, accountUsage, auditAction, freezeWarning, human, isOver, mib,
   serverLine, usageFraction, usageMarker,
 } from './format.js';
 import { chooseScreen, sessionEnded, type Screen } from './screen.js';
@@ -958,15 +958,7 @@ const removeButton = (run: BackupRun): HTMLElement => {
   };
 
   submits(confirm, where, async () => {
-    try {
-      await removeBackup(run.id);
-    } catch (e) {
-      // Rethrown as a sentence. `attempt` owns where a failure is drawn — a second place that
-      // drew them would be a second wording — and a refusal here is a decision the server made
-      // deliberately, so "409 newest_copy" is the one thing it must not read as.
-      if (e instanceof ApiError && e.status === 409) throw new Error(backupRefusal(e.code));
-      throw e;
-    }
+    await removeBackup(run.id);
     confirm.remove();
     cancel.remove();
     where.append(say('The copy is gone. This run stays in the history.'));
@@ -1017,12 +1009,7 @@ const restoreButton = (run: BackupRun): HTMLElement => {
   };
 
   submits(confirm, where, async () => {
-    try {
-      await restoreFromCopy(run.id);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) throw new Error(backupRefusal(e.code));
-      throw e;
-    }
+    await restoreFromCopy(run.id);
     confirm.remove();
     cancel.remove();
     where.replaceChildren(
