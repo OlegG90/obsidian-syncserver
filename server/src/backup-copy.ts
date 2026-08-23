@@ -2,8 +2,8 @@
  * Where the two halves of a backup copy live, said once.
  *
  * A copy is a directory holding `database.dump` beside `blobs/`. The writer spelled that layout, and
- * then **every reader spelled it again** — the restore, the rehearsal, the console's verify and the
- * scheduled one, each with its own `join(dir, 'blobs')`. Five spellings of one fact, in four files.
+ * then **every reader spelled it again** — the restore, the console's verify, and more besides, each
+ * with its own `join(dir, 'blobs')`. Several spellings of one fact, across several files.
  *
  * That is the shape which already cost this project a shipped defect. `restore-argv.ts` exists because
  * the argv contract "was written down nowhere, and the two callers read it two different ways" — and a

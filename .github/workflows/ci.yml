@@ -107,8 +107,8 @@ jobs:
       # **From PGDG, pinned to the major the service runs**, and that is not tidiness: `pg_dump`
       # refuses a server newer than itself (docs/10), and Ubuntu's own `postgresql-client` is
       # several majors behind the `postgres:18` above. With the distribution package the
-      # rehearsal tests — the ones that take a real dump and restore it — SKIPPED, and the job
-      # went green without running the thing it was added to prove.
+      # tests that take a real dump SKIPPED, and the job went green without running the thing it
+      # was added to prove.
       - name: a psql and pg_dump of the major this job runs
         run: |
           set -euo pipefail

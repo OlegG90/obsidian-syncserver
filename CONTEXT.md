@@ -52,24 +52,16 @@ session are ports bound in `main.ts`. The guard compares `share_id:root_node_id`
 ids alone — a re-materialised share keeps its id but changes its root, and the badge has to
 follow.
 
-## verification / rehearsal
+## verification
 
-*(server)* **Two different claims about a backup, and never one word for both.**
+*(server)* **The one claim this server makes about a backup, and it makes it only when asked.**
 
-A **verification** reopens one copy and confirms that every blob the database references is present in
-it. It says the copy **arrived**. **On demand only** — it is what the console's **Verify** button runs
-and what `backup_runs.verified` records. It used to also run at boot and daily; checking a backup is not
-part of serving one, and a server doing it unasked was work nobody had asked for at a moment nobody
-chose.
+A verification reopens one copy and confirms that every blob the database references is present in it.
+It says the copy **arrived** — not that the archive can be read, which is a different claim and one
+nothing here checks automatically. `backup_runs.verified` records it; the console's **Verify** button is
+the only thing that runs it.
 
-A **rehearsal** loads the newest dump into a scratch database and confirms that what comes out carries
-this build's functions and triggers and holds at least one account. It says the archive can be **read**.
-Weekly by default, paced by `REHEARSE_RESTORE_EVERY_SECONDS`, and `0` turns it off.
-
-A `pg_dump` that will not restore — a version mismatch, a truncated file, a corrupt archive — **passes
-the verification and fails the rehearsal**, which is the whole reason the second exists (#159).
-
-Both were called *rehearsal* for a while, including in the operator manual, where the sentence "the
-server rehearses on its own" described one of them and was read as the other. That is the failure D-114
-reserved the word `freeze` to prevent: one word for two things makes every sentence naming it ambiguous,
-and here it would mislead on the day somebody is reading the log to decide whether a backup is usable.
+**Nothing about a backup happens on a schedule.** Taking one, verifying one and restoring from one are
+all acts somebody asks for. A server that took backups nightly, verified them nightly and loaded them
+weekly was doing three things nobody had asked it to do that day, and the settings for all three were
+questions an operator had to answer before they had a reason to.

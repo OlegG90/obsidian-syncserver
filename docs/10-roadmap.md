@@ -309,7 +309,7 @@ own argument for walking: the suite that reviewed them was written by whoever wr
 
 M5 also carried a set of defects that only a review found, listed with the boxes below rather than
 separately: a version check inside the window it was meant to precede, a `verified_at` stamped on copies
-found incomplete, a rehearsal that stopped for ever after one failed run, and a backup nothing ever took.
+found incomplete, and a check that stopped for ever after one failed run.
 
 ### Where the console lives, and what it may not assume
 
@@ -362,20 +362,12 @@ found incomplete, a rehearsal that stopped for ever after one failed run, and a 
       dump references — a restore that completes, looks whole, and cannot open a note.
 - [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
       refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
-- [x] **One integrity check, three callers** ([08](08-backup-restore.md)): the console's verify, the
-      periodic restore rehearsal, and whatever runs it nightly. Written once — `verifyBackup` in
-      `backup.ts` — and all three now call it: the Verify button, `verifyLatestBackup` on its own rare
-      interval, and every scheduled run checking the copy it just wrote (`backup-schedule.ts`).
-      Two things it was willing to claim had to stop first. `verified_at` was stamped unconditionally,
-      so a copy the check had just found incomplete was listed as verified; and the rehearsal fetched
-      one row and then filtered it for `ok`, so a single failed run at the head meant the last good
-      copy was never rehearsed again.
-- [x] **Something presses the button.** `runBackup` had one caller — the console — so a backup happened
-      when a person remembered, which for an unattended NAS means an installation nobody touches for a
-      month has no copies from that month. A schedule takes one every `BACKUP_EVERY_SECONDS`, on by
-      default once a destination is configured, and `0` turns it off for a deployment driving backups
-      from cron on the host. Nothing runs at boot: a server in a restart loop would otherwise take a
-      backup per restart, each opening a refusal window.
+- [x] **One integrity check, one caller** ([08](08-backup-restore.md)): the console's Verify button.
+      Written once — `verifyBackup` in `backup.ts`. What it was willing to claim had to stop first:
+      `verified_at` was stamped unconditionally, so a copy the check had just found incomplete was
+      listed as verified.
+- [x] **Nothing presses the button but a person** (D-121). Taking a backup, verifying one and restoring
+      from one are all asked for. The schedules that once did them are gone.
 
 ### The image is pulled, not built on the server
 
@@ -486,11 +478,6 @@ Not here: a live walk of `.obsidian/` synchronisation. That is a walk, and it ne
       node *and the private chain it hangs from* (SH-27), so the one thing left to do about it was to say
       so on the screen, where somebody pressing "my copy is the truth" can read which half is theirs to
       give away.
-- [x] **A rehearsal that actually restores** (#159). [08](08-backup-restore.md) says a backup that has
-      never been restored is not a backup, and prescribes a quarterly rehearsal by hand. The automatic one
-      checks that the copy's blobs are all present — which is worth having and is not the same claim. A
-      rehearsal that restores the dump into a scratch database and reports is the one that would have
-      caught a dump nobody can read.
 - [x] **The vaults an account has, shown to the person who owns them** (#161). `GET /vaults` is called in
       exactly one place — inside `chooseVault`, at pairing or recovery, to ask which vault this device is
       for. Once connected nothing lists them again, so somebody with three vaults sees the id of the one

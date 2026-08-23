@@ -143,17 +143,15 @@ then the effective quarantine is zero and every restore should expect the report
   ones the restored store does not have — the same walk `verifyBackup` runs over a copy, pointed at the
   live store, where it answers the other question.
 
-## Removing a copy, and how many to keep
+## Removing a copy
 
-Copies pile up on a schedule, so left alone they fill a disk on a schedule. Two answers, and the first is
-the one that matters:
+Copies are taken when somebody asks for one, so they pile up at the rate somebody asks — a rate a person
+can keep up with. **Removing one from the console**, per row and behind a confirmation naming it, is the
+whole of it.
 
-- **`BACKUP_KEEP`** — a number of finished copies to keep. Each scheduled run prunes what falls past the
-  newest N, **after** taking its own: pruning first would delete an old backup to make room for one that
-  then failed, which is a trade nobody would agree to if asked. Unset means keep everything, which is what
-  every deployment did before this existed;
-- **removing one from the console**, per row and behind a confirmation naming it. For the one-off — a run
-  that left a partial copy, a copy moved by hand — not as the way to stay under a disk.
+There is no retention setting. One existed while backups were nightly, and a number of copies to keep is
+an answer to a machine producing them; with a person producing them the same person can remove them, and
+a server that deletes backups on a rule nobody re-reads is a server that deletes backups.
 
 **The run stays in the history and its `destination` becomes null.** Dropping the row would leave the files
 behind with nothing referencing them, which is exactly the state an operator watching free space disappear
@@ -216,26 +214,17 @@ usable copy no matter what its status column says.
 
 > **A backup that has never been restored is not a backup.**
 
-**The server checks two different things, and the difference between them is the sentence above** (#159):
+**The server checks one thing, and only when asked.** The console's Verify button reopens one copy and
+confirms that every blob the database references is present in it. That says the copy **arrived**.
 
-- the **verification**, on demand: the console's Verify button reopens one copy and confirms that every
-  blob the database references is present in it. That says the copy **arrived**. It runs on no schedule
-  and not at boot — verifying a backup is not part of serving one;
-- the **rehearsal**: on a much rarer interval — `REHEARSE_RESTORE_EVERY_SECONDS`, weekly by default, `0`
-  to turn it off — it **loads the dump into a scratch database** created for the purpose and dropped
-  afterwards, and confirms
-  that what comes out carries this build's functions and triggers and holds at least one account. That
-  says the archive can be **read**.
+It does **not** say the archive can be read. A `pg_dump` that fails to restore — a version mismatch, a
+truncated file, a corrupt archive — passes this check and fails at the moment it is needed. **The server
+does not test that for you**, and the sentence at the top of this section is therefore addressed to a
+person: restore a copy somewhere safe, on whatever rhythm the data deserves, and find out while it still
+costs nothing.
 
-A `pg_dump` that fails to restore — a version mismatch, a truncated file, a corrupt archive — passes the
-first and fails the second, which is the whole reason the second exists. It needs the database role to be
-able to `CREATE DATABASE`; where it cannot, the server says so and carries on, because a check that
-stopped the thing it checks would be the worst trade here. The outcome is written beside the restore
-epoch, so *"the last successful rehearsal was 60 days ago"* survives a restart, and the console says it on
-the Backups screen.
-
-What neither can claim is that the data is **correct** — nothing outside the vaults' own keys could tell.
-That is what the quarterly check below is still for.
+Nor can either say the data is **correct** — nothing outside the vaults' own keys could tell. That is
+what the quarterly check below is for.
 
 Quarterly, by hand: restore into a separate instance and run the check —
 

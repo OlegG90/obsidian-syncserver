@@ -32,7 +32,6 @@ import { insideDestination } from '../backup-remove.js';
 import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
-import { readRehearsal } from '../rehearsal.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
@@ -333,18 +332,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // The restore surface: what the server knows, and the one act that resolves it. Both are
   // reachable even in the halt state, because a restore nobody can confirm is a restore
   // nobody can leave.
-  /**
-   * When the newest backup was last **loaded**, and whether it read (#159).
-   *
-   * Separate from the blob check whose result rides on the backup row, because it is a different claim
-   * about a different thing: that one says the copy arrived, this one says the archive can be restored.
-   * A console that showed them as one number would let the cheaper check speak for the expensive one.
-   */
-  app.get('/admin/rehearsal', admin, async (_req, reply) => {
-    if (!backup.restoreStateFile) return noRestoreFile(reply);
-    return { rehearsal: (await readRehearsal(backup.restoreStateFile)) ?? null };
-  });
-
   app.get('/admin/restore', admin, async (req, reply) => {
     if (!backup.restoreStateFile) return noRestoreFile(reply);
     return restoreStatus(db, backup.restoreStateFile);

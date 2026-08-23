@@ -10,9 +10,8 @@
  * server, or against a directory that is not a backup, is how an installation loses both the old data
  * and the new; and one that cannot bring everything back has to **say so**.
  *
- * **Its own process, and not by accident.** It counts connections to the database, and the rehearsal
- * next door opens and drops scratch databases — run in one file, each makes the other's answer wrong.
- * `tsx --test test/*.test.ts` gives a file a process, which is what keeps them apart.
+ * **Its own process.** It counts connections to the database, so anything else in the same process that
+ * opens one makes its answer wrong. `tsx --test test/*.test.ts` gives a file a process.
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';

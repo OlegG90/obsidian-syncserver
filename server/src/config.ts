@@ -14,27 +14,6 @@ const int = (name: string, fallback: number): number => {
   return n;
 };
 
-/**
- * A whole number the deployment may leave out — where **an empty value is leaving it out**.
- *
- * The rule lives beside `int` and `str`, which have always read `''` as absent, because the
- * one reader that did not was `BACKUP_KEEP` reading `process.env` directly. Compose passes
- * `${BACKUP_KEEP:-}` as an empty string whenever nobody has set it, so a server with no
- * retention configured refused to boot — in a restart loop, on a NAS, over a variable its
- * operator had never touched.
- *
- * The rejected value is quoted back. "Must be a whole number" over an invisible string is what
- * turns a minute into an hour.
- */
-const count = (name: string): number | undefined => {
-  const raw = process.env[name];
-  const value = raw === undefined ? '' : raw.trim();
-  if (value === '') return undefined;
-  if (!/^[1-9][0-9]*$/.test(value)) {
-    throw new Error(`${name} must be a whole number, at least 1 — or unset; got ${JSON.stringify(raw)}`);
-  }
-  return Number(value);
-};
 
 const str = (name: string, fallback?: string): string => {
   const raw = process.env[name];
@@ -108,22 +87,6 @@ export interface Config {
    * how promptly a swept blob disappears, never what gets swept.
    */
   sweepIntervalSeconds: number;
-  /** How often the newest backup is LOADED into a scratch database, rather than only checked; `0` is off (#159). */
-  rehearsalIntervalSeconds: number;
-  /**
-   * How often a backup is TAKEN, when one is configured at all (docs/10).
-   *
-   * Defaulted ON rather than off, and the reason is what configuring a backup means: nobody
-   * sets a destination, a dump command and a blob source in order to press a button by hand
-   * for ever. The opt-in already happened when those three were set — this only decides how
-   * often, and an unattended NAS with backups configured and none being taken is the failure
-   * this milestone is about.
-   *
-   * `0` turns it off for a deployment that drives backups from outside — cron on the host, or
-   * a storage appliance's own snapshotting — where a second schedule would be two windows
-   * where the operator asked for one.
-   */
-  backupEverySeconds: number;
   /**
    * Where backups go, and how they are taken. All three are deployment facts, not protocol:
    * a destination directory, the `pg_dump` invocation (or whatever this deployment calls
@@ -138,15 +101,6 @@ export interface Config {
         dumpCommand: string[];
         /** The blob store directory, copied after the dump (D-114). */
         blobSource: string;
-        /**
-         * How many finished copies to keep on disk, or `undefined` for all of them (#136).
-         *
-         * Unset is the default and means **nothing is ever pruned**, which is what every
-         * deployment has done until now. Deleting backups is not a behaviour to acquire by
-         * upgrading: an operator who has not asked for it should find their copies where they
-         * left them.
-         */
-        keep?: number | undefined;
       }
     | undefined;
   /**
@@ -194,12 +148,6 @@ export const loadConfig = (): Config => {
       pairingTtlSeconds: int('PAIRING_TTL_SECONDS', 10 * 60),
     },
     sweepIntervalSeconds: int('SWEEP_INTERVAL_SECONDS', 60 * 60),
-    // How often to LOAD the newest backup into a scratch database, rather than only checking that its
-    // blobs are present (#159). Weekly by default and not daily: it restores a whole dump, which on a
-    // NAS is minutes rather than the second the blob check takes. `0` turns it off for a deployment
-    // that rehearses by hand — the honest opt-out, since the whole point is that nobody remembers to.
-    rehearsalIntervalSeconds: int('REHEARSE_RESTORE_EVERY_SECONDS', 7 * 24 * 60 * 60),
-    backupEverySeconds: int('BACKUP_EVERY_SECONDS', 24 * 60 * 60),
     // How to put a dump back (#155). Symmetric with BACKUP_DB_COMMAND, and separate because the
     // restore is a different binary with different flags: `--clean --if-exists` is what makes it
     // replace what is there rather than collide with it, and `--no-owner` is what lets a dump taken
@@ -234,16 +182,7 @@ export const loadConfig = (): Config => {
           'a partial backup configuration would start a run that cannot finish',
       );
     }
-    // How many copies to keep, or nothing at all — `count` is where "empty means unset" lives,
-    // which is the rule this variable learned the hard way (#136 shipped it reading
-    // `process.env` directly, and a server would not boot).
-    const keep = count('BACKUP_KEEP');
-    cfg.backup = {
-      destination,
-      dumpCommand: dumpCommand.split(/\s+/),
-      blobSource,
-      ...(keep === undefined ? {} : { keep }),
-    };
+    cfg.backup = { destination, dumpCommand: dumpCommand.split(/\s+/), blobSource };
   }
 
   if (cfg.limits.abandonedPartTtlSeconds >= cfg.limits.unboundBlobTtlSeconds) {
