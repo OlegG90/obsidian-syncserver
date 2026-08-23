@@ -19,6 +19,26 @@
 import type { Change, Delta, Material, NodeType, Scope } from '@syncserver/shared';
 import type { CursorRejected, Envelope, PutConflict, CursorUnverifiable } from '../api/client.js';
 
+/** A node as the server describes it, plus the path this client resolved it to. */
+export interface ServerNode {
+  nodeId: string;
+  parentId: string | null;
+  path: string;
+  rev: number;
+  address: string | null;
+  isFile: boolean;
+  /** The key scope the node is named under — the vault's own scope, or a share's `KS` (SH-28). */
+  nameKeyId: string | null;
+  /**
+   * The share this node belongs to, for a node inside a replica.
+   *
+   * Optional because the engine builds `ServerNode`s in three places and only the tree read
+   * has it: the other two describe a node this pass just wrote, where the share is whatever
+   * the parent already said it was.
+   */
+  shareId?: string | null;
+}
+
 export interface VaultWire {
   /**
    * No `openVault` here, deliberately.
