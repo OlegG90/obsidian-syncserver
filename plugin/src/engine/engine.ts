@@ -33,6 +33,8 @@
  * only the provenance check (incremental application is M2).
  */
 import type { DeltaEvent } from '@syncserver/shared';
+import { remapState, remapTree } from './remap.js';
+import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
@@ -103,25 +105,6 @@ export interface SyncReport {
   errors: { path: string; message: string }[];
 }
 
-/** A node as the server describes it, plus the path this client resolved it to. */
-export interface ServerNode {
-  nodeId: string;
-  parentId: string | null;
-  path: string;
-  rev: number;
-  address: string | null;
-  isFile: boolean;
-  /** The key scope the node is named under — the vault's own scope, or a share's `KS` (SH-28). */
-  nameKeyId: string | null;
-  /**
-   * The share this node belongs to, for a node inside a replica.
-   *
-   * Optional because the engine builds `ServerNode`s in three places and only the tree read
-   * has it: the other two describe a node this pass just wrote, where the share is whatever
-   * the parent already said it was.
-   */
-  shareId?: string | null;
-}
 
 /**
  * A shared folder this pass could not read, and therefore must leave alone on both sides.
@@ -642,8 +625,8 @@ export class SyncEngine {
           name_hmac: nameHmac(this.scopeKeyFor(nameScopeId), name),
           name_key_id: nameScopeId,
         });
-        this.remapTreePaths(move.from, move.to, out.rev, ctx);
-        this.remapStatePaths(move.from, move.to, ctx);
+        ctx.tree = remapTree(ctx.tree, move.from, move.to, out.rev);
+        ctx.state.nodes = remapState(ctx.state.nodes, move.from, move.to);
         for (const child of move.children) {
           ctx.vanished.delete(child.hash);
           ctx.handled.add(child.to);
@@ -662,37 +645,6 @@ export class SyncEngine {
     }
   }
 
-  /** Rewrite `from/…` paths in the walked tree to `to/…`, refreshing the moved folder's rev. */
-  private remapTreePaths(from: string, to: string, rev: number, ctx: PassContext): void {
-    const prefix = from ? `${from}/` : '';
-    const dest = to ? `${to}/` : '';
-    const next = new Map<string, ServerNode>();
-    for (const [path, node] of ctx.tree) {
-      if (path === from) {
-        next.set(to, { ...node, path: to, rev });
-      } else if (path.startsWith(prefix)) {
-        next.set(dest + path.slice(prefix.length), { ...node, path: dest + path.slice(prefix.length) });
-      } else {
-        next.set(path, node);
-      }
-    }
-    ctx.tree = next;
-  }
-
-  /** The same rewrite for the local state, so the moved files are remembered at their new paths. */
-  private remapStatePaths(from: string, to: string, ctx: PassContext): void {
-    const prefix = from ? `${from}/` : '';
-    const dest = to ? `${to}/` : '';
-    const next: VaultState['nodes'] = {};
-    for (const [path, known] of Object.entries(ctx.state.nodes)) {
-      if (path.startsWith(prefix)) {
-        next[dest + path.slice(prefix.length)] = known;
-      } else {
-        next[path] = known;
-      }
-    }
-    ctx.state.nodes = next;
-  }
 
   /**
    * A move, not a delete and a create.
