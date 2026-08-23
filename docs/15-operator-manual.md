@@ -46,7 +46,7 @@ Five steps, no choices. Two files, four directories, and a working server at the
 ### Step 1 — Get the two files
 
 ```bash
-V=0.5.8                       # the release to install; the newest is on the repository's releases page
+V=0.5.9                       # the release to install; the newest is on the repository's releases page
 mkdir -p syncserver && cd syncserver
 
 BASE=https://raw.githubusercontent.com/OlegG90/obsidian-syncserver/$V
