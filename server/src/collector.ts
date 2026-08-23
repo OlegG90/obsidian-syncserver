@@ -36,6 +36,7 @@
  * collectors and the switch docs/08 needs to keep one out of a backup window.
  */
 import type { Config } from './config.js';
+import { holdForCollector } from './interlock.js';
 import type { Db } from './db.js';
 import type { BlobStore } from './blobs/store.js';
 import { dropSpentClaims, markUnreferenced, REFERENCED, removeSpentTrash, thinVersions } from './retention.js';
@@ -59,16 +60,6 @@ export interface CollectorResult {
   skipped: boolean;
 }
 
-/**
- * `SYNC` as four ASCII bytes. A session-scoped advisory lock under this key means "a
- * collection is in progress", and it is the handle docs/08 asks for: an operator takes the
- * same lock for the duration of a backup, and the collector then skips its passes instead
- * of removing a blob the dump being taken still references. The blocking form waits for a
- * pass already running, so the window is clean from the moment the lock is granted.
- *
- * It also makes two server processes against one database safe, which a timer alone is not.
- */
-export const COLLECTOR_LOCK_ID = 0x53_59_4e_43;
 
 const EMPTY: CollectorResult = {
   versionsThinned: 0, trashRemoved: 0, claimsDropped: 0, blobsMarked: 0, blobsUnmarked: 0,
@@ -84,12 +75,12 @@ export const runCollector = async (
   // The lock is held across several transactions and released by the connection that took
   // it, so the whole pass runs inside one session.
   db.session(async (lock) => {
-    const got = await lock.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [COLLECTOR_LOCK_ID]);
-    if (!got.rows[0]?.ok) return { ...EMPTY, skipped: true };
+    const release = await holdForCollector(lock);
+    if (!release) return { ...EMPTY, skipped: true };
     try {
       return await sweep(db, store, cfg, log);
     } finally {
-      await lock.query('SELECT pg_advisory_unlock($1)', [COLLECTOR_LOCK_ID]);
+      await release();
     }
   });
 

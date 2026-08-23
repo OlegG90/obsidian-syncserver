@@ -15,7 +15,8 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { openStore } from '../src/blobs/store.js';
-import { COLLECTOR_LOCK_ID, runCollector } from '../src/collector.js';
+import { runCollector } from '../src/collector.js';
+import { INTERLOCK_ID as COLLECTOR_LOCK_ID } from '../src/interlock.js';
 
 const STORE = `var/test-collector-${process.pid}`;
 // Small TTLs so the test can backdate rows instead of waiting.

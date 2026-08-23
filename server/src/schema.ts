@@ -25,7 +25,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Db } from './db.js';
-import { COLLECTOR_LOCK_ID } from './collector.js';
+import { SCHEMA_LOCK_ID } from './interlock.js';
 
 /**
  * Where the schema is, in the image and in a checkout alike.
@@ -44,7 +44,6 @@ export const SCHEMA_FILE = fileURLToPath(new URL('../../db/schema.sql', import.m
  * corruption. It is a **transaction** lock: it goes when the transaction ends, including when
  * it ends badly, so a crash mid-apply cannot leave the next start waiting for ever.
  */
-export const SCHEMA_LOCK_ID = COLLECTOR_LOCK_ID + 1;
 
 /** The marker: `server_meta` is seeded by the schema itself, so its absence is "no schema here". */
 const MARKER = 'public.server_meta';

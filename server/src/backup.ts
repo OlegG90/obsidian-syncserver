@@ -27,7 +27,7 @@
  * else's stuck session.
  */
 import type { Db } from './db.js';
-import { COLLECTOR_LOCK_ID } from './collector.js';
+import { holdForBackup, inRefusalWindow } from './interlock.js';
 import { openStore, storageKeyFor } from './blobs/store.js';
 import { join } from 'node:path';
 import type { BackupRun } from '@syncserver/shared';
@@ -37,7 +37,7 @@ export interface Legs {
   /**
    * Everything that must already be true before a window is worth opening.
    *
-   * **Runs before the lock, before the row, before `windowOpen`** — which is the whole point
+   * **Runs before the lock, before the row, before the window** — which is the whole point
    * of its existing separately from the legs it guards. The `pg_dump` major check lived inside
    * `dumpDatabase`, so a mismatched binary was discovered with writes already being refused
    * and a `backup_runs` row already inserted: the exact failure D-73 was opened to prevent,
@@ -84,14 +84,17 @@ export interface CopyReader {
 /**
  * Whether new writes are being refused right now.
  *
- * In memory rather than read per request: one process owns the window it opened, and a write
- * path that asked the database on every call would pay for a backup that runs nightly. The
- * consequence is named where it matters — this is what makes the window a refusal for *new*
- * writes rather than a freeze, and therefore what forces the leg order.
+ * In memory rather than read per request: one process owns the window it opened, and a write path that
+ * asked the database on every call would pay for something that happens when somebody presses a button.
+ * The consequence is named where it matters — this is what makes the window a refusal for *new* writes
+ * rather than a freeze, and therefore what forces the leg order (D-114).
+ *
+ * **Re-exported, not owned.** The window is a sub-interval of holding the interlock, so the flag lives
+ * beside the lock that opens it (`interlock.ts`) — two variables for one interval is two things to keep
+ * in step, and a window left open by a path that forgot is a server refusing every write until it
+ * restarts.
  */
-let windowOpen = false;
-
-export const backupInProgress = (): boolean => windowOpen;
+export const backupInProgress = inRefusalWindow;
 
 /** How long a run waits for the collector's lock before calling itself skipped. */
 const LOCK_WAIT_MS = 60_000;
@@ -169,27 +172,19 @@ export const runBackup = async (
     // is seconds, so anything past this is another backup or a session nobody will release,
     // and waiting on either is how a backup job becomes a hung process. The timeout is what
     // keeps `skipped` an honest answer instead of the usual one.
-    await lock.query(`SET lock_timeout = ${lockWaitMs}`);
-    try {
-      await lock.query('SELECT pg_advisory_lock($1)', [COLLECTOR_LOCK_ID]);
-    } catch {
+    const release = await holdForBackup(lock, lockWaitMs);
+    if (!release) {
       const error = `the collector lock was still held after ${lockWaitMs}ms; another backup is probably running`;
       // A schedule that silently skips is a schedule that has stopped being one.
       warn(`backup skipped: ${error}`);
       return { status: 'skipped' as const, error };
-    } finally {
-      // This connection goes back to the pool, and a lock_timeout left on it would apply to
-      // whatever runs there next.
-      await lock.query('SET lock_timeout = DEFAULT');
     }
-
     const started = await db.one<{ id: string }>(
       `INSERT INTO backup_runs (window_opened_at, destination, triggered_by)
        VALUES (now(), $1, $2) RETURNING id::text AS id`,
       [destination, triggeredBy ?? null],
     );
     const id = started!.id;
-    windowOpen = true;
     // Said as the window opens rather than after it closes: a run that never reaches its
     // settle line is exactly the run somebody needs to read about.
     const openedAt = Date.now();
@@ -254,8 +249,7 @@ export const runBackup = async (
       );
       return { id, status: 'failed' as const, error: message };
     } finally {
-      windowOpen = false;
-      await lock.query('SELECT pg_advisory_unlock($1)', [COLLECTOR_LOCK_ID]);
+      await release();
     }
   });
 };
