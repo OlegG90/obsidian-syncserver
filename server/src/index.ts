@@ -1,7 +1,6 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns } from './backup.js';
 import { assertPgDumpMatches, backupLegs, pgDumpVersion, serverVersionLine } from './backup-legs.js';
-import { startBackupSchedule } from './backup-schedule.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
@@ -12,7 +11,6 @@ import { clearRestoreRequest, readRestoreRequest } from './restore-request.js';
 import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema } from './schema.js';
-import { rehearseRestore } from './rehearsal.js';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
@@ -60,47 +58,6 @@ const stopCollector = startCollector(db, collectorStore, cfg);
 // the legs the schedule builds, and the advisory check below. Through the reader that owns the
 // fact — `buildApp` needs the same string, and this used to ask for it a second time (D-89).
 const versionLine = cfg.backup ? await serverVersionLine(db) : '';
-
-/**
- * The **rehearsal**: it *loads* the newest dump into a scratch database, where a verification only
- * confirms the copy's blobs are all present. "The copy arrived" and "the archive can be read" are two
- * claims, and only the second is what docs/08 means by *"a backup that has never been restored is not a
- * backup"* — which is why this one runs on a schedule and the verification does not run on one at all.
- *
- * On its own, much rarer interval, and NOT at boot: restoring a whole dump on a NAS is minutes, and a
- * server that spent them before it started serving would be paying for the check at the worst moment.
- */
-let rehearsalTimer: ReturnType<typeof setInterval> | undefined;
-if (cfg.backup && cfg.rehearsalIntervalSeconds > 0) {
-  const rehearse = async (): Promise<void> => {
-    try {
-      await rehearseRestore(db, {
-        databaseUrl: cfg.databaseUrl,
-        restoreCommand: cfg.restoreCommand,
-        stateFile: cfg.restoreStateFile,
-        stamp: new Date().toISOString(),
-      });
-    } catch (e) {
-      console.warn(`rehearsal failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-  rehearsalTimer = setInterval(() => void rehearse(), cfg.rehearsalIntervalSeconds * 1000);
-  rehearsalTimer.unref?.();
-}
-
-// The caller docs/10 named and nothing was: whatever runs a backup nightly. Off when no backup
-// is configured, and off when the interval is zero — a deployment driving backups from cron on
-// the host wants one schedule, not two. Nothing runs at boot: a server in a restart loop would
-// otherwise take a backup per restart, each opening a refusal window.
-const stopBackupSchedule = startBackupSchedule(db, cfg, (runDir) =>
-  backupLegs(
-    cfg.backup!.destination,
-    cfg.backup!.dumpCommand,
-    cfg.backup!.blobSource,
-    runDir,
-    versionLine,
-  ),
-);
 
 // A `running` backup row that survived a restart is a lie: the window it recorded went with
 // the process, so nothing has been refusing writes since. Nothing else will ever settle it —
@@ -182,8 +139,6 @@ console.log(`syncserver listening on ${host}:${port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
-    stopBackupSchedule();
-    if (rehearsalTimer) clearInterval(rehearsalTimer);
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
 }

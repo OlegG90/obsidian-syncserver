@@ -1,5 +1,5 @@
 /**
- * Removing a backup's copy from disk, and keeping only the last few (#136).
+ * Removing a backup's copy from disk (#136).
  *
  * **"Delete a backup" is two acts wearing one word**, and only one of them is wanted. Forgetting
  * the RUN — dropping the row — leaves the files behind, unreferenced, so an operator watching
@@ -9,7 +9,7 @@
  *
  * So the row survives every removal here, and `destination` becomes NULL: the history keeps
  * saying a backup ran, and the null says its copy is no longer on disk. That is also what makes
- * the rehearsal skip it, since it already asks for `destination IS NOT NULL`.
+ * the backup list skip it, since it already asks for `destination IS NOT NULL`.
  *
  * **What is refused, and why each one:**
  *
@@ -17,8 +17,7 @@
  *   the way a run directory is named. `destination` is a text column: a value from a restored
  *   dump, another deployment, or a hand edit would otherwise become `rm -rf` of whatever that
  *   path names on THIS host;
- * - the **newest successful** copy. It is what a restore would use and what the rehearsal
- *   verifies, and a server that will not leave itself without a backup is worth more than one
+ * - the **newest successful** copy. It is what a restore would use, and a server that will not leave itself without a backup is worth more than one
  *   that does exactly as it is told;
  * - a **running** one, which has no finished copy to remove and a writer still inside it.
  */
@@ -84,43 +83,3 @@ export const removeBackupCopy = async (
   return undefined;
 };
 
-/**
- * Keep the last `keep` copies and remove the rest — the answer to a disk that fills (#136).
- *
- * Retention rather than a button is what an operator actually wants: backups arrive on a
- * schedule, so the copies pile up on a schedule, and a person deleting them one at a time is
- * doing a machine's job. The single-row removal stays for the one-off — a failed run that left
- * a partial copy, or one moved by hand.
- *
- * Counted over runs that still HAVE a copy, newest first, so `keep = 7` means seven copies on
- * disk and not seven rows in a history that reaches back further. Every removal is logged: a
- * server that silently deletes backups is indistinguishable from one that loses them.
- */
-export const pruneBackupCopies = async (
-  db: Db,
-  root: string,
-  keep: number,
-  log: (message: string) => void = console.log,
-): Promise<number> => {
-  const rows = await db.query<{ id: string }>(
-    `SELECT id::text AS id FROM backup_runs
-      WHERE destination IS NOT NULL AND status <> 'running'
-      ORDER BY started_at DESC
-      OFFSET $1`,
-    [keep],
-  );
-
-  let removed = 0;
-  for (const { id } of rows) {
-    const refused = await removeBackupCopy(db, root, id);
-    if (refused === undefined) {
-      removed++;
-      log(`backup ${id}: copy removed, keeping the last ${keep}`);
-    } else {
-      // Said, not swallowed. A copy that could not be pruned is the reason a disk keeps
-      // filling, and "outside_destination" in particular names a row nobody should ignore.
-      log(`backup ${id}: copy NOT removed (${refused})`);
-    }
-  }
-  return removed;
-};

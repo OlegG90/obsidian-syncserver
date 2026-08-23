@@ -2,8 +2,8 @@
  * How a restore command is shaped and run (#171, #182).
  *
  * `RESTORE_DB_COMMAND` ends at `-d`, and what follows it is the database and then the archive. That
- * contract was written down nowhere, and the two callers read it two different ways: the rehearsal
- * appended `-d <scratch> <dump>` and was right, while the restore appended the dump alone — handing
+ * contract was written down nowhere, and the two callers of the day read it two different ways: one
+ * appended `-d <database> <dump>` and was right, while the restore appended the dump alone — handing
  * `pg_restore` the archive path where it expected a **database name**, and leaving it to read the
  * archive from an empty stdin. The restore this repository shipped could not restore, and every test
  * injected `true` in place of the binary, so nothing looked at the argv.
@@ -31,9 +31,8 @@ export const restoreArgv = (
 /**
  * Run one of these and turn a non-zero exit into an error that carries the reason.
  *
- * Here rather than beside each caller because there were three copies — the restore, the rehearsal and
- * the rehearsal's own test — and they had already drifted: two of them reported `stderr` differently, and
- * the one that mattered was the one nobody read. `pg_restore` writes warnings to stderr on a perfectly
+ * Here rather than beside the caller because there were three copies of it, and they had already
+ * drifted: two reported `stderr` differently, and the one that mattered was the one nobody read. `pg_restore` writes warnings to stderr on a perfectly
  * good restore, so only the exit code decides; the text goes into the error, because it is where the
  * reason lives.
  */

@@ -179,19 +179,18 @@ Backups are **off until a destination is named**, and nothing else decides it. I
 BACKUP_DESTINATION=/backups          # the path INSIDE the container
 BACKUP_BLOB_SOURCE=/data/blobs       # likewise
 BACKUP_DIR=/srv/syncserver/backups   # where that lands on THIS machine — the default is ./data/backups
-BACKUP_EVERY_SECONDS=86400
-BACKUP_KEEP=7                        # optional: prune all but the newest 7 copies
 ```
 
 `BACKUP_DESTINATION` and `BACKUP_DIR` are the two sides of one mount. Naming a destination with no host
 directory behind it writes the copy into the container's writable layer, where the next `docker compose
 pull` takes it.
 
-`docker compose up -d` again, and the boot log says `backups are scheduled every 86400s to /backups`.
+`docker compose up -d` again, and the console's **Back up now** stops answering "not configured".
 
-**Copies are kept for ever unless `BACKUP_KEEP` says otherwise.** With it set, each scheduled run prunes
-what falls past the newest N *after* taking its own — the newest good copy is never removed, and every
-removal is logged.
+**Nothing about backups happens on a schedule.** Taking one, verifying one and restoring from one are
+acts you ask for. There is no retention setting either: copies pile up at the rate you take them, and you
+remove the ones you no longer want, per row. **Whatever rhythm your data deserves is yours to keep** —
+this server will not keep it for you, and will not pretend to.
 
 ### Audit log
 
@@ -300,51 +299,23 @@ when the self-check found the copy whole.
 whole — some blob the database references is missing from it. A backup nobody can restore from is not a
 backup, and this is the difference between learning that now and learning it at restore time.
 
-**Verify** re-runs that check, and **only when asked**. The server does not verify on a schedule and does
-not verify at boot: checking a backup is not part of serving one, and a server doing it unasked spends
-minutes walking every blob at a moment nobody chose. What it *does* run on a schedule is the
-**rehearsal** — the other claim entirely, and the one worth paying for (see the next section; CONTEXT.md
-keeps the two words apart).
+**Verify** re-runs that check, and **only when asked**. Nothing verifies on a schedule or at boot.
+
+It says the copy **arrived**. It does not say the archive can be **read** — a `pg_dump` that fails to
+restore passes this check and fails on the one day it matters. **The server does not test that**, so
+restoring a copy somewhere safe, now and then, is yours to do; `docker compose run --rm server node
+server/dist/restore-cli.js …` against a scratch deployment is the honest way.
 
 **Remove a copy** from its row, behind a confirmation naming it. The run stays in the history with no
 destination — the log keeps saying a backup ran, and the empty destination says its copy is gone. The
-newest good copy cannot be removed, by that button or by `BACKUP_KEEP`.
-
-### Rehearsing a restore
-
-The verification above says the copy **arrived**. It does not say the dump can be **read** — a `pg_dump`
-that fails to restore, from a version mismatch or a truncated file, passes the blob check and fails on
-the one day it is needed.
-
-So the server can also load the newest backup into a scratch database it creates and drops, and report
-what came out. Off by default; in `.env`:
-
-```bash
-REHEARSE_RESTORE_EVERY_SECONDS=604800   # weekly; 0 turns it off
-RESTORE_DB_COMMAND=...                  # optional, and normally leave it alone
-```
-
-`RESTORE_DB_COMMAND` defaults to `pg_restore --clean --if-exists --no-owner`, with `pg_restore` in the
-image at the database's own major. The database name and the archive are appended by the server, in that
-order — an override may end with `-d` or leave it off, and both behave the same.
-
-**Console → Restoring, rehearsed** says when it last ran, what came out, and — when the last run failed —
-**when one last passed**. That second line is the one worth reading on a bad day: that today's archive did
-not load matters less than whether one ever did, and how long ago.
-
-**What it claims, precisely.** That the archive loads, that what comes out carries this build's functions
-and triggers, and that the account table is not empty. It does **not** claim the data is correct; nothing
-outside the vaults' own keys could tell, and it must not be read as saying so.
-
-The scratch database is named after the moment and dropped afterwards, never the live one. The role has to
-be allowed to create databases; if it is not, the rehearsal reports that rather than failing the server —
-a server that refused to run because it could not rehearse would be trading the thing for the check on it.
+newest good copy cannot be removed — a server that will not leave itself without a backup is worth more
+than one that does exactly as it is told.
 
 ### What a backup is not
 
 It is not a second copy in a second place. Everything above writes to one directory on one machine — take
 that directory somewhere else, on whatever schedule your data deserves, and remember that **a backup that
-has never been restored is not a backup** ([08](08-backup-restore.md) has the quarterly rehearsal).
+has never been restored is not a backup** — and nothing here does that for you.
 
 ---
 
@@ -421,8 +392,6 @@ Then, the parts only you can do:
 | `N backup run(s) were still marked running` at boot | a run whose process died. The window went with it; those rows are recorded failed |
 | every client resyncing at length after a restore | expected — see above |
 | an account over its quota that is **not** frozen | ordinary: a freeze is raised when somebody else's write crosses the boundary. New files are refused either way |
-| a rehearsal saying `could not create a scratch database` | the database role may not create databases. The rehearsal is off, the server is fine |
-| a failed rehearsal after a good backup row | the copy arrived whole and the dump will not load. **This is the row to act on** — take a fresh backup and rehearse again |
 
 And the ones that are faults, with what each looks like:
 
@@ -435,4 +404,4 @@ And the ones that are faults, with what each looks like:
 | `password authentication failed` after an upgrade | `.env` and the database disagree. The database keeps the password it was created with |
 
 The server's own log is the surface on an unattended box. `docker compose logs -f server` is where the
-backup schedule, the rehearsal, the restore guard and the boot warnings all say what they found.
+the restore guard and the boot warnings say what they found.

@@ -12,6 +12,7 @@
  * the two legs separate and the window honest.
  */
 import { execFile } from 'node:child_process';
+import { copyAt } from './backup-copy.js';
 import { cp, mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from './db.js';
@@ -132,7 +133,7 @@ export const backupLegs = (
   async dumpDatabase() {
     await mkdir(join(destination, runDir), { recursive: true });
     const [cmd, ...args] = dumpCommand;
-    const file = join(destination, runDir, 'database.dump');
+    const file = copyAt(join(destination, runDir)).dump;
     if (!cmd) throw new Error('BACKUP_DB_COMMAND is empty — it must name the dump binary');
     await run(cmd, [...args, '-f', file]);
     const size = await stat(file);
@@ -174,4 +175,4 @@ export const backupRunDir = (stamp: string): string => `backup-${stamp}`;
 export const runDirOf = (destination: string, runDir: string): string => join(destination, runDir);
 
 /** Where the blob copy of a run lives, under the run's own destination. */
-export const blobDirOf = (destination: string, runDir: string): string => join(destination, runDir, 'blobs');
+export const blobDirOf = (destination: string, runDir: string): string => copyAt(join(destination, runDir)).blobs;

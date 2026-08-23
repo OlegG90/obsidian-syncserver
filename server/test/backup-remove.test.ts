@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { insideDestination, newestCopy, pruneBackupCopies, removeBackupCopy } from '../src/backup-remove.js';
+import { insideDestination, newestCopy, removeBackupCopy } from '../src/backup-remove.js';
 
 let db: Db;
 let root: string;
@@ -129,28 +129,3 @@ describe('removing one copy', () => {
   });
 });
 
-describe('keeping the last few', () => {
-  it('removes every copy past the newest N, and says so', async () => {
-    await db.query(`DELETE FROM backup_runs`);
-    for (const day of ['11', '12', '13', '14']) await aRun(day, 'ok', `2026-08-${day}`);
-
-    const said: string[] = [];
-    assert.equal(await pruneBackupCopies(db, root, 2, (m) => said.push(m)), 2);
-
-    assert.ok(existsSync(join(root, 'backup-14')), 'the two newest stay');
-    assert.ok(existsSync(join(root, 'backup-13')));
-    assert.ok(!existsSync(join(root, 'backup-12')), 'and the rest go');
-    assert.ok(!existsSync(join(root, 'backup-11')));
-    assert.equal(said.length, 2, 'each removal is logged: a silent deleter reads like a loser of data');
-  });
-
-  it('counts copies, not rows: a history longer than the copies is not pruned twice', async () => {
-    // Runs whose copies are already gone still stand in the log. Counting those rows would
-    // leave fewer copies on disk than were asked for — quietly, and by a different number
-    // every time the history grew.
-    const said: string[] = [];
-    assert.equal(await pruneBackupCopies(db, root, 2, (m) => said.push(m)), 0);
-    assert.ok(existsSync(join(root, 'backup-13')));
-    assert.equal(said.length, 0);
-  });
-});

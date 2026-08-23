@@ -8,6 +8,7 @@
  * rather than a permission somebody could grant later.
  */
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { copyAt } from '../backup-copy.js';
 import { join } from 'node:path';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
@@ -31,7 +32,6 @@ import { insideDestination } from '../backup-remove.js';
 import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
-import { readRehearsal } from '../rehearsal.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
@@ -215,7 +215,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
       triggeredBy: req.admin!.id,
       // The self-check: reopen the copy just written and confirm it is whole, so a backup
       // nobody can restore from is flagged on the row instead of at restore time (docs/10).
-      openCopy: (dest) => openStore(join(dest, 'blobs')),
+      openCopy: (dest) => openStore(copyAt(dest).blobs),
     });
     // Refused is not failed and not busy: nothing ran, so there is no row and nothing to
     // retry until the deployment is fixed. 503, like `unconfigured` — the same family of
@@ -271,7 +271,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
 
     // The COPY, not the live store: the run's destination names its own blob directory,
     // and verifying against the live data would always answer yes.
-    const copy = openStore(join(run.destination, 'blobs'));
+    const copy = openStore(copyAt(run.destination).blobs);
     const out = await verifyBackup(db, copy, req.params.id);
     return { checked: out.checked, missing: out.missing, whole: out.missing.length === 0 };
   });
@@ -332,18 +332,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // The restore surface: what the server knows, and the one act that resolves it. Both are
   // reachable even in the halt state, because a restore nobody can confirm is a restore
   // nobody can leave.
-  /**
-   * When the newest backup was last **loaded**, and whether it read (#159).
-   *
-   * Separate from the blob check whose result rides on the backup row, because it is a different claim
-   * about a different thing: that one says the copy arrived, this one says the archive can be restored.
-   * A console that showed them as one number would let the cheaper check speak for the expensive one.
-   */
-  app.get('/admin/rehearsal', admin, async (_req, reply) => {
-    if (!backup.restoreStateFile) return noRestoreFile(reply);
-    return { rehearsal: (await readRehearsal(backup.restoreStateFile)) ?? null };
-  });
-
   app.get('/admin/restore', admin, async (req, reply) => {
     if (!backup.restoreStateFile) return noRestoreFile(reply);
     return restoreStatus(db, backup.restoreStateFile);

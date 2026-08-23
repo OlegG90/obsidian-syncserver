@@ -14,7 +14,7 @@
  */
 import {
   accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, devicesOf, forgetSession, health, invite, rehearsal, reissue, removeBackup,
+  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup,
   restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
@@ -935,11 +935,10 @@ const restoreFrom = (destination: string): HTMLElement => {
 /**
  * Remove one copy, per row, behind a confirmation that names it (#136).
  *
- * **Per row and not a selection with one button.** Checkboxes plus Delete is the most
- * destructive control a console can have — one press, many copies, no chance to read what is
- * about to go — and the thing an operator actually wants is not to delete backups one by one
- * but for them to stop piling up, which is `BACKUP_KEEP` and happens without anybody standing
- * over it.
+ * **Per row and not a selection with one button.** Checkboxes plus Delete is the most destructive
+ * control a console can have: one press, many copies, and no chance to read what is about to go. Backups
+ * are taken when somebody asks for one, so they pile up at the rate somebody asks — which is a rate a
+ * person can keep up with, one row at a time.
  *
  * The confirmation names the date rather than asking "are you sure": the question is which
  * copy, and a dialogue that does not answer it is a speed bump instead of a check.
@@ -1089,44 +1088,8 @@ const backupsScreen = (): void => {
    * the question an operator has is "when did we last prove we can restore", and "never" is a real and
    * important answer that no row can carry.
    */
-  const rehearsed = el('div', { className: 'card' });
-  const tellRehearsal = async (): Promise<void> => {
-    const { rehearsal: r } = await rehearsal();
-    rehearsed.replaceChildren(el('h1', { textContent: 'Restoring, rehearsed' }));
-    if (!r) {
-      rehearsed.append(
-        say('No backup has ever been loaded into a scratch database on this server.', true),
-        el('p', {
-          className: 'muted',
-          textContent:
-            'Set REHEARSE_RESTORE_EVERY_SECONDS to have the server do it, or restore a copy by hand ' +
-            'somewhere safe. A backup that has never been restored is not a backup.',
-        }),
-      );
-      return;
-    }
-    rehearsed.append(
-      r.ok ? say(`Last rehearsed ${when(r.at)}.`) : say(`The last rehearsal FAILED, ${when(r.at)}.`, true),
-      el('p', { className: 'muted', textContent: r.detail }),
-    );
-    // On a failure the age of the last PASS is the number worth reading, and it used to be the one the
-    // failure overwrote (#173). Said only when it adds something: after a pass it would repeat the line
-    // above, and "never" is already what an absent record says.
-    if (!r.ok) {
-      rehearsed.append(
-        el('p', {
-          className: 'muted',
-          textContent: r.lastGood
-            ? `The last rehearsal that passed was ${when(r.lastGood.at)}, on backup ${r.lastGood.run}.`
-            : 'No rehearsal has ever passed on this server.',
-        }),
-      );
-    }
-  };
-
-  shell('backups', currentLogin(), page, rehearsed, list, runCard);
+  shell('backups', currentLogin(), page, list, runCard);
   loads(list, fill);
-  loads(rehearsed, tellRehearsal);
 };
 
 const restoreScreen = (): void => {
