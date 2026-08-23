@@ -342,7 +342,10 @@ docker compose run --rm server node server/dist/restore-cli.js /backups/backup-<
 docker compose start server
 ```
 
-The row also shows this command with the directory already in it, folded under the button.
+**Those are this deployment's names.** The project and the service are named by the compose file in this
+repository; installed from a stack manager they are the stack's, and there is no directory to stand in.
+Adapt them, or use the button, which knows nothing about either. The directory to pass is the one the row
+shows — `/backups/…`, the path inside the container, not where it is on the host.
 
 **It refuses while anything else is connected to the database**, naming how many. `pg_restore` drops and
 recreates what it restores, and doing that under a running server is not a race to be careful about: it is
