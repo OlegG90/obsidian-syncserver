@@ -267,6 +267,22 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
+   * Tell me when the sync's state changes — for a screen that is open while it does (issue #233).
+   *
+   * `setPhase` wrote to the status bar and the ribbon and nothing else could hear it. Both of those
+   * are behind the settings modal when somebody presses **Sync now** from it, so the two surfaces that
+   * knew the answer were the two that could not be seen, and the header kept saying `Sync: locked`
+   * after the sync that unlocked the vault.
+   *
+   * Returns the unsubscribe rather than taking an owner: the caller knows when its draw dies, and
+   * `Surface.whileDrawn` is where that is already tracked.
+   */
+  watchPhase(listener: (phase: SyncPhase) => void): () => void {
+    this.phaseWatchers.add(listener);
+    return () => this.phaseWatchers.delete(listener);
+  }
+
+  /**
    * Everything the four coordinators say, raised as a notice **and** kept (#130).
    *
    * One place, because a notice is gone by the time somebody looks up and the question they
@@ -296,6 +312,8 @@ export default class SyncServerPlugin extends Plugin {
     return this.sync?.run() ?? Promise.resolve();
   }
 
+  private readonly phaseWatchers = new Set<(phase: SyncPhase) => void>();
+
   private setPhase(phase: SyncPhase): void {
     this.phase = phase;
     const text = shortStatus(phase);
@@ -306,6 +324,9 @@ export default class SyncServerPlugin extends Plugin {
       // it is the same line the status bar carries on a desktop.
       this.ribbon.setAttribute('aria-label', text);
     }
+    // After the two glanceable surfaces, because those are the ones a phone and a desktop always have;
+    // a watcher is a screen that happens to be open, and it must not be able to stop them being told.
+    for (const listener of this.phaseWatchers) listener(phase);
   }
 
   /**
