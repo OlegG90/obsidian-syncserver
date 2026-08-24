@@ -178,15 +178,14 @@ progress is refused, and a copy already gone is not an error.
 
 ## Procedure
 
-**Backup — nightly, before the GC window:**
+**Backup — when somebody presses the button** (D-121):
 
 1. open the window: new writes are refused, record `window_opened_at`;
 2. `pg_dump`;
 3. snapshot the blob store;
 4. close the window, record `window_closed_at` — in a `finally`, or a failed run leaves the server
    refusing writes for ever;
-5. copy the configuration;
-6. write an operations log entry: time, sizes, checksums.
+5. settle the row: status, each leg's size, and the blob count.
 
 Steps 2 and 3 are **not** interchangeable, for the reason above (D-114): a window that only refuses new
 writes leaves the ones already running, and blobs-first is what turns one of those into a file that
@@ -242,4 +241,4 @@ Quarterly, by hand: restore into a separate instance and run the check —
 > it surfaces at the worst possible moment — when someone opens the version list precisely because they
 > lost the current file.
 
-The same check is the tool for the nightly reconciliation and for post-incident diagnosis. Write it once.
+The same check serves post-incident diagnosis. Write it once.
