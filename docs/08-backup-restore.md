@@ -213,8 +213,9 @@ usable copy no matter what its status column says.
 
 > **A backup that has never been restored is not a backup.**
 
-**The server checks one thing, and only when asked.** The console's Verify button reopens one copy and
-confirms that every blob the database references is present in it. That says the copy **arrived**.
+**The server checks one thing, and nothing runs it unasked.** Every backup applies the check to the
+copy it just wrote before settling its row, and the console's Verify button reopens any copy on
+demand. Both say the copy **arrived**.
 
 It does **not** say the archive can be read. A `pg_dump` that fails to restore — a version mismatch, a
 truncated file, a corrupt archive — passes this check and fails at the moment it is needed. **The server
