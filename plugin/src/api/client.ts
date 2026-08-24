@@ -156,6 +156,34 @@ export interface ShareMember {
   finalizing: boolean;
 }
 
+/**
+ * How many 64-character identifiers travel in one query string (issue #230).
+ *
+ * **The arithmetic is the whole reason for the number.** A `sha256` address or a dedup tag is 64 hex
+ * characters, and with its separator that is 65 bytes of request line each. Node refuses a request whose
+ * header block — the request line included — passes 16 KB, and answers `431` before Fastify sees any of
+ * it, so an unbatched lookup dies at about 250 items. A vault of a few hundred notes crosses that on its
+ * FIRST sync and can never sync again: `SyncEngine` tags every local file it scanned, not every file that
+ * changed, so the ceiling is a function of vault size rather than of how much moved.
+ *
+ * Sixty, not two hundred and forty. The transport ceiling is not the binding one — a reverse proxy in
+ * front of this server commonly caps a request line at 4 KB, and sizing against the limit that happens
+ * to apply today is how this defect gets rediscovered behind nginx. Sixty items is a little under 4 KB
+ * with the path and the bearer token counted.
+ *
+ * The batches go **one at a time**. A vault large enough to need several is a vault whose owner is
+ * already waiting for a scan, and firing thirty concurrent lookups at a home server to save a second of
+ * that is the wrong trade.
+ */
+const LOOKUP_BATCH = 60;
+
+/** `[]` in, nothing out — so a caller with nothing to ask makes no request at all. */
+const inBatches = <T>(items: readonly T[]): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += LOOKUP_BATCH) out.push(items.slice(i, i + LOOKUP_BATCH));
+  return out;
+};
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -796,18 +824,18 @@ export class SyncClient {
    * which key it is unwrapping with.
    */
   async blobKeys(vaultId: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
-    if (addresses.length === 0) return new Map();
-    const q = new URLSearchParams({ sha256: addresses.join(',') });
-    const out = await this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
-      'GET',
-      `/vaults/${vaultId}/blob-keys?${q}`,
-    );
-
     const byAddress = new Map<string, Envelope[]>();
-    for (const k of out.keys) {
-      const list = byAddress.get(k.sha256) ?? [];
-      list.push({ scopeId: k.scope_id, wrappedKey: k.wrapped_key });
-      byAddress.set(k.sha256, list);
+    for (const batch of inBatches(addresses)) {
+      const q = new URLSearchParams({ sha256: batch.join(',') });
+      const out = await this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
+        'GET',
+        `/vaults/${vaultId}/blob-keys?${q}`,
+      );
+      for (const k of out.keys) {
+        const list = byAddress.get(k.sha256) ?? [];
+        list.push({ scopeId: k.scope_id, wrappedKey: k.wrapped_key });
+        byAddress.set(k.sha256, list);
+      }
     }
     return byAddress;
   }
@@ -827,13 +855,16 @@ export class SyncClient {
    * itself, only "not something this vault has tagged before."
    */
   async dedupLookup(vaultId: string, tags: string[]): Promise<Map<string, string>> {
-    if (tags.length === 0) return new Map();
-    const q = new URLSearchParams({ tags: tags.join(',') });
-    const out = await this.json<{ matches: { content_tag: string; sha256: string }[] }>(
-      'GET',
-      `/vaults/${vaultId}/dedup?${q}`,
-    );
-    return new Map(out.matches.map((m) => [m.content_tag, m.sha256]));
+    const found = new Map<string, string>();
+    for (const batch of inBatches(tags)) {
+      const q = new URLSearchParams({ tags: batch.join(',') });
+      const out = await this.json<{ matches: { content_tag: string; sha256: string }[] }>(
+        'GET',
+        `/vaults/${vaultId}/dedup?${q}`,
+      );
+      for (const m of out.matches) found.set(m.content_tag, m.sha256);
+    }
+    return found;
   }
 
   // ---- sharing (docs/05) ---------------------------------------------------------

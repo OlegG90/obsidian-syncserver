@@ -37,7 +37,12 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
     async (req, reply) => {
       const raw = (req.query.tags ?? '').split(',').filter(Boolean);
       if (raw.length === 0) return reply.code(400).send({ error: 'tags_required' });
-      if (raw.length > 500) return reply.code(400).send({ error: 'too_many_tags' });
+      // **200, not 500** (issue #230). The bound is only a bound if the transport can carry a request
+      // that trips it: at 65 bytes an item, five hundred is 32 KB of request line and Node answers
+      // `431` at 16 KB — so this refusal had never once run, and a caller who sent too many got an
+      // HTTP-level error naming headers rather than a sentence naming the limit. The client batches at
+      // sixty, so this sits well above anything it sends and below what would reach here at all.
+      if (raw.length > 200) return reply.code(400).send({ error: 'too_many_tags' });
       if (!raw.every((h) => HEX64.test(h))) return reply.code(400).send({ error: 'bad_tag' });
 
       const rows = await dedupLookup(db, req.caller!.userId, req.params.vaultId, raw.map((h) => Buffer.from(h, 'hex')));

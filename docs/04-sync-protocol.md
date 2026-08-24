@@ -328,11 +328,11 @@ POST   /blobs/{sha256}/complete?size=&enc_alg=&key_id=
 
 GET    /vaults/{vault_id}/blob-keys?sha256=a,b,…
                                                → {keys: [{sha256, scope_id, wrapped_key}]}
-                                               batched; an address the caller cannot open is
+                                               batched, ≤200; an address the caller cannot open is
                                                OMITTED, the same 404-not-403 rule as a blob read (D-20)
 GET    /vaults/{vault_id}/dedup?tags=a,b,…
                                                → {matches: [{content_tag, sha256}]}
-                                               batched; scoped to the vault's OWN key scope —
+                                               batched, ≤200; scoped to the vault's OWN key scope —
                                                self-consistent, not an oracle (docs/07 adoption)
 
 POST   /vaults/{vault_id}/nodes  {parent_id, type, sha256?, size?, mtime, name_enc, name_hmac, name_key_id,
@@ -376,6 +376,16 @@ this exact plaintext is already known in the vault's own scope. A match means a 
 existing address with no fresh envelope or upload — `nodes_check_private_material` only checks that the
 material rows exist, not who wrote them or when ([03](03-data-model.md)). This is what makes adopting an
 already-synced vault "nearly free" ([07](07-onboarding.md)): after matching by path, only metadata travels.
+
+**Both are bounded, and the bound is a transport fact rather than a database one** (issue #230). An
+identifier is 64 hex characters, so with its separator it costs 65 bytes of the request line — and a
+request whose header block passes 16 KB is refused by Node with `431` before the server sees it. A
+lookup that put every item in one query therefore died at about 250, which a vault of a few hundred
+notes reaches on its first sync and never gets past. The client asks in batches of sixty, sized against
+the 4 KB a reverse proxy commonly allows rather than the 16 KB that happens to apply without one; the
+server refuses past 200, which is under the ceiling and therefore a refusal that can actually be
+delivered. A bound written above what the transport carries is not a bound — it is a sentence nobody
+ever receives.
 
 Both are authorised by **vault ownership**, not by the caller already holding what they are asking about —
 the whole point of each is to learn something before that would be true. Neither is a new oracle: a

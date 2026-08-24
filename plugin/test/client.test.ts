@@ -127,3 +127,76 @@ describe('SyncClient bounds how long it waits', () => {
     await assert.rejects(client.health(), /timed out/i);
   });
 });
+
+/**
+ * The batched lookups, and the request line they have to fit inside (issue #230).
+ *
+ * The defect this suite exists for was not subtle and no suite had an opinion about it: `dedupLookup`
+ * put every tag of every scanned file into one query string, so a vault of a few hundred notes met
+ * `431 Request Header Fields Too Large` on its first sync and could never sync again. It was found by
+ * connecting a real vault, which is the only place the threshold lives — a fixture vault is small.
+ *
+ * So the assertions are about **bytes**, not about a count. A count would pass a rewrite that kept the
+ * batch size and doubled the identifier length.
+ */
+describe('the batched lookups fit inside a request line', () => {
+  const hex = (n: number): string[] =>
+    Array.from({ length: n }, (_, i) => i.toString(16).padStart(64, '0'));
+
+  it('splits a dedup lookup into requests a proxy will carry, and merges the answers', async () => {
+    const urls: string[] = [];
+    const transport: Transport = async (req) => {
+      urls.push(req.url);
+      const asked = new URL(req.url).searchParams.get('tags')!.split(',');
+      // Every tag answers with itself, so a dropped or duplicated batch is visible in the result.
+      return ok({ matches: asked.map((t) => ({ content_tag: t, sha256: t })) });
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('a');
+
+    const tags = hex(250);
+    const found = await client.dedupLookup('v1', tags);
+
+    assert.ok(urls.length > 1, `250 items cannot be one request: ${urls.length}`);
+    for (const u of urls) {
+      assert.ok(u.length < 4096, `a request line of ${u.length} bytes is past what a proxy will carry`);
+    }
+    assert.equal(found.size, 250, 'every batch was asked for, and every answer kept');
+    assert.equal(found.get(tags[7]!), tags[7]!, 'and the merge is by tag, not by position');
+  });
+
+  it('splits a blob-keys lookup the same way, keeping every envelope', async () => {
+    const urls: string[] = [];
+    const transport: Transport = async (req) => {
+      urls.push(req.url);
+      const asked = new URL(req.url).searchParams.get('sha256')!.split(',');
+      return ok({ keys: asked.map((a) => ({ sha256: a, scope_id: 's', wrapped_key: a })) });
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('a');
+
+    const addresses = hex(130);
+    const keys = await client.blobKeys('v1', addresses);
+
+    assert.ok(urls.length > 1, `130 items cannot be one request: ${urls.length}`);
+    for (const u of urls) assert.ok(u.length < 4096, `${u.length} bytes is too long a request line`);
+    assert.equal(keys.size, 130);
+    assert.deepEqual(keys.get(addresses[129]!), [{ scopeId: 's', wrappedKey: addresses[129]! }]);
+  });
+
+  it('asks nothing at all when there is nothing to look up', async () => {
+    // The empty case used to be an early return beside the request; it is now a property of the
+    // batching, and a loop that ran once on an empty list would send `tags=` and be refused.
+    const urls: string[] = [];
+    const transport: Transport = async (req) => {
+      urls.push(req.url);
+      return ok({ matches: [], keys: [] });
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('a');
+
+    assert.equal((await client.dedupLookup('v1', [])).size, 0);
+    assert.equal((await client.blobKeys('v1', [])).size, 0);
+    assert.deepEqual(urls, [], 'no request was made');
+  });
+});
