@@ -176,9 +176,11 @@ describe('why a backup copy was not removed', () => {
   });
 
   it('has words for every refusal this build can send', () => {
-    // The `Record` over the union is the guard; this is the assertion that the guard is over the RIGHT
-    // set. A code the server can send and the console cannot say is what put `newest_copy` on a screen.
-    for (const code of ['backup_not_configured', 'nothing_to_confirm', 'not_a_good_copy', 'already_gone']) {
+    // The `Record` over the union is the guard, and it is the one that is exhaustive: a code added to
+    // `OperatorRefusalCode` without a sentence fails to compile. This is a SAMPLE, kept because a code
+    // the server can send and the console cannot say is what put `newest_copy` on a screen — so when a
+    // refusal leaves the union, it leaves this list too (`backup_not_configured` did, D-122).
+    for (const code of ['nothing_to_confirm', 'not_a_good_copy', 'already_gone']) {
       assert.notEqual(operatorRefusal(code), code, `${code} has no sentence`);
     }
   });

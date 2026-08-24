@@ -135,10 +135,10 @@ else
         printf 'RUN_AS=%s:%s\n' "$(id -u)" "$(id -g)"
         printf 'DB_DIR=%s\n' "$root/db"
         printf 'BLOB_DIR=%s\n' "$root/blobs"
-        # Where a backup lands on THIS machine. `/backups` is where the container sees it,
-        # and `BACKUP_DESTINATION` names that side — the same split as BLOB_DIR and
-        # /data/blobs. Written whether or not backups are switched on, because the mount
-        # exists either way and an empty directory costs nothing.
+        # Where a backup lands on THIS machine. `/backups` is where the container sees it —
+        # the same split as BLOB_DIR and /data/blobs, and the container's side is fixed in
+        # the compose file rather than repeated here (issue #219). This is the only half a
+        # deployment chooses, and it is written whether or not anybody presses the button.
         printf 'BACKUP_DIR=%s\n' "$root/backups"
         # The restore epoch's directory on this machine; /state is the container's view.
         printf 'STATE_DIR=%s\n' "$root/state"

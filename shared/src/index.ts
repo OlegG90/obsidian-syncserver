@@ -100,12 +100,10 @@ export type OperatorRefusalCode =
   | 'outside_destination'
   | 'not_a_good_copy'
   // The backup surface itself, when the deployment has not configured one or is mid-run.
-  | 'backup_not_configured'
   | 'backup_not_ready'
   | 'backup_in_progress'
   | 'backup_failed'
   // Restoring, and the epoch guard that follows it (D-92).
-  | 'restore_not_configured'
   | 'nothing_to_confirm'
   // A malformed administrative request — the field that was missing.
   | 'login_required'

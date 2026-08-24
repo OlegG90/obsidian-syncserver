@@ -171,21 +171,19 @@ This exists for the person the account's owner cannot be — their only device i
 nobody but you can take it away. Revoking here is written to the audit log, because it is done **to**
 somebody rather than by them; a person revoking their own device from the plugin is not.
 
-### Turn on backups
+### Where backups land
 
-Backups are **off until a destination is named**, and nothing else decides it. In `.env`:
+There is **nothing to turn on** (issue #219). One line in `.env` decides where a copy goes on this
+machine:
 
 ```bash
-BACKUP_DESTINATION=/backups          # the path INSIDE the container
-BACKUP_BLOB_SOURCE=/data/blobs       # likewise
-BACKUP_DIR=/srv/syncserver/backups   # where that lands on THIS machine — the default is ./data/backups
+BACKUP_DIR=/srv/syncserver/backups   # the default is ./data/backups
 ```
 
-`BACKUP_DESTINATION` and `BACKUP_DIR` are the two sides of one mount. Naming a destination with no host
-directory behind it writes the copy into the container's writable layer, where the next `docker compose
-pull` takes it.
-
-`docker compose up -d` again, and the console's **Back up now** stops answering "not configured".
+That directory is what the container sees as `/backups`, the same split as `BLOB_DIR` and `/data/blobs`,
+and the compose file makes the mount whether or not you ever press the button — an empty directory costs
+nothing, and the alternative is a copy written into the container's writable layer, where the next
+`docker compose pull` takes it.
 
 **Nothing about backups happens on a schedule.** Taking one, verifying one and restoring from one are
 acts you ask for. There is no retention setting either: copies pile up at the rate you take them, and you

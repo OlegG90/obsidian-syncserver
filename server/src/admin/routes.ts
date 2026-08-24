@@ -43,10 +43,10 @@ export interface BackupDeps {
    * Build the legs for one run. Called per backup, so each run lands in its own
    * subdirectory; a fresh run dir is what keeps two backups from writing into each other.
    */
-  makeLegs?(runDir: string): Legs;
-  destination?: string;
+  makeLegs(runDir: string): Legs;
+  destination: string;
   /** Where the restore epoch lives — see `restore.ts`. */
-  restoreStateFile?: string;
+  restoreStateFile: string;
   /**
    * How this server stops itself once a restore has been asked for.
    *
@@ -58,23 +58,6 @@ export interface BackupDeps {
 
 /** A week to redeem an invitation, matching the one the schema seeds for the first administrator. */
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
-
-/**
- * The one sentence a missing configuration answers with, wherever it is asked.
- *
- * The same refusal at four call sites, and the details drifted while the meaning did not. So
- * the prose lives here — and so does the **code**, which is the half that was still leaking:
- * the routes passed `'backup_not_configured'` as a string and this branched on it to choose a
- * sentence, which is the caller knowing the spelling AND this knowing the caller. The docblock
- * already claimed the routes "only have to know whether the thing is configured, not how to
- * say it is not"; two named refusals make that true (D-89).
- */
-const noBackup = (reply: FastifyReply): unknown =>
-  refuseWith(reply, 503, 'backup_not_configured',
-    'set BACKUP_DESTINATION, BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE to enable backups');
-
-const noRestoreFile = (reply: FastifyReply): unknown =>
-  refuseWith(reply, 503, 'restore_not_configured', 'no restore state file configured');
 
 /**
  * Refuse with a code `shared` declares, and nothing else.
@@ -93,7 +76,7 @@ const refuseWith = (
   detail?: string,
 ): unknown => reply.code(status).send(detail === undefined ? { error } : { error, detail });
 
-export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps = {}): void => {
+export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps): void => {
   const admin = { preHandler: requireAdmin(db) };
 
   app.get('/admin/accounts', admin, async () => ({ accounts: await listAccounts(db) }));
@@ -222,7 +205,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // because they only look — a poll that moved the state would make watching a backup
   // indistinguishable from driving one.
   app.post('/admin/backups', admin, async (req, reply) => {
-    if (!backup.makeLegs || !backup.destination) return noBackup(reply);
     const runDir = backupRunDir(new Date().toISOString().replace(/[:.]/g, '-'));
     // The destination recorded on the row is THIS run's directory, so verify knows where
     // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
@@ -267,7 +249,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
    * whatever that path names here.
    */
   app.delete<{ Params: { id: string } }>('/admin/backups/:id', admin, async (req, reply) => {
-    if (!backup.destination) return noBackup(reply);
     const refused = await removeBackupCopy(db, backup.destination, req.params.id);
     if (refused === 'not_found') return refuseWith(reply, 404, 'not_found');
     if (refused === 'already_gone') return reply.code(204).send();
@@ -280,7 +261,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   });
 
   app.post<{ Params: { id: string } }>('/admin/backups/:id/verify', admin, async (req, reply) => {
-    if (!backup.destination) return noBackup(reply);
     const run = await db.one<{ destination: string }>(
       `SELECT destination FROM backup_runs WHERE id = $1`, [req.params.id]);
     if (!run?.destination) return refuseWith(reply, 404, 'not_found');
@@ -307,9 +287,6 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
    * Recorded before the server goes, because after it goes there is nobody to record it.
    */
   app.post<{ Params: { id: string } }>('/admin/backups/:id/restore', admin, async (req, reply) => {
-    if (!backup.destination) return noBackup(reply);
-    if (!backup.restoreStateFile) return noRestoreFile(reply);
-
     const run = await db.one<{ destination: string | null; status: string }>(
       `SELECT destination, status::text AS status FROM backup_runs WHERE id = $1`, [req.params.id]);
     if (!run) return refuseWith(reply, 404, 'not_found');
@@ -348,13 +325,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   // The restore surface: what the server knows, and the one act that resolves it. Both are
   // reachable even in the halt state, because a restore nobody can confirm is a restore
   // nobody can leave.
-  app.get('/admin/restore', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) return noRestoreFile(reply);
-    return restoreStatus(db, backup.restoreStateFile);
-  });
+  app.get('/admin/restore', admin, async () => restoreStatus(db, backup.restoreStateFile));
 
   app.post('/admin/restore/confirm', admin, async (req, reply) => {
-    if (!backup.restoreStateFile) return noRestoreFile(reply);
     // Refuse to confirm when nothing is pending: the act is audited and irreversible, and
     // there is nothing to resolve.
     const status = await restoreStatus(db, backup.restoreStateFile);

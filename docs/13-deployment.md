@@ -380,12 +380,12 @@ just `docker compose pull` again.
 - **not exposed publicly.** It publishes on the host and nothing terminates TLS in front of it.
   Public exposure stays out of scope until authentication has had a review of its own
   ([02](02-architecture.md)). Reaching it from elsewhere is a VPN's job, not this compose file's;
-- **backed up only once a destination is chosen, and only when asked.** The procedure is wired up —
+- **backed up when asked, and not configured at all** (issue #219). The procedure is wired up —
   one refusal window, database dumped first and blobs copied second inside it (D-114), described in
-  [08](08-backup-restore.md) — and the console has the button that runs it. `pg_dump` is in the image
-  at the database's own major, so `BACKUP_DB_COMMAND` has a working default; **`BACKUP_DESTINATION`
-  is still the operator's to choose**, and while it is unset the trio is "not configured" and the
-  button says so. The collector is held off during the window, which is what its advisory lock is for.
+  [08](08-backup-restore.md) — and the console has the button that runs it. Every part of it has a
+  working answer already: `pg_dump` is in the image at the database's own major, `/backups` is a mount
+  this file always makes, and the blobs come from the store `BLOB_STORE_PATH` names. What an
+  installation chooses is `BACKUP_DIR`, the host side of that mount. The collector is held off during the window, which is what its advisory lock is for.
   **Nothing is scheduled**: no nightly run, no retention, no automatic verification. Copies pile up at
   the rate somebody takes them, and are removed one at a time from the console — which leaves the run
   in the history with no destination, so the log keeps saying a backup ran and the empty destination

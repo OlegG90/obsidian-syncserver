@@ -94,21 +94,21 @@ services:
       HOST: 0.0.0.0
       PORT: 8080
       BLOB_STORE_PATH: /data/blobs
-      # Backups, all-or-nothing: leaving these unset means the console's backup button
-      # answers "not configured", which is a truthful and safe answer.
-      BACKUP_DESTINATION: ${BACKUP_DESTINATION:-}
-      # `pg_dump` is in the image at the database's own major, so this one has a working
-      # default; the destination and the blob source stay empty, and an unset destination is
-      # what still makes the trio "not configured".
-      BACKUP_DB_COMMAND: ${BACKUP_DB_COMMAND:-pg_dump --format=custom}
-      BACKUP_BLOB_SOURCE: ${BACKUP_BLOB_SOURCE:-}
-      # Where the restore epoch lives — must survive a restore, so it is a host path, not
-      # inside the database or the blobs.
-      RESTORE_STATE_FILE: ${RESTORE_STATE_FILE:-/state/restore.epoch}
-      # How the restore container puts a dump back. `pg_restore` is in the image at the
-      # database's own major, so this has a working default and exists to be overridden —
-      # which it could not be, because it never reached the container (#174).
-      RESTORE_DB_COMMAND: ${RESTORE_DB_COMMAND:-}
+      # Where a copy lands, and where the restore epoch lives. Both are the CONTAINER's side
+      # of a mount below, so both are constants of this file — the halves an installation
+      # actually chooses are `BACKUP_DIR` and `STATE_DIR`. They used to be `${...}`, and
+      # every deployment dutifully repeated a path from inside this image into its own
+      # `.env`, which is for what only that machine can say (issue #219).
+      BACKUP_DESTINATION: /backups
+      RESTORE_STATE_FILE: /state/restore.epoch
+      # `BACKUP_DB_COMMAND` and `RESTORE_DB_COMMAND` are deliberately absent. `pg_dump` and
+      # `pg_restore` are in the image at the database's own major and the server defaults to
+      # them, so naming them here would put two more constants in every `.env` — and one of
+      # them spent a release documented, read and passed by nothing (#174). Overriding either
+      # is for a deployment with a reason, which can set it and have it reach the server.
+      #
+      # The blob store is not named twice either: the backup copies the live store, which
+      # `BLOB_STORE_PATH` above already points at.
     volumes:
       - ${BLOB_DIR:?set BLOB_DIR in .env — the directory the encrypted files live in}:/data/blobs
       # Where a backup can actually land. Without this the destination could only be a path
