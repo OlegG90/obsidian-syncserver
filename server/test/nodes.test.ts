@@ -335,6 +335,29 @@ describe('dedup lookup', () => {
     assert.deepEqual(r.json().matches, [{ content_tag: tag, sha256: hex }], 'the unknown tag is omitted, not erred on');
   });
 
+  it('refuses a batch bigger than a request line could carry, and the refusal is reachable', async () => {
+    // The bound was 500 and could never fire (issue #230): at 65 bytes an item that is 32 KB of request
+    // line, and Node answers `431` at 16 KB — so a caller who sent too many met an HTTP error naming
+    // headers, not this sentence naming the limit. Two hundred is under the transport ceiling, which is
+    // what makes this test possible at all: `app.inject()` has no such ceiling, so a bound written above
+    // one would look reachable here and be unreachable in production.
+    const many = (n: number): string =>
+      Array.from({ length: n }, (_, i) => i.toString(16).padStart(64, '0')).join(',');
+
+    const over = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/dedup?tags=${many(201)}`, headers: auth() });
+    assert.equal(over.statusCode, 400, over.body);
+    assert.equal(over.json().error, 'too_many_tags');
+
+    const at = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/dedup?tags=${many(200)}`, headers: auth() });
+    assert.equal(at.statusCode, 200, 'two hundred is inside the bound, so the edge is where it says it is');
+
+    // `blob-keys` here rather than in the blob suite, because this is one scenario across two routes:
+    // they carry identifiers of the same length in the same place and had the same unreachable bound.
+    const keys = await app.inject({ method: 'GET', url: `/vaults/${vaultId}/blob-keys?sha256=${many(201)}`, headers: auth() });
+    assert.equal(keys.statusCode, 400, keys.body);
+    assert.equal(keys.json().error, 'too_many_addresses');
+  });
+
   it('lets a second node bind to the same address with NO fresh material — the whole point of the lookup', async () => {
     const body = randomBytes(48);
     const hex = await putBlob(body);
