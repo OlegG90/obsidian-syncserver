@@ -88,21 +88,25 @@ export interface Config {
    */
   sweepIntervalSeconds: number;
   /**
-   * Where backups go, and how they are taken. All three are deployment facts, not protocol:
-   * a destination directory, the `pg_dump` invocation (or whatever this deployment calls
-   * it), and the blob store to copy. Absent until configured — a server without them can
-   * still serve, but the console's backup button answers "not configured".
+   * Where backups go, and how they are taken.
+   *
+   * **Always present** (issue #219). It used to be absent until `BACKUP_DESTINATION` was named, and
+   * that switch answered a question this server no longer asks: it was built while backups ran
+   * nightly, and it decided whether the schedule should run at all. Since D-121 a backup happens
+   * exactly when somebody presses the button, so a server that will not take one is a server whose
+   * button nobody presses — and the configuration that produced it cost every deployment two
+   * variables repeating constants of its own image.
+   *
+   * The blob store is **not** one of these. The backup copies the live store, so `blobStorePath`
+   * already says which directory that is; asking a second variable for the same fact meant a
+   * deployment could answer it twice and disagree.
    */
-  backup?:
-    | {
-        /** Where each run's two legs land. */
-        destination: string;
-        /** `pg_dump`, or whatever this deployment calls it. Must match the server's PG. */
-        dumpCommand: string[];
-        /** The blob store directory, copied after the dump (D-114). */
-        blobSource: string;
-      }
-    | undefined;
+  backup: {
+    /** Where each run's two legs land. */
+    destination: string;
+    /** `pg_dump`, or whatever this deployment calls it. Must match the server's PG. */
+    dumpCommand: string[];
+  };
   /**
    * How to put a dump back (#155) — `pg_restore` and its flags, split into argv.
    *
@@ -156,34 +160,16 @@ export const loadConfig = (): Config => {
     // two callers used to disagree (#171).
     restoreCommand: str('RESTORE_DB_COMMAND', 'pg_restore --clean --if-exists --no-owner -d').split(/\s+/),
     restoreStateFile: str('RESTORE_STATE_FILE', 'var/restore.epoch'),
+    // Both have working defaults, and that is the point: `pg_dump` is in the image at the database's
+    // own major, and where a copy lands is a directory this deployment mounts. Neither is a fact a
+    // person has to supply, so neither belongs in an `.env` — which is for what only this machine can
+    // say (issue #219). `var/backups` is the bare-`node` answer, the same convention the restore state
+    // file above already uses; compose names the container's side.
+    backup: {
+      destination: str('BACKUP_DESTINATION', 'var/backups'),
+      dumpCommand: str('BACKUP_DB_COMMAND', 'pg_dump --format=custom').split(/\s+/),
+    },
   };
-
-  const destination = process.env['BACKUP_DESTINATION'];
-  const dumpCommand = process.env['BACKUP_DB_COMMAND'];
-  const blobSource = process.env['BACKUP_BLOB_SOURCE'];
-  // **The DESTINATION is the switch**, not "any of the three". It used to be any of them,
-  // which was right while all three were empty by default and stopped being right the moment
-  // `BACKUP_DB_COMMAND` got a working one: with `pg_dump` in the image there is a sensible
-  // default for HOW to dump, so that variable is now always set — and "any of the three"
-  // then read every unconfigured deployment as a half-configured one and refused to boot.
-  //
-  // Found by deploying, not by a test: nothing here starts a server from `.env.example`.
-  //
-  // Where to put a copy is the part only this installation knows, so it is the part that
-  // decides. Unset destination means backups are not configured, the console's button says
-  // so, and nothing is scheduled — which is what the documents promised all along.
-  if (destination) {
-    // With a destination named, the rest must be answerable: a run that cannot find the
-    // blobs it is meant to copy is a backup that fails halfway, having already opened a
-    // window. `dumpCommand` has a default and `blobSource` does not.
-    if (!(dumpCommand && blobSource)) {
-      throw new Error(
-        'BACKUP_DESTINATION is set, so BACKUP_DB_COMMAND and BACKUP_BLOB_SOURCE must be too — ' +
-          'a partial backup configuration would start a run that cannot finish',
-      );
-    }
-    cfg.backup = { destination, dumpCommand: dumpCommand.split(/\s+/), blobSource };
-  }
 
   if (cfg.limits.abandonedPartTtlSeconds >= cfg.limits.unboundBlobTtlSeconds) {
     throw new Error(

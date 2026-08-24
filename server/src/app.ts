@@ -93,28 +93,19 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
 
   // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
   // that owns the fact, so this and `index.ts` cannot ask separately and disagree (D-89).
-  const versionLine = cfg.backup ? await serverVersionLine(db) : '';
+  const versionLine = await serverVersionLine(db);
   registerAdminRoutes(app, db, {
     restoreStateFile: cfg.restoreStateFile,
     ...(stop ? { stop } : {}),
-    ...(cfg.backup
-      ? {
-          destination: cfg.backup.destination,
-          // The legs are built per run, so each backup lands in its own subdirectory and
-          // two runs never write into each other. The server's PostgreSQL version is read
-          // once, here, and carried into every run's `assertReady` — which `runBackup` calls
-          // before the lock, the row and the window, so a dump whose major disagrees is
-          // refused with none of them taken (docs/10, D-73).
-          makeLegs: (runDir: string) =>
-            backupLegs(
-              cfg.backup!.destination,
-              cfg.backup!.dumpCommand,
-              cfg.backup!.blobSource,
-              runDir,
-              versionLine,
-            ),
-        }
-      : {}),
+    destination: cfg.backup.destination,
+    // The legs are built per run, so each backup lands in its own subdirectory and two runs
+    // never write into each other. The server's PostgreSQL version is read once, here, and
+    // carried into every run's `assertReady` — which `runBackup` calls before the lock, the
+    // row and the window, so a dump whose major disagrees is refused with none of them taken
+    // (docs/10, D-73). The blobs come from the live store, which the configuration names once
+    // (issue #219) rather than twice.
+    makeLegs: (runDir: string) =>
+      backupLegs(cfg.backup.destination, cfg.backup.dumpCommand, cfg.blobStorePath, runDir, versionLine),
   });
   await registerConsoleRoutes(app);
 

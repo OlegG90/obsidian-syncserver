@@ -57,7 +57,7 @@ const stopCollector = startCollector(db, collectorStore, cfg);
 // The PostgreSQL major a dump must match (docs/10), used by both the things here that need it:
 // the legs the schedule builds, and the advisory check below. Through the reader that owns the
 // fact — `buildApp` needs the same string, and this used to ask for it a second time (D-89).
-const versionLine = cfg.backup ? await serverVersionLine(db) : '';
+const versionLine = await serverVersionLine(db);
 
 // A `running` backup row that survived a restart is a lie: the window it recorded went with
 // the process, so nothing has been refusing writes since. Nothing else will ever settle it —
@@ -80,12 +80,10 @@ if (interrupted > 0) {
 // nothing started whether or not anybody read this line. Warning here and refusing there is
 // not two checks disagreeing — it is the difference between telling somebody early and
 // stopping the thing that would go wrong.
-if (cfg.backup) {
-  try {
-    assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), versionLine);
-  } catch (e) {
-    console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
-  }
+try {
+  assertPgDumpMatches(await pgDumpVersion(cfg.backup.dumpCommand), versionLine);
+} catch (e) {
+  console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
 }
 
 if (cfg.serverSecretIsDefault) {

@@ -294,12 +294,9 @@ const SENTENCES: Record<OperatorRefusalCode, string> = {
   outside_destination:
     'that run points outside this server’s backup directory, so it will not be touched from here. Deal with it by hand if it is really yours.',
   not_a_good_copy: 'that run did not finish successfully, so there is nothing in it to restore from.',
-  backup_not_configured:
-    'this server has no backup destination set, so it cannot take one. See the operator manual.',
   backup_not_ready: 'the server cannot take a backup right now — the detail says what is in the way.',
   backup_in_progress: 'a backup is already being written. Wait for it to finish.',
   backup_failed: 'the backup started and did not finish. The detail is what went wrong.',
-  restore_not_configured: 'this server has no restore state file, so it cannot track a restore.',
   nothing_to_confirm: 'there is no restore waiting to be confirmed — the database is not behind its state file.',
   login_required: 'that needs a login.',
   quota_bytes_required: 'that needs a quota, as a positive number of bytes.',

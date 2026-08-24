@@ -271,7 +271,7 @@ export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage
 export const audit = (limit = 100): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
   call('GET', `/admin/audit?limit=${limit}`);
 
-/** Start a backup now. Refused with `backup_not_configured` when the server has none. */
+/** Start a backup now. Refused with `backup_not_ready` when something is in the way of one. */
 export const runBackup = (): Promise<{ id?: string; status: string; bytes?: number; blob_count?: number }> =>
   call('POST', '/admin/backups');
 

@@ -201,9 +201,11 @@ data, and retrieval belongs at the operating-system / storage layer, at the same
 access, not as a convenience button in a management UI. The backup goes to its configured destination, and
 getting it from there is an OS question.
 
-**Backups require configuration.** Without `BACKUP_DESTINATION`, `BACKUP_DB_COMMAND` and
-`BACKUP_BLOB_SOURCE` the button answers "not configured" rather than pretending; the three are
-all-or-nothing (server/src/config.ts).
+**Backups require no configuration** (issue #219). A copy lands where compose mounts one, `pg_dump` is
+in the image at the database's own major, and the blobs are copied from the store the server already
+names — so the button works on any deployment this file describes. There is no switch to turn them on,
+and none to turn them off: one existed while backups ran nightly and decided whether the *schedule*
+should run, and since D-121 a backup happens when somebody presses the button.
 
 ### Restore: the console cannot perform it
 
