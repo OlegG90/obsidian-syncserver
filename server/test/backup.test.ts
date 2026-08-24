@@ -483,6 +483,45 @@ describe('the backup self-check', () => {
     assert.match(row!.error ?? '', /missing/, 'the row carries the sentence too');
   });
 
+  it('runs with the window shut, so writes are not refused while it walks the copy', async () => {
+    // The defect (#225): the self-check sat between the legs and the settle, so every blob address in
+    // the copy was walked while the server was still turning new writes away. The window buys nothing
+    // for it — the copy is on disk and cannot change — and the cost scaled with the store.
+    //
+    // Asserted from INSIDE the legs and the reader, which is the only place that can see the answer:
+    // by the time `runBackup` returns the window is shut either way, and the observation is worthless.
+    //
+    // **Every call is recorded, not the last one.** A single variable passed while the defect was
+    // reintroduced — the reader was called twice, once inside the window and once after, and the second
+    // overwrote the evidence of the first. The window state during the legs is asserted too, so a
+    // `backupInProgress` that answered `false` everywhere could not make this pass by accident.
+    const duringLegs: boolean[] = [];
+    const duringCheck: boolean[] = [];
+
+    const out = await runBackup(
+      db,
+      {
+        assertReady: async () => {},
+        dumpDatabase: async () => ({ bytes: 1 }),
+        copyBlobs: async () => {
+          duringLegs.push(backupInProgress());
+          return { bytes: 1, count: 0 };
+        },
+      },
+      '/backups/window-shut',
+      {
+        openCopy: () => {
+          duringCheck.push(backupInProgress());
+          return { size: async () => 1 };
+        },
+      },
+    );
+
+    assert.equal(out.status, 'ok');
+    assert.deepEqual(duringLegs, [true], 'the legs ran with writes refused, which is what the window is for');
+    assert.deepEqual(duringCheck, [false], 'and the check ran once, outside it');
+  });
+
   it('says nothing on the row when the copy is whole', async () => {
     const out = await runBackup(
       db,
@@ -525,19 +564,25 @@ describe('what a refusal window leaves in the log', () => {
       `the window opening, and what it costs: ${said.join(' | ')}`,
     );
     assert.ok(
-      said.some((m) => /ok in/.test(m) && /2 blobs/.test(m) && /verified whole/.test(m)),
+      said.some((m) => /ok in/.test(m) && /2 blobs/.test(m) && /writes accepted again/.test(m)),
       `and how it settled: ${said.join(' | ')}`,
     );
+    // A separate line, because it is a separate moment now (#225): the window closes, and only then
+    // is the copy walked. The settle line says the outage is over; this one says what was found.
+    assert.ok(said.some((m) => /verified whole/.test(m)), `and what the check found: ${said.join(' | ')}`);
   });
 
   it('does not claim a copy was verified when nothing checked it', async () => {
-    // "Not checked" and "checked and whole" are different claims about the same run, and a
-    // log that ran them together would let an unverified copy read as a verified one.
+    // "Not checked" and "checked and whole" are different claims about the same run, and a log that
+    // ran them together would let an unverified copy read as a verified one. The assertion is on the
+    // WORD rather than on a sentence saying it was skipped: silence is not a claim, and this fails the
+    // moment anything says "verified" on a run where nothing looked.
     const said: string[] = [];
 
     await runBackup(db, good, '/backups/unchecked', { log: (m) => said.push(m) });
 
-    assert.ok(said.some((m) => /not checked/.test(m)), `said which it was: ${said.join(' | ')}`);
+    assert.ok(said.length > 0, 'the run still says what it did');
+    assert.ok(!said.some((m) => /verified/.test(m)), `claimed nothing: ${said.join(' | ')}`);
   });
 
   it('says a failed run failed, and how long the window was open for it', async () => {

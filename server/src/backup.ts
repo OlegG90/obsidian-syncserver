@@ -134,11 +134,18 @@ export const runBackup = async (
     log?: (message: string) => void;
     warn?: (message: string) => void;
     /**
-     * A reader over the blob copy this run just wrote, when the caller wants it verified
-     * on the spot (the "nightly self-check" of docs/10). Called after the legs, before the
-     * row is settled as `ok`; a copy with missing blobs is still a completed backup, but a
-     * flagged one — a backup nobody can restore from is not a backup, and the operator is
-     * told rather than left to find out at restore time.
+     * A reader over the blob copy this run just wrote, when the caller wants it verified on the spot.
+     * A copy with missing blobs is still a completed backup, but a flagged one — a backup nobody can
+     * restore from is not a backup, and the operator is told rather than left to find out at restore
+     * time.
+     *
+     * **Called after the window has closed and the lock is released** (#225). It used to run between
+     * the legs and the settle, which put a walk over every blob address in the copy inside the interval
+     * where the server turns new writes away — and the window buys nothing for it. What the window is
+     * for is the two legs describing nearly the same instant in the one safe order (D-114); by the time
+     * this runs both are on disk and the copy cannot change, whether or not writes are being accepted.
+     * The cost scaled with the store: seconds on an empty vault, a full walk added to an outage on a
+     * real one.
      */
     openCopy?: (runDestination: string) => CopyReader;
   } = {},
@@ -148,7 +155,7 @@ export const runBackup = async (
   // server that has stopped accepting writes. A precondition checked after any of them is not
   // protecting the thing it was written to protect — which is exactly how the `pg_dump` major
   // check came to run with the window already open.
-  const { log = console.log, warn = console.warn } = opts;
+  const { log = console.log, warn = console.warn, openCopy } = opts;
   try {
     await legs.assertReady();
   } catch (e) {
@@ -159,8 +166,8 @@ export const runBackup = async (
     return { status: 'refused' as const, error };
   }
 
-  return db.session(async (lock) => {
-    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS, openCopy } = opts;
+  const run = await db.session(async (lock) => {
+    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS } = opts;
     // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
     // for a collector pass already running, so the window is clean from the moment the lock
     // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
@@ -199,43 +206,26 @@ export const runBackup = async (
       const blobs = await legs.copyBlobs();
       await db.query(`UPDATE backup_runs SET blobs_done_at = now() WHERE id = $1`, [id]);
 
-      // The self-check (docs/10): reopen the copy just written and confirm it is whole.
-      // A failure here does not fail the run — the copy exists and is recorded — but it is
-      // written to the row so the operator sees a backup they cannot trust, instead of
-      // learning it at restore time.
-      let selfCheckError: string | undefined;
-      if (openCopy) {
-        try {
-          const out = await verifyBackup(db, openCopy(destination), id);
-          if (out.missing.length > 0) {
-            selfCheckError = `${out.missing.length} of ${out.checked} blobs missing from the copy`;
-          }
-        } catch (e) {
-          selfCheckError = `self-check failed: ${e instanceof Error ? e.message : String(e)}`;
-        }
-      }
-
+      // **Settled here, checked afterwards** (#225). The copy is written and cannot change, so the
+      // window has nothing left to protect and every moment it stays open is a write turned away.
+      // The row is briefly `ok` with nothing recorded about its wholeness, which is exactly the state
+      // it is in — and the same state a caller that passes no `openCopy` leaves it in for good.
       await db.query(
         `UPDATE backup_runs
             SET window_closed_at = now(), finished_at = now(), status = 'ok',
-                bytes = $2, blob_count = $3, error = $4
+                bytes = $2, blob_count = $3
           WHERE id = $1`,
-        [id, dumped.bytes + blobs.bytes, blobs.count, selfCheckError ?? null],
+        [id, dumped.bytes + blobs.bytes, blobs.count],
       );
-      const held = `${Date.now() - openedAt}ms`;
-      if (selfCheckError) warn(`backup ${id} completed but is NOT restorable: ${selfCheckError} (${held})`);
-      else {
-        // "Not checked" and "checked and whole" are different claims, and a log that ran them
-        // together would let an unverified copy read as a verified one.
-        const checked = openCopy ? 'verified whole' : 'not checked';
-        log(`backup ${id} ok in ${held}: ${blobs.count} blobs, ${dumped.bytes + blobs.bytes} bytes, ${checked}`);
-      }
+      log(
+        `backup ${id} ok in ${Date.now() - openedAt}ms: ${blobs.count} blobs, ` +
+          `${dumped.bytes + blobs.bytes} bytes, writes accepted again`,
+      );
       const out: BackupResult = {
         id,
         status: 'ok',
         bytes: dumped.bytes + blobs.bytes,
         blobCount: blobs.count,
-        ...(selfCheckError ? { error: selfCheckError } : {}),
       };
       return out;
     } catch (e) {
@@ -252,6 +242,36 @@ export const runBackup = async (
       await release();
     }
   });
+
+  // **The self-check, with the window shut and the lock gone** (#225).
+  //
+  // It answers the question the operator is standing there to ask — did the copy I just took arrive
+  // whole? — and it is the only moment anybody is watching, on a server where nothing checks anything
+  // on a schedule (D-121). What it is not is a reason to keep refusing writes: the copy is on disk and
+  // immutable, so this reads the same bytes whether the server is serving or not.
+  //
+  // A failure here does not fail the run. The copy exists, its row says so, and the flag is what turns
+  // "a backup ran" into "a backup ran and you cannot restore from it" — which is the sentence that has
+  // to arrive now rather than at restore time.
+  if (run.status !== 'ok' || run.id === undefined || !openCopy) return run;
+  let selfCheckError: string | undefined;
+  try {
+    const out = await verifyBackup(db, openCopy(destination), run.id);
+    if (out.missing.length > 0) {
+      selfCheckError = `${out.missing.length} of ${out.checked} blobs missing from the copy`;
+    }
+  } catch (e) {
+    selfCheckError = `self-check failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  if (!selfCheckError) {
+    // "Not checked" and "checked and whole" are different claims, and a log that ran them together
+    // would let an unverified copy read as a verified one.
+    log(`backup ${run.id} verified whole`);
+    return run;
+  }
+  await db.query(`UPDATE backup_runs SET error = $2 WHERE id = $1`, [run.id, selfCheckError]);
+  warn(`backup ${run.id} completed but is NOT restorable: ${selfCheckError}`);
+  return { ...run, error: selfCheckError };
 };
 
 /**

@@ -362,7 +362,8 @@ found incomplete, and a check that stopped for ever after one failed run.
       dump references — a restore that completes, looks whole, and cannot open a note.
 - [x] **The window closes in a `finally`.** A run that fails between the legs must not leave the server
       refusing writes, and a `running` row surviving a restart is a lie the next boot has to settle.
-- [x] **One integrity check, one caller** ([08](08-backup-restore.md)): the console's Verify button.
+- [x] **One integrity check, nothing runs it unasked** ([08](08-backup-restore.md)): the Verify
+      button, and each backup's self-check of the copy it just wrote.
       Written once — `verifyBackup` in `backup.ts`. What it was willing to claim had to stop first:
       `verified_at` was stamped unconditionally, so a copy the check had just found incomplete was
       listed as verified.
