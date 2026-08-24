@@ -1,6 +1,6 @@
 {
   "name": "@syncserver/server",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "type": "module",
   "description": "Sync API and background worker: delta, node writes, blobs, shares, quota",
