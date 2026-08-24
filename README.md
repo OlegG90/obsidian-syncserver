@@ -9,12 +9,11 @@ of the same server — **end-to-end encrypted, with the server holding no key.**
 The functional analogue of Joplin Server, built for an editor that has no synchronisation API of
 its own.
 
-> **Status: in development, version 0.4.0.** Two-way sync works on desktop and on Android against a
-> self-hosted server: connect, pair a second device, adopt an existing vault, and conflicting edits
-> keep both versions. **Folder sharing works too** — two accounts have shared a folder, written into
-> it both ways and left it again, each keeping their copy — and **a vault can be recovered from the
-> passphrase alone**, with no second device to ask. It has not yet been used to hold anything anyone
-> would miss. See [Status](#status) for exactly how far it goes.
+> **Status: in development.** Two-way sync works on desktop and on Android against a self-hosted
+> server, folders can be shared between accounts, and a vault comes back from the passphrase alone.
+> It has not yet been used to hold anything anyone would miss. See [Status](#status) for what has
+> actually been walked, and the [releases](https://github.com/OlegG90/obsidian-syncserver/releases)
+> for the current version — a number written here is a number that goes stale here.
 
 ## What it does, and what it deliberately does not
 
@@ -131,8 +130,9 @@ docker compose up -d --build
 curl -s localhost:8080/health
 ```
 
-A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"0.4.0"}` and serves
-nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its first administrator is claimed. The full
+A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"…"}` — the version being
+whatever that server runs — and serves nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its
+first administrator is claimed. The full
 procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
 
 ### The plugin
@@ -158,36 +158,28 @@ both at once.
 
 ## Status
 
-Current release: **0.4.0** — see [Versions](#versions).
+**In development.** What follows is what a person has walked on a real vault — not what the tests cover,
+which is a different and much easier claim:
 
-| Milestone | |
-|---|---|
-| **M0** — schema, blob store, auth, `delta`/`put`/`delete`, deployed and walked end to end | done |
-| **M0.5** — the plugin: one-way sync, an empty vault materialised from the server | done |
-| **M1** — two-way sync on a real vault: adoption, conflict files, rename detection, full rescan, resync on a stale cursor | done — a live `journal_ttl` resync is the one path no suite can wait 90 days to run |
-| **M2** — WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | done — including **device pairing**, without which a phone cannot join an account at all |
-| **M3** — folder sharing | works end to end and has been walked by two accounts: share, invite, accept, write from either side, leave. Thawing a frozen account with catch-up is the one path still unbuilt, and nothing yet marks a shared folder as shared in the file tree |
-| **M3.5** — getting back in and getting out: recovery with the passphrase, an editable server address, disconnect, thawing with catch-up | done — walked on a third vault with no plugin state and no second device anywhere. Its last open item, a frozen account with nothing it could delete to free space, is closed by M4's purge |
-| **M4** — space, and the history already on disk: emptying the trash, the nightly mark and sweep, the administrative API and its audit trail, the history/trash UI | done — walked by a person: a vault at 210% of its limit emptied its trash, the claim went with the row, and the collector unlinked the freed bytes. That pass found **six defects 302 green tests had no opinion about**, the quietest being a login the client stored without the server ever confirming it |
-| **M5** — the operator's milestone: management console, backup operations, and an image pulled from a registry instead of built on the server | done — closed by a live walk that found nine defects, three of them regressions introduced by the fixes for the others |
-| ~~**M6** — WebDAV gateway~~ | **dropped.** The vault is reached through the plugin; a second protocol into the same data is a second place to get the key model wrong |
-| **M7** — the recovery code: the one loss nothing else answers, a forgotten passphrase | done, and walked: a code made in one vault took the account back in another, and the passphrase it had been living under stopped opening it |
+- two-way sync on desktop and on Android, against a self-hosted server;
+- pairing a second device, and adopting a vault that already has files in it;
+- conflicting edits keeping both versions;
+- sharing a folder between two accounts, writing into it from either side, and leaving it with your copy;
+- getting back in with nothing: the passphrase alone recovers a vault, and a recovery code answers a
+  forgotten passphrase;
+- the operator's half — a management console, and backups taken, verified and restored from it.
 
-M2 ended with a full pass on an Android phone against the home server: install, pair, adopt, sync both
-ways, and a real conflict with neither version lost. That pass found **five defects a hundred and fifty
-green tests had missed**, four of them at the Obsidian edge — which is why the adapters have had test
-seams since, and why [`docs/10`](docs/10-roadmap.md) records what "mobile" had to mean before it could be
-ticked.
+**Every one of those was closed by a walk, and every walk found defects the suites had no opinion
+about.** Five on an Android phone against a hundred and fifty green tests, four of them at the Obsidian
+edge — which is why the adapters have had test seams ever since. Eighteen when two accounts shared a
+folder, against around five hundred; three of the tests involved were found to be asserting the bug
+rather than the rule. Six when a vault at 210% of its limit emptied its trash, the quietest being a
+login the client stored without the server ever confirming it. Nine on the operator's milestone, three
+of them regressions introduced by the fixes for the others. That the vault walked out of four broken
+states using nothing but the product's own buttons is a rule in `AGENTS.md` now, rather than an anecdote.
 
-M3 ended the same way, and more expensively. Two accounts on two machines shared a folder, wrote into
-it from both sides and left it — and that pass found **eighteen defects that around five hundred green
-tests had no opinion about**. They clustered: the client guessing at tables only the server can see, a
-pass over a subtree that missed the trash and the version history, and refusals that stranded a vault
-in a state its own buttons could not leave. Three tests were found to be asserting the bug rather than
-the rule and were rewritten. The vault walked out of four broken states using nothing but the product's
-own buttons, which is now a rule rather than an anecdote — see `AGENTS.md`.
-
-[`docs/10`](docs/10-roadmap.md) has the acceptance scenarios each milestone is measured against.
+[`docs/10`](docs/10-roadmap.md) has the milestones, what each one had to mean before it could be ticked,
+and the acceptance scenarios it was measured against. It is the roadmap; this section is not a second one.
 
 **A device is no longer a single point of failure, and the passphrase now is.** A vault whose every device
 is gone comes back from the address, the login and the passphrase — the client proves it can open the seed
@@ -195,17 +187,18 @@ envelope and the server returns it, having never seen the phrase. That trade is 
 [`docs/06`](docs/06-key-model.md#bootstrap-on-a-device-that-has-no-seed): it makes the passphrase a single
 factor, and a forgotten one still loses every vault, because the seed exists only inside envelopes it opens.
 
-**Not yet suitable for data you cannot lose.** A schema change still means starting the database
-again (above); backups are documented ([`docs/08`](docs/08-backup-restore.md)) but not
-automated; and nothing here has been through the kind of use that finds the last category of
-bug.
+**Not yet suitable for data you cannot lose.** A schema change still means starting the database again
+(above), and nothing here has been through the kind of use that finds the last category of bug. Backups
+are built and documented ([`docs/08`](docs/08-backup-restore.md)) — and **nothing takes one on a
+schedule, by decision** ([D-121](docs/09-decisions.md)): a copy exists when somebody asks for one, which
+is a rhythm this server does not pretend to keep for you.
 
 ## Versions
 
-**One number for the whole solution.** The server, the plugin, `shared/` and the management console
-when it exists all ship the same `major.minor.patch` and are bumped together. They are one program
-split across two machines by necessity, not four products with independent lives, and a compatibility
-matrix between them would be a fiction nobody tests.
+**One number for the whole solution.** The server, the plugin, `shared/` and the management console all
+ship the same `major.minor.patch` and are bumped together. They are one program split across two
+machines by necessity, not four products with independent lives, and a compatibility matrix between
+them would be a fiction nobody tests.
 
 **The major number carries the compatibility promise.** Two builds with the same major are meant to
 work together.
@@ -214,23 +207,22 @@ work together.
 `0.2` and `0.3` are as unrelated as `1.x` and `2.x` will be. The rule collapses to the plain "same
 major" on the day the first `1.0.0` ships, with no code change: the zero test simply stops being true.
 
-`0.4.0` earns its number in both directions. Claiming an invitation now sends the login for the
-server to **check**, so a `0.3` client omits a field a `0.4` server refuses on; and the trash answers
-with a page and a total where it used to answer with a bare array, so a `0.3` client reading a `0.4`
-server finds no list at all. The endpoints an operator uses — accounts, invitations, quotas, storage,
-the audit log, account deletion — did not exist before it either.
+Each minor so far earned its number in **both** directions, which is the test the rule is applied by.
+`0.4.0`, for one: claiming an invitation began sending the login for the server to check, so a `0.3`
+client omitted a field a `0.4` server refuses on — and the trash began answering with a page and a
+total where it had answered with a bare array, so a `0.3` client reading a `0.4` server found no list
+at all. `0.3.0` had done the same a release earlier, when registration began requiring a recovery
+verifier. That is the whole point of the number: neither build has to discover any of this by failing.
 
-`0.3.0` earned its number the same way: registration began requiring a recovery verifier and the
-endpoints that hand an account back did not exist before it, so a `0.2` client could not claim an
-invitation from a `0.3` server. That is the whole point of the number: neither build has to discover
-any of this by failing.
+**A minor is a promise about compatibility, not a measure of how much was added.** Both directions get
+checked before the number is chosen, and a release full of work that breaks nothing stays a patch.
 
 The server reports its version from `/health`, and only there — it is the one endpoint open before
 authentication and before an administrator exists, which is exactly when a client needs the answer:
 
 ```bash
 curl -s localhost:8080/health
-# {"status":"ok","bootstrap_pending":false,"version":"0.4.0"}
+# {"status":"ok","bootstrap_pending":false,"version":"…"}
 ```
 
 The plugin shows both numbers at the bottom of its settings tab and **warns** on a mismatch. It does
@@ -239,9 +231,10 @@ and it would happen in precisely the situation where the numbers are least trust
 exists because the alternative was watching a server eight commits behind its client answer `404` to a
 route it had never heard of, with nothing on screen to say why.
 
-Five files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
+**Six** files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
 requires one in `manifest.json`. `npm test` runs `scripts/check-version.mjs`, which fails when they
-disagree. The rule itself is [D-111](docs/09-decisions.md).
+disagree; the count changed the day the console became a workspace, and the check is what noticed.
+The rule itself is [D-111](docs/09-decisions.md).
 
 That check governs the repository, and its authority ends there. An **installed** plugin is two files
 Obsidian reads separately — `manifest.json`, which it parses and shows in its plugin list, and
