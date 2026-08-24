@@ -34,19 +34,36 @@ export const statusHeader = (containerEl: HTMLElement, s: Surface, conn: Connect
   const header = containerEl.createEl('div');
   header.style.margin = '0 0 1rem';
 
-  const phase = header.createEl('p', { text: shortStatus(plugin.phaseNow()) });
+  const phase = header.createEl('p');
   phase.style.fontWeight = 'bold';
   phase.style.margin = '0 0 0.25rem';
 
   // The last thing said, with the time. A notice has gone by the time somebody looks up, and
   // "did that work?" is the question it leaves behind (#130).
-  const said = lastActionLine(plugin.lastAction());
-  if (said) {
-    const line = header.createEl('p', { text: said });
-    line.style.fontSize = 'var(--font-ui-smaller)';
-    line.style.opacity = '0.8';
-    line.style.margin = '0 0 0.5rem';
-  }
+  //
+  // **Always created, shown only when there is something to show.** It used to exist only if there was
+  // a line at the moment of the draw, which meant the screen that had just done something could not
+  // grow one — and the press somebody was waiting on is exactly when the first line appears (#233).
+  const line = header.createEl('p');
+  line.style.fontSize = 'var(--font-ui-smaller)';
+  line.style.opacity = '0.8';
+  line.style.margin = '0 0 0.5rem';
+
+  /**
+   * Both lines, from whatever is true now.
+   *
+   * Called on every phase change, which is what makes this header answer the button beside it. Pressing
+   * **Sync now** here used to leave `Sync: locked` on screen through the sync that unlocked the vault:
+   * the status bar and the ribbon were told, and both are behind this modal.
+   */
+  const paint = (): void => {
+    phase.setText(shortStatus(plugin.phaseNow()));
+    const said = lastActionLine(plugin.lastAction());
+    line.setText(said ?? '');
+    line.style.display = said ? '' : 'none';
+  };
+  paint();
+  s.whileDrawn(plugin.watchPhase(() => paint()));
 
   // Identity as one line rather than a three-row table: it is a thing to recognise, not to
   // read. The vault id is shortened for the same reason — nobody compares 36 characters.

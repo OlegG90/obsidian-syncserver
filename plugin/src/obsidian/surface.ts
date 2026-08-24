@@ -20,7 +20,15 @@ import type SyncServerPlugin from '../main.js';
 export class Surface {
   private waiting: ButtonComponent[] = [];
   private busyNote: HTMLElement | undefined;
-  private unwatch: (() => void) | undefined;
+  /**
+   * What has to be undone when this draw goes away.
+   *
+   * A list rather than the single `unwatch` it began as (issue #233): the gate is no longer the only
+   * thing a surface listens to, and one slot meant the second listener silently replaced the first.
+   * The rule it enforces is unchanged and is the reason any of this exists — a listener that outlives
+   * its draw writes into elements nobody can see.
+   */
+  private teardown: (() => void)[] = [];
 
   constructor(
     readonly app: App,
@@ -31,10 +39,19 @@ export class Surface {
 
   /** Forget the previous draw's controls. Called first thing in a redraw, before anything registers. */
   reset(): void {
-    this.unwatch?.();
-    this.unwatch = undefined;
+    this.stop();
     this.waiting = [];
     this.busyNote = undefined;
+  }
+
+  /**
+   * Undo this when the draw goes away — for anything a part of the screen subscribes to itself.
+   *
+   * Takes the unsubscribe rather than the subscription, so the caller keeps the choice of what to
+   * listen to and this keeps only the promise to let go of it.
+   */
+  whileDrawn(stop: () => void): void {
+    this.teardown.push(stop);
   }
 
   /**
@@ -58,14 +75,14 @@ export class Surface {
 
   /** Start mirroring, and apply the state straight away — an operation may already be running. */
   watch(): void {
-    this.unwatch = this.plugin.watchBusy((holding) => this.showBusy(holding));
+    this.whileDrawn(this.plugin.watchBusy((holding) => this.showBusy(holding)));
     this.showBusy(this.plugin.busyWith());
   }
 
   /** The surface is going away; the gate must not keep a listener writing into dead elements. */
   stop(): void {
-    this.unwatch?.();
-    this.unwatch = undefined;
+    for (const undo of this.teardown) undo();
+    this.teardown = [];
   }
 
   private showBusy(holding: string | undefined): void {
