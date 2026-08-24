@@ -84,7 +84,8 @@ A verification reopens one copy and confirms that every blob the database refere
 It says the copy **arrived** — not that the archive can be read, which is a different claim and one
 nothing here checks automatically. `backup_runs.verified_at` records it. Two things run the check, and
 both are tails of an act somebody asked for: the console's **Verify** button, and each backup's own
-pass over the copy it just wrote before its row settles.
+pass over the copy it just wrote — taken **after** the row settles and the window shuts, because a walk
+over a copy that can no longer change has no reason to keep writes refused (#225).
 
 **Nothing about a backup happens on a schedule.** Taking one, verifying one and restoring from one are
 all acts somebody asks for. A server that took backups nightly, verified them nightly and loaded them

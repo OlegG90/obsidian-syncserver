@@ -223,8 +223,8 @@ the state it is actually in.
 > **A backup that has never been restored is not a backup.**
 
 **The server checks one thing, and nothing runs it unasked.** Every backup applies the check to the
-copy it just wrote before settling its row, and the console's Verify button reopens any copy on
-demand. Both say the copy **arrived**.
+copy it just wrote, once its row is settled and the window is shut (step 6 above), and the console's
+Verify button reopens any copy on demand. Both say the copy **arrived**.
 
 It does **not** say the archive can be read. A `pg_dump` that fails to restore — a version mismatch, a
 truncated file, a corrupt archive — passes this check and fails at the moment it is needed. **The server
