@@ -185,12 +185,21 @@ progress is refused, and a copy already gone is not an error.
 3. snapshot the blob store;
 4. close the window, record `window_closed_at` — in a `finally`, or a failed run leaves the server
    refusing writes for ever;
-5. settle the row: status, each leg's size, and the blob count.
+5. settle the row: status, each leg's size, and the blob count;
+6. **then**, with the window shut, walk the copy and record what the walk found.
 
 Steps 2 and 3 are **not** interchangeable, for the reason above (D-114): a window that only refuses new
 writes leaves the ones already running, and blobs-first is what turns one of those into a file that
 restores and cannot be opened. Steps 1 and 4 are not optional, and a run that records neither is not a
 usable copy no matter what its status column says.
+
+**Step 6 is after step 4 on purpose** (#225). It used to sit between 3 and 4, which put a walk over every
+blob address in the copy inside the interval where the server turns writes away — and the window buys it
+nothing. What the window is for is the two legs describing nearly the same instant in the one safe order;
+by the time the copy is walked both legs are on disk and the copy cannot change, whether or not writes
+are being accepted. The cost scaled with the store: seconds on an empty vault, a full walk added to an
+outage on a real one. The row is therefore briefly `ok` with nothing said about its wholeness, which is
+the state it is actually in.
 
 **Restore:**
 
