@@ -360,6 +360,24 @@ export type AccountRow = {
 };
 
 /**
+ * One row of `GET /admin/accounts/:id/devices` and `GET /auth/devices` — the shape the server builds and the console renders.
+ *
+ * Here rather than in either side because both touch it: the server's SQL aliases columns
+ * to these names, and the console's table reads them. Declared once, a column renamed in
+ * the query no longer compiles on both sides and reaches the screen as `undefined`.
+ *
+ * Snake_case as the wire spells it; `last_seen_at` is as fresh as the access token's lifetime (D-118).
+ *
+ * A type and not an interface: `db.query` constrains its rows to `Record<string, unknown>` which an interface does not satisfy because it has no index signature.
+ */
+export type DeviceRow = {
+  id: string;
+  name: string;
+  platform: string;
+  last_seen_at: string | null;
+};
+
+/**
  * What `GET /admin/storage` answers — the totals only the server can compute (#123).
  *
  * `stored` and `charged` differ, and the difference is the point: a blob referenced by two

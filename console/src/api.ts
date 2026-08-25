@@ -10,12 +10,12 @@
  * **No key material passes through here, ever.** A console account has none (D-115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
+import type { AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
 import { operatorRefusal } from './format.js';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, AuditRow, BackupRun, DeletionProgress, HealthResponse, RestoreStatus, StorageTotals };
+export type { AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals };
 
 export class ApiError extends Error {
   constructor(
@@ -226,15 +226,6 @@ export const devicesOf = (userId: string): Promise<{ devices: DeviceRow[] }> =>
 
 export const revokeDevice = (userId: string, deviceId: string): Promise<void> =>
   call('DELETE', `/admin/accounts/${userId}/devices/${deviceId}`);
-
-/** What the device list carries. Names and times — an administrator holds no key and needs none here. */
-export interface DeviceRow {
-  id: string;
-  name: string;
-  platform: string;
-  last_seen_at: string | null;
-}
-
 
 /**
  * Remove one backup's copy from disk, keeping the run in the history (#136).

@@ -542,6 +542,7 @@ export class Session {
       }),
     );
     this.conn.wrappedSeed = wrappedSeed;
+    this.stale = false;
   }
 
   /**

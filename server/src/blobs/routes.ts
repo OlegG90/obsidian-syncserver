@@ -3,7 +3,7 @@ import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
-import { BlobService, callerHoldsBlob, envelopesFor, parseRange, storageKeyOf } from './service.js';
+import { BlobService, callerHoldsBlob, envelopesFor, parseRange, storageKeyIfHeld } from './service.js';
 import { type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -85,11 +85,7 @@ export const registerBlobRoutes = (
     if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
 
     const sha = Buffer.from(hex, 'hex');
-    if (!(await callerHoldsBlob(db, req.caller!.userId, sha))) {
-      return reply.code(404).send({ error: 'not_found' });
-    }
-
-    const key = await storageKeyOf(db, sha);
+    const key = await storageKeyIfHeld(db, req.caller!.userId, sha);
     if (!key) return reply.code(404).send({ error: 'not_found' });
 
     const total = await store.size(key);

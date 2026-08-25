@@ -29,6 +29,24 @@ export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): P
 };
 
 /**
+ * The storage key, but only where the caller holds a live reference (issue #241).
+ *
+ * `GET /blobs` checked hold and location in separate queries — a reference deleted
+ * between them still served bytes. One statement narrows that window to the transfer
+ * itself (the stream still outlives the query, so the rule cannot be made absolute
+ * without holding something for the whole response — acknowledged in #241).
+ */
+export const storageKeyIfHeld = async (db: Db, userId: string, sha256: Buffer): Promise<string | undefined> => {
+  const row = await db.one<{ storageKey: string }>(
+    `SELECT b.storage_key AS "storageKey"
+       FROM blobs b
+       JOIN user_blobs ub ON ub.sha256 = b.sha256
+      WHERE ub.user_id = $1 AND b.sha256 = $2 AND ub.refs_own > 0`,
+    [userId, sha256],
+  );
+  return row?.storageKey;
+};
+/**
  * The envelopes a caller can actually open, for blobs they actually hold.
  *
  * Without this a client can download a blob and not read it: the delta describes the node,

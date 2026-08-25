@@ -11,7 +11,7 @@
  * under it. It is what makes the collector's re-check safe, and what an interrupted upload
  * leaves behind — a temp file the parts TTL sweeps, not a corrupt blob.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -111,8 +111,10 @@ export const openStore = (root: string): BlobStore => {
     const target = abs(key);
     // The temp name carries the address so a sweep can tell what was being written, and
     // sits beside the target so the rename stays on one filesystem — across a boundary
-    // it would be a copy, and a copy is not atomic.
-    const temp = `${target}.${process.pid}.part`;
+    // it would be a copy, and a copy is not atomic. The suffix is per-attempt, not
+    // per-process: two concurrent uploads of the same address inside one process must
+    // not share one temp file (issue #240).
+    const temp = `${target}.${randomUUID()}.part`;
 
     await mkdir(dirname(target), { recursive: true });
 
@@ -226,7 +228,7 @@ export const openStore = (root: string): BlobStore => {
       // Written beside its name and renamed, for the same reason a blob is: a part half
       // written under its final name would be read as complete by the next `complete`.
       const target = join(dir, String(index));
-      const temp = `${target}.${process.pid}.part`;
+      const temp = `${target}.${randomUUID()}.part`;
       let size = 0;
       await pipeline(
         body,

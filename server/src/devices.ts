@@ -20,23 +20,13 @@
  * a device row is not where that would start.
  */
 import type { Db } from './db.js';
+import type { DeviceRow } from '@syncserver/shared';
 
-/**
- * What a device row carries. `lastSeenAt` is as fresh as the access token's lifetime — see D-118.
- *
- * An alias and not an interface: `db.query` constrains its rows to `Record<string, unknown>`, which an
- * interface does not satisfy because it has no index signature.
- */
-export type DeviceRow = {
-  id: string;
-  name: string;
-  platform: string;
-  lastSeenAt: string | null;
-};
+export type { DeviceRow };
 
 export const activeDevices = (db: Db, userId: string): Promise<DeviceRow[]> =>
   db.query<DeviceRow>(
-    `SELECT id::text AS id, name, platform, last_seen_at AS "lastSeenAt"
+    `SELECT id::text AS id, name, platform, last_seen_at
        FROM devices
       WHERE user_id = $1 AND revoked_at IS NULL
       ORDER BY last_seen_at DESC NULLS LAST, name`,

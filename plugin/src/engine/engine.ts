@@ -762,8 +762,8 @@ export class SyncEngine {
     const localPlain = await this.vault.read(file.path);
     const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
 
-    await this.vault.write(file.path, serverPlain);
     await this.vault.write(conflictPath, localPlain);
+    await this.vault.write(file.path, serverPlain);
 
     ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
@@ -827,10 +827,13 @@ export class SyncEngine {
   private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode, ctx: PassContext): Promise<void> {
     const localChanged = known.plainHash !== m.plainHash;
 
-    // Move the local file to where the server put the node. The content goes with it.
+    // Never delete the last local copy before its new home exists — if the write
+    // fails or the process dies after the delete, the next pass would see a
+    // vanished path whose node lives under `movedTo` and push a delete that
+    // removes it from the server and every device (issue #239).
     const plain = await this.vault.read(file.path);
-    await this.vault.delete(file.path);
     await this.vault.write(movedTo.path, plain, file.mtime);
+    await this.vault.delete(file.path);
 
     delete ctx.state.nodes[file.path];
     ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address! };

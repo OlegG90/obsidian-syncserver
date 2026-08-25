@@ -169,9 +169,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.get<{ Params: { userId: string } }>('/admin/accounts/:userId/devices', admin, async (req, reply) => {
     const out = await listDevices(db, req.params.userId);
     if ('kind' in out) return refuse(reply, out);
-    return {
-      devices: out.map((d) => ({ id: d.id, name: d.name, platform: d.platform, last_seen_at: d.lastSeenAt })),
-    };
+    return { devices: out };
   });
 
   app.delete<{ Params: { userId: string; deviceId: string } }>(

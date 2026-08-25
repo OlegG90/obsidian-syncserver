@@ -613,7 +613,7 @@ export const registerAuthRoutes = (
         platform: d.platform,
         // As fresh as the access token's lifetime, and no fresher: written on every refresh, never per
         // request (D-118). Labelled as such rather than made to sound more precise than it is.
-        last_seen_at: d.lastSeenAt,
+        last_seen_at: d.last_seen_at,
         current: d.id === claims.device,
       })),
     };
