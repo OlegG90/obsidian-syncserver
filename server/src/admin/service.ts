@@ -17,10 +17,10 @@
  * and share at once, with reads and deletions still working — so the answer says how much
  * they are using, and the caller can say that out loud before doing it rather than after.
  */
-import type { AccountRow, AuditRow } from '@syncserver/shared';
+import type { AccountRow, AuditRow, DeviceRow, StorageTotals } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import type { Db } from '../db.js';
-import { activeDevices, type DeviceRow } from '../devices.js';
+import { activeDevices } from '../devices.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { record, type Actor } from './audit.js';
 
@@ -287,12 +287,7 @@ export const setQuota = async (
  * vaults is two claims on one blob (AC-09), and the gap between those two sums is the whole
  * of what sharing and re-uploading save.
  */
-export const storage = async (db: Db): Promise<{
-  storedBytes: string;
-  chargedBytes: string;
-  blobs: string;
-  quarantined: string;
-}> => {
+export const storage = async (db: Db): Promise<StorageTotals> => {
   const row = await db.one<{ stored: string; charged: string; blobs: string; quarantined: string }>(
     `SELECT COALESCE(sum(b.size), 0)::text AS stored,
             count(*)::text AS blobs,

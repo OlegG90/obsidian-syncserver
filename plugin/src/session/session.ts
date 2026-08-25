@@ -542,6 +542,11 @@ export class Session {
       }),
     );
     this.conn.wrappedSeed = wrappedSeed;
+    // **This device is current by construction now** (issue #243). It may have been marked stale by a
+    // change made somewhere else; the envelope it holds is the one it just made the account's, so going
+    // on announcing staleness would send somebody through an adoption of their own seed. The paragraph
+    // above still stands for every OTHER device — this line says nothing about them.
+    this.stale = false;
   }
 
   /**

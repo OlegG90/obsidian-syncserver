@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import { fakeAccountSalt, hashToken, tokenMatches } from '../crypto.js';
 import type { Db } from '../db.js';
 import { activeDevices } from '../devices.js';
+import type { OwnDeviceRow } from '@syncserver/shared';
 import {
   changePassword,
   findActiveAccount,
@@ -606,17 +607,9 @@ export const registerAuthRoutes = (
 
     const rows = await activeDevices(db, claims.sub);
 
-    return {
-      devices: rows.map((d) => ({
-        id: d.id,
-        name: d.name,
-        platform: d.platform,
-        // As fresh as the access token's lifetime, and no fresher: written on every refresh, never per
-        // request (D-118). Labelled as such rather than made to sound more precise than it is.
-        last_seen_at: d.lastSeenAt,
-        current: d.id === claims.device,
-      })),
-    };
+    // Spread, not four assignments: `last_seen_at` is as fresh as the access token's lifetime and no
+    // fresher (D-118), and `current` is the only field this surface adds — see `OwnDeviceRow`.
+    return { devices: rows.map((d): OwnDeviceRow => ({ ...d, current: d.id === claims.device })) };
   });
 
   /**
