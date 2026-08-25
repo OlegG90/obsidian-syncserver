@@ -744,6 +744,19 @@ act enforces itself.
 
 No reference means `404`, not `403` — a `403` confirms that a file with that hash exists.
 
+**The check and the location are one statement, and the window is narrowed rather than closed** (issue
+#241). `GET` used to ask whether the caller held a reference and then, separately, where the bytes were:
+a reference deleted between the two — a trash emptied, a vault removed — still served the file. Asking
+both at once removes that window, and `HEAD` asks the same statement and discards the answer's location,
+because a rule written twice is a rule that eventually disagrees with itself.
+
+What remains, and is **not** a defect to be found again later: the bytes leave through a stream that
+starts after the response headers and outlives any statement, so a reference dropped while it drains
+still delivers the rest of that file. Closing that would mean the read holding something for the whole
+response. It is not closed, the exposure is one file whose ciphertext the caller could already read a
+moment earlier, and the reason it is acceptable is written here rather than left for whoever notices the
+gap next.
+
 The same check guards everything that returns content or metadata: `delta`, `list`, `versions`, `trash`,
 `restore`, blob `HEAD`/`GET`, **and `dedup_index` lookups**. Separate checks per endpoint are precisely
 where one eventually falls behind the rest.

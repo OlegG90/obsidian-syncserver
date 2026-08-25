@@ -13,6 +13,7 @@
  * the person. That asymmetry is the entire point of the key model (docs/06), and it is the
  * reason the plugin asks again after every restart instead of remembering.
  */
+import type { OwnDeviceRow } from '@syncserver/shared';
 import { Notice, Platform, Plugin, setIcon } from 'obsidian';
 
 import { ApiError, SyncClient } from './api/client.js';
@@ -1040,7 +1041,7 @@ export default class SyncServerPlugin extends Plugin {
    * Through the session like everything else, and without the shared gate: reading a list and revoking
    * one row touch nothing a sync touches (#131).
    */
-  async devices(): Promise<{ id: string; name: string; platform: string; last_seen_at: string | null; current: boolean }[]> {
+  async devices(): Promise<OwnDeviceRow[]> {
     return (await this.withSession((h) => h.client.devices())).devices;
   }
 

@@ -3,7 +3,7 @@ import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
-import { BlobService, callerHoldsBlob, envelopesFor, parseRange, storageKeyIfHeld } from './service.js';
+import { BlobService, envelopesFor, parseRange, storageKeyIfHeld } from './service.js';
 import { type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -76,7 +76,8 @@ export const registerBlobRoutes = (
   app.head<{ Params: { sha256: string } }>('/blobs/:sha256', { preHandler: requireAuth }, async (req, reply) => {
     const hex = req.params.sha256;
     if (!HEX64.test(hex)) return reply.code(400).send();
-    const held = await callerHoldsBlob(db, req.caller!.userId, Buffer.from(hex, 'hex'));
+    // The same statement `GET` asks, with the answer thrown away: one condition, one place (#241).
+    const held = await storageKeyIfHeld(db, req.caller!.userId, Buffer.from(hex, 'hex'));
     return reply.code(held ? 200 : 404).send();
   });
 

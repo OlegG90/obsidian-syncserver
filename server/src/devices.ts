@@ -22,8 +22,6 @@
 import type { Db } from './db.js';
 import type { DeviceRow } from '@syncserver/shared';
 
-export type { DeviceRow };
-
 export const activeDevices = (db: Db, userId: string): Promise<DeviceRow[]> =>
   db.query<DeviceRow>(
     `SELECT id::text AS id, name, platform, last_seen_at

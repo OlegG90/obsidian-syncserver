@@ -26,6 +26,14 @@
  * Local deletes (a synced file gone from disk) push `deleteNode` — safe under every epoch,
  * because the row soft-deletes into the trash and the content survives (docs/03).
  *
+ * **Never destroy the last local copy of content before its replacement exists** (issues #239, #242).
+ * Three places move bytes about on disk — a remote rename, a conflict, and the quarantine a reset
+ * writes — and each is two steps with no transaction around them. Ordered the wrong way round, a failed
+ * or interrupted second step leaves the content nowhere: the vault has lost it, and for a rename the
+ * NEXT pass reads the vanished path as a deletion and pushes it, taking the file off every other device
+ * too. Write the destination first, delete the source after. It is the same rule each time and it is
+ * stated here rather than three times, because three copies of a reason drift.
+ *
  * One pass's mutable state is a single `PassContext` built in `sync()` and handed to every
  * helper, so a reused instance starts a fresh pass instead of carrying the last one's
  * fields. Out of scope, deliberately: folder moves are still per-file, and the delta's
@@ -762,6 +770,9 @@ export class SyncEngine {
     const localPlain = await this.vault.read(file.path);
     const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
 
+    // The same ordering rule (#242), and it reads inverted here because the *destination* is the
+    // conflict copy: `localPlain` exists nowhere but memory, so overwriting the path first and failing
+    // second would lose this device's edits while the report below still claimed a copy had been made.
     await this.vault.write(conflictPath, localPlain);
     await this.vault.write(file.path, serverPlain);
 
@@ -827,10 +838,7 @@ export class SyncEngine {
   private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode, ctx: PassContext): Promise<void> {
     const localChanged = known.plainHash !== m.plainHash;
 
-    // Never delete the last local copy before its new home exists — if the write
-    // fails or the process dies after the delete, the next pass would see a
-    // vanished path whose node lives under `movedTo` and push a delete that
-    // removes it from the server and every device (issue #239).
+    // Destination first, source after — the ordering rule at the top of this file (#239).
     const plain = await this.vault.read(file.path);
     await this.vault.write(movedTo.path, plain, file.mtime);
     await this.vault.delete(file.path);

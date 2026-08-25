@@ -11,30 +11,26 @@ import { PRESENT } from '../shares/membership.js';
 /**
  * > A hash is not a capability.
  *
- * Deduplication means the same address is visible to many accounts (D-42). If a read
- * checked only *existence*, anyone who learned an address — from their own copy of the
- * file, from a log — could read somebody else's content.
+ * Deduplication means the same address is visible to many accounts (D-42). If a read checked only
+ * *existence*, anyone who learned an address — from their own copy of the file, from a log — could read
+ * somebody else's content.
  *
- * So both `HEAD` and `GET` require a **live reference belonging to the caller**, and under
- * replication that is a single condition: `user_blobs.refs_own > 0`, the blob is held by
- * one of their own nodes or their own history (D-20). A share grants no access that
- * ownership does not already describe, which is why there is no second branch.
- */
-export const callerHoldsBlob = async (db: Db, userId: string, sha256: Buffer): Promise<boolean> => {
-  const row = await db.one<{ held: boolean }>(
-    `SELECT (refs_own > 0) AS held FROM user_blobs WHERE user_id = $1 AND sha256 = $2`,
-    [userId, sha256],
-  );
-  return row?.held ?? false;
-};
-
-/**
- * The storage key, but only where the caller holds a live reference (issue #241).
+ * So both `HEAD` and `GET` require a **live reference belonging to the caller**, and under replication
+ * that is a single condition: `user_blobs.refs_own > 0`, the blob is held by one of their own nodes or
+ * their own history (D-20). A share grants no access that ownership does not already describe, which is
+ * why there is no second branch.
  *
- * `GET /blobs` checked hold and location in separate queries — a reference deleted
- * between them still served bytes. One statement narrows that window to the transfer
- * itself (the stream still outlives the query, so the rule cannot be made absolute
- * without holding something for the whole response — acknowledged in #241).
+ * **One function, because it is one condition** (issue #241). `GET` asked hold and location in separate
+ * statements, and a reference deleted between them still served the bytes. The obvious repair — a second
+ * query answering both — left the predicate written twice, once here for `HEAD` and once there: the same
+ * rule in two places, waiting to disagree the first time replication changes what a live reference means.
+ * So `HEAD` asks this too and throws the key away; what it answers is whether one came back.
+ *
+ * The location is joined rather than looked up separately. `user_blobs.sha256` references `blobs`
+ * (db/schema.sql), so a held row always has one — the join narrows nothing and buys the single statement.
+ *
+ * **What it does not do** is close the window, only narrow it to the transfer; the reasoning lives in
+ * docs/04 with the rule it qualifies, because that is where a rule's current state is kept.
  */
 export const storageKeyIfHeld = async (db: Db, userId: string, sha256: Buffer): Promise<string | undefined> => {
   const row = await db.one<{ storageKey: string }>(
@@ -46,6 +42,7 @@ export const storageKeyIfHeld = async (db: Db, userId: string, sha256: Buffer): 
   );
   return row?.storageKey;
 };
+
 /**
  * The envelopes a caller can actually open, for blobs they actually hold.
  *
@@ -91,14 +88,6 @@ export const envelopesFor = async (
                                    AND ${PRESENT} AND s.subtree_key_id IS NOT NULL))`,
     [userId, vaultId, addresses],
   );
-
-export const storageKeyOf = async (db: Db, sha256: Buffer): Promise<string | undefined> => {
-  const row = await db.one<{ storageKey: string }>(
-    `SELECT storage_key AS "storageKey" FROM blobs WHERE sha256 = $1`,
-    [sha256],
-  );
-  return row?.storageKey;
-};
 
 /**
  * A Range header, parsed. `undefined` for "no range"; `'unsatisfiable'` when the request

@@ -360,15 +360,23 @@ export type AccountRow = {
 };
 
 /**
- * One row of `GET /admin/accounts/:id/devices` and `GET /auth/devices` — the shape the server builds and the console renders.
+ * One row of `GET /admin/accounts/:id/devices` — the shape the server builds and the console renders.
+ * `GET /auth/devices` answers `OwnDeviceRow` below, which is this plus one field.
  *
- * Here rather than in either side because both touch it: the server's SQL aliases columns
- * to these names, and the console's table reads them. Declared once, a column renamed in
- * the query no longer compiles on both sides and reaches the screen as `undefined`.
+ * Here rather than in either side because three of them touch it: the server's SQL, the console's table
+ * and the plugin's device list. Declared once, a column renamed in the query no longer compiles on any
+ * of them instead of reaching a screen as `undefined`.
  *
- * Snake_case as the wire spells it; `last_seen_at` is as fresh as the access token's lifetime (D-118).
+ * **Snake_case, unlike `AccountRow` above, and the difference is a rule rather than an accident.** A
+ * shape the server *aliases* on its way out — `AccountRow`, `StorageTotals` — is spelled the way its one
+ * consumer reads it. This one is spelled the way the **wire** spells it, because it goes to three
+ * readers unaliased and the SQL column is already `last_seen_at`: renaming it here would buy a
+ * convention and cost a mapping layer at every one of them, which is the mapping #244 was about.
  *
- * A type and not an interface: `db.query` constrains its rows to `Record<string, unknown>` which an interface does not satisfy because it has no index signature.
+ * `last_seen_at` is as fresh as the access token's lifetime (D-118).
+ *
+ * A type and not an interface: `db.query` constrains its rows to `Record<string, unknown>`, which an
+ * interface does not satisfy because it has no index signature.
  */
 export type DeviceRow = {
   id: string;
@@ -376,6 +384,19 @@ export type DeviceRow = {
   platform: string;
   last_seen_at: string | null;
 };
+
+/**
+ * A device as its **owner** sees it — `GET /auth/devices`, which the plugin lists.
+ *
+ * The extra field is the whole difference: only the account's own surface can say which row is the
+ * device reading it, and that is what a person needs before revoking one. An operator's list has no
+ * such row and must not pretend to.
+ *
+ * Derived rather than restated, so the four shared fields cannot drift apart from `DeviceRow` — which is
+ * exactly what they had done: the plugin declared this shape inline in two places (issue #244 fixed the
+ * console and the server and left the third reader out).
+ */
+export type OwnDeviceRow = DeviceRow & { current: boolean };
 
 /**
  * What `GET /admin/storage` answers — the totals only the server can compute (#123).

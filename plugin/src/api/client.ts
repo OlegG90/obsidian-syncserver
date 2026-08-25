@@ -21,6 +21,7 @@ import type {
   Material,
   NodeType,
   OpenedVault,
+  OwnDeviceRow,
   Scope,
   RefusalCode,
   RefusalDetails,
@@ -443,7 +444,7 @@ export class SyncClient {
    * issued to, and "which of these am I" is the one thing a person looking at several cannot be asked.
    */
   devices(): Promise<{
-    devices: { id: string; name: string; platform: string; last_seen_at: string | null; current: boolean }[];
+    devices: OwnDeviceRow[];
   }> {
     return this.json('GET', '/auth/devices');
   }

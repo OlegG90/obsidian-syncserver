@@ -424,6 +424,49 @@ const realDerivationForTests: Derivation = {
     openAccount(passphrase, accountSalt, kdfParams, wrappedSeed),
 };
 
+/**
+ * A device told it is behind, that then makes the account current itself (issue #243).
+ *
+ * `stale` is not a fact about the account — it is this device's answer to "is the envelope I hold the
+ * one the account is behind" (#138), computed at login from a fingerprint. Changing the passphrase makes
+ * this device's envelope the account's, so the answer changes with it. It did not: only `adoptEnvelope`
+ * cleared the flag, and a stale device that changed the phrase went on being steered into adopting a
+ * seed it had just written itself.
+ */
+describe('changing the passphrase makes this device current (issue #243)', () => {
+  /** A login that says the account is behind an envelope this device does not hold. */
+  const staleAnswers = () => ({
+    ...okAnswers(),
+    'POST /auth/login': {
+      status: 200,
+      body: { access: 'acc-1', refresh: 'ref-1', seed_fingerprint: 'ff'.repeat(32) },
+    },
+    'PUT /auth/passphrase': { status: 204, body: {} },
+  });
+
+  it('stops announcing staleness once the server has taken the new envelope', async () => {
+    const session = forTests({ derivation: fakeDerivation(), transport: fakeTransport(staleAnswers()) }).create(conn());
+    assert.equal(await session.open('correct horse battery staple'), 'open');
+    assert.equal(session.envelopeIsStale, true, 'the fingerprint disagreed, so this device is behind');
+
+    await session.changePassphrase('correct horse battery staple', 'a new and better phrase');
+
+    assert.equal(session.envelopeIsStale, false, 'the envelope it holds is the one it just made current');
+  });
+
+  it('leaves the flag alone when the server refuses the change', async () => {
+    // The order in `changePassphrase` is server first, deliberately — a device alone on a new phrase is
+    // a state nobody can act on. So a refusal must leave this device exactly as stale as it was.
+    const transport = fakeTransport({ ...staleAnswers(), 'PUT /auth/passphrase': { status: 409, body: { error: 'conflict' } } });
+    const session = forTests({ derivation: fakeDerivation(), transport }).create(conn());
+    await session.open('correct horse battery staple');
+
+    await assert.rejects(() => session.changePassphrase('correct horse battery staple', 'a new and better phrase'));
+
+    assert.equal(session.envelopeIsStale, true, 'nothing was accepted, so nothing changed');
+  });
+});
+
 describe('Session.recover — the last device is gone', () => {
   // What the server would hold for this account: the seed sealed under the real KEK, so the
   // envelope that comes back is one this passphrase can actually open.

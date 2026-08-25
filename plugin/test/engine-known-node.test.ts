@@ -53,6 +53,8 @@ class FakeSyncClient implements VaultWire {
   constructor(
     private readonly kv: Uint8Array,
     remoteText: string,
+    /** Where the SERVER says the node lives. Different from `path` means the server renamed it. */
+    private readonly serverPath: string = path,
   ) {
     const sealed = sealBlob(utf8(remoteText));
     this.remoteBytes = sealed.bytes;
@@ -101,8 +103,8 @@ class FakeSyncClient implements VaultWire {
         {
           node_id: nodeId,
           parent_id: rootNodeId,
-          name_enc: encryptName(this.kv, path),
-          name_hmac: nameHmac(this.kv, path),
+          name_enc: encryptName(this.kv, this.serverPath),
+          name_hmac: nameHmac(this.kv, this.serverPath),
           name_key_id: scopeId,
           op: 'put',
           rev: 2,
@@ -181,11 +183,24 @@ class FakeSyncClient implements VaultWire {
   }
 }
 
-const makeKnownNodeScenario = ({ localText, serverText, knownText }: { localText: string; serverText: string; knownText: string }) => {
+const makeKnownNodeScenario = ({
+  localText,
+  serverText,
+  knownText,
+  serverPath = path,
+  vault = new FakeVault(),
+}: {
+  localText: string;
+  serverText: string;
+  knownText: string;
+  /** Where the server says the node is now — a different path means it was renamed there. */
+  serverPath?: string;
+  /** A vault that behaves differently from the plain one: see the ordering suite below. */
+  vault?: FakeVault;
+}) => {
   const seed = randomBytes(32);
   const kv = vaultKey(seed, vaultId);
-  const client = new FakeSyncClient(kv, serverText);
-  const vault = new FakeVault();
+  const client = new FakeSyncClient(kv, serverText, serverPath);
   vault.seed(path, localText);
   const store = new InitialStateStore({
     nodes: {
@@ -254,5 +269,80 @@ describe('SyncEngine known-node reconciliation', () => {
     assert.equal(report.errors.length, 0);
     assert.equal(setup.vault.contents(setup.path), 'same', 'nothing written, nothing renamed');
     assert.deepEqual(report.matched.map((m) => m.path), [setup.path], 'recorded as already in step');
+  });
+});
+
+/**
+ * Moving bytes about on disk, when the second step fails (issues #239, #242).
+ *
+ * Three places in the engine move content between paths, and each is two steps with no transaction
+ * around them. Ordered the wrong way round they destroy the only copy: the rule is stated once at the
+ * top of `engine.ts` — write the destination first, delete or overwrite the source after.
+ *
+ * **These are not tests about `write` throwing.** They are tests about what survives when it does, which
+ * is the only observable difference between the two orderings — both are two writes and a delete, and
+ * both look correct until one of them fails.
+ */
+class BrittleVault extends FakeVault {
+  writes: string[] = [];
+
+  constructor(private readonly failOn: string) {
+    super();
+  }
+
+  override async write(path: string, bytes: Uint8Array, mtime = Date.now()): Promise<void> {
+    this.writes.push(path);
+    // Thrown BEFORE the write lands, which is the honest model: a disk that refuses has not written.
+    if (path === this.failOn) throw new Error(`the disk refused ${path}`);
+    return super.write(path, bytes, mtime);
+  }
+}
+
+describe('a failed write never leaves content nowhere', () => {
+  it('keeps the local file when a remote rename cannot write its destination (issue #239)', async () => {
+    // The server moved the node to `moved.md`. Under the old order the local copy was deleted first, so
+    // a failing write left the bytes nowhere — and the NEXT pass would read the vanished path as a
+    // deletion and push it, taking the file off every other device too.
+    const vault = new BrittleVault('moved.md');
+    const { engine } = makeKnownNodeScenario({
+      localText: 'the only copy',
+      serverText: 'the only copy',
+      knownText: 'the only copy',
+      serverPath: 'moved.md',
+      vault,
+    });
+
+    const report = await engine.sync();
+
+    assert.equal(vault.writes[0], 'moved.md', 'the destination was tried first, before anything was lost');
+    assert.equal(vault.contents(path), 'the only copy', 'and the source is still there');
+    assert.equal(report.renamed.length, 0, 'nothing is reported as renamed');
+    assert.ok(report.errors.length >= 1, 'the pass says the file failed');
+    // The destination is attempted a second time, and that is the pass being sensible rather than a
+    // defect: the rename never claimed the node, so the walk finishes by pulling it as a server-only
+    // file. On a working disk that second attempt is the file arriving. Not asserted as an exact count,
+    // because how many times the engine retries is not what this test is about.
+
+  });
+
+  it('keeps this device’s version when a conflict cannot write the server copy (issue #242)', async () => {
+    // Local and server both moved away from what this device last knew: a conflict. `localPlain` exists
+    // only in memory by then, so under the old order — overwrite the path, then write the conflict copy —
+    // a failing second write lost the person's edits while the report still claimed a conflict file.
+    const vault = new BrittleVault(path);
+    const { engine } = makeKnownNodeScenario({
+      localText: 'what I wrote here',
+      serverText: 'what somebody else wrote',
+      knownText: 'what we both started from',
+      vault,
+    });
+
+    const report = await engine.sync();
+
+    const conflictPath = vault.paths().find((p) => p !== path);
+    assert.ok(conflictPath, `this device’s version was kept somewhere: ${vault.paths().join(', ')}`);
+    assert.equal(vault.contents(conflictPath), 'what I wrote here', 'and it is the local text, not the server’s');
+    assert.equal(report.conflicts.length, 0, 'a conflict that did not complete is not reported as handled');
+    assert.equal(report.errors.length, 1, 'the pass ends in an error report');
   });
 });

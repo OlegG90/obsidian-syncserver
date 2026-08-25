@@ -17,11 +17,10 @@
  * and share at once, with reads and deletions still working — so the answer says how much
  * they are using, and the caller can say that out loud before doing it rather than after.
  */
-import type { AccountRow, AuditRow, StorageTotals } from '@syncserver/shared';
+import type { AccountRow, AuditRow, DeviceRow, StorageTotals } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import type { Db } from '../db.js';
 import { activeDevices } from '../devices.js';
-import type { DeviceRow } from '@syncserver/shared';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { record, type Actor } from './audit.js';
 
