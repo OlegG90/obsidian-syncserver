@@ -15,6 +15,7 @@ import { refusalFromDatabase, type Refusal } from '../refusal.js';
 /** PostgreSQL's `unique_violation`. */
 const UNIQUE_VIOLATION = '23505';
 import { usageOf } from '../quota.js';
+import { thawIfUnderQuota } from '../shares/thaw.js';
 
 /**
  * A vault as its owner's client sees it: the id, the name it cannot read, and how much is in it.
@@ -167,6 +168,23 @@ export const deleteVault = async (db: Db, userId: string, vaultId: string): Prom
     // nothing. Recomputed here rather than left to the sweep: an account that deleted a vault to make
     // room would otherwise still read as full.
     await dropUnreferenced(c, userId);
+
+    // **And if that was enough, the freeze lifts here** (issue #236). SH-20's advice to a frozen
+    // account is "delete something", and removing a vault is the largest deletion this product offers —
+    // it was also the only one that freed the space and left the freeze on, because `thawIfUnderQuota`
+    // was called by the trash purge and the vault reset and not by this. The person did exactly what
+    // they were told, watched the usage fall, and was still refused every write until they went and
+    // emptied a trash somewhere unrelated.
+    //
+    // **After `dropUnreferenced`, and that ordering is the whole of it**: the thaw asks `headroom`, so
+    // the bytes have to have stopped counting before it looks, or it decides the account is still over
+    // and does nothing.
+    //
+    // The catch-up SH-21 requires runs with it, in this transaction. That is not a contradiction of the
+    // refusal above — a vault a share names cannot be removed, but the account may hold OTHER vaults
+    // inside shares, and those are exactly the replicas whose propagation was skipped for the length of
+    // the freeze.
+    await thawIfUnderQuota(c, userId);
     return undefined;
   });
 

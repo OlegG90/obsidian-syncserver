@@ -300,6 +300,15 @@ is updated in the same transaction as the reference that caused it.
 matters here is that a frozen account still occupies exactly as much quota as before: freezing stops growth,
 it does not release anything, so the only way out is deleting something.
 
+**Every deletion that frees space lifts the freeze in the same transaction, and there are three of them**
+(issue #236): emptying a trash, resetting a vault, and removing one. The list is worth writing down
+because it was incomplete for a release and the missing entry was the largest deletion the product
+offers — removing a vault freed the bytes and left `frozen_at` set, so somebody who did exactly what
+SH-20 told them watched the usage fall and was still refused every write. A way out that only some
+deletions open is not a way out; it is a maze. Each of the three asks `headroom` **after** the bytes have
+stopped counting, and lifts the freeze only if the account is genuinely back inside its limit — the act
+is not what thaws, the arithmetic is.
+
 ## Garbage collection
 
 `refcount` is reconciled by a **nightly mark and sweep**, not maintained live: under concurrent writes a

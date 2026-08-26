@@ -176,6 +176,97 @@ describe('deleting a vault', () => {
   });
 });
 
+/**
+ * The way out of a freeze, when the way out is a whole vault (issue #236).
+ *
+ * SH-20 tells a frozen account to delete something, and `thaw.ts` says why that has to work: *"a freeze
+ * that only ever went on is a state with no exit"*. Removing a vault is the largest deletion this
+ * product offers and it was the one that did not lift the freeze — `thawIfUnderQuota` was called by the
+ * trash purge and by a vault reset, and not here. The bytes went, the usage fell, and every write was
+ * still refused until the person went and emptied a trash somewhere unrelated.
+ *
+ * **Its own account**, because the assertion is about a quota being crossed and this file's other tests
+ * share a user whose usage they move.
+ */
+describe('removing a vault lets a frozen account back in (issue #236)', () => {
+  const freshAccount = async (): Promise<{ id: string; token: string }> => {
+    const id = randomUUID();
+    await db.query(
+      `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
+                          enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
+       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+               '{"v":19,"m":65536,"t":3,"p":1}', '\x01', '\x02', 'kv', '\x03', 'rh', '\x04', 1048576)`,
+      [id, `frozen-${randomUUID()}`],
+    );
+    const device = await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [id]);
+    return { id, token: app.jwt.sign({ sub: id, device: device!.id }) };
+  };
+
+  /** A vault holding one file, so that removing it frees bytes the account is charged for. */
+  const vaultHoldingAFile = async (token: string, bytes: Buffer): Promise<string> => {
+    const head = { authorization: `Bearer ${token}` };
+    const vaultId = randomUUID();
+    const created = await app.inject({ method: 'POST', url: '/vaults', headers: head, payload: { id: vaultId, name_enc: b64('heavy') } });
+    assert.equal(created.statusCode, 201, created.body);
+    const rootId = created.json().root_node_id as string;
+    const keyId = (await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [vaultId]))!.id;
+
+    const hex = sha(bytes);
+    const up = await app.inject({
+      method: 'POST', url: '/blobs',
+      query: { sha256: hex, size: String(bytes.length), key_id: keyId },
+      headers: { ...head, 'content-type': 'application/octet-stream' },
+      payload: bytes,
+    });
+    assert.equal(up.statusCode, 201, up.body);
+
+    const node = await app.inject({
+      method: 'POST', url: `/vaults/${vaultId}/nodes`, headers: head,
+      payload: {
+        parent_id: rootId, type: 'file', sha256: hex, size: bytes.length,
+        mtime: new Date().toISOString(),
+        name_enc: b64('big.md'), name_hmac: sha(randomBytes(8)), name_key_id: keyId,
+        blob_envelopes: [{ sha256: hex, scope_id: keyId, wrapped_key: Buffer.alloc(48, 9).toString('base64') }],
+        dedup_tags: [{ sha256: hex, scope_id: keyId, content_tag: sha(Buffer.from(`tag:${hex}`)) }],
+      },
+    });
+    assert.equal(node.statusCode, 201, node.body);
+    return vaultId;
+  };
+
+  const frozenAt = async (id: string): Promise<string | null> =>
+    (await db.one<{ frozen: string | null }>(`SELECT frozen_at AS frozen FROM users WHERE id = $1`, [id]))!.frozen;
+
+  it('lifts the freeze when what it removed was enough', async () => {
+    const acc = await freshAccount();
+    const vaultId = await vaultHoldingAFile(acc.token, randomBytes(4096));
+    // Over the limit by holding it, then frozen the way propagation freezes an account (SH-20).
+    await db.query(`UPDATE users SET quota_bytes = 1000, frozen_at = now() WHERE id = $1`, [acc.id]);
+    assert.notEqual(await frozenAt(acc.id), null, 'frozen before the removal, or this proves nothing');
+
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${vaultId}`, headers: { authorization: `Bearer ${acc.token}` } });
+    assert.equal(r.statusCode, 204, r.body);
+
+    assert.equal(await frozenAt(acc.id), null, 'the space came back and so did the account');
+  });
+
+  it('leaves it on when the account is still over the limit', async () => {
+    // The other half, and the reason this is not simply "deleting a vault unfreezes you". A thaw that
+    // fired on the act rather than on the arithmetic would let an account out while it was still over,
+    // which is the state the freeze exists to hold.
+    const acc = await freshAccount();
+    const one = await vaultHoldingAFile(acc.token, randomBytes(4096));
+    await vaultHoldingAFile(acc.token, randomBytes(4096));
+    await db.query(`UPDATE users SET quota_bytes = 1000, frozen_at = now() WHERE id = $1`, [acc.id]);
+
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${one}`, headers: { authorization: `Bearer ${acc.token}` } });
+    assert.equal(r.statusCode, 204, r.body);
+
+    assert.notEqual(await frozenAt(acc.id), null, 'one vault gone was not enough, so nothing was lifted');
+  });
+});
+
 describe('usage', () => {
   it('counts the account\'s blobs and reports the limit', async () => {
     const before = await app.inject({ method: 'GET', url: '/usage', headers: auth() });
