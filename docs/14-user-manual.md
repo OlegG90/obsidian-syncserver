@@ -123,6 +123,21 @@ It also syncs **on its own when the server says something changed** — another 
 note, or a shared folder moving. There is no timer; it is a live connection, so the change arrives rather
 than being waited for.
 
+### When a sync misses a change you know you made
+
+A sync does not re-read a note whose size and modification time are both exactly what they were last
+time — it takes the file's word that nothing happened. That is what makes a sync of a large vault quick,
+and it is right almost always.
+
+It is wrong in one situation: something changed a file **without** changing its modification time.
+Restoring notes from a backup does that, so do some file-copying tools, and so does another sync program
+writing into the same folder. Obsidian editing a note never does — it always stamps the file.
+
+If you have done something like that and a sync reports nothing, run **Full rescan (read every file)**
+from the command palette. It reads everything and costs a little time on a big vault. You do not need it
+after ordinary editing, and you never need it after a restore *of the server* — the plugin already reads
+everything on the pass that follows one.
+
 **But only while this session is unlocked.** A change arriving in the background must never pop up a
 passphrase prompt, so if the vault is locked the hint is ignored and nothing is pulled until you sync
 yourself. That is the answer to "my laptop saved an hour ago and this device still has not seen it".

@@ -30,8 +30,13 @@ export interface SyncCoordinatorDeps {
   unlock(passphrase: string): Promise<boolean>;
   /** Ask for the passphrase; undefined means dismissed. Never called without permission to prompt. */
   askPassphrase(): Promise<string | undefined>;
-  /** Run one engine pass. Called only with an open session. */
-  runPass(): Promise<SyncReport>;
+  /**
+   * Run one engine pass. Called only with an open session.
+   *
+   * `rescan` reads every file rather than trusting the recorded `mtime`/`size` (issue #237) — the way
+   * back when a timestamp lied, which a restore from backup or another sync tool can make it do.
+   */
+  runPass(opts: { rescan?: boolean }): Promise<SyncReport>;
   /** The phase changed — the status bar and anything else that renders it. */
   setPhase(phase: SyncPhase): void;
   /** A line for the user, with an optional duration in milliseconds. */
@@ -40,13 +45,13 @@ export interface SyncCoordinatorDeps {
 
 export interface SyncCoordinator {
   /** The manual path: unlock (prompting when locked), one pass, render. */
-  run(): Promise<void>;
+  run(opts?: { rescan?: boolean }): Promise<void>;
   /** The push path: a hint — runs only when the session is open and nothing is running. */
   runIfIdle(): Promise<void>;
 }
 
 export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator => {
-  const pass = async (prompt: boolean): Promise<void> => {
+  const pass = async (prompt: boolean, rescan = false): Promise<void> => {
     // The shared gate, taken synchronously before any await: a second call — manual or a
     // push hint — cannot slip past while the first waits on the passphrase or the pass. It
     // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
@@ -68,7 +73,7 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
         if (!(await deps.unlock(passphrase))) return; // refused
       }
       deps.setPhase({ kind: 'syncing' });
-      const report = await deps.runPass();
+      const report = await deps.runPass({ rescan });
       deps.setPhase({ kind: 'idle', at: Date.now(), report });
       render(report);
     } catch (e) {
@@ -101,7 +106,9 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
   };
 
   return {
-    run: () => pass(true),
+    run: (opts) => pass(true, opts?.rescan ?? false),
+    // Never a rescan: a hint from the push channel is the cheap path, and reading the whole vault
+    // because something arrived is the opposite of what makes it cheap.
     runIfIdle: () => pass(false),
   };
 };

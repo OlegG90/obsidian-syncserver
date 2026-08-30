@@ -596,6 +596,29 @@ not the data — the client re-reads the tree through a full walk (incremental a
 Local changes go out first. The reverse order hides conflicts: the client would
 apply the server's version over its own and only then discover there was a conflict.
 
+### What the client reads before it decides anything
+
+**A pass hashes the files it cannot rule out, not every file** (issue #237). The client records, beside
+the hash of each synced path, the `mtime` and `size` the vault reported when that hash was taken. On the
+next pass a file whose `mtime` **and** `size` both still match is taken as unchanged and not read: its
+hash is the recorded one, and its dedup tag derives from that hash rather than from the bytes
+(`dedupTagFromHash`). The saving is the read — the tag still travels, because a server that deleted and
+recreated a node hands the same content back under a new id, and binding to it happens by tag.
+
+**A timestamp is a hint and never authority.** A restore from backup, `mv -p`, or another tool writing
+into the vault can put different content under an unmoved timestamp, and nothing detects that by
+construction. So the shortcut is turned off in the two places where being wrong would cost most:
+
+- **any epoch whose policy prefers the local copy** — `restore`, `cursor_unverifiable`, `reset`. These
+  are the passes where this device's file may be the only surviving one, and a server restored from
+  backup is *precisely* the event that leaves timestamps alone while changing content;
+- **an explicit rescan**, which a person asks for (the plugin's *Full rescan* command).
+
+**The client records only timestamps the vault gave it.** A file this device wrote — a pulled node, a
+conflict copy — gets no hint at all: the editor stamps what it writes, so any value the client invented
+would be one the vault never reports back, and the file would be re-read on every pass while the state
+claimed it had been checked. Absent, it is read once on the next pass and hinted correctly from then on.
+
 A deletion is pushed like any other local change — `DELETE /nodes/{node_id}` with the revision the walk
 saw — and a node missing from the walked tree under a continuous epoch deletes the local copy. Under a
 `restore` epoch the same absence is a rescue, not a wipe: nothing is deleted locally and what the server

@@ -12,7 +12,7 @@ import type { StateStore } from '../src/engine/state.js';
 import { vaultKey } from '../src/crypto/account.js';
 import { randomBytes, toHex, utf8 } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { dedupTag, encryptName, nameHmac } from '../src/crypto/scope.js';
+import { dedupTag, encryptName, nameHmac, wrapContentKey } from '../src/crypto/scope.js';
 import { sealBlob } from '../src/crypto/blob.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
@@ -29,10 +29,6 @@ const opened: OpenedVault = {
 
 class CountingVault extends FakeVault {
   reads = 0;
-  // expose raw map for same-mtime tamper (same size, same mtime, different bytes)
-  rawFiles(): Map<string, { bytes: Uint8Array; mtime: number }> {
-    return (this as unknown as { files: Map<string, { bytes: Uint8Array; mtime: number }> }).files;
-  }
   override async read(path: string): Promise<Uint8Array> {
     this.reads++;
     return super.read(path);
@@ -61,8 +57,13 @@ class TrackingWire implements VaultWire {
   }
   private seal(text: string) {
     const s = sealBlob(utf8(text));
+    // The content key travels too, so this wire can actually serve a pull: an envelope from `blobKeys`
+    // and the ciphertext from `getBlob`. Without both, every test here can only ever adopt or match.
+    this.byAddress.set(s.sha256, { bytes: s.bytes, wrappedKey: wrapContentKey(this.kv, s.contentKey) });
     return { sha256: s.sha256, bytes: s.bytes };
   }
+
+  private byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
   async listNodes() {
     const nodes: import('@syncserver/shared').Change[] = [
       { node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null, op: 'put' as const, rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null },
@@ -78,7 +79,13 @@ class TrackingWire implements VaultWire {
     }
     return { nodes, snapshot: 'cur' };
   }
+  /** What the epoch probe is answered with. `undefined` = an ordinary, continuous server. */
+  rejectWith: 'restore' | 'reset' | undefined = undefined;
+
   async delta() {
+    if (this.rejectWith) {
+      return { rejected: true, reason: this.rejectWith } as unknown as Awaited<ReturnType<VaultWire['delta']>>;
+    }
     return { changes: [], events: [], next_cursor: 'cur', has_more: false } as unknown as Awaited<ReturnType<VaultWire['delta']>>;
   }
   async dedupLookup(_vaultId: string, tags: string[]) {
@@ -93,8 +100,16 @@ class TrackingWire implements VaultWire {
   async putBlob(sealed: { sha256: string; bytes: Uint8Array; keyId: string }) {
     return { sha256: sealed.sha256, size: sealed.bytes.length };
   }
-  async getBlob() { return undefined; }
-  async blobKeys() { return new Map(); }
+  async getBlob(address: string) { return this.byAddress.get(address)?.bytes; }
+
+  async blobKeys(_vaultId: string, addresses: string[]) {
+    const out = new Map<string, { scopeId: string; wrappedKey: string }[]>();
+    for (const a of addresses) {
+      const held = this.byAddress.get(a);
+      if (held) out.set(a, [{ scopeId, wrappedKey: held.wrappedKey }]);
+    }
+    return out;
+  }
   async createNode() { this.created++; return { node_id: `new-${this.created}`, rev: 10 }; }
   async putContent(_v: string, _n: string, _b: unknown) { this.putContentCalls++; return { rev: 2 }; }
   async moveNode() { return { rev: 2 }; }
@@ -111,7 +126,7 @@ function makeStore(initial: import('../src/engine/state.js').VaultState = { node
 }
 
 describe('engine #237 — incremental pre-pass', () => {
-  it('an unchanged vault does no pre-pass reads and no dedup lookup', async () => {
+  it('an unchanged vault reads nothing, and still asks about every tag', async () => {
     const seed = randomBytes(32);
     const kv = vaultKey(seed, vaultId);
     const vault = new CountingVault();
@@ -138,8 +153,13 @@ describe('engine #237 — incremental pre-pass', () => {
     wire.dedupTags = [];
     const report = await engine.sync();
     assert.equal(vault.reads, 0, 'unchanged vault must skip every read (meta phase)');
-    // skipped files still contribute a dedup tag derived from plainHash so adoption/reset can match
-    assert.equal(wire.dedupTags[0]?.length ?? 0, 3, 'unchanged vault still queries dedup (cheap HMAC, no read)');
+    // **The lookup does NOT shrink, and #237 expected it to.** Every file still contributes a tag —
+    // derived from the stored hash, so it costs an HMAC and no read. The reason it cannot shrink is the
+    // test below it: a server that deleted and recreated a node hands back the same content under a new
+    // id, and `matched` binds to it by TAG. Drop the tags of files that look unchanged locally and that
+    // rebinding stops happening, turning an ordinary server-side recreate into a spurious conflict.
+    // The saving this issue is about is the read; the lookup is a batched HMAC comparison (#230).
+    assert.equal(wire.dedupTags[0]?.length ?? 0, 3, 'every file is asked about, none is read');
     assert.equal(report.pushed.length, 0);
     assert.equal(report.matched.length, 0); // early return does not report matched, just returns
   });
@@ -242,9 +262,9 @@ describe('engine #237 — incremental pre-pass', () => {
     const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store);
     await engine.sync();
 
-    // tamper content to same size, same mtime (restore / mv -p scenario)
-    // 'hello world' -> 'hello worle' (11 bytes, different hash)
-    vault.rawFiles().set('a.md', { bytes: utf8('hello worle'), mtime: 1000 });
+    // Different content, same size, same mtime — what a restore from backup or `mv -p` leaves behind.
+    // `seed` and not `write`: this is the world changing under the plugin, not the plugin writing.
+    vault.seed('a.md', 'hello worle', 1000); // 11 bytes, as 'hello world' is
 
     vault.reads = 0;
     wire.putContentCalls = 0;
@@ -282,5 +302,65 @@ describe('engine #237 — incremental pre-pass', () => {
     assert.equal(report.conflicts.length, 0);
     assert.equal(report.matched[0]!.path, 'a.md');
     assert.equal(store.state.nodes['a.md']?.nodeId, 'node-new', 'hint tracks new nodeId');
+  });
+
+  it('a file this device pulled carries no hint, and earns one on the pass after', async () => {
+    // **The defect this pins** (#237). The engine used to record `Date.now()` as the timestamp of a
+    // file it had just written and skip on it for ever after. `ObsidianVaultAdapter.write` does not set
+    // `mtime` — Obsidian stamps the file itself — so that number never matched what `list()` reports,
+    // and every pulled file was re-read on every pass while the state claimed a hint. It passed here
+    // only because the fake stored what it was handed; it no longer does.
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new CountingVault();
+    const wire = new TrackingWire(kv);
+    wire.setServerFiles([{ path: 'from-server.md', text: 'came down', nodeId: 'node-s', rev: 2 }]);
+    const store = makeStore();
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store);
+
+    const first = await engine.sync();
+    assert.equal(first.pulled.length, 1, 'the file came down');
+    assert.equal(store.state.nodes['from-server.md']?.mtime, undefined, 'and no timestamp was invented for it');
+
+    // Second pass: one read, because there is nothing to skip on yet — and it ends with a real hint,
+    // taken from what the vault says rather than from what this device wished.
+    vault.reads = 0;
+    await engine.sync();
+    assert.equal(vault.reads, 1, 'read once, to learn what it actually looks like');
+    const hinted = store.state.nodes['from-server.md'];
+    assert.notEqual(hinted?.mtime, undefined, 'now it has one');
+    assert.equal(hinted?.size, utf8('came down').length);
+
+    // Third pass: the hint is real, so nothing is read at all.
+    vault.reads = 0;
+    await engine.sync();
+    assert.equal(vault.reads, 0, 'and from here on it is skipped');
+  });
+
+  it('an epoch that says the local copy may be the only one turns the shortcut off', async () => {
+    // The shortcut is a guess about the local file, and `restore`/`unverifiable`/`reset` are exactly
+    // the passes where that guess is least safe: restoring a server from a backup is the event that
+    // changes content while leaving timestamps alone. The policy already names them — `preferLocal` —
+    // so this asks the same question the rest of the pass asks rather than keeping a second list.
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new CountingVault();
+    vault.seed('a.md', 'hello world', 1000);
+    const wire = new TrackingWire(kv);
+    wire.setServerFiles([{ path: 'a.md', text: 'hello world', nodeId: 'node-a', rev: 2 }]);
+    const store = makeStore();
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store);
+    await engine.sync();
+
+    // Proof the hint is live: an ordinary pass reads nothing.
+    vault.reads = 0;
+    await engine.sync();
+    assert.equal(vault.reads, 0, 'the hint works on an ordinary pass');
+
+    // The server went backwards. Same file, same mtime, same size — and it is read anyway.
+    wire.rejectWith = 'restore';
+    vault.reads = 0;
+    await engine.sync();
+    assert.ok(vault.reads > 0, 'under a restore the pass does not trust a timestamp');
   });
 });

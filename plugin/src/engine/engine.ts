@@ -47,9 +47,8 @@ import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
-import { fromHex, toHex } from '../crypto/bytes.js';
-import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
-import { hmac } from '@noble/hashes/hmac.js';
+import { toHex } from '../crypto/bytes.js';
+import { decryptName, dedupTag, dedupTagFromHash, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
@@ -290,17 +289,34 @@ export class SyncEngine {
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
     // an actual upload, costs I/O this trades for that.
     //
-    // #237: when `mtime` and `size` both match the stored hint, the file is treated as
-    // unchanged without re-reading. `mtime` is a hint, not authority — a restore or `mv -p`
-    // can change content without moving it — so a full rescan would still read everything,
-    // but a normal pass takes the shortcut. Entries predating `mtime`/`size` are read once.
+    // **The shortcut, and the two things that turn it off** (issue #237). When `mtime` and `size` both
+    // match what this device recorded for the path, the file is taken as unchanged and not read: its
+    // hash is the one already stored, and the dedup tag derives from that hash rather than the bytes.
+    //
+    // `mtime` is a hint, never authority. A restore from backup, `mv -p`, or another sync tool can put
+    // different content under an unmoved timestamp — so this must be able to be wrong, and there must
+    // be a way to be right anyway. There are two:
+    //
+    // - `rescan`, asked for by a person ("Full rescan" in the command palette);
+    // - **any epoch whose policy says the local copy may be the only one** — `preferLocal`. That is
+    //   exactly `restore`, `unverifiable` and `reset`, and reusing the policy rather than listing the
+    //   three keeps one answer to "is the server's word trustworthy here" instead of two that can
+    //   drift. It is also the case that most needs the full read: restoring a server from backup is
+    //   *precisely* the event that changes content while leaving timestamps alone.
+    //
+    // Entries written before this field existed carry no `mtime`, so they are read once and hinted
+    // afterwards — no migration, and no state to reset.
+    const trustHints = !opts.rescan && !POLICY[epoch].preferLocal;
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
       const known = state.nodes[f.path];
-      if (!opts.rescan && known?.mtime !== undefined && known?.size !== undefined && known.mtime === f.mtime && known.size === f.size) {
-        // tag is HMAC(K, sha256(plain)); have the hash, derive tag without re-reading
-        const tag = toHex(hmac(sha256, this.scopes.vaultKey, fromHex(known.plainHash)));
-        meta.set(f.path, { plainHash: known.plainHash, tag, mtime: f.mtime, size: f.size });
+      if (trustHints && known?.mtime === f.mtime && known?.size === f.size && known.mtime !== undefined) {
+        meta.set(f.path, {
+          plainHash: known.plainHash,
+          tag: dedupTagFromHash(this.scopes.vaultKey, known.plainHash),
+          mtime: f.mtime,
+          size: f.size,
+        });
         continue;
       }
       const bytes = await this.vault.read(f.path);
@@ -562,14 +578,19 @@ export class SyncEngine {
     return source;
   }
 
-  private async hashAndTag(file: VaultFile | string): Promise<LocalMeta> {
-    const path = typeof file === 'string' ? file : file.path;
-    const mtimeHint = typeof file === 'string' ? undefined : file.mtime;
-    const bytes = await this.vault.read(path);
+  /**
+   * Read one file and describe it, for a path the pre-pass did not cover.
+   *
+   * **Takes the `VaultFile`, not the path**, because the `mtime` it records has to be the vault's own —
+   * the number `list()` will report on the next pass — and not `Date.now()`, which nothing will ever
+   * report again (#237). A hint that cannot match is worse than no hint: it says a file was checked.
+   */
+  private async hashAndTag(file: VaultFile): Promise<LocalMeta> {
+    const bytes = await this.vault.read(file.path);
     return {
       plainHash: toHex(sha256(bytes)),
       tag: dedupTag(this.scopes.vaultKey, bytes),
-      mtime: mtimeHint ?? Date.now(),
+      mtime: file.mtime,
       size: bytes.length,
     };
   }
@@ -796,23 +817,23 @@ export class SyncEngine {
     // The same ordering rule (#242), and it reads inverted here because the *destination* is the
     // conflict copy: `localPlain` exists nowhere but memory, so overwriting the path first and failing
     // second would lose this device's edits while the report below still claimed a copy had been made.
-    const conflictNow = Date.now();
-    await this.vault.write(conflictPath, localPlain, conflictNow);
-    const now = Date.now();
-    await this.vault.write(file.path, serverPlain, now);
+    await this.vault.write(conflictPath, localPlain);
+    await this.vault.write(file.path, serverPlain);
 
+    // **No `mtime` hint for a file this device just wrote** (issue #237). The engine does not decide
+    // what a written file's timestamp is — `ObsidianVaultAdapter.write` deliberately lets Obsidian
+    // stamp it — so a hint recorded here would be a number the vault never reports back, and every
+    // pulled file would be re-read for ever while the state claimed otherwise. Left absent, the next
+    // pass reads this file once, finds the content identical and records the timestamp the vault
+    // actually has. One read, once, instead of a hint that can never match.
     ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
-      mtime: now,
-      size: serverPlain.length,
     };
-    // Conflict copy holds the local bytes that were just read — record its mtime/size so the
-    // queued upload does not re-read it if the pass would otherwise revisit it.
     ctx.report.conflicts.push({ path: file.path, conflictPath });
-    ctx.queue.push({ path: conflictPath, mtime: conflictNow, size: localPlain.length });
+    ctx.queue.push({ path: conflictPath, mtime: Date.now(), size: localPlain.length });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
@@ -943,10 +964,11 @@ export class SyncEngine {
         if (!ciphertext) throw new Error('the server holds no bytes at that address');
 
         const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
-        const now = Date.now();
-        await this.vault.write(node.path, plain, now);
+        await this.vault.write(node.path, plain);
 
-        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!, mtime: now, size: plain.length };
+        // No hint, for the reason `resolveConflict` gives: this device does not choose the timestamp
+        // of a file it writes, so it has nothing true to record (#237).
+        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: message(e) });

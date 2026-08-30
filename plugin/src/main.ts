@@ -138,13 +138,13 @@ export default class SyncServerPlugin extends Plugin {
       sessionState: () => (this.sess ? this.sess.state : 'none'),
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
-      runPass: async () => {
+      runPass: async (opts) => {
         // `sess.use` and not `withVault`: a pass runs on an already-open session and must never be the
         // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
         // prompt in the middle of a background sync.
         const report = await this.sess!.use(async (h) => {
           const scopes = await this.openVault(h);
-          const out = await this.engineFor(h, scopes).sync();
+          const out = await this.engineFor(h, scopes).sync(opts);
           // Asked here because the session is already open and the folder this pass may
           // have just created is now on disk. A shared folder somebody ACCEPTED does not
           // exist locally until then, so its badge was filtered out as a path that is not
@@ -213,6 +213,23 @@ export default class SyncServerPlugin extends Plugin {
       id: 'sync-now',
       name: 'Sync now',
       callback: () => void this.syncNow(),
+    });
+
+    /**
+     * The way back when a timestamp lied (issue #237).
+     *
+     * An ordinary pass skips reading a file whose `mtime` and `size` still match what it recorded. That
+     * is a guess, and it is wrong for content that changed underneath an unmoved timestamp — a restore
+     * from backup, `mv -p`, another sync tool writing into the vault. Nothing detects that by
+     * construction, so the answer is a person being able to say "read everything".
+     *
+     * A command rather than a setting: it is an act, not a mode, and a mode would be a switch somebody
+     * leaves on and pays for on every pass.
+     */
+    this.addCommand({
+      id: 'full-rescan',
+      name: 'Full rescan (read every file)',
+      callback: () => void this.syncNow({ rescan: true }),
     });
 
     this.addCommand({
@@ -309,8 +326,8 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
-  syncNow(): Promise<void> {
-    return this.sync?.run() ?? Promise.resolve();
+  syncNow(opts?: { rescan?: boolean }): Promise<void> {
+    return this.sync?.run(opts) ?? Promise.resolve();
   }
 
   private readonly phaseWatchers = new Set<(phase: SyncPhase) => void>();
