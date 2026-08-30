@@ -1,6 +1,6 @@
 {
   "name": "syncserver-workspace",
-  "version": "0.6.3",
+  "version": "0.6.4-b",
   "private": true,
   "description": "Self-hosted synchronisation server for Obsidian vaults: multi-device sync plus per-folder sharing, end-to-end encrypted",
   "type": "module",
