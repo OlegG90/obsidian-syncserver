@@ -47,8 +47,9 @@ import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
-import { toHex } from '../crypto/bytes.js';
+import { fromHex, toHex } from '../crypto/bytes.js';
 import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
+import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
@@ -297,7 +298,9 @@ export class SyncEngine {
     for (const f of local) {
       const known = state.nodes[f.path];
       if (!opts.rescan && known?.mtime !== undefined && known?.size !== undefined && known.mtime === f.mtime && known.size === f.size) {
-        meta.set(f.path, { plainHash: known.plainHash, tag: '', mtime: f.mtime, size: f.size });
+        // tag is HMAC(K, sha256(plain)); have the hash, derive tag without re-reading
+        const tag = toHex(hmac(sha256, this.scopes.vaultKey, fromHex(known.plainHash)));
+        meta.set(f.path, { plainHash: known.plainHash, tag, mtime: f.mtime, size: f.size });
         continue;
       }
       const bytes = await this.vault.read(f.path);
@@ -308,7 +311,7 @@ export class SyncEngine {
         size: bytes.length,
       });
     }
-    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag).filter(Boolean))]);
+    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag))]);
 
     const here = new Set(local.map((f) => f.path));
 
@@ -501,7 +504,7 @@ export class SyncEngine {
     // A node at this path, but not the one we know — deleted and recreated, or a fresh
     // adoption. Content, not history, decides what happens next (docs/07).
     if (onServer && (!known || known.nodeId !== onServer.nodeId)) {
-      const matched = m.tag ? ctx.dedup.get(m.tag) : undefined;
+      const matched = ctx.dedup.get(m.tag);
       if (matched === onServer.address) {
         // Same plaintext, already at this exact address: record and move on.
         ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
@@ -793,21 +796,23 @@ export class SyncEngine {
     // The same ordering rule (#242), and it reads inverted here because the *destination* is the
     // conflict copy: `localPlain` exists nowhere but memory, so overwriting the path first and failing
     // second would lose this device's edits while the report below still claimed a copy had been made.
-    await this.vault.write(conflictPath, localPlain);
-    await this.vault.write(file.path, serverPlain);
+    const conflictNow = Date.now();
+    await this.vault.write(conflictPath, localPlain, conflictNow);
+    const now = Date.now();
+    await this.vault.write(file.path, serverPlain, now);
 
     ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
-      mtime: Date.now(),
+      mtime: now,
       size: serverPlain.length,
     };
     // Conflict copy holds the local bytes that were just read — record its mtime/size so the
     // queued upload does not re-read it if the pass would otherwise revisit it.
     ctx.report.conflicts.push({ path: file.path, conflictPath });
-    ctx.queue.push({ path: conflictPath, mtime: Date.now(), size: localPlain.length });
+    ctx.queue.push({ path: conflictPath, mtime: conflictNow, size: localPlain.length });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
@@ -896,7 +901,7 @@ export class SyncEngine {
       const m = ctx.meta.get(file.path)!;
       const onServer = ctx.tree.get(file.path);
       try {
-        if (onServer && m.tag && ctx.dedup.get(m.tag) === onServer.address) {
+        if (onServer && ctx.dedup.get(m.tag) === onServer.address) {
           // Same plaintext at the same path in the winning tree: rebind, nothing moves.
           ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
           ctx.report.matched.push({ path: file.path });
@@ -938,9 +943,10 @@ export class SyncEngine {
         if (!ciphertext) throw new Error('the server holds no bytes at that address');
 
         const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
-        await this.vault.write(node.path, plain);
+        const now = Date.now();
+        await this.vault.write(node.path, plain, now);
 
-        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!, mtime: Date.now(), size: plain.length };
+        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!, mtime: now, size: plain.length };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: message(e) });

@@ -138,7 +138,8 @@ describe('engine #237 — incremental pre-pass', () => {
     wire.dedupTags = [];
     const report = await engine.sync();
     assert.equal(vault.reads, 0, 'unchanged vault must skip every read (meta phase)');
-    assert.equal(wire.dedupTags[0]?.length ?? 0, 0, 'unchanged vault must ask for no dedup tags');
+    // skipped files still contribute a dedup tag derived from plainHash so adoption/reset can match
+    assert.equal(wire.dedupTags[0]?.length ?? 0, 3, 'unchanged vault still queries dedup (cheap HMAC, no read)');
     assert.equal(report.pushed.length, 0);
     assert.equal(report.matched.length, 0); // early return does not report matched, just returns
   });
@@ -167,7 +168,7 @@ describe('engine #237 — incremental pre-pass', () => {
     const report = await engine.sync();
     // meta reads 1 (b.md) + upload re-read 1 = 2 total reads; skipped files add 0
     assert.equal(vault.reads, 2, 'one changed file — one meta read + one upload read, others skipped');
-    assert.equal(wire.dedupTags[0]?.length, 1, 'dedup lookup shrinks to the one changed file');
+    assert.equal(wire.dedupTags[0]?.length, 3, 'all files query dedup (skipped via HMAC, changed via read)');
     assert.equal(report.pushed.length, 1);
     assert.equal(report.pushed[0]!.path, 'b.md');
   });
@@ -258,5 +259,28 @@ describe('engine #237 — incremental pre-pass', () => {
     assert.equal(vault.reads, 2, 'rescan forces the read');
     assert.equal(withRescan.pushed.length, 1, 'rescan finds the change');
     assert.equal(withRescan.pushed[0]!.path, 'a.md');
+  });
+
+  it('skipped file still dedup-matches on delete+recreate (no spurious conflict)', async () => {
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new CountingVault();
+    vault.seed('a.md', 'same body', 1000);
+    const wire = new TrackingWire(kv);
+    wire.setServerFiles([{ path: 'a.md', text: 'same body', nodeId: 'node-old', rev: 2 }]);
+    const store = makeStore();
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store);
+    await engine.sync(); // populates hint with node-old
+
+    // server recreates the node with new id but same content (delete+create)
+    wire.setServerFiles([{ path: 'a.md', text: 'same body', nodeId: 'node-new', rev: 3 }]);
+    vault.reads = 0;
+    const report = await engine.sync();
+    // file is skipped (mtime+size match) but dedup tag is still derived, so adoption matched
+    assert.equal(vault.reads, 0, 'skipped file should not be re-read even for adoption check');
+    assert.equal(report.matched.length, 1, 'same content at same path should bind, not conflict');
+    assert.equal(report.conflicts.length, 0);
+    assert.equal(report.matched[0]!.path, 'a.md');
+    assert.equal(store.state.nodes['a.md']?.nodeId, 'node-new', 'hint tracks new nodeId');
   });
 });
