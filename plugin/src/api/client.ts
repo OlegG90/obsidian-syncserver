@@ -185,6 +185,43 @@ const inBatches = <T>(items: readonly T[]): T[][] => {
   return out;
 };
 
+/**
+ * How many of those batches are in the air at once (issue #250).
+ *
+ * **They used to go one at a time**, and the note that made them do so said a vault large enough to need
+ * several batches was one whose owner was already waiting for a scan. That was written when a pass
+ * followed a button press and the scan meant the **read** — which #237 has since removed. Measured on a
+ * real vault afterwards: 508 files, nine batches, and the nine round trips were about ninety
+ * milliseconds against thirty for the whole server tree. The longest thing in a pass that does nothing
+ * was the waiting.
+ *
+ * Six, which is what a browser allows one host and therefore what a home server is likely to have been
+ * sized for. The point is not to make it as parallel as possible: an unattended pass now runs every time
+ * the vault settles (#238), and a plugin that answers that by opening eighty connections to somebody's
+ * NAS has moved the cost rather than removed it.
+ */
+const LOOKUP_CONCURRENCY = 6;
+
+/**
+ * Run `work` over every item, at most `LOOKUP_CONCURRENCY` at a time, answers in the order asked.
+ *
+ * A rolling pool rather than groups of six awaited in turn: with groups, one slow batch holds up the
+ * five it happened to be grouped with, and a home server reached over a VPN is exactly where one batch
+ * is slower than its neighbours.
+ */
+const inFlight = async <T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> => {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const mine = next++;
+      out[mine] = await work(items[mine]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LOOKUP_CONCURRENCY, items.length) }, worker));
+  return out;
+};
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -825,13 +862,18 @@ export class SyncClient {
    * which key it is unwrapping with.
    */
   async blobKeys(vaultId: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
-    const byAddress = new Map<string, Envelope[]>();
-    for (const batch of inBatches(addresses)) {
+    const answers = await inFlight(inBatches(addresses), (batch) => {
       const q = new URLSearchParams({ sha256: batch.join(',') });
-      const out = await this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
+      return this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
         'GET',
         `/vaults/${vaultId}/blob-keys?${q}`,
       );
+    });
+
+    // Merged after, in the order the batches were asked for, so a blob with envelopes in two scopes
+    // lists them the same way however the requests happened to finish.
+    const byAddress = new Map<string, Envelope[]>();
+    for (const out of answers) {
       for (const k of out.keys) {
         const list = byAddress.get(k.sha256) ?? [];
         list.push({ scopeId: k.scope_id, wrappedKey: k.wrapped_key });
@@ -856,15 +898,16 @@ export class SyncClient {
    * itself, only "not something this vault has tagged before."
    */
   async dedupLookup(vaultId: string, tags: string[]): Promise<Map<string, string>> {
-    const found = new Map<string, string>();
-    for (const batch of inBatches(tags)) {
+    const answers = await inFlight(inBatches(tags), (batch) => {
       const q = new URLSearchParams({ tags: batch.join(',') });
-      const out = await this.json<{ matches: { content_tag: string; sha256: string }[] }>(
+      return this.json<{ matches: { content_tag: string; sha256: string }[] }>(
         'GET',
         `/vaults/${vaultId}/dedup?${q}`,
       );
-      for (const m of out.matches) found.set(m.content_tag, m.sha256);
-    }
+    });
+
+    const found = new Map<string, string>();
+    for (const out of answers) for (const m of out.matches) found.set(m.content_tag, m.sha256);
     return found;
   }
 
