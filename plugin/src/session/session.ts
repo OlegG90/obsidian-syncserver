@@ -54,6 +54,7 @@ import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
 import { newHumanCode, normaliseHumanCode } from '../crypto/human-code.js';
 import { SyncClient } from '../api/client.js';
+import { openTreeCache, type TreeCache } from '../engine/tree-cache.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
 
@@ -85,6 +86,15 @@ export interface Connection {
  */
 export interface Handle {
   client: SyncClient;
+  /**
+   * Where a pass leaves the tree it walked, so the next one need not walk it again (issue #252).
+   *
+   * **Here, and not on the plugin, because of what it holds.** The tree is paths — decrypted names, all
+   * the way down. A cache the plugin owned would have to be cleared when the vault locks, by somebody
+   * remembering to clear it; this one cannot outlive the unlocked session, because the handle it hangs
+   * off is made at unlock and dropped at lock.
+   */
+  treeCache: TreeCache;
   /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
   kv: Uint8Array;
   /** This account's id. An invitation's envelope is bound to it (docs/06), so opening one needs it. */
@@ -210,6 +220,7 @@ const handleFor = (
   encPrivkey: string,
 ): Handle => ({
   client,
+  treeCache: openTreeCache(),
   kv: vaultKey(seed, vaultId),
   userId,
   encPrivkey,

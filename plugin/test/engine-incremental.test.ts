@@ -16,6 +16,7 @@ import { dedupTag, encryptName, nameHmac, wrapContentKey } from '../src/crypto/s
 import { sealBlob } from '../src/crypto/blob.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
+import { openTreeCache } from '../src/engine/tree-cache.js';
 import { FakeVault } from './fake-vault.js';
 
 const vaultId = '11111111-1111-4111-8111-111111111111';
@@ -81,7 +82,11 @@ class TrackingWire implements VaultWire {
   private byText = new Map<string, { sha256: string; bytes: Uint8Array }>();
 
   private byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
+  /** How many times the whole tree was fetched — what #252 is about. */
+  listNodeCalls = 0;
+
   async listNodes() {
+    this.listNodeCalls++;
     const nodes: import('@syncserver/shared').Change[] = [
       { node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null, op: 'put' as const, rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null },
     ];
@@ -99,11 +104,19 @@ class TrackingWire implements VaultWire {
   /** What the epoch probe is answered with. `undefined` = an ordinary, continuous server. */
   rejectWith: 'restore' | 'reset' | undefined = undefined;
 
+  /** Set to a change to answer the probe with "something happened since your cursor". */
+  deltaChanges: unknown[] = [];
+
   async delta() {
     if (this.rejectWith) {
       return { rejected: true, reason: this.rejectWith } as unknown as Awaited<ReturnType<VaultWire['delta']>>;
     }
-    return { changes: [], events: [], next_cursor: 'cur', has_more: false } as unknown as Awaited<ReturnType<VaultWire['delta']>>;
+    return {
+      changes: this.deltaChanges,
+      events: [],
+      next_cursor: 'cur',
+      has_more: false,
+    } as unknown as Awaited<ReturnType<VaultWire['delta']>>;
   }
   async dedupLookup(_vaultId: string, tags: string[]) {
     this.dedupTags.push([...tags]);
@@ -379,5 +392,96 @@ describe('engine #237 — incremental pre-pass', () => {
     vault.reads = 0;
     await engine.sync();
     assert.ok(vault.reads > 0, 'under a restore the pass does not trust a timestamp');
+  });
+});
+
+/**
+ * Walking the server's tree, and not walking it (issue #252).
+ *
+ * Measured on a real vault: the listing is 313 KB and turning it into paths costs 12–17 ms of
+ * decryption at 624 nodes, 92 ms at 5 000 — paid on every pass, and since #238 a pass happens whenever
+ * the vault settles rather than when somebody presses a button.
+ *
+ * **The cursor is the whole of what makes reuse safe.** These cases are about when the engine is allowed
+ * to believe the tree it already has, and — more importantly — when it is not. A cache that guessed
+ * would put this device permanently out of step with the server, silently, which is the worst failure
+ * this product has.
+ */
+describe('the tree is walked once while nothing happens (issue #252)', () => {
+  const scenario = () => {
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new CountingVault();
+    vault.seed('a.md', 'hello world', 1000);
+    const wire = new TrackingWire(kv);
+    wire.setServerFiles([{ path: 'a.md', text: 'hello world', nodeId: 'node-a', rev: 2 }]);
+    const store = makeStore();
+    const cache = openTreeCache();
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store, 'device', false, cache);
+    return { wire, engine, store };
+  };
+
+  it('walks once, then reuses it while the probe says nothing happened', async () => {
+    const { wire, engine } = scenario();
+
+    await engine.sync();
+    assert.equal(wire.listNodeCalls, 1, 'the first pass has nothing to reuse');
+
+    await engine.sync();
+    await engine.sync();
+    assert.equal(wire.listNodeCalls, 1, 'and the quiet ones reuse it');
+  });
+
+  it('walks again the moment the probe reports a change', async () => {
+    const { wire, engine } = scenario();
+    await engine.sync();
+    await engine.sync();
+    assert.equal(wire.listNodeCalls, 1);
+
+    // One change since our cursor is enough: what it was does not matter, only that the tree this
+    // device holds can no longer be assumed to be the server's.
+    wire.deltaChanges = [{ node_id: 'whatever' }];
+    await engine.sync();
+
+    assert.equal(wire.listNodeCalls, 2, 'anything at all having happened means walking again');
+  });
+
+  it('walks again under an epoch that moved, however quiet the page was', async () => {
+    // A rejected cursor is not a quiet one: `restore`, `reset` and `unverifiable` all mean the server
+    // is not where this device left it, and a tree remembered from before is a tree from another world.
+    const { wire, engine } = scenario();
+    await engine.sync();
+    assert.equal(wire.listNodeCalls, 1);
+
+    wire.rejectWith = 'restore';
+    await engine.sync();
+
+    assert.equal(wire.listNodeCalls, 2, 'an epoch that moved rebuilds');
+  });
+
+  it('gives out a copy, so a pass that changes the tree cannot poison the next one', async () => {
+    // A pass mutates the tree it is handed — a pushed file joins it, a reset remaps it. Handing out the
+    // cache's own map would corrupt it on the first pass that used it, and the corruption would look
+    // like the server having changed.
+    const cache = openTreeCache();
+    const walked = {
+      cursor: 'cur',
+      tree: new Map([['a.md', { nodeId: 'n1', parentId: 'root', path: 'a.md', rev: 1, isFile: true } as never]]),
+      unreadable: [],
+    };
+    cache.put(walked);
+
+    walked.tree.set('b.md', { nodeId: 'n2' } as never);
+    const first = cache.get('cur')!;
+    first.tree.set('c.md', { nodeId: 'n3' } as never);
+
+    const second = cache.get('cur')!;
+    assert.deepEqual([...second.tree.keys()], ['a.md'], 'neither the caller before nor after can reach it');
+  });
+
+  it('answers nothing for a cursor it did not walk at', async () => {
+    const cache = openTreeCache();
+    cache.put({ cursor: 'one', tree: new Map(), unreadable: [] });
+    assert.equal(cache.get('two'), undefined);
   });
 });

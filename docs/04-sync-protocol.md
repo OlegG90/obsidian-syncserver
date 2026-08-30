@@ -605,8 +605,19 @@ journal at all ([05](05-sharing.md)).
 `/delta` with `limit: 1` and reads the verdict. `200` means the server is continuous with what it last
 saw; `410` names the epoch that moved; `400 cursor_unverifiable` means the cursor cannot be checked at all.
 That verdict is what decides how an absence is read: whether a node missing from the listing was deleted
-there, or the server simply no longer holds it (docs/04's epoch table below, D-70). The probe is a check,
-not the data — the client re-reads the tree through a full walk (incremental application is M2).
+there, or the server simply no longer holds it (docs/04's epoch table below, D-70).
+
+**The probe is a check, not the data**, with one thing read off it: whether anything happened at all. An
+empty page with nothing after it means no node has been written, moved or removed since that cursor — so
+the tree the client built at that cursor is still what a fresh walk would produce, and the walk is
+skipped (issue #252). Anything else, and any epoch that is not continuous, walks: the client rebuilds
+the tree rather than editing the one it has, and a cache that guessed would put a device permanently and
+silently out of step.
+
+The remembered tree lives only as long as the vault is unlocked. It is **paths** — decrypted names — and
+keeping it past a lock would leave in memory exactly what locking is for.
+
+Applying the delta's pages to a kept tree, rather than reusing or rebuilding one, is still not done.
 
 Local changes go out first. The reverse order hides conflicts: the client would
 apply the server's version over its own and only then discover there was a conflict.
