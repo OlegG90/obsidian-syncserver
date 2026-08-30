@@ -184,6 +184,46 @@ describe('the batched lookups fit inside a request line', () => {
     assert.deepEqual(keys.get(addresses[129]!), [{ scopeId: 's', wrappedKey: addresses[129]! }]);
   });
 
+  it('sends the batches at once rather than one after another, bounded (issue #250)', async () => {
+    // The measurement that produced this: 508 files, nine batches, nine sequential round trips — about
+    // ninety milliseconds against thirty for the whole server tree, on a pass that found nothing. The
+    // waiting was the longest thing in it.
+    //
+    // Bounded, and the bound is asserted: an unattended pass runs every time the vault settles (#238),
+    // and answering that by opening a connection per batch to somebody's NAS moves the cost rather than
+    // removing it.
+    let inFlight = 0;
+    let peak = 0;
+    const release: (() => void)[] = [];
+    const transport: Transport = async (req) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      // Held open until every worker that can start has started, so `peak` measures what the pool
+      // allows rather than how fast the fake answers.
+      await new Promise<void>((r) => release.push(r));
+      inFlight--;
+      const asked = new URL(req.url).searchParams.get('tags')!.split(',');
+      return ok({ matches: asked.map((t) => ({ content_tag: t, sha256: t })) });
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('a');
+
+    const tags = hex(540); // nine batches of sixty
+    const pending = client.dedupLookup('v1', tags);
+
+    // Let the pool fill, then answer everything.
+    await new Promise((r) => setTimeout(r, 0));
+    while (release.length) {
+      release.splice(0).forEach((r) => r());
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const found = await pending;
+
+    assert.ok(peak > 1, `the batches queued one behind another: peak ${peak}`);
+    assert.ok(peak <= 6, `too many at once for a home server: peak ${peak}`);
+    assert.equal(found.size, 540, 'and every answer is kept, whatever order they arrived in');
+  });
+
   it('asks nothing at all when there is nothing to look up', async () => {
     // The empty case used to be an early return beside the request; it is now a property of the
     // batching, and a loop that ran once on an empty list would send `tags=` and be refused.

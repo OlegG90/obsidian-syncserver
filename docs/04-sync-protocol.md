@@ -377,6 +377,12 @@ existing address with no fresh envelope or upload — `nodes_check_private_mater
 material rows exist, not who wrote them or when ([03](03-data-model.md)). This is what makes adopting an
 already-synced vault "nearly free" ([07](07-onboarding.md)): after matching by path, only metadata travels.
 
+**Both are asked for concurrently, up to six at a time** (issue #250). Measured on a real vault: 508
+files is nine batches, and nine round trips one after another cost about three times the whole server
+tree on the same pass. Six rather than all of them, because an unattended pass runs every time the vault
+settles and a client that answers that by opening a connection per batch has moved the cost rather than
+removed it.
+
 **Both are bounded, and the bound is a transport fact rather than a database one** (issue #230). An
 identifier is 64 hex characters, so with its separator it costs 65 bytes of the request line — and a
 request whose header block passes 16 KB is refused by Node with `431` before the server sees it. A
