@@ -55,13 +55,30 @@ class TrackingWire implements VaultWire {
       this.tagToAddr.set(tag, s.sha256);
     }
   }
+  /**
+   * Seal once per text, and hand the same address back ever after.
+   *
+   * **This is what a real server does, and getting it wrong hid a defect.** Sealing uses a random
+   * content key, so the same plaintext sealed twice lands at two addresses — which is why the dedup
+   * tag exists at all: a client that already holds the content binds to the **existing** address rather
+   * than sealing again. So a node deleted and recreated by another device keeps its address and changes
+   * only its id, and a fake that re-sealed made that case look like an address change. A mutation
+   * dropping the node-id half of the pre-pass predicate then passed, because no test could reach the
+   * one thing that half protects.
+   */
   private seal(text: string) {
+    const already = this.byText.get(text);
+    if (already) return already;
     const s = sealBlob(utf8(text));
     // The content key travels too, so this wire can actually serve a pull: an envelope from `blobKeys`
     // and the ciphertext from `getBlob`. Without both, every test here can only ever adopt or match.
     this.byAddress.set(s.sha256, { bytes: s.bytes, wrappedKey: wrapContentKey(this.kv, s.contentKey) });
-    return { sha256: s.sha256, bytes: s.bytes };
+    const out = { sha256: s.sha256, bytes: s.bytes };
+    this.byText.set(text, out);
+    return out;
   }
+
+  private byText = new Map<string, { sha256: string; bytes: Uint8Array }>();
 
   private byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
   async listNodes() {
@@ -126,7 +143,7 @@ function makeStore(initial: import('../src/engine/state.js').VaultState = { node
 }
 
 describe('engine #237 — incremental pre-pass', () => {
-  it('an unchanged vault reads nothing, and still asks about every tag', async () => {
+  it('an unchanged vault reads nothing and asks about nothing', async () => {
     const seed = randomBytes(32);
     const kv = vaultKey(seed, vaultId);
     const vault = new CountingVault();
@@ -153,13 +170,15 @@ describe('engine #237 — incremental pre-pass', () => {
     wire.dedupTags = [];
     const report = await engine.sync();
     assert.equal(vault.reads, 0, 'unchanged vault must skip every read (meta phase)');
-    // **The lookup does NOT shrink, and #237 expected it to.** Every file still contributes a tag —
-    // derived from the stored hash, so it costs an HMAC and no read. The reason it cannot shrink is the
-    // test below it: a server that deleted and recreated a node hands back the same content under a new
-    // id, and `matched` binds to it by TAG. Drop the tags of files that look unchanged locally and that
-    // rebinding stops happening, turning an ordinary server-side recreate into a spurious conflict.
-    // The saving this issue is about is the read; the lookup is a batched HMAC comparison (#230).
-    assert.equal(wire.dedupTags[0]?.length ?? 0, 3, 'every file is asked about, none is read');
+    // **Nothing travels** (issue #250). A path whose stored entry names the same node and the same
+    // address as the walked tree takes the known-node branch, finds nothing changed on either side and
+    // returns — it never reads the dedup map, so its tag is a question with a predetermined answer.
+    // On a vault nobody has touched that is every file, so the request disappears rather than shrinking.
+    // The test below keeps the case this could have broken: a server-side delete-and-recreate changes
+    // the node id, so that file IS asked about and still rebinds instead of conflicting.
+    // Counted as TAGS, not as calls: `dedupLookup([])` reaches the real client and makes no request at
+    // all (`inBatches` of nothing is nothing), so what matters is that nothing travelled.
+    assert.equal(wire.dedupTags.flat().length, 0, 'nothing was read and nothing was asked about');
     assert.equal(report.pushed.length, 0);
     assert.equal(report.matched.length, 0); // early return does not report matched, just returns
   });
@@ -188,7 +207,9 @@ describe('engine #237 — incremental pre-pass', () => {
     const report = await engine.sync();
     // meta reads 1 (b.md) + upload re-read 1 = 2 total reads; skipped files add 0
     assert.equal(vault.reads, 2, 'one changed file — one meta read + one upload read, others skipped');
-    assert.equal(wire.dedupTags[0]?.length, 3, 'all files query dedup (skipped via HMAC, changed via read)');
+    // Only the file that changed. The other two are unchanged on both sides, and nothing in their
+    // reconciliation can consult the map, so their tags are questions with predetermined answers (#250).
+    assert.equal(wire.dedupTags.flat().length, 1, 'only the changed file is asked about');
     assert.equal(report.pushed.length, 1);
     assert.equal(report.pushed[0]!.path, 'b.md');
   });
