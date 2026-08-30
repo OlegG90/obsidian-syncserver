@@ -11,9 +11,10 @@
  * **type-only**, so nothing circular exists at runtime: the composition root imports this
  * screen, and this screen imports nothing back.
  */
-import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, ButtonComponent, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import { whatIsMissing, type ConnectDraft, type Route } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
+import { QUIET_MS } from '../local-changes.js';
 import { lastActionLine } from '../last-action.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
@@ -130,6 +131,32 @@ export class SyncServerSettings extends PluginSettingTab {
             .setValue(this.plugin.data.syncObsidian === true)
             .onChange(async (v) => {
               this.plugin.data.syncObsidian = v;
+              await this.plugin.save();
+            }),
+        );
+
+      /**
+       * Automatic syncing after local edits (issue #238).
+       *
+       * **Its default is per install, not shared**: a pass reads what it cannot rule out and talks to a
+       * server, which is a different proposition on a phone's battery and a metered connection than at
+       * a desk. So the stored value is unset until somebody decides, and unset means on at a desk.
+       *
+       * The description says the delay out loud. A sync that happens "eventually" is one a person
+       * checks up on, which costs more attention than the button it replaced.
+       */
+      new Setting(options)
+        .setName('Sync after local changes')
+        .setDesc(
+          `Runs a sync once the vault has been still for ${Math.round(QUIET_MS / 1000)} seconds. ` +
+            'Incoming changes always arrive on their own; this is for your own edits. ' +
+            `Default: ${Platform.isMobile ? 'off on a phone' : 'on at a desk'}.`,
+        )
+        .addToggle((t) =>
+          t
+            .setValue(this.plugin.data.autoSync ?? !Platform.isMobile)
+            .onChange(async (v) => {
+              this.plugin.data.autoSync = v;
               await this.plugin.save();
             }),
         );

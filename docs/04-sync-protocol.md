@@ -624,6 +624,28 @@ saw — and a node missing from the walked tree under a continuous epoch deletes
 `restore` epoch the same absence is a rescue, not a wipe: nothing is deleted locally and what the server
 lost is uploaded as new.
 
+### What starts a pass
+
+Three things, and none of them is a timer (issue #238). A timer syncs a vault nobody touched and misses
+the edit made a second after it fired.
+
+- **A person**, from the ribbon, the settings tab or the command palette.
+- **The server**, through the change-notification socket below: another device wrote, or a shared folder
+  moved.
+- **The vault settling.** A local change starts a quiet period, and a pass runs once nothing has changed
+  for its duration — so a burst of edits, a paste of forty files or a folder rename costs one pass. The
+  period has to outlast the editor's own write: Obsidian saves a note about two seconds after typing
+  stops, and *that save* is the change this counts from.
+
+**Nothing starts while an operation is already running**, which is what makes the client's own writes
+harmless. A pull writes files, those writes raise the same events, and a pass that could start on them
+would wake the client in a loop. The quiet period restarts instead, so what follows a pass is at most
+one more — and that one reads the files the pull just wrote, which is the read the incremental pass
+defers to exactly there (#237).
+
+**An unattended pass that moved nothing says nothing.** Errors, conflicts, quarantines and account
+states are still told: those are the ones no other surface would mention.
+
 ## Change notifications
 
 A device learns that another device wrote, so that it can stop waiting for the user to press the sync

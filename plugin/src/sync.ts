@@ -75,7 +75,9 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
       deps.setPhase({ kind: 'syncing' });
       const report = await deps.runPass({ rescan });
       deps.setPhase({ kind: 'idle', at: Date.now(), report });
-      render(report);
+      // `prompt` is also the answer to "did somebody ask for this": the manual path prompts for the
+      // passphrase and the automatic ones must never. One flag, because they are one question.
+      render(report, prompt);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       deps.setPhase({ kind: 'failed', message, at: Date.now() });
@@ -85,13 +87,21 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     }
   };
 
-  // The post-pass render: one line that says what happened, then each thing that needs a
-  // person named individually — "3 failed" (or "3 conflicts") is not actionable by count.
-  const render = (report: SyncReport): void => {
+  /**
+   * The post-pass render: one line that says what happened, then each thing that needs a person named
+   * individually — "3 failed" (or "3 conflicts") is not actionable by count.
+   *
+   * **A pass nobody asked for says nothing when nothing happened** (issue #238). Automatic syncing turns
+   * one notice per press into one every time the vault settles, and "nothing changed" arriving all day
+   * is how a person learns to dismiss the notices that matter. So the summary is skipped for an
+   * unattended pass with an empty summary — and only the summary. Errors, conflicts, quarantines and
+   * account states are told either way: those are the ones nothing else on screen would say.
+   */
+  const render = (report: SyncReport, announce: boolean): void => {
     const parts = summary(report);
     // The "saw nothing" reading is the report module's `empty` mood, not a re-derived check.
     const head = parts.length ? parts.join(', ') : priority(report) === 'empty' ? 'vault looks empty' : 'nothing changed';
-    deps.notify(`SyncServer: ${head} — ${report.scanned} local files seen.`);
+    if (announce || parts.length) deps.notify(`SyncServer: ${head} — ${report.scanned} local files seen.`);
     for (const e of report.errors.slice(0, 5)) deps.notify(`SyncServer: ${e.path} — ${e.message}`, 10000);
     for (const c of report.conflicts.slice(0, 5)) {
       deps.notify(`SyncServer: conflict — ${c.path}\nyour copy: ${c.conflictPath}`, 15000);

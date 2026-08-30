@@ -15,6 +15,7 @@
  */
 import type { OwnDeviceRow } from '@syncserver/shared';
 import { Notice, Platform, Plugin, setIcon } from 'obsidian';
+import { watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
 import { ApiError, SyncClient } from './api/client.js';
 import { SyncEngine } from './engine/engine.js';
@@ -72,6 +73,14 @@ interface PluginData {
   sharedFolders?: Record<string, string>;
   /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
   syncObsidian?: boolean;
+  /**
+   * Sync on its own once the vault has been still for a moment (issue #238).
+   *
+   * Unset means **on at a desk and off on a phone**, decided per install rather than shared: a pass
+   * reads the files it cannot rule out and talks to a server, and doing that after every edit is a
+   * different proposition on a battery and a metered connection than on a desktop.
+   */
+  autoSync?: boolean;
 }
 
 const DEFAULT_DATA: PluginData = {};
@@ -89,6 +98,8 @@ export default class SyncServerPlugin extends Plugin {
   private push: PushListener | undefined;
   /** The sync coordinator (sync.ts) — owns unlock → one pass → render, and the re-entry guard. */
   private sync: SyncCoordinator | undefined;
+  /** The quiet period after a local edit — see `local-changes.ts` (#238). */
+  private localChanges: LocalChangeWatcher | undefined;
   /** Kept so a finished pairing can rebuild the screen that was showing its code. */
   /** One unlock in flight at a time, so a screen that asks for three things asks once. */
   private unlocking: Promise<Session> | undefined;
@@ -158,6 +169,27 @@ export default class SyncServerPlugin extends Plugin {
       setPhase: (phase) => this.setPhase(phase),
       notify: (message, durationMs) => this.say(message, durationMs),
     });
+
+    /**
+     * Local edits start a pass on their own, once the vault settles (issue #238).
+     *
+     * The four events are Obsidian's whole vocabulary for "the vault changed"; `modify` is the one that
+     * fires for typing, and it fires when the **editor saves**, not per keystroke. What decides when a
+     * pass runs lives in `local-changes.ts` — this is only the wiring, and `registerEvent` is what makes
+     * the listeners die with the plugin.
+     */
+    this.localChanges = watchLocalChanges({
+      busy: () => this.busyWith() !== undefined,
+      enabled: () => this.data.autoSync ?? !Platform.isMobile,
+      run: () => void this.sync?.runIfIdle(),
+    });
+    // Listed one by one rather than looped: Obsidian types `vault.on` per event name, and a loop over
+    // the four narrows to whichever overload it saw last.
+    const touched = (): void => this.localChanges?.touched();
+    this.registerEvent(this.app.vault.on('create', touched));
+    this.registerEvent(this.app.vault.on('modify', touched));
+    this.registerEvent(this.app.vault.on('delete', touched));
+    this.registerEvent(this.app.vault.on('rename', touched));
 
     // Desktop only — Obsidian does not render a status bar on a phone (docs/02), which is
     // exactly why the same state is a command as well, and not only here.
@@ -261,6 +293,8 @@ export default class SyncServerPlugin extends Plugin {
    * switched off here, in the same order it went on.
    */
   override async onunload(): Promise<void> {
+    // Before the rest: a quiet period still counting would fire against a session being torn down.
+    this.localChanges?.stop();
     await this.stopPush();
     document.getElementById(SHARED_MARKS_STYLE)?.remove();
   }
