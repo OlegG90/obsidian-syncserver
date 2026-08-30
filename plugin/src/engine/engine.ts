@@ -331,7 +331,35 @@ export class SyncEngine {
         size: bytes.length,
       });
     }
-    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag))]);
+    /**
+     * **Only for the files whose reconciliation could consult it** (issue #250).
+     *
+     * The map is read in exactly three places, and two of them cannot be reached by a file that is
+     * unchanged on both sides:
+     *
+     * - `reconcileLocal`'s adoption branch, which needs `!known || known.nodeId !== onServer.nodeId` —
+     *   a node this device has not synced, or one deleted and recreated under a new id;
+     * - `resolveContent`, on the way to an upload, which a file with nothing to push never reaches;
+     * - `resyncAfterReset`, under an epoch where hints are not trusted anyway, so every file was read
+     *   and every tag computed.
+     *
+     * So a path whose stored entry names **the same node and the same address** as the walked tree goes
+     * down the known-node branch, finds nothing changed on either side and returns — without ever
+     * asking the map. Its tag is a question with a predetermined answer, and on a vault nobody has
+     * touched that is every file: the ask disappears entirely rather than shrinking, which is what
+     * #237 wanted and #250 could not safely do until the lookups were measured.
+     *
+     * The tag is still **computed** for everything — it costs an HMAC over a hash already in hand, and
+     * `meta` is what the rest of the pass reads. What changes is what travels.
+     */
+    const mightNeedATag = (path: string, m: LocalMeta): boolean => {
+      const known = state.nodes[path];
+      const onServer = tree.get(path);
+      return !(known && onServer && known.nodeId === onServer.nodeId && known.address === onServer.address
+        && known.plainHash === m.plainHash);
+    };
+    const asking = [...new Set([...meta].filter(([p, m]) => mightNeedATag(p, m)).map(([, m]) => m.tag))];
+    const dedup = await this.client.dedupLookup(this.vaultId, asking);
 
     const here = new Set(local.map((f) => f.path));
 

@@ -377,6 +377,15 @@ existing address with no fresh envelope or upload — `nodes_check_private_mater
 material rows exist, not who wrote them or when ([03](03-data-model.md)). This is what makes adopting an
 already-synced vault "nearly free" ([07](07-onboarding.md)): after matching by path, only metadata travels.
 
+**A path unchanged on both sides is not asked about at all** (issue #250). The dedup map is read only
+where a node is *not* the one this device last synced — an adoption, or a delete-and-recreate — and on
+the way to an upload. A path whose recorded entry names the same node, the same address and the same
+hash as the walked tree reaches none of those, so its tag is a question with a predetermined answer. On
+a vault nobody has touched that is every file, and the request disappears rather than shrinking.
+
+The tag is still *computed* for everything, because it costs an HMAC over a hash already in hand. What
+changes is what travels.
+
 **Both are asked for concurrently, up to six at a time** (issue #250). Measured on a real vault: 508
 files is nine batches, and nine round trips one after another cost about three times the whole server
 tree on the same pass. Six rather than all of them, because an unattended pass runs every time the vault
