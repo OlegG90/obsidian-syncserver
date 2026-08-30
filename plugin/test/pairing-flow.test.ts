@@ -33,7 +33,7 @@ const harness = (over: Partial<PairingFlowDeps> = {}) => {
       approved.push(code);
     },
     showCode: (code) => shown.push(code),
-    setStatus: (text) => statuses.push(text),
+    setStatus: (text, failed) => statuses.push(failed === true ? `FAILED: ${text}` : text),
     notify: (message) => notices.push(message),
     wait: async (ms) => {
       waits.push(ms);
@@ -154,7 +154,7 @@ describe('joining an account from the new device', () => {
     });
     await h.flow.join(args);
 
-    assert.ok(h.statuses.includes('404 Not Found'), 'under the code, where they have been staring');
+    assert.ok(h.statuses.includes('FAILED: 404 Not Found'), 'under the code, where they have been staring — and looking like a refusal (#255)');
     assert.match(h.notices.at(-1)!, /404 Not Found/, 'and as a notice');
     assert.equal(h.rebuilt(), 0);
   });
@@ -297,5 +297,41 @@ describe('approving a code from the connected device (#131)', () => {
     });
     await h.flow.approve('AAAA-BBBB');
     assert.match(h.notices.at(-1)!, /the network is down/);
+  });
+});
+
+/**
+ * Which statuses are refusals (issue #255).
+ *
+ * A pairing failed with a connection refused, the notice faded, and the line under the code said
+ * nothing a person could see — it was drawn below the buttons, off the bottom of a pane that scrolls,
+ * and it looked exactly like `Waiting for approval…` when it was in view at all. Placement is
+ * Obsidian's half and cannot be tested here; **which of these is a failure** is this module's, and that
+ * is what a surface needs in order to look different.
+ */
+describe('a refusal is reported as one', () => {
+  it('marks the failure, and leaves waiting and cancelling unmarked', async () => {
+    const r = harness({ join: async () => { throw new Error('net::ERR_CONNECTION_REFUSED'); } });
+
+    await r.flow.join(args);
+
+    assert.deepEqual(r.statuses, ['Waiting for approval…', 'FAILED: net::ERR_CONNECTION_REFUSED']);
+  });
+
+  it('keeps the mood through a redraw, not only the words', async () => {
+    // A settings tab rebuilds while a pairing is live, and the flow puts the line back. Putting the
+    // words back grey after a refusal would be the same defect one redraw later.
+    const r = harness({ join: async () => { throw new Error('the server said no'); } });
+    await r.flow.join(args);
+
+    r.flow.redraw();
+
+    assert.equal(r.statuses.at(-1), 'FAILED: the server said no');
+  });
+
+  it('does not mark an ordinary wait', async () => {
+    const r = harness();
+    await r.flow.join(args);
+    assert.ok(!r.statuses.some((s) => s.startsWith('FAILED')), `nothing failed: ${r.statuses.join(' | ')}`);
   });
 });

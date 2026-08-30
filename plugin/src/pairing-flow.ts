@@ -42,8 +42,15 @@ export interface PairingFlowDeps {
   approve(code: string): Promise<void>;
   /** Put the code in front of the person; called once, before any waiting. */
   showCode(code: string): void;
-  /** The line under the code: waiting, cancelled, or what went wrong. */
-  setStatus(text: string): void;
+  /**
+   * The line under the code: waiting, cancelled, or what went wrong.
+   *
+   * `failed` is passed rather than inferred from the words, because the surface has to be able to look
+   * different for a refusal and cannot read English to decide (issue #255). Waiting and failing arrived
+   * in the same grey paragraph, and a state change a person can miss while looking straight at it is
+   * the reason this line exists at all.
+   */
+  setStatus(text: string, failed?: boolean): void;
   /** A line for the user, with an optional duration in milliseconds. */
   notify(message: string, durationMs?: number): void;
   /** Sleep between claim attempts. Injected so a test does not wait in real seconds. */
@@ -105,9 +112,12 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
     liveCode = code;
     deps.showCode(code);
   };
-  const status = (text: string): void => {
+  /** Kept alongside the text, so a redraw restores the mood as well as the words. */
+  let liveFailed = false;
+  const status = (text: string, failed = false): void => {
     liveStatus = text;
-    deps.setStatus(text);
+    liveFailed = failed;
+    deps.setStatus(text, failed);
   };
 
   return {
@@ -141,7 +151,7 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
         // Twice, and on purpose: the notice is seen, and the line under the code is where
         // somebody who has been staring at that code will look.
         const message = e instanceof Error ? e.message : String(e);
-        status(message);
+        status(message, true);
         deps.notify(`SyncServer: ${message}`, 10000);
       } finally {
         running = false;
@@ -189,7 +199,7 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
       // The settings tab is rebuilt on every display(); the element a held flow drew into
       // is gone, and the flow itself must draw the live state back into the fresh one.
       if (liveCode) show(liveCode);
-      if (liveStatus) status(liveStatus);
+      if (liveStatus) status(liveStatus, liveFailed);
     },
   };
 };

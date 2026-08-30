@@ -615,7 +615,7 @@ export default class SyncServerPlugin extends Plugin {
       join: (args, waiting) => this.pair(args, waiting),
       approve: (code) => this.approvePairing(code),
       showCode: (code) => this.renderPairingCode(code),
-      setStatus: (text) => this.renderPairingStatus(text),
+      setStatus: (text, failed) => this.renderPairingStatus(text, failed === true),
       notify: (message, durationMs) => this.say(message, durationMs),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       done: () => this.pairingDone?.(),
@@ -634,6 +634,13 @@ export default class SyncServerPlugin extends Plugin {
     // into another, and 26 characters are hard enough to follow without prose around
     // them.
     target.createEl('pre', { text: code });
+
+    // **The status line is created here, under the code and above the buttons** (issue #255). It used
+    // to be appended by `renderPairingStatus` when the first status arrived, which put it last — below
+    // Copy and Cancel, at the bottom of a pane that scrolls, off the screen of the person staring at
+    // the code. `Waiting for approval…` was out of sight from the first second, and so was the sentence
+    // explaining a refusal. Drawn empty here, it is filled in place instead of appended.
+    target.createEl('p', { cls: 'syncserver-pairing-status' });
 
     /**
      * Copy, because the second screen is not always a second device.
@@ -661,12 +668,24 @@ export default class SyncServerPlugin extends Plugin {
     target.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.pairingFlow?.cancel());
   }
 
-  private renderPairingStatus(text: string): void {
+  /**
+   * The line under the code, filled in place.
+   *
+   * The `??` stays as the honest fallback: a status can be set before any code has been drawn — a join
+   * refused for a missing passphrase never reaches `showCode` — and appending is the right answer when
+   * there is nothing to sit under. What it must not be is the ordinary path (#255).
+   *
+   * **A refusal looks like one.** Waiting and failing shared a grey paragraph, and a person who has been
+   * reading a code off the screen for a minute does not re-read the line below it word by word. The
+   * flow says which this is; nothing here guesses from the text.
+   */
+  private renderPairingStatus(text: string, failed: boolean): void {
     const target = this.pairingTarget;
     if (!target) return;
     const line = target.querySelector('p.syncserver-pairing-status') ?? target.createEl('p');
     line.addClass('syncserver-pairing-status');
     line.setText(text);
+    (line as HTMLElement).style.color = failed ? 'var(--text-error)' : '';
   }
 
   /**
