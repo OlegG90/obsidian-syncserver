@@ -306,28 +306,15 @@ export class SyncEngine {
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
     // an actual upload, costs I/O this trades for that.
     //
-    // **The shortcut, and the two things that turn it off** (issue #237). When `mtime` and `size` both
-    // match what this device recorded for the path, the file is taken as unchanged and not read: its
-    // hash is the one already stored, and the dedup tag derives from that hash rather than the bytes.
-    //
-    // `mtime` is a hint, never authority. A restore from backup, `mv -p`, or another sync tool can put
-    // different content under an unmoved timestamp — so this must be able to be wrong, and there must
-    // be a way to be right anyway. There are two:
-    //
-    // - `rescan`, asked for by a person ("Full rescan" in the command palette);
-    // - **any epoch whose policy says the local copy may be the only one** — `preferLocal`. That is
-    //   exactly `restore`, `unverifiable` and `reset`, and reusing the policy rather than listing the
-    //   three keeps one answer to "is the server's word trustworthy here" instead of two that can
-    //   drift. It is also the case that most needs the full read: restoring a server from backup is
-    //   *precisely* the event that changes content while leaving timestamps alone.
-    //
-    // Entries written before this field existed carry no `mtime`, so they are read once and hinted
-    // afterwards — no migration, and no state to reset.
+    // **The skip hint** — docs/04 "What the client reads before it decides anything" states the rule and
+    // why a timestamp is only ever a hint (issue #237). What is here is the one thing the rule does not
+    // say: the epochs it is turned off for are read out of `POLICY` rather than listed again, so "is
+    // the server's word trustworthy here" has one answer in this file instead of two that can drift.
     const trustHints = !opts.rescan && !POLICY[epoch].preferLocal;
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
       const known = state.nodes[f.path];
-      if (trustHints && known?.mtime === f.mtime && known?.size === f.size && known.mtime !== undefined) {
+      if (trustHints && known?.mtime === f.mtime && known?.size === f.size) {
         meta.set(f.path, {
           plainHash: known.plainHash,
           tag: dedupTagFromHash(this.scopes.vaultKey, known.plainHash),
@@ -514,7 +501,7 @@ export class SyncEngine {
       if (!localChanged && !remoteChanged) {
         // Content identical but mtime moved — refresh the hint so the next pass can skip.
         if (known.mtime !== m.mtime || known.size !== m.size) {
-          ctx.state.nodes[file.path] = { ...known, mtime: m.mtime, size: m.size };
+          ctx.state.nodes[file.path] = { ...known, ...SyncEngine.hintFrom(m) };
         }
         return;
       }
@@ -540,7 +527,7 @@ export class SyncEngine {
       const matched = ctx.dedup.get(m.tag);
       if (matched === onServer.address) {
         // Same plaintext, already at this exact address: record and move on.
-        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
+        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, ...SyncEngine.hintFrom(m) };
         ctx.report.matched.push({ path: file.path });
         return;
       }
@@ -593,6 +580,18 @@ export class SyncEngine {
     // Consumed: a second file with these bytes must not claim the same source.
     ctx.vanished.delete(m.plainHash);
     return source;
+  }
+
+  /**
+   * The skip hint for a file the pre-pass measured — `list()` gave the timestamp, the read gave the size.
+   *
+   * Written as a call at each of the five sites that record a node, rather than two more fields spelled
+   * into five object literals, because the **source** of a hint is the thing this has twice got wrong:
+   * once by inventing it, once by copying it from the wrong path. Two sources, two names — this one and
+   * `hintFor` below — so a reader sees which is which without checking where `m` came from.
+   */
+  private static hintFrom(m: LocalMeta): { mtime: number; size: number } {
+    return { mtime: m.mtime, size: m.size };
   }
 
   /**
@@ -702,7 +701,7 @@ export class SyncEngine {
     });
 
     delete ctx.state.nodes[source.path];
-    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, mtime: m.mtime, size: m.size };
+    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, ...SyncEngine.hintFrom(m) };
 
     // The tree follows, so the pull at the end of the pass does not see the old path as a
     // server-only node and fetch a file that has just moved.
@@ -788,7 +787,7 @@ export class SyncEngine {
       return;
     }
 
-    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address, mtime: m.mtime, size: m.size };
+    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address, ...SyncEngine.hintFrom(m) };
     ctx.report.pushed.push({ path: file.path });
   }
 
@@ -812,7 +811,7 @@ export class SyncEngine {
       name_key_id: scopeId,
       ...material,
     });
-    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address, mtime: m.mtime, size: m.size };
+    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address, ...SyncEngine.hintFrom(m) };
     ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true, nameKeyId: scopeId });
     ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
     ctx.report.pushed.push({ path: file.path });
@@ -957,7 +956,7 @@ export class SyncEngine {
       try {
         if (onServer && ctx.dedup.get(m.tag) === onServer.address) {
           // Same plaintext at the same path in the winning tree: rebind, nothing moves.
-          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
+          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, ...SyncEngine.hintFrom(m) };
           ctx.report.matched.push({ path: file.path });
           continue;
         }

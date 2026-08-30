@@ -78,30 +78,22 @@ follow.
 
 ## quiet period
 
-*(plugin)* The stillness a vault has to show before a sync starts on its own — five seconds, in
-`local-changes.ts`. It is measured from the last change **event**, not from the last keystroke, which
-matters because Obsidian saves a note about two seconds after typing stops and *that save* is the event.
-So the period covers a run of saves landing together rather than the typing itself, and it is what keeps
-a pass from uploading a note the editor is still writing.
+*(plugin)* The stillness a vault has to show before a sync starts on its own. Measured from the last
+change **event**, not the last keystroke — Obsidian saves a note about two seconds after typing stops,
+and that save is the event — so the word names an interval of *no events*, not of no typing.
 
-It is also, deliberately, the thing that keeps a pass away from a file somebody is typing into right now
-(D-124), and what turns a burst — a paste of forty files, a folder rename — into one pass rather than
-forty.
-
-**Not an interval.** A timer syncs a vault nobody touched and misses the edit made a second after it
-fired; a quiet period does neither.
+Not an interval and not a debounce per path: one period for the whole vault, so a burst is one pass.
+`local-changes.ts` owns it; the rule it serves is in [docs/04](docs/04-sync-protocol.md).
 
 ## skip hint
 
 *(plugin)* The `mtime` and `size` recorded beside a path's hash, and the whole of what lets a pass
-decide it need not read that file (issue #237). It is a **hint**: content can change under an unmoved
-timestamp — a restore from a backup, `mv -p`, another sync tool — so a pass that must be right reads
-anyway. Two things make it read: an epoch whose policy prefers the local copy, and a person asking for a
-**Full rescan**.
+decide it need not read that file. **Hint** is the load-bearing word: content can change under an
+unmoved timestamp, so this is evidence a pass may act on and never a fact it may rely on — when being
+right matters more than being quick, the file is read regardless.
 
-Every hint comes from the vault. For a file the client itself wrote — a pulled node, a conflict copy, a
-renamed file — it asks (`stat`) afterwards rather than recording what it intended, because the editor
-stamps what it writes and an invented number is one `list()` will never report back.
+When that is, and where a hint may come from, are rules and live in
+[docs/04](docs/04-sync-protocol.md).
 
 ## verification
 
