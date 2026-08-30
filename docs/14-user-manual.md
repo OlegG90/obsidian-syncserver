@@ -113,15 +113,42 @@ This is the door for a lost, broken or stolen device. It is **not** a door for a
 
 ## Everyday syncing
 
-You start a sync yourself:
+**It syncs on its own a few seconds after you stop changing things.** Edit a note, leave it alone, and
+the sync happens — you do not have to press anything. A burst of work costs one sync rather than one per
+file, and the wait is there on purpose: it lets Obsidian finish writing the note before it is sent.
+
+This is **on at a desk and off on a phone**, and it is per device. *Sync after local changes*, under
+**Server and sync options**, is where you change it — a phone on a battery and a metered connection is a
+different proposition from a desktop, which is why the two start differently.
+
+You can also start one yourself, at any time:
 
 - the **ribbon icon** (the one that shows the sync state) syncs on click;
 - **Sync now** in the settings tab;
 - **Sync now** in the command palette.
 
-It also syncs **on its own when the server says something changed** — another of your devices saving a
-note, or a shared folder moving. There is no timer; it is a live connection, so the change arrives rather
-than being waited for.
+Changes **coming the other way** arrive on their own too — another of your devices saving a note, or a
+shared folder moving. There is no timer anywhere in this; it is a live connection, so the change arrives
+rather than being waited for.
+
+**A sync that moved nothing says nothing.** You will not get a notice every few minutes telling you
+there was nothing to do. Anything that needs you — a conflict, a file that failed, an account over its
+limit — is still said, and the sync state is always on the ribbon icon.
+
+### When a sync misses a change you know you made
+
+A sync does not re-read a note whose size and modification time are both exactly what they were last
+time — it takes the file's word that nothing happened. That is what makes a sync of a large vault quick,
+and it is right almost always.
+
+It is wrong in one situation: something changed a file **without** changing its modification time.
+Restoring notes from a backup does that, so do some file-copying tools, and so does another sync program
+writing into the same folder. Obsidian editing a note never does — it always stamps the file.
+
+If you have done something like that and a sync reports nothing, run **Full rescan (read every file)**
+from the command palette. It reads everything and costs a little time on a big vault. You do not need it
+after ordinary editing, and you never need it after a restore *of the server* — the plugin already reads
+everything on the pass that follows one.
 
 **But only while this session is unlocked.** A change arriving in the background must never pop up a
 passphrase prompt, so if the vault is locked the hint is ignored and nothing is pulled until you sync

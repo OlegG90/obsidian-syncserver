@@ -203,3 +203,79 @@ describe('the sync coordinator', () => {
     await sharing;
   });
 });
+
+/**
+ * What a pass nobody asked for is allowed to say (issue #238).
+ *
+ * Automatic syncing turned every one of these sentences from something a person met once, having
+ * pressed a button, into something that can arrive every few seconds for as long as the vault is being
+ * edited. The rule is that an unattended pass reports **outcomes**, never its own preconditions: a
+ * conflict, an error and an account state are told either way, because nothing else on any screen would
+ * mention them (D-124); "not connected" and "locked" are told to nobody, because the ribbon and the
+ * status bar already say exactly that, permanently and without interrupting.
+ */
+describe('an unattended pass and its silences', () => {
+  it('says nothing about not being connected — the ribbon already does', async () => {
+    // The regression this pins: the notice was raised before the attended check, so an installed but
+    // unconnected vault answered every edit with it, five seconds later, for ever.
+    const r = rig();
+    r.setState('none');
+    const sync = openSyncCoordinator(r.deps);
+
+    await sync.runIfIdle();
+    assert.equal(r.notices.length, 0, 'nobody asked, so there is nobody to tell');
+
+    await sync.run();
+    assert.ok(r.notices.some((m) => m.includes('not connected')), 'but a person who pressed it is told');
+  });
+
+  it('says nothing about being locked either, and never asks for the passphrase', async () => {
+    const r = rig();
+    r.setState('locked');
+    const sync = openSyncCoordinator(r.deps);
+
+    await sync.runIfIdle();
+
+    assert.deepEqual(r.notices, [], 'the phase says `locked` on every surface that renders one');
+    assert.equal(r.calls.ask, 0, 'and a background pass must never put a prompt in front of somebody');
+    assert.equal(r.calls.pass, 0);
+  });
+
+  it('says nothing when a pass moved nothing', async () => {
+    const r = rig();
+    const sync = openSyncCoordinator(r.deps);
+
+    await sync.runIfIdle();
+
+    assert.deepEqual(r.notices, [], '"nothing changed" every few seconds teaches somebody to ignore notices');
+    assert.equal(r.calls.pass, 1, 'the pass still ran');
+  });
+
+  it('still tells a person what needs them, asked for or not', async () => {
+    // The half that must not be silenced. Each of these is the only place it would be said.
+    const r = rig({
+      runPass: async () =>
+        emptyReport({
+          conflicts: [{ path: 'note.md', conflictPath: 'note (conflict).md' }],
+          errors: [{ path: 'broken.md', message: 'the disk refused it' }],
+          events: [{ type: 'account_frozen' } as SyncReport['events'][number]],
+        }),
+    });
+    const sync = openSyncCoordinator(r.deps);
+
+    await sync.runIfIdle();
+
+    assert.ok(r.notices.some((m) => m.includes('note (conflict).md')), 'a conflict is told (D-124)');
+    assert.ok(r.notices.some((m) => m.includes('the disk refused it')), 'so is a file that failed');
+    assert.ok(r.notices.some((m) => m.toLowerCase().includes('limit')), 'so is an account that stopped accepting');
+  });
+
+  it('says what it did when a person pressed it, even if that is nothing', async () => {
+    const r = rig();
+    const sync = openSyncCoordinator(r.deps);
+
+    await sync.run();
+
+    assert.ok(r.notices.some((m) => m.includes('nothing changed')), 'a press deserves an answer');
+  });
+});

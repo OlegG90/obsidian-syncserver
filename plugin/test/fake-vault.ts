@@ -28,7 +28,7 @@ export class FakeVault implements VaultAdapter {
   }
 
   async list(): Promise<VaultFile[]> {
-    return [...this.files.entries()].map(([path, f]) => ({ path, mtime: f.mtime }));
+    return [...this.files.entries()].map(([path, f]) => ({ path, mtime: f.mtime, size: f.bytes.length }));
   }
 
   async read(path: string): Promise<Uint8Array> {
@@ -37,8 +37,24 @@ export class FakeVault implements VaultAdapter {
     return f.bytes;
   }
 
-  async write(path: string, bytes: Uint8Array, mtime = Date.now()): Promise<void> {
-    this.files.set(path, { bytes, mtime });
+  /**
+   * **The advisory `mtime` is ignored, because the real adapter ignores it** (issue #237).
+   *
+   * It used to be stored, and that is a double being more capable than the thing it stands for. It hid
+   * a real defect for a whole branch: the engine recorded `Date.now()` as the timestamp of a file it
+   * had just written and used it as a skip hint, which works perfectly here and never once matches in
+   * Obsidian, where the editor stamps the file itself. Tests were green on a path that could not work.
+   *
+   * So this stamps its own time, as Obsidian does. A test that needs a file at a chosen `mtime` seeds
+   * it — `seed()` is the way to plant a file, and `write()` is the engine doing what the engine does.
+   */
+  async write(path: string, bytes: Uint8Array, _mtime?: number): Promise<void> {
+    this.files.set(path, { bytes, mtime: Date.now() });
+  }
+
+  async stat(path: string): Promise<{ mtime: number; size: number } | undefined> {
+    const f = this.files.get(path);
+    return f ? { mtime: f.mtime, size: f.bytes.length } : undefined;
   }
 
   async delete(path: string): Promise<void> {

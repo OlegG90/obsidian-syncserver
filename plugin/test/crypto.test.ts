@@ -24,6 +24,7 @@ import { newHumanCode } from '../src/crypto/human-code.js';
 import { openBlob, sealBlob } from '../src/crypto/blob.js';
 import { MARKER_BYTES, WRAP_VERSION, open, seal } from '../src/crypto/sealed.js';
 import { fromBase64, randomBytes, toBase64, toHex, utf8 } from '../src/crypto/bytes.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 import {
   ALG_XCHACHA20_POLY1305,
   HEADER_BYTES,
@@ -34,7 +35,7 @@ import {
   parseHeader,
   uuidToBytes,
 } from '../src/crypto/format.js';
-import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
+import { decryptName, dedupTag, dedupTagFromHash, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
 
 // Argon2id at 64 MiB is deliberately slow; these params keep the suite usable while
 // exercising the same code path. They are BELOW the server's floor on purpose, which is
@@ -278,6 +279,19 @@ describe('a scope key', () => {
     assert.equal(dedupTag(key, content), dedupTag(key, content), 'deduplication needs this to be stable');
     assert.notEqual(dedupTag(key, content), dedupTag(other, content), 'two vaults never dedup against each other');
     assert.equal(dedupTag(key, content).length, 64);
+  });
+
+  it('derives the same tag from the plaintext hash as from the plaintext (issue #237)', () => {
+    // The incremental pass skips reading a file whose timestamp and size are unchanged, so it has the
+    // hash and not the bytes. If these two ever disagreed the pass would ask the server about tags no
+    // vault has ever produced: no match, every skipped file re-uploaded as new content, and the
+    // deduplication that makes adoption "nearly free" silently off. Two entry points, one derivation —
+    // asserted here rather than trusted, because nothing else would notice them parting.
+    const content = utf8('the same file');
+    const hashHex = toHex(sha256(content));
+
+    assert.equal(dedupTagFromHash(key, hashHex), dedupTag(key, content));
+    assert.notEqual(dedupTagFromHash(key, hashHex), dedupTagFromHash(other, hashHex), 'still scoped');
   });
 });
 

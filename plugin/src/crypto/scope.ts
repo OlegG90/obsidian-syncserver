@@ -9,7 +9,7 @@
  */
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { fromUtf8, toHex, utf8 } from './bytes.js';
+import { fromHex, fromUtf8, toHex, utf8 } from './bytes.js';
 import { open, seal } from './sealed.js';
 
 /** `nodes.name_enc`. One path segment, never a path: the server has no paths (docs/03). */
@@ -45,3 +45,18 @@ export const unwrapContentKey = (scopeKey: Uint8Array, wrapped: string): Uint8Ar
  */
 export const dedupTag = (scopeKey: Uint8Array, plaintext: Uint8Array): string =>
   toHex(hmac(sha256, scopeKey, sha256(plaintext)));
+
+/**
+ * The same tag, for a caller that already holds the plaintext hash and not the plaintext (issue #237).
+ *
+ * The incremental pass skips reading a file whose `mtime` and `size` still match what it recorded, and
+ * the hash it recorded is exactly the inner `sha256` above — so the tag is derivable without the bytes.
+ *
+ * **Here rather than in the engine**, which is where it was first written: the formula is this module's,
+ * and a second copy of it somewhere else is a rule stated twice. The two are one derivation with two
+ * entry points, and `crypto.test.ts` asserts they agree.
+ *
+ * @param plainHashHex `sha256` of the plaintext, hex — `KnownNode.plainHash`.
+ */
+export const dedupTagFromHash = (scopeKey: Uint8Array, plainHashHex: string): string =>
+  toHex(hmac(sha256, scopeKey, fromHex(plainHashHex)));

@@ -76,6 +76,25 @@ session are ports bound in `main.ts`. The guard compares `share_id:root_node_id`
 ids alone — a re-materialised share keeps its id but changes its root, and the badge has to
 follow.
 
+## quiet period
+
+*(plugin)* The stillness a vault has to show before a sync starts on its own. Measured from the last
+change **event**, not the last keystroke — Obsidian saves a note about two seconds after typing stops,
+and that save is the event — so the word names an interval of *no events*, not of no typing.
+
+Not an interval and not a debounce per path: one period for the whole vault, so a burst is one pass.
+`local-changes.ts` owns it; the rule it serves is in [docs/04](docs/04-sync-protocol.md).
+
+## skip hint
+
+*(plugin)* The `mtime` and `size` recorded beside a path's hash, and the whole of what lets a pass
+decide it need not read that file. **Hint** is the load-bearing word: content can change under an
+unmoved timestamp, so this is evidence a pass may act on and never a fact it may rely on — when being
+right matters more than being quick, the file is read regardless.
+
+When that is, and where a hint may come from, are rules and live in
+[docs/04](docs/04-sync-protocol.md).
+
 ## verification
 
 *(server)* **The one claim this server makes about a backup — and nothing runs it that nobody asked for.**

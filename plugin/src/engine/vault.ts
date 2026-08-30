@@ -15,6 +15,8 @@ export interface VaultFile {
   path: string;
   /** Epoch milliseconds, as the vault reports them. */
   mtime: number;
+  /** Size in bytes, as the vault reports it — a hint along with `mtime` to skip re-hashing (#237). */
+  size: number;
 }
 
 /**
@@ -36,6 +38,17 @@ export interface VaultAdapter {
    * It is passed along; the adapter does what it can with it.
    */
   write(path: string, bytes: Uint8Array, mtime?: number): Promise<void>;
+
+  /**
+   * What the vault says about one path right now — `undefined` if there is nothing there.
+   *
+   * **Asked after this device writes a file** (issue #237). The incremental pass skips reading a file
+   * whose `mtime` and `size` still match what it recorded, and the engine does not get to decide what a
+   * written file's timestamp is: the editor stamps it (`write` above says so). So after writing, the
+   * engine asks rather than assuming — a number it invented would be one `list()` never reports back,
+   * and the file would be re-read on every pass while the state claimed it had been checked.
+   */
+  stat(path: string): Promise<{ mtime: number; size: number } | undefined>;
   delete(path: string): Promise<void>;
 }
 

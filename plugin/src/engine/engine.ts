@@ -48,7 +48,7 @@ import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
-import { decryptName, dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
+import { decryptName, dedupTag, dedupTagFromHash, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
@@ -118,6 +118,23 @@ export interface SyncReport {
 
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
+/**
+ * What a caller may ask of one pass.
+ *
+ * One type rather than the same anonymous shape at five call sites — the command, `syncNow`, the
+ * coordinator, `runPass` and here — because they are one option travelling, and five copies drift.
+ */
+export interface PassOptions {
+  /**
+   * Read every file, rather than trusting the recorded `mtime`/`size` (issue #237).
+   *
+   * The way back when a timestamp lied: a restore from backup, `mv -p`, or another tool writing into
+   * the vault can leave content changed under an unmoved timestamp, and nothing detects that by
+   * construction.
+   */
+  rescan?: boolean;
+}
+
 interface LocalMeta {
   plainHash: string;
   /** `HMAC(vault key, sha256(plaintext))` — what the dedup lookup is keyed by (docs/06). */
@@ -246,7 +263,7 @@ export class SyncEngine {
     return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
   }
 
-  async sync(): Promise<SyncReport> {
+  async sync(opts: PassOptions = {}): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
       deleted: [], removed: [], quarantined: [], vanished: [], unreadable: [], errors: [], events: [],
@@ -288,8 +305,24 @@ export class SyncEngine {
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
     // an actual upload, costs I/O this trades for that.
+    //
+    // **The skip hint** — docs/04 "What the client reads before it decides anything" states the rule and
+    // why a timestamp is only ever a hint (issue #237). What is here is the one thing the rule does not
+    // say: the epochs it is turned off for are read out of `POLICY` rather than listed again, so "is
+    // the server's word trustworthy here" has one answer in this file instead of two that can drift.
+    const trustHints = !opts.rescan && !POLICY[epoch].preferLocal;
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
+      const known = state.nodes[f.path];
+      if (trustHints && known?.mtime === f.mtime && known?.size === f.size) {
+        meta.set(f.path, {
+          plainHash: known.plainHash,
+          tag: dedupTagFromHash(this.scopes.vaultKey, known.plainHash),
+          mtime: f.mtime,
+          size: f.size,
+        });
+        continue;
+      }
       const bytes = await this.vault.read(f.path);
       meta.set(f.path, {
         plainHash: toHex(sha256(bytes)),
@@ -452,7 +485,7 @@ export class SyncEngine {
    */
   private async reconcileLocal(file: VaultFile, ctx: PassContext): Promise<void> {
     // A conflict file born during this same pass has no pre-pass entry; compute it now.
-    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file.path));
+    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file));
 
     const known = ctx.state.nodes[file.path];
     const onServer = ctx.tree.get(file.path);
@@ -465,7 +498,13 @@ export class SyncEngine {
       const localChanged = known.plainHash !== m.plainHash;
       const remoteChanged = known.address !== onServer.address;
 
-      if (!localChanged && !remoteChanged) return;
+      if (!localChanged && !remoteChanged) {
+        // Content identical but mtime moved — refresh the hint so the next pass can skip.
+        if (known.mtime !== m.mtime || known.size !== m.size) {
+          ctx.state.nodes[file.path] = { ...known, ...SyncEngine.hintFrom(m) };
+        }
+        return;
+      }
 
       // Under a restore the server's "change" is the backup going backwards, and our copy is
       // the newer one — so the usual remote-wins pull is inverted into a push.
@@ -488,7 +527,7 @@ export class SyncEngine {
       const matched = ctx.dedup.get(m.tag);
       if (matched === onServer.address) {
         // Same plaintext, already at this exact address: record and move on.
-        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, ...SyncEngine.hintFrom(m) };
         ctx.report.matched.push({ path: file.path });
         return;
       }
@@ -543,12 +582,43 @@ export class SyncEngine {
     return source;
   }
 
-  private async hashAndTag(path: string): Promise<LocalMeta> {
-    const bytes = await this.vault.read(path);
+  /**
+   * The skip hint for a file the pre-pass measured — `list()` gave the timestamp, the read gave the size.
+   *
+   * Written as a call at each of the five sites that record a node, rather than two more fields spelled
+   * into five object literals, because the **source** of a hint is the thing this has twice got wrong:
+   * once by inventing it, once by copying it from the wrong path. Two sources, two names — this one and
+   * `hintFor` below — so a reader sees which is which without checking where `m` came from.
+   */
+  private static hintFrom(m: LocalMeta): { mtime: number; size: number } {
+    return { mtime: m.mtime, size: m.size };
+  }
+
+  /**
+   * The skip hint for a file **this device just wrote**, taken from the vault rather than guessed.
+   *
+   * The engine does not choose a written file's timestamp — the editor stamps it — so the only honest
+   * hint is the one the vault reports afterwards (issue #237, `VaultAdapter.stat`). A missing answer is
+   * not an error: the entry simply carries no hint and the next pass reads the file once, which is what
+   * every entry written before hints existed does.
+   */
+  private async hintFor(path: string): Promise<{ mtime?: number; size?: number }> {
+    return (await this.vault.stat(path)) ?? {};
+  }
+
+  /**
+   * Read one file and describe it, for a path the pre-pass did not cover.
+   *
+   * **Takes the `VaultFile`, not the path**, because the `mtime` it records has to be the vault's own —
+   * the number `list()` will report on the next pass — and not `Date.now()`, which nothing will ever
+   * report again (#237). A hint that cannot match is worse than no hint: it says a file was checked.
+   */
+  private async hashAndTag(file: VaultFile): Promise<LocalMeta> {
+    const bytes = await this.vault.read(file.path);
     return {
       plainHash: toHex(sha256(bytes)),
       tag: dedupTag(this.scopes.vaultKey, bytes),
-      mtime: Date.now(),
+      mtime: file.mtime,
       size: bytes.length,
     };
   }
@@ -631,7 +701,7 @@ export class SyncEngine {
     });
 
     delete ctx.state.nodes[source.path];
-    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address };
+    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, ...SyncEngine.hintFrom(m) };
 
     // The tree follows, so the pull at the end of the pass does not see the old path as a
     // server-only node and fetch a file that has just moved.
@@ -703,6 +773,8 @@ export class SyncEngine {
           rev: current.rev,
           plainHash: m.plainHash,
           address: current.address!,
+          mtime: m.mtime,
+          size: m.size,
         };
         ctx.report.matched.push({ path: file.path });
         return;
@@ -715,7 +787,7 @@ export class SyncEngine {
       return;
     }
 
-    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address };
+    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address, ...SyncEngine.hintFrom(m) };
     ctx.report.pushed.push({ path: file.path });
   }
 
@@ -739,7 +811,7 @@ export class SyncEngine {
       name_key_id: scopeId,
       ...material,
     });
-    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address };
+    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address, ...SyncEngine.hintFrom(m) };
     ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true, nameKeyId: scopeId });
     ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
     ctx.report.pushed.push({ path: file.path });
@@ -781,9 +853,14 @@ export class SyncEngine {
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
+      ...(await this.hintFor(file.path)),
     };
     ctx.report.conflicts.push({ path: file.path, conflictPath });
-    ctx.queue.push({ path: conflictPath, mtime: Date.now() });
+    // The conflict copy is uploaded later in this same pass, and it is a file the vault now holds — so
+    // it joins the queue described the way `list()` would have described it, not the way this device
+    // imagined it.
+    const copy = await this.vault.stat(conflictPath);
+    ctx.queue.push({ path: conflictPath, mtime: copy?.mtime ?? Date.now(), size: copy?.size ?? localPlain.length });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
@@ -844,13 +921,18 @@ export class SyncEngine {
     await this.vault.delete(file.path);
 
     delete ctx.state.nodes[file.path];
-    ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address! };
+    // `m` describes the file at its OLD path. The new one is a file this device wrote a moment ago, so
+    // its hint is whatever the vault now says about it — not the timestamp the source happened to have.
+    ctx.state.nodes[movedTo.path] = {
+      nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address!,
+      ...(await this.hintFor(movedTo.path)),
+    };
     ctx.handled.add(movedTo.path);
     ctx.report.renamed.push({ from: file.path, to: movedTo.path });
 
     // Our edits, if any, still go up — against the node at its new path.
     if (localChanged) {
-      await this.pushEdit({ path: movedTo.path, mtime: file.mtime }, m, known, movedTo, ctx);
+      await this.pushEdit({ path: movedTo.path, mtime: file.mtime, size: m.size }, m, known, movedTo, ctx);
     }
   }
 
@@ -874,7 +956,7 @@ export class SyncEngine {
       try {
         if (onServer && ctx.dedup.get(m.tag) === onServer.address) {
           // Same plaintext at the same path in the winning tree: rebind, nothing moves.
-          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, ...SyncEngine.hintFrom(m) };
           ctx.report.matched.push({ path: file.path });
           continue;
         }
@@ -916,7 +998,10 @@ export class SyncEngine {
         const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
-        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
+        ctx.state.nodes[node.path] = {
+          nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!,
+          ...(await this.hintFor(node.path)),
+        };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: message(e) });

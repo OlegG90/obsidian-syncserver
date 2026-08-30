@@ -11,9 +11,10 @@
  * **type-only**, so nothing circular exists at runtime: the composition root imports this
  * screen, and this screen imports nothing back.
  */
-import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, ButtonComponent, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import { whatIsMissing, type ConnectDraft, type Route } from '../connect-form.js';
 import { newestFirst } from '../history-flow.js';
+import { autoSyncByDefault, QUIET_MS } from '../local-changes.js';
 import { lastActionLine } from '../last-action.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
@@ -130,6 +131,25 @@ export class SyncServerSettings extends PluginSettingTab {
             .setValue(this.plugin.data.syncObsidian === true)
             .onChange(async (v) => {
               this.plugin.data.syncObsidian = v;
+              await this.plugin.save();
+            }),
+        );
+
+      // The delay is said out loud, because a sync that happens "eventually" is one a person checks up
+      // on — which costs more attention than the button it replaces. The default is `local-changes.ts`'s
+      // to state, not this screen's to repeat (#238).
+      new Setting(options)
+        .setName('Sync after local changes')
+        .setDesc(
+          `Runs a sync once the vault has been still for ${Math.round(QUIET_MS / 1000)} seconds. ` +
+            'Incoming changes always arrive on their own; this is for your own edits. ' +
+            `Default: ${autoSyncByDefault(Platform.isMobile) ? 'on at a desk' : 'off on a phone'}.`,
+        )
+        .addToggle((t) =>
+          t
+            .setValue(this.plugin.data.autoSync ?? autoSyncByDefault(Platform.isMobile))
+            .onChange(async (v) => {
+              this.plugin.data.autoSync = v;
               await this.plugin.save();
             }),
         );

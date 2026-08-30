@@ -19,6 +19,16 @@ export interface KnownNode {
   plainHash: string;
   /** The address of the ciphertext currently on the server, which `base_sha256` needs. */
   address: string;
+  /**
+   * What the local file looked like when `plainHash` was last computed.
+   *
+   * `mtime` alone is not authoritative — a restore, `mv -p` or a sync tool can change
+   * content without moving the timestamp — so a normal pass treats a match as a hint to
+   * skip the read, while a rescan (full read) would still catch it. Entries written
+   * before this field existed have no `mtime`/`size` and are read once, same as before.
+   */
+  mtime?: number;
+  size?: number;
 }
 
 export interface VaultState {

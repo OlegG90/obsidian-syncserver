@@ -19,7 +19,7 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   async list(): Promise<VaultFile[]> {
     // `getFiles()` is Obsidian's own view of the vault: files it tracks, folders excluded,
     // and the configuration directory already absent.
-    return this.vault.getFiles().map((f) => ({ path: f.path, mtime: f.stat.mtime }));
+    return this.vault.getFiles().map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size }));
   }
 
   async read(path: string): Promise<Uint8Array> {
@@ -44,6 +44,12 @@ export class ObsidianVaultAdapter implements VaultAdapter {
     await this.vault.adapter.writeBinary(path, arrayBufferOf(bytes));
     // `mtime` is deliberately not forced. Obsidian stamps a written file with now, and the
     // engine compares content hashes rather than times, so nothing depends on winning here.
+  }
+
+  async stat(path: string): Promise<{ mtime: number; size: number } | undefined> {
+    const s = await this.vault.adapter.stat(path);
+    // `null` for a path that is not there, and a folder is not a file this engine syncs.
+    return s && s.type === 'file' ? { mtime: s.mtime, size: s.size } : undefined;
   }
 
   async delete(path: string): Promise<void> {

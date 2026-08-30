@@ -596,10 +596,57 @@ not the data — the client re-reads the tree through a full walk (incremental a
 Local changes go out first. The reverse order hides conflicts: the client would
 apply the server's version over its own and only then discover there was a conflict.
 
+### What the client reads before it decides anything
+
+**A pass hashes the files it cannot rule out, not every file** (issue #237). The client records, beside
+the hash of each synced path, the `mtime` and `size` the vault reported when that hash was taken. On the
+next pass a file whose `mtime` **and** `size` both still match is taken as unchanged and not read: its
+hash is the recorded one, and its dedup tag derives from that hash rather than from the bytes
+(`dedupTagFromHash`). The saving is the read — the tag still travels, because a server that deleted and
+recreated a node hands the same content back under a new id, and binding to it happens by tag.
+
+**A timestamp is a hint and never authority.** A restore from backup, `mv -p`, or another tool writing
+into the vault can put different content under an unmoved timestamp, and nothing detects that by
+construction. So the shortcut is turned off in the two places where being wrong would cost most:
+
+- **any epoch whose policy prefers the local copy** — `restore`, `cursor_unverifiable`, `reset`. These
+  are the passes where this device's file may be the only surviving one, and a server restored from
+  backup is *precisely* the event that leaves timestamps alone while changing content;
+- **an explicit rescan**, which a person asks for (the plugin's *Full rescan* command).
+
+**Every hint comes from the vault, including for files the client itself wrote.** The client does not
+decide what a written file's timestamp is — the editor stamps it — so after writing a pulled node, a
+conflict copy or a renamed file it *asks* (`stat`) rather than recording what it intended. A value the
+client invented would be one the vault never reports back, and the file would be re-read on every pass
+while the state claimed it had been checked. A `stat` that answers nothing leaves the entry with no
+hint, which is the same, safe state as an entry written before hints existed: read once, then hinted.
+
 A deletion is pushed like any other local change — `DELETE /nodes/{node_id}` with the revision the walk
 saw — and a node missing from the walked tree under a continuous epoch deletes the local copy. Under a
 `restore` epoch the same absence is a rescue, not a wipe: nothing is deleted locally and what the server
 lost is uploaded as new.
+
+### What starts a pass
+
+Three things, and none of them is a timer (issue #238). A timer syncs a vault nobody touched and misses
+the edit made a second after it fired.
+
+- **A person**, from the ribbon, the settings tab or the command palette.
+- **The server**, through the change-notification socket below: another device wrote, or a shared folder
+  moved.
+- **The vault settling.** A local change starts a quiet period, and a pass runs once nothing has changed
+  for its duration — so a burst of edits, a paste of forty files or a folder rename costs one pass. The
+  period has to outlast the editor's own write: Obsidian saves a note about two seconds after typing
+  stops, and *that save* is the change this counts from.
+
+**Nothing starts while an operation is already running**, which is what makes the client's own writes
+harmless. A pull writes files, those writes raise the same events, and a pass that could start on them
+would wake the client in a loop. The quiet period restarts instead, so what follows a pass is at most
+one more — and that one reads the files the pull just wrote, which is the read the incremental pass
+defers to exactly there (#237).
+
+**An unattended pass that moved nothing says nothing.** Errors, conflicts, quarantines and account
+states are still told: those are the ones no other surface would mention.
 
 ## Change notifications
 
