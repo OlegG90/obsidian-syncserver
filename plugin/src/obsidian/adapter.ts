@@ -19,7 +19,7 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   async list(): Promise<VaultFile[]> {
     // `getFiles()` is Obsidian's own view of the vault: files it tracks, folders excluded,
     // and the configuration directory already absent.
-    return this.vault.getFiles().map((f) => ({ path: f.path, mtime: f.stat.mtime }));
+    return this.vault.getFiles().map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size }));
   }
 
   async read(path: string): Promise<Uint8Array> {

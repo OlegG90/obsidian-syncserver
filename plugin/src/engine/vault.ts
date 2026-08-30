@@ -15,6 +15,8 @@ export interface VaultFile {
   path: string;
   /** Epoch milliseconds, as the vault reports them. */
   mtime: number;
+  /** Size in bytes, as the vault reports it — a hint along with `mtime` to skip re-hashing (#237). */
+  size: number;
 }
 
 /**

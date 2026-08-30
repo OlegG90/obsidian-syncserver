@@ -28,7 +28,7 @@ export class FakeVault implements VaultAdapter {
   }
 
   async list(): Promise<VaultFile[]> {
-    return [...this.files.entries()].map(([path, f]) => ({ path, mtime: f.mtime }));
+    return [...this.files.entries()].map(([path, f]) => ({ path, mtime: f.mtime, size: f.bytes.length }));
   }
 
   async read(path: string): Promise<Uint8Array> {

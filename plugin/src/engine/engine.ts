@@ -246,7 +246,7 @@ export class SyncEngine {
     return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
   }
 
-  async sync(): Promise<SyncReport> {
+  async sync(opts: { rescan?: boolean } = {}): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
       deleted: [], removed: [], quarantined: [], vanished: [], unreadable: [], errors: [], events: [],
@@ -288,8 +288,18 @@ export class SyncEngine {
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
     // the thing docs/02 rules out; re-reading a handful of them a second time, just before
     // an actual upload, costs I/O this trades for that.
+    //
+    // #237: when `mtime` and `size` both match the stored hint, the file is treated as
+    // unchanged without re-reading. `mtime` is a hint, not authority — a restore or `mv -p`
+    // can change content without moving it — so a full rescan would still read everything,
+    // but a normal pass takes the shortcut. Entries predating `mtime`/`size` are read once.
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
+      const known = state.nodes[f.path];
+      if (!opts.rescan && known?.mtime !== undefined && known?.size !== undefined && known.mtime === f.mtime && known.size === f.size) {
+        meta.set(f.path, { plainHash: known.plainHash, tag: '', mtime: f.mtime, size: f.size });
+        continue;
+      }
       const bytes = await this.vault.read(f.path);
       meta.set(f.path, {
         plainHash: toHex(sha256(bytes)),
@@ -298,7 +308,7 @@ export class SyncEngine {
         size: bytes.length,
       });
     }
-    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag))]);
+    const dedup = await this.client.dedupLookup(this.vaultId, [...new Set([...meta.values()].map((m) => m.tag).filter(Boolean))]);
 
     const here = new Set(local.map((f) => f.path));
 
@@ -452,7 +462,7 @@ export class SyncEngine {
    */
   private async reconcileLocal(file: VaultFile, ctx: PassContext): Promise<void> {
     // A conflict file born during this same pass has no pre-pass entry; compute it now.
-    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file.path));
+    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file));
 
     const known = ctx.state.nodes[file.path];
     const onServer = ctx.tree.get(file.path);
@@ -465,7 +475,13 @@ export class SyncEngine {
       const localChanged = known.plainHash !== m.plainHash;
       const remoteChanged = known.address !== onServer.address;
 
-      if (!localChanged && !remoteChanged) return;
+      if (!localChanged && !remoteChanged) {
+        // Content identical but mtime moved — refresh the hint so the next pass can skip.
+        if (known.mtime !== m.mtime || known.size !== m.size) {
+          ctx.state.nodes[file.path] = { ...known, mtime: m.mtime, size: m.size };
+        }
+        return;
+      }
 
       // Under a restore the server's "change" is the backup going backwards, and our copy is
       // the newer one — so the usual remote-wins pull is inverted into a push.
@@ -485,10 +501,10 @@ export class SyncEngine {
     // A node at this path, but not the one we know — deleted and recreated, or a fresh
     // adoption. Content, not history, decides what happens next (docs/07).
     if (onServer && (!known || known.nodeId !== onServer.nodeId)) {
-      const matched = ctx.dedup.get(m.tag);
+      const matched = m.tag ? ctx.dedup.get(m.tag) : undefined;
       if (matched === onServer.address) {
         // Same plaintext, already at this exact address: record and move on.
-        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
         ctx.report.matched.push({ path: file.path });
         return;
       }
@@ -543,12 +559,14 @@ export class SyncEngine {
     return source;
   }
 
-  private async hashAndTag(path: string): Promise<LocalMeta> {
+  private async hashAndTag(file: VaultFile | string): Promise<LocalMeta> {
+    const path = typeof file === 'string' ? file : file.path;
+    const mtimeHint = typeof file === 'string' ? undefined : file.mtime;
     const bytes = await this.vault.read(path);
     return {
       plainHash: toHex(sha256(bytes)),
       tag: dedupTag(this.scopes.vaultKey, bytes),
-      mtime: Date.now(),
+      mtime: mtimeHint ?? Date.now(),
       size: bytes.length,
     };
   }
@@ -631,7 +649,7 @@ export class SyncEngine {
     });
 
     delete ctx.state.nodes[source.path];
-    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address };
+    ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, mtime: m.mtime, size: m.size };
 
     // The tree follows, so the pull at the end of the pass does not see the old path as a
     // server-only node and fetch a file that has just moved.
@@ -703,6 +721,8 @@ export class SyncEngine {
           rev: current.rev,
           plainHash: m.plainHash,
           address: current.address!,
+          mtime: m.mtime,
+          size: m.size,
         };
         ctx.report.matched.push({ path: file.path });
         return;
@@ -715,7 +735,7 @@ export class SyncEngine {
       return;
     }
 
-    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address };
+    ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: out.rev, plainHash: m.plainHash, address, mtime: m.mtime, size: m.size };
     ctx.report.pushed.push({ path: file.path });
   }
 
@@ -739,7 +759,7 @@ export class SyncEngine {
       name_key_id: scopeId,
       ...material,
     });
-    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address };
+    ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address, mtime: m.mtime, size: m.size };
     ctx.tree.set(file.path, { nodeId: created.node_id, parentId, path: file.path, rev: created.rev, address, isFile: true, nameKeyId: scopeId });
     ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
     ctx.report.pushed.push({ path: file.path });
@@ -781,9 +801,13 @@ export class SyncEngine {
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
+      mtime: Date.now(),
+      size: serverPlain.length,
     };
+    // Conflict copy holds the local bytes that were just read — record its mtime/size so the
+    // queued upload does not re-read it if the pass would otherwise revisit it.
     ctx.report.conflicts.push({ path: file.path, conflictPath });
-    ctx.queue.push({ path: conflictPath, mtime: Date.now() });
+    ctx.queue.push({ path: conflictPath, mtime: Date.now(), size: localPlain.length });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
@@ -844,13 +868,13 @@ export class SyncEngine {
     await this.vault.delete(file.path);
 
     delete ctx.state.nodes[file.path];
-    ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address! };
+    ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address!, mtime: m.mtime, size: m.size };
     ctx.handled.add(movedTo.path);
     ctx.report.renamed.push({ from: file.path, to: movedTo.path });
 
     // Our edits, if any, still go up — against the node at its new path.
     if (localChanged) {
-      await this.pushEdit({ path: movedTo.path, mtime: file.mtime }, m, known, movedTo, ctx);
+      await this.pushEdit({ path: movedTo.path, mtime: file.mtime, size: m.size }, m, known, movedTo, ctx);
     }
   }
 
@@ -872,9 +896,9 @@ export class SyncEngine {
       const m = ctx.meta.get(file.path)!;
       const onServer = ctx.tree.get(file.path);
       try {
-        if (onServer && ctx.dedup.get(m.tag) === onServer.address) {
+        if (onServer && m.tag && ctx.dedup.get(m.tag) === onServer.address) {
           // Same plaintext at the same path in the winning tree: rebind, nothing moves.
-          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address! };
+          ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, mtime: m.mtime, size: m.size };
           ctx.report.matched.push({ path: file.path });
           continue;
         }
@@ -916,7 +940,7 @@ export class SyncEngine {
         const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
-        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
+        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!, mtime: Date.now(), size: plain.length };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: message(e) });
