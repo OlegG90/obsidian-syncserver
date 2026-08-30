@@ -118,6 +118,23 @@ export interface SyncReport {
 
 
 /** What the pre-pass learns about one local file without holding onto its bytes. */
+/**
+ * What a caller may ask of one pass.
+ *
+ * One type rather than the same anonymous shape at five call sites — the command, `syncNow`, the
+ * coordinator, `runPass` and here — because they are one option travelling, and five copies drift.
+ */
+export interface PassOptions {
+  /**
+   * Read every file, rather than trusting the recorded `mtime`/`size` (issue #237).
+   *
+   * The way back when a timestamp lied: a restore from backup, `mv -p`, or another tool writing into
+   * the vault can leave content changed under an unmoved timestamp, and nothing detects that by
+   * construction.
+   */
+  rescan?: boolean;
+}
+
 interface LocalMeta {
   plainHash: string;
   /** `HMAC(vault key, sha256(plaintext))` — what the dedup lookup is keyed by (docs/06). */
@@ -246,7 +263,7 @@ export class SyncEngine {
     return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
   }
 
-  async sync(opts: { rescan?: boolean } = {}): Promise<SyncReport> {
+  async sync(opts: PassOptions = {}): Promise<SyncReport> {
     const report: SyncReport = {
       scanned: 0, pushed: [], pulled: [], matched: [], conflicts: [], renamed: [],
       deleted: [], removed: [], quarantined: [], vanished: [], unreadable: [], errors: [], events: [],
@@ -579,6 +596,18 @@ export class SyncEngine {
   }
 
   /**
+   * The skip hint for a file **this device just wrote**, taken from the vault rather than guessed.
+   *
+   * The engine does not choose a written file's timestamp — the editor stamps it — so the only honest
+   * hint is the one the vault reports afterwards (issue #237, `VaultAdapter.stat`). A missing answer is
+   * not an error: the entry simply carries no hint and the next pass reads the file once, which is what
+   * every entry written before hints existed does.
+   */
+  private async hintFor(path: string): Promise<{ mtime?: number; size?: number }> {
+    return (await this.vault.stat(path)) ?? {};
+  }
+
+  /**
    * Read one file and describe it, for a path the pre-pass did not cover.
    *
    * **Takes the `VaultFile`, not the path**, because the `mtime` it records has to be the vault's own —
@@ -820,20 +849,19 @@ export class SyncEngine {
     await this.vault.write(conflictPath, localPlain);
     await this.vault.write(file.path, serverPlain);
 
-    // **No `mtime` hint for a file this device just wrote** (issue #237). The engine does not decide
-    // what a written file's timestamp is — `ObsidianVaultAdapter.write` deliberately lets Obsidian
-    // stamp it — so a hint recorded here would be a number the vault never reports back, and every
-    // pulled file would be re-read for ever while the state claimed otherwise. Left absent, the next
-    // pass reads this file once, finds the content identical and records the timestamp the vault
-    // actually has. One read, once, instead of a hint that can never match.
     ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
       plainHash: toHex(sha256(serverPlain)),
       address: onServer.address!,
+      ...(await this.hintFor(file.path)),
     };
     ctx.report.conflicts.push({ path: file.path, conflictPath });
-    ctx.queue.push({ path: conflictPath, mtime: Date.now(), size: localPlain.length });
+    // The conflict copy is uploaded later in this same pass, and it is a file the vault now holds — so
+    // it joins the queue described the way `list()` would have described it, not the way this device
+    // imagined it.
+    const copy = await this.vault.stat(conflictPath);
+    ctx.queue.push({ path: conflictPath, mtime: copy?.mtime ?? Date.now(), size: copy?.size ?? localPlain.length });
   }
 
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
@@ -894,7 +922,12 @@ export class SyncEngine {
     await this.vault.delete(file.path);
 
     delete ctx.state.nodes[file.path];
-    ctx.state.nodes[movedTo.path] = { nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address!, mtime: m.mtime, size: m.size };
+    // `m` describes the file at its OLD path. The new one is a file this device wrote a moment ago, so
+    // its hint is whatever the vault now says about it — not the timestamp the source happened to have.
+    ctx.state.nodes[movedTo.path] = {
+      nodeId: known.nodeId, rev: movedTo.rev, plainHash: m.plainHash, address: movedTo.address!,
+      ...(await this.hintFor(movedTo.path)),
+    };
     ctx.handled.add(movedTo.path);
     ctx.report.renamed.push({ from: file.path, to: movedTo.path });
 
@@ -966,9 +999,10 @@ export class SyncEngine {
         const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
         await this.vault.write(node.path, plain);
 
-        // No hint, for the reason `resolveConflict` gives: this device does not choose the timestamp
-        // of a file it writes, so it has nothing true to record (#237).
-        ctx.state.nodes[node.path] = { nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address! };
+        ctx.state.nodes[node.path] = {
+          nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!,
+          ...(await this.hintFor(node.path)),
+        };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: message(e) });

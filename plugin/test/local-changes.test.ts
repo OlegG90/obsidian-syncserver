@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { watchLocalChanges, type Timer } from '../src/local-changes.js';
+import { forTests, type Timer } from '../src/local-changes.js';
 
 /** A clock the test advances by hand. Fires everything due at or before the new time, in order. */
 const fakeTimer = () => {
@@ -36,13 +36,14 @@ const fakeTimer = () => {
 const watcher = (over: { busy?: () => boolean; enabled?: () => boolean } = {}) => {
   const clock = fakeTimer();
   const runs: number[] = [];
-  const w = watchLocalChanges({
-    busy: over.busy ?? (() => false),
-    enabled: over.enabled ?? (() => true),
-    run: () => runs.push(runs.length + 1),
-    quietMs: 5_000,
-    timer: clock.timer,
-  });
+  const w = forTests(
+    {
+      busy: over.busy ?? (() => false),
+      enabled: over.enabled ?? (() => true),
+      run: () => runs.push(runs.length + 1),
+    },
+    { quietMs: 5_000, timer: clock.timer },
+  );
   return { w, clock, runs };
 };
 
@@ -83,7 +84,6 @@ describe('syncing after the vault settles (issue #238)', () => {
     w.touched();
     clock.advance(5_000);
     assert.deepEqual(runs, [], 'held off while the gate is held');
-    assert.equal(w.waiting(), true, 'but still waiting, not given up');
 
     clock.advance(5_000);
     assert.deepEqual(runs, [], 'still waiting, for as long as it takes');
@@ -103,7 +103,6 @@ describe('syncing after the vault settles (issue #238)', () => {
     clock.advance(60_000);
 
     assert.deepEqual(runs, [], 'turning it off cancels what was already waiting');
-    assert.equal(w.waiting(), false);
   });
 
   it('stops when the plugin unloads', () => {

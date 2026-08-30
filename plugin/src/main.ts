@@ -15,10 +15,10 @@
  */
 import type { OwnDeviceRow } from '@syncserver/shared';
 import { Notice, Platform, Plugin, setIcon } from 'obsidian';
-import { watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
+import { autoSyncByDefault, watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
 import { ApiError, SyncClient } from './api/client.js';
-import { SyncEngine } from './engine/engine.js';
+import { SyncEngine, type PassOptions } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
@@ -180,7 +180,7 @@ export default class SyncServerPlugin extends Plugin {
      */
     this.localChanges = watchLocalChanges({
       busy: () => this.busyWith() !== undefined,
-      enabled: () => this.data.autoSync ?? !Platform.isMobile,
+      enabled: () => this.data.autoSync ?? autoSyncByDefault(Platform.isMobile),
       run: () => void this.sync?.runIfIdle(),
     });
     // Listed one by one rather than looped: Obsidian types `vault.on` per event name, and a loop over
@@ -360,7 +360,7 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
-  syncNow(opts?: { rescan?: boolean }): Promise<void> {
+  syncNow(opts?: PassOptions): Promise<void> {
     return this.sync?.run(opts) ?? Promise.resolve();
   }
 

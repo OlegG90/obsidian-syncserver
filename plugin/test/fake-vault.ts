@@ -52,6 +52,11 @@ export class FakeVault implements VaultAdapter {
     this.files.set(path, { bytes, mtime: Date.now() });
   }
 
+  async stat(path: string): Promise<{ mtime: number; size: number } | undefined> {
+    const f = this.files.get(path);
+    return f ? { mtime: f.mtime, size: f.bytes.length } : undefined;
+  }
+
   async delete(path: string): Promise<void> {
     this.files.delete(path);
   }

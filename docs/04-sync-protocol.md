@@ -614,10 +614,12 @@ construction. So the shortcut is turned off in the two places where being wrong 
   backup is *precisely* the event that leaves timestamps alone while changing content;
 - **an explicit rescan**, which a person asks for (the plugin's *Full rescan* command).
 
-**The client records only timestamps the vault gave it.** A file this device wrote — a pulled node, a
-conflict copy — gets no hint at all: the editor stamps what it writes, so any value the client invented
-would be one the vault never reports back, and the file would be re-read on every pass while the state
-claimed it had been checked. Absent, it is read once on the next pass and hinted correctly from then on.
+**Every hint comes from the vault, including for files the client itself wrote.** The client does not
+decide what a written file's timestamp is — the editor stamps it — so after writing a pulled node, a
+conflict copy or a renamed file it *asks* (`stat`) rather than recording what it intended. A value the
+client invented would be one the vault never reports back, and the file would be re-read on every pass
+while the state claimed it had been checked. A `stat` that answers nothing leaves the entry with no
+hint, which is the same, safe state as an entry written before hints existed: read once, then hinted.
 
 A deletion is pushed like any other local change — `DELETE /nodes/{node_id}` with the revision the walk
 saw — and a node missing from the walked tree under a continuous epoch deletes the local copy. Under a

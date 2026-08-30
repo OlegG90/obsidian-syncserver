@@ -46,6 +46,12 @@ export class ObsidianVaultAdapter implements VaultAdapter {
     // engine compares content hashes rather than times, so nothing depends on winning here.
   }
 
+  async stat(path: string): Promise<{ mtime: number; size: number } | undefined> {
+    const s = await this.vault.adapter.stat(path);
+    // `null` for a path that is not there, and a folder is not a file this engine syncs.
+    return s && s.type === 'file' ? { mtime: s.mtime, size: s.size } : undefined;
+  }
+
   async delete(path: string): Promise<void> {
     if (await this.vault.adapter.exists(path)) await this.vault.adapter.remove(path);
   }

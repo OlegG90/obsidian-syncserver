@@ -304,12 +304,13 @@ describe('engine #237 — incremental pre-pass', () => {
     assert.equal(store.state.nodes['a.md']?.nodeId, 'node-new', 'hint tracks new nodeId');
   });
 
-  it('a file this device pulled carries no hint, and earns one on the pass after', async () => {
-    // **The defect this pins** (#237). The engine used to record `Date.now()` as the timestamp of a
-    // file it had just written and skip on it for ever after. `ObsidianVaultAdapter.write` does not set
-    // `mtime` — Obsidian stamps the file itself — so that number never matched what `list()` reports,
-    // and every pulled file was re-read on every pass while the state claimed a hint. It passed here
-    // only because the fake stored what it was handed; it no longer does.
+  it('a file this device pulled is hinted from the vault, not from what the engine intended', async () => {
+    // **The defect this pins** (#237). The engine recorded `Date.now()` as the timestamp of a file it
+    // had just written and skipped on it ever after. `ObsidianVaultAdapter.write` does not set `mtime`
+    // — Obsidian stamps the file itself — so that number never matched what `list()` reports, and every
+    // pulled file was re-read on every pass while the state claimed a hint. It passed here only because
+    // the fake stored what it was handed; it no longer does, and the engine no longer guesses: it asks
+    // the vault (`stat`) after writing.
     const seed = randomBytes(32);
     const kv = vaultKey(seed, vaultId);
     const vault = new CountingVault();
@@ -320,21 +321,16 @@ describe('engine #237 — incremental pre-pass', () => {
 
     const first = await engine.sync();
     assert.equal(first.pulled.length, 1, 'the file came down');
-    assert.equal(store.state.nodes['from-server.md']?.mtime, undefined, 'and no timestamp was invented for it');
 
-    // Second pass: one read, because there is nothing to skip on yet — and it ends with a real hint,
-    // taken from what the vault says rather than from what this device wished.
+    const hint = store.state.nodes['from-server.md'];
+    const onDisk = await vault.stat('from-server.md');
+    assert.equal(hint?.mtime, onDisk?.mtime, 'the hint is the timestamp the vault actually holds');
+    assert.equal(hint?.size, utf8('came down').length);
+
+    // And because it is the real one, the next pass skips the file outright — no read at all.
     vault.reads = 0;
     await engine.sync();
-    assert.equal(vault.reads, 1, 'read once, to learn what it actually looks like');
-    const hinted = store.state.nodes['from-server.md'];
-    assert.notEqual(hinted?.mtime, undefined, 'now it has one');
-    assert.equal(hinted?.size, utf8('came down').length);
-
-    // Third pass: the hint is real, so nothing is read at all.
-    vault.reads = 0;
-    await engine.sync();
-    assert.equal(vault.reads, 0, 'and from here on it is skipped');
+    assert.equal(vault.reads, 0, 'a pulled file costs no read on the pass after it arrived');
   });
 
   it('an epoch that says the local copy may be the only one turns the shortcut off', async () => {

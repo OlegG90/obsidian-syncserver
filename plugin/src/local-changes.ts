@@ -16,6 +16,11 @@
  * together. Anything shorter risks uploading a file the editor is still writing, and a half-written
  * note is what would then propagate to every other device.
  *
+ * **A pass may therefore create a conflict file nobody asked for**, which is a decision rather than an
+ * oversight (D-124): syncing sooner shrinks the window in which two devices can diverge, the losing
+ * version is kept beside the winning one, and the notice for it is never suppressed. The quiet period
+ * is also what keeps a pass from writing into a file somebody is typing into at that moment.
+ *
  * **Nothing starts while an operation is running**, and that is what makes the engine's own writes
  * harmless. A pull writes files, those writes raise the same events, and if a pass could start on them
  * the plugin would wake itself in a loop. Instead the quiet period restarts for as long as the gate is
@@ -29,6 +34,19 @@
 /** How long the vault must be still before a pass starts. */
 export const QUIET_MS = 5_000;
 
+/**
+ * Whether automatic syncing is on when nobody has said (issue #238).
+ *
+ * **On at a desk, off on a phone.** A pass reads the files it cannot rule out and talks to a server,
+ * which is a different proposition on a battery and a metered connection. Stored per install, so the
+ * two ends of one account can disagree and both be right.
+ *
+ * One function rather than the expression written where it is read: `main.ts` decides whether to run
+ * and `settings.ts` draws the toggle, and the same rule in two places is one of them eventually being
+ * a different rule.
+ */
+export const autoSyncByDefault = (isMobile: boolean): boolean => !isMobile;
+
 export interface Timer {
   set(fn: () => void, ms: number): unknown;
   clear(handle: unknown): void;
@@ -41,16 +59,18 @@ export interface LocalChangeDeps {
   run(): void;
   /** Whether automatic syncing is on at all; asked per settling, so a setting change takes effect at once. */
   enabled(): boolean;
-  quietMs?: number;
-  timer?: Timer;
+}
+
+/** The clock and the delay, replaced only by `forTests` below. */
+interface Pacing {
+  quietMs: number;
+  timer: Timer;
 }
 
 export interface LocalChangeWatcher {
   /** Something in the vault changed. Cheap and synchronous — it is called from an editor event. */
   touched(): void;
-  /** Whether a pass is currently waiting on the quiet period. */
-  waiting(): boolean;
-  /** Unregister: the plugin is unloading, or automatic syncing was turned off. */
+  /** Unregister: the plugin is unloading. */
   stop(): void;
 }
 
@@ -59,9 +79,8 @@ const REAL_TIMER: Timer = {
   clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 };
 
-export const watchLocalChanges = (deps: LocalChangeDeps): LocalChangeWatcher => {
-  const quietMs = deps.quietMs ?? QUIET_MS;
-  const timer = deps.timer ?? REAL_TIMER;
+const open = (deps: LocalChangeDeps, pacing: Pacing): LocalChangeWatcher => {
+  const { quietMs, timer } = pacing;
   let handle: unknown;
 
   const clear = (): void => {
@@ -85,11 +104,23 @@ export const watchLocalChanges = (deps: LocalChangeDeps): LocalChangeWatcher => 
   return {
     touched: () => {
       // Asked here rather than at registration: turning the setting off stops the next pass, not only
-      // the ones after a reload.
+      // the ones after a reload — and cancels one already counting down.
       if (!deps.enabled()) return clear();
       arm();
     },
-    waiting: () => handle !== undefined,
     stop: clear,
   };
 };
+
+/** The production entry point. It takes no clock, so no caller can hand it one by accident. */
+export const watchLocalChanges = (deps: LocalChangeDeps): LocalChangeWatcher =>
+  open(deps, { quietMs: QUIET_MS, timer: REAL_TIMER });
+
+/**
+ * The same watcher on a clock a test advances by hand.
+ *
+ * **A separate function, visible in review**, the way `Session.forTests` is: the value under test here
+ * is *when*, and a suite that waited five real seconds per case is one nobody runs — but a production
+ * path that silently accepted a fake clock is a worse trade than the typing this costs.
+ */
+export const forTests = (deps: LocalChangeDeps, pacing: Pacing): LocalChangeWatcher => open(deps, pacing);
