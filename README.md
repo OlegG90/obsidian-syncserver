@@ -42,9 +42,12 @@ plugin/   the Obsidian plugin — holds every key, does every encryption
   └ obsidian/ the adapters: requestUrl, the vault, the status surfaces
 
 server/   Fastify + pg. No ORM
+  └ db/       schema.sql — the whole schema, and its tests
+console/  the management console the server builds in and serves
 shared/   the wire contract, and only that
-db/       schema.sql — the whole schema, and its tests
 docs/     the design record: every rule lives here, and nowhere else
+checks/   the repository's own tests — run by `npm test` and by CI
+tools/    things a person picks up: reset, pack, deploy, smoke, clean
 ```
 
 The server and the plugin are separate packages because they are separate programs with
@@ -104,9 +107,10 @@ Requires **PostgreSQL 18+** and **Node 22+**.
 
 ```bash
 npm ci
-npm run db:reset          # drop the dev database, apply schema.sql + tests.sql, report
+npm run db:reset          # drop the dev database, apply schema.sql + tests.sql, sweep var/tmp
 npm test                  # every workspace, after asserting one version across all six manifests
 npm run check:compose     # assert the shape the deployment depends on
+npm run clean             # remove what a build reproduces; prints what it would not touch
 ```
 
 `db:reset` recreates the database from nothing and runs the schema's own negative tests, which
@@ -125,18 +129,24 @@ nothing.
 
 ### Deploying it
 
-Two containers — PostgreSQL and the server — and one file to edit:
+Two containers — PostgreSQL and the server — and one file to fill in:
 
 ```bash
-cp .env.example .env      # generate the two secrets it asks for
-docker compose up -d --build
+cp .env.example .env      # then set the two secrets, the four directories and SERVER_IMAGE
+docker compose up -d      # pulls the published image; nothing is built here
 curl -s localhost:8080/health
 ```
 
+**`.env` is not optional and not a formality.** `SERVER_IMAGE` has no default — compose refuses to
+start without it, deliberately, so that a server can always say which release it runs and can be
+rolled back to the previous one. The same is true of both secrets. `.env.example` lists every field
+at the top and ships them commented out.
+
 A fresh installation answers `{"status":"ok","bootstrap_pending":true,"version":"…"}` — the version being
-whatever that server runs — and serves nothing but `/auth/kdf`, `/auth/redeem` and `/health` until its
-first administrator is claimed. The full
-procedure, including the traps a NAS adds, is in [`docs/13`](docs/13-deployment.md).
+whatever that server runs — and until its first administrator is claimed it serves only `/auth/kdf`,
+`/auth/bootstrap`, `/health`, the two restore endpoints, and the **management console**, which is how
+the administrator is claimed. The full procedure, including the traps a NAS adds, is in
+[`docs/13`](docs/13-deployment.md); the step-by-step for a plain host is [`docs/15`](docs/15-operator-manual.md).
 
 ### The plugin
 
