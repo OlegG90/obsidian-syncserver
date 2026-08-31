@@ -12,8 +12,9 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { encodeCursor } from '../src/delta/cursor.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-delta-${process.pid}`;
+const STORE = testStore('delta');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
 
 let db: Db;

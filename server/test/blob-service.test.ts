@@ -19,8 +19,9 @@ import { openStore } from '../src/blobs/store.js';
 import { inProcessRateLimiter } from '../src/blobs/rate.js';
 import { BlobService, parseRange } from '../src/blobs/service.js';
 import type { BlobStore } from '../src/blobs/store.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-blob-service-${process.pid}`;
+const STORE = testStore('blob-service');
 const base = loadConfig();
 // 1 KB parts, not 8 MB: the account quota here is 1 MiB, so a realistic part size would
 // make a multi-part upload impossible to express. The server enforces the part size as a

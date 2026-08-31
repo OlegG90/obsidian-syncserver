@@ -13,8 +13,9 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { storageKeyFor } from '../src/blobs/store.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-blobs-${process.pid}`;
+const STORE = testStore('blobs');
 const base = loadConfig();
 // 1 KB parts, not 8 MB: the account quota here is 1 MiB, so a realistic part size would
 // make a multi-part upload impossible to express. The server enforces the part size as a

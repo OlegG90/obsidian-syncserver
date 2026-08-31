@@ -44,6 +44,10 @@ npm run typecheck     # every workspace, including test-only tsconfigs
 npm run test:live     # plugin tests against a REAL server it starts itself
 ```
 
+`db:reset` also sweeps `server/var/tmp`, where every suite writes its blob store — teardown
+removes those, but a run that crashes or is interrupted never reaches its own, and residue
+sitting beside `var/blobs` and `var/backups` reads as data.
+
 `npm run test:live` resets its own database (`syncserver_plugin`), builds the server and runs
 the plugin suite against it. It is the only thing that proves client, keys and server agree.
 

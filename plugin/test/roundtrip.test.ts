@@ -76,7 +76,10 @@ const DB = process.env['SYNCSERVER_TEST_DB'] ?? 'syncserver_plugin';
  * that, and a mismatch shows up as a first-run vault that is not first-run.
  */
 const DATABASE_URL = process.env['DATABASE_URL'] ?? `postgres:///${DB}?host=/var/run/postgresql`;
-const STORE = path.join(repo, `server/var/test-plugin-${process.pid}`);
+// Same convention as the server's own suites (server/test/support/store.ts): everything under
+// var/tmp is disposable, and db:reset sweeps it. Written out rather than imported — one
+// string is not worth a test-time dependency from this workspace on another's.
+const STORE = path.join(repo, `server/var/tmp/plugin-${process.pid}`);
 const base = `http://127.0.0.1:${PORT}`;
 
 // The REAL Argon2id parameters, not fast ones. The server enforces a 64 MiB floor (D-62)
