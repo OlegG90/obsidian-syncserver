@@ -218,6 +218,14 @@ convenience that eats the property. The token lives in memory for the length of 
 `lock()` clears it together with the seed and the access token, and after a restart the passphrase is the
 only way back in.
 
+**The rule generalises, and it has to be stated once: anything derived from the seed keeps the unlock's
+lifetime.** The token is one such thing; so is the tree of **paths** the sync engine walks, which is
+plaintext names all the way down — the server holds none, and one exists only once a client has opened
+every name above it (docs/03). Keeping a walked tree between passes is allowed (issue #252) and keeping
+it past a lock is not: it would leave in memory exactly what locking exists to end. The way this is kept
+is structural rather than remembered — such a cache hangs off the session's handle, which is made at
+unlock and dropped by `lock()`, so there is no clearing step for anybody to forget.
+
 `account_salt` and `kdf_params` are returned by the pre-auth `/auth/kdf` response and by either bootstrap.
 Nothing in them is secret, and they are not sufficient to obtain a seed — deriving a `KEK` from them still
 requires the passphrase, which is exactly what recovery makes the caller demonstrate.

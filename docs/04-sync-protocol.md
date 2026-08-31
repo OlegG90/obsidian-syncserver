@@ -607,15 +607,19 @@ saw; `410` names the epoch that moved; `400 cursor_unverifiable` means the curso
 That verdict is what decides how an absence is read: whether a node missing from the listing was deleted
 there, or the server simply no longer holds it (docs/04's epoch table below, D-70).
 
-**The probe is a check, not the data**, with one thing read off it: whether anything happened at all. An
-empty page with nothing after it means no node has been written, moved or removed since that cursor — so
-the tree the client built at that cursor is still what a fresh walk would produce, and the walk is
-skipped (issue #252). Anything else, and any epoch that is not continuous, walks: the client rebuilds
-the tree rather than editing the one it has, and a cache that guessed would put a device permanently and
-silently out of step.
+**The probe is a check, not the data**, with one thing read off it: whether any node has changed. An
+empty page means none has been written, moved or removed since that cursor, and the walk is skipped
+(issue #252). Anything else, and any epoch that is not continuous, walks: the client rebuilds the tree
+rather than editing the one it has.
 
-The remembered tree lives only as long as the vault is unlocked. It is **paths** — decrypted names — and
-keeping it past a lock would leave in memory exactly what locking is for.
+**A remembered tree is only reusable while the keys that read it are the same ones.** A path exists only
+once every name above it has been opened, so a subtree whose scope will not open is absent from the tree
+and listed as unreadable instead — and share membership travels as **events**, outside the journal. A
+key arriving, or a share ending, changes what a walk would produce while no node has changed at all. So
+what the tree is remembered against is the cursor *and* the set of scopes this device can open; a cache
+keyed on the cursor alone hides a share whose key has just arrived, until something unrelated moves.
+
+The remembered tree is decrypted names, and docs/06 gives it the lifetime that follows from that.
 
 Applying the delta's pages to a kept tree, rather than reusing or rebuilding one, is still not done.
 

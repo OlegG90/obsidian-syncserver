@@ -89,10 +89,9 @@ export interface Handle {
   /**
    * Where a pass leaves the tree it walked, so the next one need not walk it again (issue #252).
    *
-   * **Here, and not on the plugin, because of what it holds.** The tree is paths — decrypted names, all
-   * the way down. A cache the plugin owned would have to be cleared when the vault locks, by somebody
-   * remembering to clear it; this one cannot outlive the unlocked session, because the handle it hangs
-   * off is made at unlock and dropped at lock.
+   * **Here, and not on the plugin, because of what it holds**: paths are decrypted names, and docs/06
+   * gives them the unlock's lifetime. This type is what has that lifetime already — made at unlock,
+   * dropped at lock — so the rule is kept by construction rather than by remembering.
    */
   treeCache: TreeCache;
   /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */

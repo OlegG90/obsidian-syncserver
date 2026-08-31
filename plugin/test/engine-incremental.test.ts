@@ -466,22 +466,37 @@ describe('the tree is walked once while nothing happens (issue #252)', () => {
     const cache = openTreeCache();
     const walked = {
       cursor: 'cur',
+      scopes: 'kv|',
       tree: new Map([['a.md', { nodeId: 'n1', parentId: 'root', path: 'a.md', rev: 1, isFile: true } as never]]),
       unreadable: [],
     };
     cache.put(walked);
 
     walked.tree.set('b.md', { nodeId: 'n2' } as never);
-    const first = cache.get('cur')!;
+    const first = cache.get({ cursor: 'cur', scopes: 'kv|' })!;
     first.tree.set('c.md', { nodeId: 'n3' } as never);
 
-    const second = cache.get('cur')!;
+    const second = cache.get({ cursor: 'cur', scopes: 'kv|' })!;
     assert.deepEqual([...second.tree.keys()], ['a.md'], 'neither the caller before nor after can reach it');
   });
 
   it('answers nothing for a cursor it did not walk at', async () => {
     const cache = openTreeCache();
-    cache.put({ cursor: 'one', tree: new Map(), unreadable: [] });
-    assert.equal(cache.get('two'), undefined);
+    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [] });
+    assert.equal(cache.get({ cursor: 'two', scopes: 'kv|' }), undefined);
+  });
+
+  it('answers nothing when the keys the names were read with have changed', async () => {
+    // **The defect the first version of this shipped.** The tree is a function of the nodes AND of the
+    // scopes this device can open: a subtree whose key will not open is absent from it and listed as
+    // unreadable instead. Share membership travels as delta *events*, outside the journal — so a key
+    // arriving moves what a walk would produce while the node listing has not changed at all, and the
+    // probe answers `quiet`. Keyed on the cursor alone, the cache went on hiding a share whose key had
+    // just arrived until some unrelated node happened to change.
+    const cache = openTreeCache();
+    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [] });
+
+    assert.equal(cache.get({ cursor: 'one', scopes: 'kv|share-a' }), undefined, 'a key arrived');
+    assert.ok(cache.get({ cursor: 'one', scopes: 'kv|' }), 'and the unchanged case still answers');
   });
 });

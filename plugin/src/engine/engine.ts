@@ -43,7 +43,7 @@
 import type { DeltaEvent } from '@syncserver/shared';
 import { resolveContent } from './content.js';
 import { treeFrom, type UnreadableFolder } from './tree.js';
-import type { TreeCache } from './tree-cache.js';
+import type { TreeCache, WalkedTree } from './tree-cache.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
@@ -237,9 +237,8 @@ export class SyncEngine {
     /**
      * Where the last walked tree is kept, when the caller has somewhere for it to live (issue #252).
      *
-     * Optional because the lifetime is the point: it holds decrypted paths, so it belongs to something
-     * that ends when the session locks. A caller with nowhere safe to put it passes nothing and walks
-     * every time, which is what every pass did before.
+     * Optional because the lifetime is the point (docs/06): a caller with nowhere that ends at lock
+     * passes nothing and walks every time, which is what every pass did before.
      */
     private readonly cache?: TreeCache,
   ) {}
@@ -295,13 +294,18 @@ export class SyncEngine {
     /**
      * The tree, walked or remembered (issue #252).
      *
-     * Reused only when the server has said, in the probe already made, that **nothing has happened**
-     * since the cursor this tree was walked at. Anything else — a change, another page, an epoch that
-     * moved — walks again. The cache holds plaintext paths and belongs to the unlocked session, so a
-     * pass with no cache (a test, a share operation) simply walks, which is what every pass did before.
+     * Reused only when **both halves of what a walk depends on** are unchanged: the server has said, in
+     * the probe already made, that no node has moved since this cursor, and this device reads names with
+     * the same keys it did then. The second is not decoration — a path exists only once every name above
+     * it is opened, and share membership travels as events rather than journal changes, so a key that
+     * arrived would otherwise leave the share hidden behind a tree remembered from before it. Anything
+     * else, and any epoch that is not continuous, walks again.
+     *
+     * A pass with no cache (a test, a share operation) simply walks, which is what every pass did before.
      */
-    const remembered = probe.quiet && state.cursor ? this.cache?.get(state.cursor) : undefined;
-    const walked = remembered ?? (await this.readServerTree(rootNodeId));
+    const at = { cursor: state.cursor ?? '', scopes: this.scopes.fingerprint() };
+    const remembered = probe.quiet && state.cursor ? this.cache?.get(at) : undefined;
+    const walked = remembered ?? { ...(await this.readServerTree(rootNodeId)), scopes: at.scopes };
     if (!remembered) this.cache?.put(walked);
     const { tree, cursor, unreadable } = walked;
     const byNodeId = new Map<string, ServerNode>();
@@ -523,9 +527,7 @@ export class SyncEngine {
    * own label is under `KV` (SH-01), so its path is readable even when its interior is not,
    * and one key covers a whole share, so every child of that root is unreadable together.
    */
-  private async readServerTree(
-    rootNodeId: string,
-  ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: UnreadableFolder[] }> {
+  private async readServerTree(rootNodeId: string): Promise<Omit<WalkedTree, 'scopes'>> {
     const res = await this.client.listNodes(this.vaultId);
     return { ...treeFrom(res.nodes, rootNodeId, this.scopes), cursor: res.snapshot };
   }

@@ -7,17 +7,25 @@
  * A pass used to pay it whenever somebody pressed a button; since #238 it pays whenever the vault
  * settles, which on a working afternoon is most of the time.
  *
- * **The cursor is what makes reuse safe, and nothing else would.** A delta probe against a cursor the
- * server signed answers "has anything happened since". If the answer is *nothing* — no changes, no
- * further pages — then no node was written, moved or removed, and the tree this device built at that
- * cursor is still exactly what a fresh walk would produce. Any other answer, and any epoch that is not
- * continuous, rebuilds: a cache that guessed would diverge from the server silently and permanently,
- * which is the worst failure this product has.
+ * **What it is keyed on is a cursor AND the keys the names were read with**, because the tree is a
+ * function of both. A delta probe against a cursor the server signed answers "has any node changed
+ * since"; if the answer is nothing, no node was written, moved or removed. But a path exists only once
+ * every name above it has been opened, so a subtree whose scope will not open is absent from the tree
+ * and listed as unreadable instead — and **share membership travels as delta events, outside the
+ * journal**. A key arriving, or a share ending, moves what a walk would produce while the node listing
+ * has not changed at all.
  *
- * **It holds plaintext paths, so it lives and dies with the unlocked session.** That is why it hangs off
- * the session's handle rather than off the plugin: the handle is created at unlock and dropped at lock,
- * and a cache that had to be cleared by somebody remembering to clear it would keep decrypted names in
- * memory after the person locked the vault — the one thing locking is for.
+ * Keyed on the cursor alone, this cache went on hiding a share whose key had just arrived, until some
+ * unrelated node happened to change. That is the failure this product can least afford — a device
+ * silently and permanently out of step — and it was introduced by the first version of this file.
+ * `VaultScopes.fingerprint()` is the other half of the key.
+ *
+ * Any other answer, and any epoch that is not continuous, rebuilds.
+ *
+ * **It holds plaintext paths, so its lifetime is the unlock's** — the rule and its reasoning are in
+ * docs/06, with the other plaintext derivatives that may not outlive a lock. What is here is only where
+ * that lifetime comes from: it hangs off the session's handle, which is made at unlock and dropped at
+ * lock, so nobody has to remember to clear it.
  *
  * **Copies go in and copies come out.** A pass mutates the tree it is given — a pushed file joins it, a
  * reset remaps it — and a cache handing out its own map would be corrupted by the first pass that used
@@ -27,20 +35,23 @@ import type { ServerNode } from './wire.js';
 import type { UnreadableFolder } from './tree.js';
 
 export interface WalkedTree {
-  /** The snapshot the walk was taken at — the cache key, and the only thing that makes it reusable. */
+  /** The snapshot the walk was taken at. */
   cursor: string;
+  /** `VaultScopes.fingerprint()` — which keys the names in it were read with. */
+  scopes: string;
   tree: Map<string, ServerNode>;
   unreadable: UnreadableFolder[];
 }
 
 export interface TreeCache {
-  /** The tree walked at exactly this cursor, or nothing. */
-  get(cursor: string): WalkedTree | undefined;
+  /** The tree walked at exactly this cursor **and** under exactly these scopes, or nothing. */
+  get(at: { cursor: string; scopes: string }): WalkedTree | undefined;
   put(walked: WalkedTree): void;
 }
 
 const copy = (w: WalkedTree): WalkedTree => ({
   cursor: w.cursor,
+  scopes: w.scopes,
   tree: new Map(w.tree),
   unreadable: [...w.unreadable],
 });
@@ -48,9 +59,9 @@ const copy = (w: WalkedTree): WalkedTree => ({
 export const openTreeCache = (): TreeCache => {
   let held: WalkedTree | undefined;
   return {
-    get: (cursor) => (held && held.cursor === cursor ? copy(held) : undefined),
-    // One tree, not a map of them: a device syncs one vault (AC-Q4), and a second entry could only ever
-    // be a stale one nothing would ask for again.
+    get: (at) => (held && held.cursor === at.cursor && held.scopes === at.scopes ? copy(held) : undefined),
+    // One tree, not a map of them: a plugin instance is bound to one vault (docs/02), so a second entry
+    // could only ever be a stale one nothing would ask for again.
     put: (walked) => void (held = copy(walked)),
   };
 };

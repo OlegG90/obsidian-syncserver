@@ -790,7 +790,6 @@ export default class SyncServerPlugin extends Plugin {
       this.stateStore(),
       deviceLabel(),
       this.data.syncObsidian === true,
-      // Lives on the handle, so it ends when the session locks — it holds decrypted paths (#252).
       h.treeCache,
     );
   }
