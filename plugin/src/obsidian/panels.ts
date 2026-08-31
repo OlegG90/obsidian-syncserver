@@ -397,6 +397,12 @@ export class Panels {
       .setName('Find')
       .setDesc('Searches what this page carried, which is the most recently deleted — not the whole trash.');
 
+    // Where the Empty button goes, claimed BEFORE the listing so it lands above it. The trash
+    // grows with ordinary editing, and an action that applies to the whole of it does not
+    // belong past a scroll of the part of it that fits — the longer the list, the further the
+    // one control that acts on all of it used to run away.
+    const emptyHere = containerEl.createEl('div');
+
     const list = containerEl.createEl('div');
     list.createEl('p', { text: 'Loading…' });
 
@@ -438,7 +444,6 @@ export class Panels {
           const p = list.createEl('p', { text: line });
           p.style.fontSize = 'var(--font-ui-smaller)';
         }
-        list.append(emptyRow);
       };
 
       const render = (rows: typeof page.rows): void => {
@@ -515,16 +520,19 @@ export class Panels {
       };
 
       /**
-       * Built once and re-appended, not rebuilt with the rows.
+       * Above the listing, and outside the redraw.
        *
        * It discards **everything the server holds**, not what is on screen — and a filtered
-       * list is the one moment somebody could read it as "empty these". Keeping it out of the
+       * list is the one moment somebody could read it as "empty these". Sitting outside the
        * redraw is also what keeps its count honest: `page.total`, never the rows in front of
        * it (the screen that showed 200 rows and discarded 3,000 was telling the truth twice
        * and lying once).
+       *
+       * It used to be appended after the rows, which put it past however much trash ordinary
+       * editing had accumulated. Pressing it is guarded by a confirmation naming the count, so
+       * the reachable position costs nothing.
        */
-      const emptyRow = createEl('div');
-      new Setting(emptyRow)
+      new Setting(emptyHere)
         .setName('Empty the trash')
         .setDesc(
           'Discards every deleted file and all of its history, for good — the whole trash, not ' +
