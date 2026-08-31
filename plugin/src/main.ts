@@ -790,6 +790,7 @@ export default class SyncServerPlugin extends Plugin {
       this.stateStore(),
       deviceLabel(),
       this.data.syncObsidian === true,
+      h.treeCache,
     );
   }
 

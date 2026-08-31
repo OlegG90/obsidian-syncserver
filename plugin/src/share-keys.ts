@@ -213,6 +213,26 @@ export class VaultScopes {
     readonly unopenable: readonly string[],
   ) {}
 
+  /**
+   * Which keys this device can read this vault's **names** with, as one comparable string.
+   *
+   * The server holds no paths: a path exists only once every name above it has been opened, so the tree
+   * a walk produces is a function of the nodes **and** of this — a subtree whose scope will not open is
+   * absent from it and listed as unreadable instead (`tree.ts`).
+   *
+   * That is why it exists (issue #252). Anything caching a walked tree has to notice when this changes,
+   * and a cursor cannot tell it: share membership travels as delta *events*, outside the journal, so a
+   * key arriving or a share ending can move this while the node listing has not changed at all. Keyed
+   * on the cursor alone, a cache would go on hiding a share whose key had just arrived.
+   *
+   * Both halves are in it, not only what opened: a scope that appears as unopenable is a difference the
+   * tree can see, and one that disappears is too.
+   */
+  fingerprint(): string {
+    const openable = [...this.shareKeys.keys()].sort();
+    return `${this.vaultScopeId}|${openable.join(',')}|${[...this.unopenable].sort().join(',')}`;
+  }
+
   static open(opened: OpenedVault, deps: ShareKeyDeps): VaultScopes {
     const { keys, unopenable } = shareKeysFrom(opened.scopes, deps);
     return new VaultScopes(opened, deps.vaultKey, vaultScopeIdOf(opened.scopes), keys, unopenable);

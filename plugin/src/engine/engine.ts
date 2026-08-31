@@ -43,6 +43,7 @@
 import type { DeltaEvent } from '@syncserver/shared';
 import { resolveContent } from './content.js';
 import { treeFrom, type UnreadableFolder } from './tree.js';
+import type { TreeCache, WalkedTree } from './tree-cache.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
@@ -233,6 +234,13 @@ export class SyncEngine {
     private readonly deviceLabel = 'device',
     /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
     private readonly syncObsidian = false,
+    /**
+     * Where the last walked tree is kept, when the caller has somewhere for it to live (issue #252).
+     *
+     * Optional because the lifetime is the point (docs/06): a caller with nowhere that ends at lock
+     * passes nothing and walks every time, which is what every pass did before.
+     */
+    private readonly cache?: TreeCache,
   ) {}
 
   /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
@@ -277,11 +285,29 @@ export class SyncEngine {
     // Provenance before a byte moves: present the stored cursor, and let its answer decide
     // what a missing node means (D-70). The pages themselves are re-read through the walk —
     // the probe is the check, not the data.
-    const probe = state.cursor ? await this.probeEpoch(state.cursor) : { epoch: 'continuous' as const, events: [] };
+    const probe = state.cursor
+      ? await this.probeEpoch(state.cursor)
+      : { epoch: 'continuous' as const, events: [], quiet: false };
     const epoch: RemoteEpoch = probe.epoch;
     report.events = probe.events;
 
-    const { tree, cursor, unreadable } = await this.readServerTree(rootNodeId);
+    /**
+     * The tree, walked or remembered (issue #252).
+     *
+     * Reused only when **both halves of what a walk depends on** are unchanged: the server has said, in
+     * the probe already made, that no node has moved since this cursor, and this device reads names with
+     * the same keys it did then. The second is not decoration — a path exists only once every name above
+     * it is opened, and share membership travels as events rather than journal changes, so a key that
+     * arrived would otherwise leave the share hidden behind a tree remembered from before it. Anything
+     * else, and any epoch that is not continuous, walks again.
+     *
+     * A pass with no cache (a test, a share operation) simply walks, which is what every pass did before.
+     */
+    const at = { cursor: state.cursor ?? '', scopes: this.scopes.fingerprint() };
+    const remembered = probe.quiet && state.cursor ? this.cache?.get(at) : undefined;
+    const walked = remembered ?? { ...(await this.readServerTree(rootNodeId)), scopes: at.scopes };
+    if (!remembered) this.cache?.put(walked);
+    const { tree, cursor, unreadable } = walked;
     const byNodeId = new Map<string, ServerNode>();
     for (const n of tree.values()) byNodeId.set(n.nodeId, n);
 
@@ -449,14 +475,18 @@ export class SyncEngine {
    * engine it is a policy — resync from an empty cursor, deleting nothing — and a policy
    * belongs on the type, where the next consumer of `VaultWire` can see it.
    */
-  private async probeEpoch(cursor: string): Promise<{ epoch: RemoteEpoch; events: DeltaEvent[] }> {
+  private async probeEpoch(cursor: string): Promise<{ epoch: RemoteEpoch; events: DeltaEvent[]; quiet: boolean }> {
     const res = await this.client.delta(this.vaultId, cursor, 1);
-    if ('rejected' in res) return { epoch: res.reason, events: [] };
-    if ('unverifiable' in res) return { epoch: 'unverifiable', events: [] };
-    // The probe asks for one page and reads none of it — except this. The account states
+    if ('rejected' in res) return { epoch: res.reason, events: [], quiet: false };
+    if ('unverifiable' in res) return { epoch: 'unverifiable', events: [], quiet: false };
+    // The probe asks for one page and reads none of it — except these two. The account states
     // ride on every delta answer by design, so the call that is already being made is where
     // they are collected; asking again would be a second request for a field this one had.
-    return { epoch: 'continuous', events: res.events };
+    //
+    // `quiet` is the other thing the answer already contains: an empty page with nothing after it
+    // means no node has been written, moved or removed since this cursor — so the tree cannot have
+    // changed either, which is what lets the last walk be reused (issue #252, `tree-cache.ts`).
+    return { epoch: 'continuous', events: res.events, quiet: res.changes.length === 0 && !res.has_more };
   }
 
   /**
@@ -497,9 +527,7 @@ export class SyncEngine {
    * own label is under `KV` (SH-01), so its path is readable even when its interior is not,
    * and one key covers a whole share, so every child of that root is unreadable together.
    */
-  private async readServerTree(
-    rootNodeId: string,
-  ): Promise<{ tree: Map<string, ServerNode>; cursor: string; unreadable: UnreadableFolder[] }> {
+  private async readServerTree(rootNodeId: string): Promise<Omit<WalkedTree, 'scopes'>> {
     const res = await this.client.listNodes(this.vaultId);
     return { ...treeFrom(res.nodes, rootNodeId, this.scopes), cursor: res.snapshot };
   }

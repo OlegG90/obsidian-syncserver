@@ -54,6 +54,7 @@ import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
 import { newHumanCode, normaliseHumanCode } from '../crypto/human-code.js';
 import { SyncClient } from '../api/client.js';
+import { openTreeCache, type TreeCache } from '../engine/tree-cache.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
 
@@ -85,6 +86,14 @@ export interface Connection {
  */
 export interface Handle {
   client: SyncClient;
+  /**
+   * Where a pass leaves the tree it walked, so the next one need not walk it again (issue #252).
+   *
+   * **Here, and not on the plugin, because of what it holds**: paths are decrypted names, and docs/06
+   * gives them the unlock's lifetime. This type is what has that lifetime already — made at unlock,
+   * dropped at lock — so the rule is kept by construction rather than by remembering.
+   */
+  treeCache: TreeCache;
   /** `KV = HKDF(seed, vault_id)` — the vault's own key scope (docs/06). */
   kv: Uint8Array;
   /** This account's id. An invitation's envelope is bound to it (docs/06), so opening one needs it. */
@@ -210,6 +219,7 @@ const handleFor = (
   encPrivkey: string,
 ): Handle => ({
   client,
+  treeCache: openTreeCache(),
   kv: vaultKey(seed, vaultId),
   userId,
   encPrivkey,

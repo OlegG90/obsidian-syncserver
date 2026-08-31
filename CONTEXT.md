@@ -95,6 +95,18 @@ right matters more than being quick, the file is read regardless.
 When that is, and where a hint may come from, are rules and live in
 [docs/04](docs/04-sync-protocol.md).
 
+## walked tree
+
+*(plugin)* The server's nodes turned into **paths** — what one pass produces and the next may reuse. The
+server holds no paths at all, so this exists only after a client has decrypted every name on the way
+down, which makes it a function of two things: the nodes, and **which key scopes this device can open**.
+A subtree whose scope will not open is not in it; it is in the `unreadable` list beside it.
+
+Both halves are why a remembered one is keyed on a cursor *and* a scope fingerprint: node changes travel
+in the journal and the cursor covers them, while share membership travels as events and does not. The
+rules are in [docs/04](docs/04-sync-protocol.md); its lifetime, being plaintext, is in
+[docs/06](docs/06-key-model.md).
+
 ## verification
 
 *(server)* **The one claim this server makes about a backup — and nothing runs it that nobody asked for.**
