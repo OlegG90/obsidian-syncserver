@@ -35,7 +35,7 @@ every file arrived — see the extraction rule below, which is the reason those 
 
 One archive rather than a list of paths to copy, because a list drifts from the compose file
 the moment either changes, and the failure lands on the far side where it is least convenient
-to diagnose. `scripts/pack.sh` names what goes in explicitly and **fails here** if any of it is
+to diagnose. `tools/pack.sh` names what goes in explicitly and **fails here** if any of it is
 absent.
 
 **The archive is built from the repository, not from the working tree** (#106). The `<sha>` in
@@ -152,7 +152,7 @@ export PATH=/path/to/the/nas/docker/bin:$PATH
 Sourced before the deploy script, it needs no flags:
 
 ```bash
-. deploy/<host>.env && checkout/scripts/deploy-dev-host.sh
+. deploy/<host>.env && checkout/tools/deploy-dev-host.sh
 ```
 
 `RUN_AS`, `DB_DIR` and `BLOB_DIR` belong in `.env` on the target rather than here, because they
@@ -163,7 +163,7 @@ are the deployment's own configuration and the script writes them once.
 The whole of it, as a script that is also the redeploy procedure:
 
 ```bash
-rm -rf checkout && mkdir checkout && tar xzf syncserver-*.tar.gz -C checkout && checkout/scripts/deploy-dev-host.sh
+rm -rf checkout && mkdir checkout && tar xzf syncserver-*.tar.gz -C checkout && checkout/tools/deploy-dev-host.sh
 ```
 
 It sets `DOCKER_CONFIG`, creates and permits the two data directories, writes `.env` with
@@ -183,13 +183,13 @@ generate secrets over an existing `db/` says so before it pulls.
 Then walk M0 end to end against it — one command, from any state:
 
 ```bash
-./scripts/run-smoke.sh
+./tools/run-smoke.sh
 ```
 
 It verifies the checkout against the manifest packed with it, deploys, obtains a token (signing
 one with the server's own `SERVER_SECRET` when the installation is already claimed, since the
 account's `auth_secret` is shown once and stored only as a hash), and runs the walk below.
-`scripts/smoke.sh` can still be run directly against a server you have a token for.
+`tools/smoke.sh` can still be run directly against a server you have a token for.
 
 It claims the seeded administrator if nobody has, then exercises the account surface, a blob and
 all three node verbs M0 names — create, `put` with the content precondition (D-52), `delete` with
@@ -208,7 +208,7 @@ twice against the same vault is the normal case. `RESET=1` exists only as housek
 trashed nodes that accumulate, and it destroys with no undo.
 
 On an installation somebody has already claimed, `run-smoke.sh` handles the token itself;
-`scripts/smoke.sh` can be run directly with `ACCESS=… VAULT=…` if you already have one.
+`tools/smoke.sh` can be run directly with `ACCESS=… VAULT=…` if you already have one.
 
 What each step does by hand, and why, is below.
 

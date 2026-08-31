@@ -26,7 +26,7 @@ MANIFEST.sha256
 
 # Host profiles: the scripts and settings for named machines. A hostname, an address, a
 # share layout and an account are nobody else's business, and the generic half of every one
-# of them is already in scripts/ — see docs/13, "Host profiles".
+# of them is already in tools/ — see docs/13, "Host profiles".
 deploy/
 
 # Editors and operating systems. Nothing here is anyone else's business.

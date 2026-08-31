@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One command to verify a deployed server, from any state it happens to be in:
 #
-#     ./scripts/run-smoke.sh
+#     ./tools/run-smoke.sh
 #
 # It brings the server up if it is down, obtains a token whichever way the installation
 # allows, and walks M0 and M4. Run it ON the server — smoke.sh reads /proc for a UUID and talks to
@@ -59,7 +59,7 @@ if [ -n "${SKIP_DEPLOY:-}" ]; then
     say "SKIP_DEPLOY is set — walking whatever image is running, which may not be this checkout"
 else
     say "deploying this checkout, so the walk tests the code that is in it"
-    ./scripts/deploy-dev-host.sh
+    ./tools/deploy-dev-host.sh
 fi
 
 say "is it up?"
@@ -71,7 +71,7 @@ printf '  %s\n' "$health"
 case "$health" in
     *'"bootstrap_pending":true'*)
         say "no administrator yet — smoke.sh will walk the first run"
-        exec ./scripts/smoke.sh "$base"
+        exec ./tools/smoke.sh "$base"
         ;;
 esac
 
@@ -138,4 +138,4 @@ printf '  vault %s on %s\n' "$vault" "$base"
 # collide with what an earlier run left; destroying the vault to make a test repeatable was
 # solving the test's problem with the user's data. Pass RESET=1 to this script to clear
 # accumulated runs out — it is forwarded, and it still destroys.
-ACCESS="$access" VAULT="$vault" ./scripts/smoke.sh "$base"
+ACCESS="$access" VAULT="$vault" ./tools/smoke.sh "$base"

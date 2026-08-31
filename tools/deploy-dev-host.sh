@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Bring the server up on a test host, from the extracted checkout, ON that host:
 #
-#     tar xzf syncserver-*.tar.gz -C checkout && checkout/scripts/deploy-dev-host.sh
+#     tar xzf syncserver-*.tar.gz -C checkout && checkout/tools/deploy-dev-host.sh
 #
 # Nothing here is specific to one machine. Where a host needs its own values — a port, a
 # data directory, an identity to run as — they come from the environment, so a per-host
 # profile is a file of `export` lines rather than a second copy of this script:
 #
-#     . deploy/<host>.env && checkout/scripts/deploy-dev-host.sh
+#     . deploy/<host>.env && checkout/tools/deploy-dev-host.sh
 #
 # Safe to re-run: it is the redeploy procedure as much as the first-install one. The one
 # thing it will not do twice is write .env — the secrets in it are what the database was
@@ -249,7 +249,7 @@ answers only /auth/kdf, /auth/bootstrap, /health and the console until a passwor
 
 Open http://127.0.0.1:$port/ to set it, or walk the whole first run from here:
 
-    ./scripts/smoke.sh http://127.0.0.1:$port
+    ./tools/smoke.sh http://127.0.0.1:$port
 
 EOF
                     ;;
