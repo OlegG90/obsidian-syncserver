@@ -50,45 +50,56 @@ const accountState = (phase: SyncPhase): string | undefined => {
   return undefined;
 };
 
-export const shortStatus = (phase: SyncPhase): string => {
+/**
+ * The state on its own, without the word a surface puts in front of it.
+ *
+ * Split out because the ribbon needs both halves separately: on mobile it is an entry in a
+ * menu of ACTIONS, so its registered name has to say what pressing it does, while its
+ * accessible name — the desktop tooltip — is the place the state belongs. One string cannot
+ * be both, and the one that was tried read as a report and reported the wrong thing (#285).
+ */
+export const phaseState = (phase: SyncPhase): string => {
   const state = accountState(phase);
-  if (state) return `Sync: ${state}`;
+  if (state) return state;
   switch (phase.kind) {
     case 'disconnected':
-      return 'Sync: not connected';
+      return 'not connected';
     case 'locked':
-      return 'Sync: locked';
+      return 'locked';
     case 'syncing':
-      return 'Sync: working…';
+      return 'working…';
     case 'failed':
-      return 'Sync: failed';
+      return 'failed';
     case 'idle': {
-      if (!phase.report) return 'Sync: ready';
+      if (!phase.report) return 'ready';
       // Which of the outcomes dominates is the report module's one precedence rule; this
       // surface only gives each mood a line.
       switch (priority(phase.report)) {
         case 'failed':
-          return `Sync: ${phase.report.errors.length} failed`;
+          return `${phase.report.errors.length} failed`;
         case 'conflicts':
-          return `Sync: ${phase.report.conflicts.length} conflict${phase.report.conflicts.length === 1 ? '' : 's'}`;
+          return `${phase.report.conflicts.length} conflict${phase.report.conflicts.length === 1 ? '' : 's'}`;
         case 'quarantined':
-          return `Sync: ${phase.report.quarantined.length} kept aside after a reset`;
+          return `${phase.report.quarantined.length} kept aside after a reset`;
         case 'moved': {
           const r = phase.report;
           const moves = r.renamed.length ? ` ${r.renamed.length}→` : '';
           const dels = r.deleted.length || r.removed.length ? ` ${r.deleted.length + r.removed.length}✕` : '';
-          return `Sync: ${r.pushed.length}↑ ${r.pulled.length}↓${moves}${dels}`;
+          return `${r.pushed.length}↑ ${r.pulled.length}↓${moves}${dels}`;
         }
         case 'matched':
-          return `Sync: up to date (${phase.report.matched.length} matched)`;
+          return `up to date (${phase.report.matched.length} matched)`;
         case 'empty':
-          return 'Sync: vault looks empty';
+          return 'vault looks empty';
         case 'up_to_date':
-          return 'Sync: up to date';
+          return 'up to date';
       }
     }
   }
 };
+
+/** What the status bar and the status screen say: the state, under the word they head it with. */
+export const shortStatus = (phase: SyncPhase): string => `Sync: ${phaseState(phase)}`;
 
 /**
  * The mood of a phase, as a Lucide icon name — what the ribbon shows.

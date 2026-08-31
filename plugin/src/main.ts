@@ -24,7 +24,7 @@ import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
 import { PushListener } from './obsidian/push.js';
 import { newHumanCode } from './crypto/human-code.js';
-import { phaseIcon, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
+import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport } from './obsidian/net.js';
 import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
@@ -84,6 +84,14 @@ interface PluginData {
 }
 
 const DEFAULT_DATA: PluginData = {};
+
+/**
+ * What the ribbon is called, everywhere it is named rather than drawn.
+ *
+ * Names the plugin as well as the act: on a phone this sits in one list with every other
+ * plugin's ribbon action, where a bare "Sync now" belongs to nobody.
+ */
+const RIBBON_ACTION = 'SyncServer: sync now';
 
 export default class SyncServerPlugin extends Plugin {
   data: PluginData = DEFAULT_DATA;
@@ -196,15 +204,23 @@ export default class SyncServerPlugin extends Plugin {
     this.statusBar = this.addStatusBarItem();
     this.statusBar.addEventListener('click', () => this.showStatus());
 
-    // The ribbon is the glanceable surface that DOES render on a phone, and it is where
-    // Obsidian's own sync puts its state — so it is where someone will look. Both this and
-    // the status bar are fed by `setPhase` and by nothing else: two surfaces, one source.
+    // The ribbon is the glanceable surface that DOES render on a phone — the status bar next
+    // door is desktop-only, which `addStatusBarItem` says outright — and it is where Obsidian's
+    // own sync puts its state, so it is where someone will look. The ELEMENT and the status bar
+    // are fed by `setPhase` and by nothing else.
     //
     // Clicking it **syncs**, and does not open the status. Obsidian's own sync icon opens a
     // panel because that sync runs by itself; this one does not run until asked, so the
     // obvious gesture on it has to be the asking. The status stays one command away, and on
     // a desktop one click of the status bar away.
-    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), shortStatus(this.phase), () => void this.syncNow());
+    //
+    // **The registered name says what pressing it DOES, and never changes.** `addRibbonIcon`
+    // takes the title once and hands back only an element; the item itself is not exposed, so
+    // that string can never be corrected. On a phone Obsidian builds its action sheet from
+    // those registrations rather than from the live element, so a title carrying state showed
+    // the phase the plugin loaded in — "Sync: not connected" beside a vault that had connected
+    // and synced, for ever (#285). The state lives on the element, which `setPhase` can reach.
+    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), RIBBON_ACTION, () => void this.syncNow());
 
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
@@ -372,9 +388,11 @@ export default class SyncServerPlugin extends Plugin {
     this.statusBar?.setText(text);
     if (this.ribbon) {
       setIcon(this.ribbon, phaseIcon(phase));
-      // The sentence, not just the glyph: on a phone this is what a long press shows, and
-      // it is the same line the status bar carries on a desktop.
-      this.ribbon.setAttribute('aria-label', text);
+      // The action first, then the state: this is the control's accessible name as well as its
+      // tooltip, and a button whose name reads "Sync: 3 conflicts" announces a report rather
+      // than what it will do. Only the desktop sees it — the mobile sheet uses the registered
+      // title above, which is why that one has to stand alone.
+      this.ribbon.setAttribute('aria-label', `${RIBBON_ACTION} — ${phaseState(phase)}`);
     }
     // After the two glanceable surfaces, because those are the ones a phone and a desktop always have;
     // a watcher is a screen that happens to be open, and it must not be able to stop them being told.
