@@ -125,7 +125,7 @@ jobs:
       - run: npm ci
 
       # `--out` rather than `--vault`: the same bundle, with the installation left out.
-      - run: node plugin/esbuild.mjs --out dist-plugin
+      - run: node plugin/esbuild.mjs --out dist/plugin
 
       - name: release
         env:
@@ -135,9 +135,9 @@ jobs:
           # The three strings Obsidian requires to be one string. The manifest was already
           # checked against the other five by `check-version.mjs` and against the tag by the
           # job above; this is the copy that actually ships, read back from the asset.
-          shipped="$(node -p 'require("./dist-plugin/manifest.json").version')"
+          shipped="$(node -p 'require("./dist/plugin/manifest.json").version')"
           if [ "$tag" != "$shipped" ]; then
             echo "::error::the bundled manifest says $shipped, not $tag — BRAT would install a version nobody released"
             exit 1
           fi
-          gh release create "$tag" --title "$tag" --generate-notes             dist-plugin/main.js dist-plugin/manifest.json
+          gh release create "$tag" --title "$tag" --generate-notes             dist/plugin/main.js dist/plugin/manifest.json

@@ -35,4 +35,3 @@ deploy/
 *.swp
 .DS_Store
 Thumbs.db
-dist-plugin/
