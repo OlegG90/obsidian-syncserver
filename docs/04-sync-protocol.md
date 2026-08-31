@@ -624,6 +624,14 @@ keyed on the cursor alone hides a share whose key has just arrived, until someth
 
 The remembered tree is decrypted names, and docs/06 gives it the lifetime that follows from that.
 
+**Sharing reads it too, and never writes it** (issue #260). The flows that ask what can be shared, or
+what a share's root resolves to, want the same tree and used to walk for it — three walks on the press
+that opens a panel. They now probe first and reuse under the same condition a pass does, walking on
+anything else, because a stale tree is what a person would share the wrong folder from. What they do
+**not** do is file the walk they make: the key is the cursor a tree was walked at, and it works because a
+pass ends by saving its walk's cursor. A flow that saves no state would file its tree under a key nobody
+looks up, and evict the one the next pass was going to find.
+
 Applying the delta's pages to a kept tree, rather than reusing or rebuilding one, is still not done.
 
 Local changes go out first. The reverse order hides conflicts: the client would

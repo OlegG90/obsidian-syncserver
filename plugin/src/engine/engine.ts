@@ -498,7 +498,46 @@ export class SyncEngine {
    * rebuild the paths" would be a second thing to get wrong about scopes.
    */
   async readTree(): Promise<Map<string, ServerNode>> {
-    const { tree } = await this.readServerTree(this.scopes.opened.root_node_id);
+    const rootNodeId = this.scopes.opened.root_node_id;
+
+    /**
+     * **Ask before walking** (issue #260). A sync leaves the tree it walked where this can find it, and
+     * since #238 a sync happens whenever the vault settles — so on the press that opens a sharing
+     * screen, a current tree usually exists already. What it costs to find out is one small request
+     * against the cursor; what it saves is 313 KB and a decryption per name.
+     *
+     * The condition is the sync's, and it has to be: same cursor, same scopes, and the server saying no
+     * node has changed since. Anything else walks. **A stale tree here is worse than a slow screen** —
+     * this is what a person is about to share *from*, and a folder that has moved or gone would be
+     * offered as if it were still there.
+     *
+     * The probe's `events` are dropped rather than reported: an account state riding on this answer has
+     * no surface here, and inventing one would put a sync's notice on a sharing screen. Nothing is lost
+     * that was not already — before this, no probe was made at all.
+     */
+    const state = await this.store.load();
+    if (state.cursor && this.cache) {
+      const probe = await this.probeEpoch(state.cursor);
+      if (probe.epoch === 'continuous' && probe.quiet) {
+        const remembered = this.cache.get({ cursor: state.cursor, scopes: this.scopes.fingerprint() });
+        if (remembered) return remembered.tree;
+      }
+    }
+
+    /**
+     * **It reads the cache and never writes it**, which is not an omission.
+     *
+     * The cache is keyed by the cursor a tree was walked at, and that key works because a *pass* ends by
+     * saving its walk's cursor into the state — so the next reader looks up exactly what was stored.
+     * `readTree` saves no state. A tree it walked would be filed under a snapshot newer than the one the
+     * state holds, and then two things go wrong at once: nothing would ever look that key up, and the
+     * entry a pass had left under the state's cursor would have been overwritten — so the next sync,
+     * which was going to skip its walk, would do a full one instead. A share operation between two
+     * syncs would have made the second slower.
+     *
+     * Being a consumer and not a producer removes the whole question.
+     */
+    const { tree } = await this.readServerTree(rootNodeId);
     return tree;
   }
 
