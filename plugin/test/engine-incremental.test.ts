@@ -84,6 +84,7 @@ class TrackingWire implements VaultWire {
   private byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
   /** How many times the whole tree was fetched — what #252 is about. */
   listNodeCalls = 0;
+  private snapshots = 0;
 
   async listNodes() {
     this.listNodeCalls++;
@@ -99,7 +100,11 @@ class TrackingWire implements VaultWire {
         mtime: new Date(0).toISOString(), share_id: null, author_id: null,
       } as import('@syncserver/shared').Change);
     }
-    return { nodes, snapshot: 'cur' };
+    // **A fresh snapshot per walk, because a real one is fresh.** The cursor pins the position the walk
+    // was taken at, so two walks a moment apart return two cursors. A constant made every walk look like
+    // the same one and hid a defect twice over: a `readTree` that filed its own walk would have evicted
+    // the entry a pass had left, and no test could see it because both were filed under `'cur'`.
+    return { nodes, snapshot: `cur-${++this.snapshots}` };
   }
   /** What the epoch probe is answered with. `undefined` = an ordinary, continuous server. */
   rejectWith: 'restore' | 'reset' | undefined = undefined;
@@ -498,5 +503,73 @@ describe('the tree is walked once while nothing happens (issue #252)', () => {
 
     assert.equal(cache.get({ cursor: 'one', scopes: 'kv|share-a' }), undefined, 'a key arrived');
     assert.ok(cache.get({ cursor: 'one', scopes: 'kv|' }), 'and the unchanged case still answers');
+  });
+});
+
+/**
+ * What a sharing screen pays to see the tree (issue #260).
+ *
+ * `readTree` is what the sharing flows read: what can be shared, what a share's root resolves to, what
+ * is already in the vault. Three of them run on the press that opens a panel, and each was a full walk —
+ * 313 KB and a decryption per name, thrown away each time.
+ */
+describe('sharing asks before it walks (issue #260)', () => {
+  const scenario = () => {
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new CountingVault();
+    vault.seed('a.md', 'hello world', 1000);
+    const wire = new TrackingWire(kv);
+    wire.setServerFiles([{ path: 'a.md', text: 'hello world', nodeId: 'node-a', rev: 2 }]);
+    const store = makeStore();
+    const cache = openTreeCache();
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, store, 'device', false, cache);
+    return { wire, engine };
+  };
+
+  it('reads the tree a recent sync left, instead of walking again', async () => {
+    const { wire, engine } = scenario();
+    await engine.sync();
+    assert.equal(wire.listNodeCalls, 1);
+
+    const tree = await engine.readTree();
+
+    assert.equal(wire.listNodeCalls, 1, 'the sync had already walked it, and nothing has happened since');
+    assert.ok(tree.has('a.md'), 'and it is the tree, not an empty one');
+  });
+
+  it('walks when anything has happened since', async () => {
+    const { wire, engine } = scenario();
+    await engine.sync();
+
+    wire.deltaChanges = [{ node_id: 'whatever' }];
+    await engine.readTree();
+
+    assert.equal(wire.listNodeCalls, 2, 'a stale tree is what a person would share the wrong folder from');
+  });
+
+  it('walks when there is nothing remembered', async () => {
+    // No sync yet: the state has no cursor, so there is nothing to probe against and nothing to reuse.
+    const { wire, engine } = scenario();
+
+    await engine.readTree();
+
+    assert.equal(wire.listNodeCalls, 1);
+  });
+
+  it('does not file its own walk, so it cannot cost the next sync one', async () => {
+    // The trap this avoids: a tree walked here would be filed under a snapshot newer than the state's
+    // cursor — a key nothing looks up — and would evict the entry the last pass left under the key the
+    // NEXT pass will look up. A share operation between two syncs would have made the second walk.
+    const { wire, engine } = scenario();
+    await engine.sync();
+    wire.deltaChanges = [{ node_id: 'whatever' }];
+    await engine.readTree(); // walks, and must not disturb what the pass left
+    assert.equal(wire.listNodeCalls, 2);
+
+    wire.deltaChanges = [];
+    await engine.sync();
+
+    assert.equal(wire.listNodeCalls, 2, 'the pass still found its own tree where it left it');
   });
 });
