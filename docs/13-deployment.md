@@ -26,7 +26,7 @@ compose file, the schema, and the deploy script — a NAS commonly has no git, s
 is a copy: one archive, made here, extracted there.
 
 ```bash
-npm run pack        # → dist-deploy/syncserver-<version>-<sha>.tar.gz
+npm run pack        # → dist/deploy/syncserver-<version>-<sha>.tar.gz
 ```
 
 It also writes `VERSION` (the release version, which the image tag is composed from) and
@@ -78,11 +78,11 @@ different `.env` and never a different `docker-compose.yml`.
 Either way works; the first needs only SSH, the second only a mounted share.
 
 ```bash
-scp dist-deploy/syncserver-*.tar.gz "$USER@$HOST:$DEPLOY_ROOT/"
+scp dist/deploy/syncserver-*.tar.gz "$USER@$HOST:$DEPLOY_ROOT/"
 ```
 
 ```powershell
-Copy-Item dist-deploy\syncserver-*.tar.gz \\$HOST\$SHARE\SyncServer\
+Copy-Item dist\deploy\syncserver-*.tar.gz \\$HOST\$SHARE\SyncServer\
 ```
 
 Then on the target:

@@ -28,7 +28,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
 
-out_dir="${1:-dist-deploy}"
+out_dir="${1:-dist/deploy}"
 # Any committable point, not only the current one: a tag, a branch, a commit. This is the
 # escape hatch that replaces "pack what is lying around" — testing an uncommitted change on a
 # dev host means committing it to a branch first, which costs one command and makes the thing

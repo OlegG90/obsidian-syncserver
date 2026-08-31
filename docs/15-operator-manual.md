@@ -245,7 +245,7 @@ On your own machine, from a checkout of this repository:
 npm run pack
 ```
 
-That produces `dist-deploy/syncserver-<version>-<sha>.tar.gz` from the **committed** contents of `HEAD` —
+That produces `dist/deploy/syncserver-<version>-<sha>.tar.gz` from the **committed** contents of `HEAD` —
 not from your working tree, deliberately (#106). It refuses if the files it ships have uncommitted
 changes; to deploy something not on `main` yet, name the point instead: `PACK_REF=some-branch npm run pack`.
 

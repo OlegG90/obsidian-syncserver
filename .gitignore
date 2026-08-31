@@ -17,9 +17,10 @@ pg_dump_*.sql
 # The development blob store: real encrypted content, at real addresses.
 var/
 
-# Deployment: bind-mounted data, packed archives, and the stamps pack.sh writes into them.
+# Deployment: bind-mounted data and the stamps pack.sh writes into them. The archives land
+# in dist/deploy, which the dist/ rule above already covers — every build output in this
+# repository is called dist.
 data/
-dist-deploy/
 VERSION
 MANIFEST.sha256
 
