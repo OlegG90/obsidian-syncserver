@@ -1,6 +1,6 @@
 # 03 — Data model
 
-Normative reference for `db/schema.sql`. Where this document and the schema disagree, one of them is a
+Normative reference for `server/db/schema.sql`. Where this document and the schema disagree, one of them is a
 bug: fix both.
 
 ## Three structural decisions
@@ -137,8 +137,8 @@ it happens ([04](04-sync-protocol.md)) — the window is the first run rather th
 The triggers enforce local database rules no matter which code path violates them. Several
 (`nodes_no_cycles`, `nodes_type_immutable`) exist only here and are not discussed at length elsewhere —
 that is the point of listing them, and the point of the list being **complete**: every trigger in
-`db/schema.sql` appears below, under the name it actually has, and each is fired from the wrong side by
-`db/tests.sql`. Eleven are `CONSTRAINT TRIGGER`s that fire at commit; they are marked **deferred**.
+`server/db/schema.sql` appears below, under the name it actually has, and each is fired from the wrong side by
+`server/db/tests.sql`. Eleven are `CONSTRAINT TRIGGER`s that fire at commit; they are marked **deferred**.
 
 ### Tree and vault structure
 
@@ -232,7 +232,7 @@ answers "have I uploaded this before".
 | `journal_append_only`, `audit_log_append_only` | an `UPDATE` on either log is always a bug | D-2, D-87 |
 | `audit_log_no_delete` | audit rows cannot be deleted either — unlike the delta journal, which is pruned by TTL | D-94 |
 
-`db/tests.sql` fires every one of them from the wrong side and asserts **which rule** rejected it — the
+`server/db/tests.sql` fires every one of them from the wrong side and asserts **which rule** rejected it — the
 expected `SQLSTATE` plus a fragment of the message (D-101). The code alone would not do: nearly every
 trigger above raises `check_violation`, the same one a plain `CHECK` produces.
 
@@ -247,7 +247,7 @@ Two shapes recur in this area and are worth naming, because a `CHECK` catches ne
   (D-102) and why the share mark is verified from the node *and* from the share (D-105).
 
 Testing them has one mechanical consequence: the deferred triggers never fire in a transaction that ends in
-`ROLLBACK`, so `db/tests.sql` forces them — see `AGENTS.md`, "Working on the schema and its tests".
+`ROLLBACK`, so `server/db/tests.sql` forces them — see `AGENTS.md`, "Working on the schema and its tests".
 
 ## Names
 

@@ -1,7 +1,7 @@
 /**
  * The database schema, applied by the server that needs it.
  *
- * It used to be a **file the operator had to place**: `db/schema.sql`, mounted into the
+ * It used to be a **file the operator had to place**: `server/db/schema.sql`, mounted into the
  * database container at a path relative to the compose file, run by PostgreSQL's entrypoint
  * once — on an empty data directory — and ignored ever after. Three failures came out of that
  * one arrangement:
@@ -31,10 +31,10 @@ import { SCHEMA_LOCK_ID } from './interlock.js';
  * Where the schema is, in the image and in a checkout alike.
  *
  * Resolved from this module rather than from the working directory: `server/dist/schema.js`
- * and `server/src/schema.ts` are both two levels below the repository root, so one expression
- * finds `db/schema.sql` in the container (`/app/db/schema.sql`) and in development.
+ * and `server/src/schema.ts` are both one level below `server/`, so one expression finds the
+ * schema in the container (`/app/server/db/schema.sql`) and in development.
  */
-export const SCHEMA_FILE = fileURLToPath(new URL('../../db/schema.sql', import.meta.url));
+export const SCHEMA_FILE = fileURLToPath(new URL('../db/schema.sql', import.meta.url));
 
 /**
  * A lock of its own, beside the collector's rather than shared with it.

@@ -27,7 +27,7 @@ import { PRESENT } from '../shares/membership.js';
  * So `HEAD` asks this too and throws the key away; what it answers is whether one came back.
  *
  * The location is joined rather than looked up separately. `user_blobs.sha256` references `blobs`
- * (db/schema.sql), so a held row always has one — the join narrows nothing and buys the single statement.
+ * (server/db/schema.sql), so a held row always has one — the join narrows nothing and buys the single statement.
  *
  * **What it does not do** is close the window, only narrow it to the transfer; the reasoning lives in
  * docs/04 with the rule it qualifies, because that is where a rule's current state is kept.

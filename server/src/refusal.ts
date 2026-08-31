@@ -105,7 +105,7 @@ const CHECK_VIOLATION = '23514';
  * `restrict_violation`, which in this schema means one thing only: a trigger that chose to
  * refuse, in a sentence written to be read. PostgreSQL does not raise it on its own — a
  * `RESTRICT` foreign key gives `foreign_key_violation` (23503) — so every 23001 reaching
- * here was authored deliberately by `db/schema.sql`.
+ * here was authored deliberately by `server/db/schema.sql`.
  */
 const RESTRICT_VIOLATION = '23001';
 

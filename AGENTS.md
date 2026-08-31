@@ -10,7 +10,7 @@ comments explain themselves; nothing else states a contract.
 
 - A new or changed rule goes into the right `docs/NN-*.md` file **in the same change** that
   implements it. A rule stated in two places is a contradiction waiting on a seam.
-- `db/schema.sql` is the executable half of `docs/03`. Its comments cite decision ids and are
+- `server/db/schema.sql` is the executable half of `docs/03`. Its comments cite decision ids and are
   part of the record, not decoration.
 - Decision ids are cited, never re-explained: `D-N` general and `AC-N` accounts/vaults live in
   `docs/09-decisions.md`, `SH-N` sharing in `docs/12-sharing-scenarios.md`. If you cite one,
@@ -28,10 +28,10 @@ comments explain themselves; nothing else states a contract.
 | Path | What it is |
 |---|---|
 | `docs/` | architecture, protocol, key model, roadmap — read before changing behaviour |
-| `db/schema.sql` | the whole schema: tables, constraints, triggers. There is no migration tool, deliberately |
-| `db/tests.sql` | negative tests for the schema, run inside a transaction that ends in `ROLLBACK` |
 | `shared/` | types both sides agree on. Nothing runtime-heavy belongs here |
 | `server/` | Fastify + `pg`. No ORM |
+| `server/db/schema.sql` | the whole schema: tables, constraints, triggers. There is no migration tool, deliberately |
+| `server/db/tests.sql` | negative tests for the schema, run inside a transaction that ends in `ROLLBACK` |
 | `plugin/` | the Obsidian plugin: one bundle for Electron and a Capacitor WebView |
 | `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI |
 | `tools/` | things a person picks up: database reset, packing a deployment archive, deploying, smoke-walking a server. Nothing in CI runs these |

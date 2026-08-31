@@ -176,7 +176,7 @@ docker compose pull
 docker compose up -d
 
 say "schema"
-# db/schema.sql is an INIT script: PostgreSQL runs it once, on an empty data directory. So
+# server/db/schema.sql is an INIT script: PostgreSQL runs it once, on an empty data directory. So
 # a build whose schema gained something arrives with code that expects it and a database
 # that has never seen it, and nothing says so — which is exactly how this deployment ran
 # for a while with the change-notification trigger missing. The server LISTENed, nothing
@@ -193,8 +193,8 @@ SCHEMA_SQL="SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.prona
 schema_drift() {
     # Names as declared. `sort -u` because a trigger may carry its function's name —
     # `journal_notify` is both — and the answer from the database is a set either way.
-    declared="$(sed -n 's/^CREATE FUNCTION \([a-z_][a-z0-9_]*\).*/\1/p;s/^CREATE TRIGGER \([a-z_][a-z0-9_]*\).*/\1/p' db/schema.sql | sort -u)"
-    [ -n "$declared" ] || { echo "  could not read db/schema.sql; skipping the comparison"; return 0; }
+    declared="$(sed -n 's/^CREATE FUNCTION \([a-z_][a-z0-9_]*\).*/\1/p;s/^CREATE TRIGGER \([a-z_][a-z0-9_]*\).*/\1/p' server/db/schema.sql | sort -u)"
+    [ -n "$declared" ] || { echo "  could not read server/db/schema.sql; skipping the comparison"; return 0; }
 
     # The credentials come from the container's own environment, the way the healthcheck
     # takes them: .env is read by compose and never sourced into this shell, so a deployment
@@ -215,20 +215,21 @@ tmp_actual="$(mktemp)"
 trap 'rm -f "$tmp_actual"' EXIT
 missing="$(schema_drift)"
 if [ -z "$missing" ]; then
-    echo "  every function and trigger in db/schema.sql is present"
+    echo "  every function and trigger in server/db/schema.sql is present"
 else
     cat >&2 <<EOF
 
-  The database is BEHIND db/schema.sql. Missing:
+  The database is BEHIND server/db/schema.sql. Missing:
 
 $(printf '    %s\n' $missing)
 
-  db/schema.sql is applied only to an empty data directory, so a schema change in a new
+  server/db/schema.sql is applied only to an empty data directory, so a schema change in a new
   build does not reach a database that already exists. The server is running and will
   answer, but whatever these objects do is not happening.
 
-  Either apply the missing definitions from db/schema.sql by hand, or remove the db/ and
-  blobs/ directories and start over — there is no migration tool, deliberately.
+  Either apply the missing definitions from checkout/server/db/schema.sql by hand, or remove
+  the db/ and blobs/ data directories beside the checkout and start over — there is no
+  migration tool, deliberately.
 
 EOF
     exit 1

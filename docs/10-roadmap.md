@@ -385,7 +385,7 @@ just to build what it runs.
       pinned to a version. `latest` is not used: a server updated a few times a year must be able to
       say what it is running, and to go back. The local-build path survives as `docker-compose.dev.yml`.
 - [x] **`pack.sh` shrinks to what compose actually reads** — the compose file, `.env` and
-      `db/schema.sql`, which the database container mounts to initialise itself. The copy does not
+      `server/db/schema.sql`, which the database container mounts to initialise itself. The copy does not
       disappear, and the roadmap should not pretend it does; it stops being a copy of the source.
 - [x] **The registry choice is a public one**, so no credential lives on the server. The image holds a
       built server and its dependencies — the same code the repository already publishes — and no
@@ -618,5 +618,5 @@ code, not to reading.
 
 | Artefact | State |
 |---|---|
-| `db/schema.sql` | applies cleanly on PostgreSQL 18.4 |
-| `db/tests.sql` | mostly negative tests; run ends in `ROLLBACK` |
+| `server/db/schema.sql` | applies cleanly on PostgreSQL 18.4 |
+| `server/db/tests.sql` | mostly negative tests; run ends in `ROLLBACK` |

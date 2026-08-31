@@ -58,8 +58,11 @@ drift, which is the failure this whole repository is arranged to avoid. Nothing 
 goes in there — no configuration, no storage layout, nothing cryptographic (keys never leave
 the client), and nothing either side can decide alone.
 
-`db/` sits at the root beside `docs/` rather than inside `server/`, because the documentation
-cites it as the executable half of the data model rather than as part of any one program.
+`server/db/schema.sql` is the executable half of `docs/03` — its comments cite decision ids and
+are part of the record — but it lives under `server/` all the same, because the server is what
+applies it. It travels in the server's image and runs against an empty database on first boot,
+which is the whole reason an installation is two files and not three. Citation does not need
+adjacency: `docs/03` is normative for the schema wherever the schema sits.
 
 ### Using it
 
@@ -92,7 +95,7 @@ each one holds is written down. [`docs/02`](docs/02-architecture.md) is the shor
 | 14 | [Using SyncServer](docs/14-user-manual.md) | **the user manual**: installing the plugin, connecting a vault, syncing, sharing, space |
 | 15 | [Running a SyncServer](docs/15-operator-manual.md) | **the operator manual**: a copy-paste quick start with `docker compose`, then accounts, backups, restore and upgrading — as a procedure |
 
-Decision ids are shared by these documents and by the comments in `db/schema.sql`, so a rule can
+Decision ids are shared by these documents and by the comments in `server/db/schema.sql`, so a rule can
 always be traced from the constraint that enforces it back to the sentence that decided it.
 
 ## Running it
@@ -147,7 +150,7 @@ the installation — there is nothing to copy afterwards. Use `npm run dev --wor
 
 ### Changing the schema
 
-**`db/schema.sql` is the only description of the schema, and it creates everything from
+**`server/db/schema.sql` is the only description of the schema, and it creates everything from
 nothing.** There is no migration tool, deliberately: a migration directory is a second
 description of the same thing, and two descriptions drift. Nothing is deployed with data worth
 keeping, so a change is an edit plus `npm run db:reset`.

@@ -84,7 +84,7 @@ COPY server/package.json server/
 COPY package.json ./
 # The schema, because the server applies it now rather than the operator mounting it into the
 # database container. An installation is a compose file and an `.env`; this is why it can be.
-COPY db/schema.sql db/schema.sql
+COPY server/db/schema.sql server/db/schema.sql
 
 USER 1001:100
 ENV HOST=0.0.0.0 PORT=8080 BLOB_STORE_PATH=/data/blobs
