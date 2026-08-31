@@ -14,7 +14,7 @@ comments explain themselves; nothing else states a contract.
   part of the record, not decoration.
 - Decision ids are cited, never re-explained: `D-N` general and `AC-N` accounts/vaults live in
   `docs/09-decisions.md`, `SH-N` sharing in `docs/12-sharing-scenarios.md`. If you cite one,
-  it must exist there — `scripts/check-citations.mjs` fails when it does not.
+  it must exist there — `checks/check-citations.mjs` fails when it does not.
 - **`#N` means a GitHub issue and nothing else.** It used to mean a decision, which put two
   numbering spaces in one notation until they collided: D-111 and D-114 through D-119 are all
   real issue numbers as well. GitHub renders `#N` as a link to issue N whether or not the
@@ -33,7 +33,8 @@ comments explain themselves; nothing else states a contract.
 | `shared/` | types both sides agree on. Nothing runtime-heavy belongs here |
 | `server/` | Fastify + `pg`. No ORM |
 | `plugin/` | the Obsidian plugin: one bundle for Electron and a Capacitor WebView |
-| `scripts/` | database reset, packing a deployment archive, deploying, smoke-walking a server |
+| `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI |
+| `tools/` | things a person picks up: database reset, packing a deployment archive, deploying, smoke-walking a server. Nothing in CI runs these |
 
 ## Commands
 

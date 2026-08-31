@@ -53,9 +53,9 @@ files=(
   docker-compose.dev.yml
   .env.example
   db/schema.sql
-  scripts/deploy-dev-host.sh
-  scripts/smoke.sh
-  scripts/run-smoke.sh
+  tools/deploy-dev-host.sh
+  tools/smoke.sh
+  tools/run-smoke.sh
   shared/package.json
   shared/tsconfig.json
   server/package.json

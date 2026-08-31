@@ -232,7 +232,7 @@ exists because the alternative was watching a server eight commits behind its cl
 route it had never heard of, with nothing on screen to say why.
 
 **Six** files must carry the number and none can be dropped — npm requires one per workspace, Obsidian
-requires one in `manifest.json`. `npm test` runs `scripts/check-version.mjs`, which fails when they
+requires one in `manifest.json`. `npm test` runs `checks/check-version.mjs`, which fails when they
 disagree; the count changed the day the console became a workspace, and the check is what noticed.
 The rule itself is [D-111](docs/09-decisions.md).
 

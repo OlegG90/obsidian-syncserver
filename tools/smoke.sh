@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Walk M0 and M4 end to end against a running server:
 #
-#     ./scripts/smoke.sh http://127.0.0.1:8087
+#     ./tools/smoke.sh http://127.0.0.1:8087
 #
 # The redemption below carries `kek_verifier` and **no recovery pair**, which is what a real
 # client sends since M3.5 (#112): the verifier is what makes an account recoverable at all and
@@ -21,7 +21,7 @@
 #
 # Against an installation somebody has already claimed, pass the token and vault:
 #
-#     ACCESS=<token> VAULT=<uuid> ./scripts/smoke.sh http://127.0.0.1:8087
+#     ACCESS=<token> VAULT=<uuid> ./tools/smoke.sh http://127.0.0.1:8087
 #
 # Every run uses its own content and its own filename, so it neither collides with nor
 # depends on what an earlier run left behind — running it twice against the same vault is

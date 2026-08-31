@@ -4,7 +4,7 @@
  * `server/package.json` is not a copy of the version — it is npm's own record of it, and
  * the Dockerfile already copies it into the runtime image because npm needs it there. So
  * reading it costs nothing and adds no second place to keep in step. A constant compiled in
- * here would be exactly that second place, and `scripts/check-version.mjs` exists because
+ * here would be exactly that second place, and `checks/check-version.mjs` exists because
  * the three manifests that genuinely cannot be merged are already one more than ideal.
  *
  * The path is the same from both sides of the build: `rootDir: src` and `outDir: dist` sit

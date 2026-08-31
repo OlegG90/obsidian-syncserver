@@ -20,7 +20,7 @@ rewrite every reference to it in the issues and in this file, to save one intege
 
 E2EE is not a milestone: it is day one, in every milestone above (AC-08).
 
-**M0 was walked end to end on the home server** (`scripts/run-smoke.sh`, build 4e47a15): claim, account
+**M0 was walked end to end on the home server** (`tools/run-smoke.sh`, build 4e47a15): claim, account
 surface, blob, node, `put` with the content precondition, `delete` with its revision precondition, the trash,
 and a delta reporting each. Including the three answers that look like faults and are not — `HEAD` on a
 freshly uploaded blob is `404` until a node references it ([D-20](03-data-model.md)), re-uploading identical

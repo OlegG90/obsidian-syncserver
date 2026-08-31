@@ -253,7 +253,7 @@ Copy it over, then **on the host**:
 
 ```bash
 rm -rf checkout && mkdir checkout && tar xzf syncserver-*.tar.gz -C checkout
-checkout/scripts/deploy-dev-host.sh
+checkout/tools/deploy-dev-host.sh
 ```
 
 Two things it does that are worth knowing before you need them:
@@ -261,7 +261,7 @@ Two things it does that are worth knowing before you need them:
 - **`.env` lives beside the checkout, not inside it.** Installing a new build deletes the checkout and
   never touches `.env` — regenerating those secrets would lock the installation out of its own data;
 - **per-host values come from the environment**, so a host profile is a file of `export` lines rather than
-  an edited script: `. deploy/myhost.env && checkout/scripts/deploy-dev-host.sh`. `PUBLISH_PORT` is the
+  an edited script: `. deploy/myhost.env && checkout/tools/deploy-dev-host.sh`. `PUBLISH_PORT` is the
   one almost every host sets.
 
 Upgrading by this route is the same two commands with the new archive.
