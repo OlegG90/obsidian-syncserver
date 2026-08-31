@@ -64,9 +64,12 @@ POST /auth/recover        {login, kek_verifier | recovery_code, name, platform}
 GET  /vaults              → [{id, name_enc}]             the account's vaults; sync targets one of them
 POST /vaults              {id, name_enc}                 → {id, root_node_id}
 PUT  /vaults/{vault_id}   {name_enc}                     → 204; rename
-DELETE /vaults/{vault_id}                              → 204; an empty vault that nothing still names —
+DELETE /vaults/{vault_id}                              → {thawed}; a vault that nothing still names —
                                                          see below, an ended share holds it longer than
-                                                         "no live share" suggests
+                                                         "no live share" suggests. `thawed` says whether
+                                                         the space this freed was enough to lift a
+                                                         freeze (issue #247), the way the trash purge
+                                                         has answered since it gained the same call
 POST /vaults/{vault_id}/reset                           → {reset_epoch, root_node_id}
 GET  /usage               → {used, quota, frozen}        account-wide — quota is per account (AC-Q2),
                                                          and `frozen` is the state that follows from it

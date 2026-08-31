@@ -139,7 +139,11 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
  * **Not this device's own vault**, and that is refused where the connection lives — on the device
  * (`session.ts`). The server cannot know which vault a caller is syncing.
  */
-export const deleteVault = async (db: Db, userId: string, vaultId: string): Promise<Refusal | undefined> =>
+export const deleteVault = async (
+  db: Db,
+  userId: string,
+  vaultId: string,
+): Promise<Refusal | { thawed: boolean }> =>
   db.tx(async (c) => {
     const found = await c.query(
       `SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2 FOR UPDATE`,
@@ -184,8 +188,11 @@ export const deleteVault = async (db: Db, userId: string, vaultId: string): Prom
     // refusal above — a vault a share names cannot be removed, but the account may hold OTHER vaults
     // inside shares, and those are exactly the replicas whose propagation was skipped for the length of
     // the freeze.
-    await thawIfUnderQuota(c, userId);
-    return undefined;
+    // **Reported, not dropped** (issue #247). The trash purge has returned `thawed` since it gained the
+    // same call, and for the same reason: a person who has just deleted something to get back in wants
+    // to know whether it worked, and the only surface that can say so at that moment is the one they
+    // pressed. What it costs is a `204` becoming a `200`, which is why this waited for a minor.
+    return { thawed: (await thawIfUnderQuota(c, userId)) !== undefined };
   });
 
 /**

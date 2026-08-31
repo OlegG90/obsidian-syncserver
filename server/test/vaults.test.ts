@@ -116,7 +116,7 @@ describe('deleting a vault', () => {
     const id = randomUUID();
     await createVault(id, 'empty');
     const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth() });
-    assert.equal(r.statusCode, 204, r.body);
+    assert.equal(r.statusCode, 200, r.body);
 
     const gone = await db.one(`SELECT 1 AS x FROM vaults WHERE id = $1`, [id]);
     assert.equal(gone, undefined);
@@ -143,7 +143,7 @@ describe('deleting a vault', () => {
     await add(two, [rootId, one, two]);
 
     const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth() });
-    assert.equal(r.statusCode, 204, r.body);
+    assert.equal(r.statusCode, 200, r.body);
 
     const left = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [id]);
     assert.equal(left.length, 0, 'the tree went with it');
@@ -246,7 +246,10 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
     assert.notEqual(await frozenAt(acc.id), null, 'frozen before the removal, or this proves nothing');
 
     const r = await app.inject({ method: 'DELETE', url: `/vaults/${vaultId}`, headers: { authorization: `Bearer ${acc.token}` } });
-    assert.equal(r.statusCode, 204, r.body);
+    assert.equal(r.statusCode, 200, r.body);
+    // Said, not merely done (issue #247): the person who deleted something to get back in is told that
+    // it worked, at the moment they pressed, by the surface they pressed.
+    assert.equal(r.json().thawed, true);
 
     assert.equal(await frozenAt(acc.id), null, 'the space came back and so did the account');
   });
@@ -261,7 +264,8 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
     await db.query(`UPDATE users SET quota_bytes = 1000, frozen_at = now() WHERE id = $1`, [acc.id]);
 
     const r = await app.inject({ method: 'DELETE', url: `/vaults/${one}`, headers: { authorization: `Bearer ${acc.token}` } });
-    assert.equal(r.statusCode, 204, r.body);
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.json().thawed, false, 'and it says so, rather than letting a person infer it');
 
     assert.notEqual(await frozenAt(acc.id), null, 'one vault gone was not enough, so nothing was lifted');
   });

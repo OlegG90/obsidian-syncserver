@@ -188,7 +188,7 @@ describe('reset', () => {
 
     const before_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
     const gone = await app.inject({ method: 'DELETE', url: `/vaults/${v.vaultId}`, headers: auth() });
-    assert.equal(gone.statusCode, 204, gone.body);
+    assert.equal(gone.statusCode, 200, gone.body);
     const after_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
 
     assert.ok(after_ < before_, 'the accounting is right when the transaction commits');
