@@ -106,17 +106,13 @@ jobs:
           docker run --rm --network host -e PGPASSWORD=postgres postgres:18-alpine \
             psql -h 127.0.0.1 -U postgres -c 'CREATE DATABASE syncserver'
 
-          # Configured the way a deployment is, not bare. `RESTORE_STATE_FILE` and
-          # `BACKUP_DESTINATION` default to `var/...` relative to WORKDIR, which is /app and
-          # belongs to root while this process runs as 1001:100 — so a bare `docker run` dies
-          # at boot on `mkdir 'var'`. That is a real defect with an issue of its own; this
-          # step covers the supported configuration, pointed at /data, which the image creates
-          # and chowns for exactly this user.
+          # BARE, and that is the assertion. Nothing but a database and a secret — no paths,
+          # no mounts — because an image whose own defaults cannot work in it is not
+          # configured, it is broken, and that is how #281 was found. Anything a deployment
+          # additionally sets is an override, and overrides are the easy case.
           docker run -d --name syncserver-ci --network host \
             -e DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/syncserver \
             -e SERVER_SECRET=ci-only-server-secret \
-            -e RESTORE_STATE_FILE=/data/state/restore.epoch \
-            -e BACKUP_DESTINATION=/data/backups \
             syncserver:ci
 
           for _ in $(seq 60); do

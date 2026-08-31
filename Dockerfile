@@ -71,7 +71,18 @@ RUN apk add --no-cache postgresql18-client
 # A non-root default that suits a NAS, where services usually share one unprivileged uid
 # and a common group: the blob volume must not end up owned by a user nobody else can write
 # as. `RUN_AS` in .env overrides it per installation.
-RUN mkdir -p /data/blobs && chown -R 1001:100 /data
+# Three directories, not one, and the defaults below point at them.
+#
+# `RESTORE_STATE_FILE` and `BACKUP_DESTINATION` used to keep the bare-`node` defaults
+# (`var/...`, relative to the working directory), which in this image is /app and belongs to
+# root while the process runs as 1001:100. So the image could not start on its own settings:
+# it connected, applied the schema, and died on `mkdir 'var'` (issue #281). Every deployment
+# sets both paths through compose, which is why nothing caught it until CI ran a container.
+#
+# `/data/backups` is a place that WORKS, not a place that is wise — backups beside the blobs
+# they back up share a disk with them. The reference compose gives each its own mount, and an
+# installation that means to keep copies should do the same.
+RUN mkdir -p /data/blobs /data/state /data/backups && chown -R 1001:100 /data
 
 COPY --from=deps  /app/node_modules      node_modules
 COPY --from=deps  /app/server/node_modules server/node_modules
@@ -92,6 +103,7 @@ COPY server/db/schema.sql server/db/schema.sql
 
 USER 1001:100
 ENV HOST=0.0.0.0 PORT=8080 BLOB_STORE_PATH=/data/blobs
+ENV RESTORE_STATE_FILE=/data/state/restore.epoch BACKUP_DESTINATION=/data/backups
 EXPOSE 8080
 
 # No wget, no curl in a slim Node image — so the check is Node, the one thing certainly
