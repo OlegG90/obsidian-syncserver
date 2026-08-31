@@ -23,7 +23,8 @@
     "check:citations": "node checks/check-citations.mjs",
     "check:names": "node checks/check-names.mjs",
     "pack": "./tools/pack.sh",
-    "test:live": "SYNCSERVER_DB=syncserver_plugin ./tools/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin"
+    "test:live": "SYNCSERVER_DB=syncserver_plugin ./tools/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin",
+    "clean": "./tools/clean.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

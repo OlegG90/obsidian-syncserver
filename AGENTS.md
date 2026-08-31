@@ -36,6 +36,37 @@ comments explain themselves; nothing else states a contract.
 | `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI |
 | `tools/` | things a person picks up: database reset, packing a deployment archive, deploying, smoke-walking a server. Nothing in CI runs these |
 
+## What is safe to delete
+
+The tree does not say. `deploy/` and `server/dist` sit at the same level and read the same
+way; one a command regenerates, the other nothing can bring back.
+
+Three lists answer neighbouring questions, and all three are authoritative for their own:
+
+| List | The question it answers |
+|---|---|
+| `.gitignore` | what is not source |
+| `.dockerignore` | what does not ship |
+| `tools/pack.sh` `files=()` | what a deployment needs |
+
+None answers **"may I delete this"**, so `npm run clean` does — by doing it, and by printing
+what it refused to touch. Five kinds of thing, not the two the tree suggests:
+
+| | Examples | What deleting costs |
+|---|---|---|
+| ships | `*/src`, `server/db/schema.sql`, `Dockerfile`, `docker-compose.yml` | everything |
+| verifies | `*/test`, `checks/`, `server/db/tests.sql` | everything, and none of it ships |
+| operates | `tools/`, `deploy/` | `deploy/` is unrecoverable |
+| is produced | `*/dist`, `shared/types`, `dist/`, `var/tmp` | a rebuild |
+| accumulates | `var/blobs`, `var/backups`, `var/restore.epoch` | **data** |
+
+The fifth is the one a "source or build output" split misses, and the only one where being
+wrong is expensive: it begins at first **run**, not at build, so no rebuild restores it.
+
+`node_modules/` is produced, and `clean` leaves it anyway — reinstalling must happen from the
+same side of the machine that runs the code, so removing it is a decision rather than a side
+effect.
+
 ## Commands
 
 ```bash
@@ -43,6 +74,7 @@ npm run db:reset      # drop the dev database, apply schema.sql + tests.sql, rep
 npm test              # every workspace's tests
 npm run typecheck     # every workspace, including test-only tsconfigs
 npm run test:live     # plugin tests against a REAL server it starts itself
+npm run clean         # remove what a build reproduces; prints what it would not touch
 ```
 
 `db:reset` also sweeps `server/var/tmp`, where every suite writes its blob store — teardown
