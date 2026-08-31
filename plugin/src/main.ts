@@ -15,6 +15,7 @@
  */
 import type { OwnDeviceRow } from '@syncserver/shared';
 import { Notice, Platform, Plugin, setIcon } from 'obsidian';
+import { teardownStep } from './teardown.js';
 import { autoSyncByDefault, watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
 import { ApiError, SyncClient } from './api/client.js';
@@ -92,6 +93,19 @@ const DEFAULT_DATA: PluginData = {};
  * plugin's ribbon action, where a bare "Sync now" belongs to nobody.
  */
 const RIBBON_ACTION = 'SyncServer: sync now';
+
+/**
+ * The glyph the registration carries, and it is the act rather than the mood.
+ *
+ * `addRibbonIcon` takes an icon name once, beside the title, and the mobile action sheet draws
+ * from that registration — so a phase icon there is frozen at load, which is `cloud-off` or
+ * `lock` almost every time. A mood that is right for one second and read as current for the
+ * rest of the session is worse than no mood at all (#290).
+ *
+ * The desktop ribbon is a live element, so `setPhase` keeps painting the phase onto it. Two
+ * surfaces, and only one of them can tell the truth about state.
+ */
+const RIBBON_GLYPH = 'refresh-cw';
 
 export default class SyncServerPlugin extends Plugin {
   data: PluginData = DEFAULT_DATA;
@@ -220,7 +234,7 @@ export default class SyncServerPlugin extends Plugin {
     // those registrations rather than from the live element, so a title carrying state showed
     // the phase the plugin loaded in — "Sync: not connected" beside a vault that had connected
     // and synced, for ever (#285). The state lives on the element, which `setPhase` can reach.
-    this.ribbon = this.addRibbonIcon(phaseIcon(this.phase), RIBBON_ACTION, () => void this.syncNow());
+    this.ribbon = this.addRibbonIcon(RIBBON_GLYPH, RIBBON_ACTION, () => void this.syncNow());
 
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
@@ -306,13 +320,18 @@ export default class SyncServerPlugin extends Plugin {
    * a second copy of the same listener ends up in the same window.
    *
    * The rule the next addition has to keep: anything switched on outside `register*` is
-   * switched off here, in the same order it went on.
+   * switched off here, in the same order it went on — and through `teardownStep`, so that
+   * **every step happens whatever the others do**. What the base class undoes, it undoes
+   * *after* this returns, so an exception thrown on the way out abandons that too, and what
+   * survives is a plugin half gone and half registered. From the outside that is a duplicated
+   * ribbon entry after an update (#290). Failures are reported, never swallowed: a teardown
+   * that fails quietly is how the next person spends an evening on the half that survived.
    */
   override async onunload(): Promise<void> {
     // Before the rest: a quiet period still counting would fire against a session being torn down.
-    this.localChanges?.stop();
-    await this.stopPush();
-    document.getElementById(SHARED_MARKS_STYLE)?.remove();
+    await teardownStep('stop watching for local changes', () => this.localChanges?.stop());
+    await teardownStep('close the push connection', () => this.stopPush());
+    await teardownStep('remove the shared-folder styles', () => document.getElementById(SHARED_MARKS_STYLE)?.remove());
   }
 
   async save(): Promise<void> {
