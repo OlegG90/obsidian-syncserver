@@ -46,7 +46,7 @@ Five steps, no choices. Two files, four directories, and a working server at the
 ### Step 1 — Get the two files
 
 ```bash
-V=0.7.0                       # the newest RELEASE; this file names one that exists, not the version in main
+V=0.7.1                       # the newest RELEASE; this file names one that exists, not the version in main
 mkdir -p syncserver && cd syncserver
 
 BASE=https://raw.githubusercontent.com/OlegG90/obsidian-syncserver/$V
