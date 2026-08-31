@@ -2,6 +2,9 @@
 node_modules
 **/node_modules
 **/dist
+# Same for shared/, which emits declarations into types/ rather than dist/. The build stage
+# compiles them from source; a stale local copy has no business in the context.
+shared/types
 data
 var
 docs

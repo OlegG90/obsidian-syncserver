@@ -36,7 +36,7 @@ if (rows.size === 0) {
 
 const files = execSync('git ls-files --cached --others --exclude-standard', { encoding: 'utf8' })
   .split('\n')
-  .filter((f) => /\.(ts|md|sql|mjs|ya?ml)$/.test(f) && !f.startsWith('shared/dist'));
+  .filter((f) => /\.(ts|md|sql|mjs|ya?ml)$/.test(f) && !f.startsWith('shared/types'));
 
 const problems = [];
 for (const file of files) {

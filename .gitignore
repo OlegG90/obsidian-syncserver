@@ -4,6 +4,11 @@ dist/
 build/
 *.tsbuildinfo
 
+# `shared/` emits declarations rather than a build, into `types/` rather than `dist/`, so the
+# rule above does not reach it. Generated all the same: tsc writes it from `shared/src`, and a
+# rebuild restores it.
+shared/types/
+
 # Local environment and secrets. `.env` is the whole of a deployment's configuration and
 # holds both of its secrets, so the example is the only one that may ever be committed.
 .env

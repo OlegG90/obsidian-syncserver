@@ -76,7 +76,7 @@ RUN mkdir -p /data/blobs && chown -R 1001:100 /data
 COPY --from=deps  /app/node_modules      node_modules
 COPY --from=deps  /app/server/node_modules server/node_modules
 COPY --from=build /app/server/dist        server/dist
-COPY --from=build /app/shared/dist        shared/dist
+COPY --from=build /app/shared/types       shared/types
 # `server/src/console.ts` reads this at boot, relative to server/dist.
 COPY --from=build /app/console/dist       console/dist
 COPY shared/package.json shared/
