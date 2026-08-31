@@ -58,8 +58,19 @@ jobs:
   # or on the NAS — is learning it too late. `postgresql18-client` is in Alpine 3.23 and not in
   # 3.22, which is exactly the kind of thing that moves.
   image:
-    name: the runtime image, and the pg_dump in it
+    name: the runtime image — its pg_dump, and that it runs
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
@@ -79,6 +90,44 @@ jobs:
           got=$(docker run --rm --entrypoint pg_dump syncserver:ci --version | grep -oP '\d+' | head -1)
           echo "compose runs postgres $want; the image carries pg_dump $got"
           [ "$want" = "$got" ] || { echo "::error::pg_dump $got cannot back up postgres $want"; exit 1; }
+
+      # The image is BUILT above and RUN here, and the difference is the whole point of this
+      # step. A build proves the layers assemble; it says nothing about whether the thing that
+      # comes out starts, reaches a database, and applies its own schema. Every question of the
+      # form "does the image still need this file" was previously unanswerable without a
+      # machine with Docker on it — so the answer was guessed, or the file was left alone.
+      #
+      # `/health` is a small request that exercises a surprising amount: the process booted,
+      # `pg_dump` matched at startup, PostgreSQL is reachable, and `bootstrap_pending` is a
+      # query against a table that only exists if the server applied `schema.sql` itself.
+      - name: the image starts, reaches a database, and applies its own schema
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:18-alpine \
+            psql -h 127.0.0.1 -U postgres -c 'CREATE DATABASE syncserver'
+
+          docker run -d --name syncserver-ci --network host \
+            -e DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/syncserver \
+            -e SERVER_SECRET=ci-only-server-secret \
+            syncserver:ci
+
+          for _ in $(seq 60); do
+            body="$(curl -fsS http://127.0.0.1:8080/health || true)"
+            [ -n "$body" ] && break
+            sleep 1
+          done
+
+          docker logs syncserver-ci
+          echo "$body"
+          [ -n "$body" ] || { echo "::error::no answer from /health in 60s"; exit 1; }
+
+          # Three claims, and the third is the one a build cannot make: the schema is there.
+          echo "$body" | grep -q '"status":"ok"'            || { echo "::error::not healthy"; exit 1; }
+          want=$(node -p 'require("./package.json").version')
+          echo "$body" | grep -q "\"version\":\"$want\""    || { echo "::error::image reports the wrong release"; exit 1; }
+          echo "$body" | grep -q '"bootstrap_pending":true' || { echo "::error::no schema, or an administrator nobody seeded"; exit 1; }
+
+          docker rm -f syncserver-ci
 
   server:
     name: server + schema
