@@ -24,7 +24,7 @@ createdb "$DB"
 rm -rf "$here/server/var/tmp"
 
 if psql -d "$DB" -q -v ON_ERROR_STOP=1 \
-        -f "$here/db/schema.sql" -f "$here/db/tests.sql" > "$log" 2>&1; then
+        -f "$here/server/db/schema.sql" -f "$here/server/db/tests.sql" > "$log" 2>&1; then
     echo "$DB: schema applied, $(grep -c 'NOTICE:  PASS' "$log") assertions passed"
 else
     # The failing assertion is the only interesting line; expect_fail prints which rule

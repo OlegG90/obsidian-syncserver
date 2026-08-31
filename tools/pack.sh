@@ -7,7 +7,7 @@
 # far side where it is least convenient.
 #
 # The server image is published from CI and pulled, so this is no longer the build context:
-# it is what compose reads (the compose file, .env, db/schema.sql), the deploy and smoke
+# it is what compose reads (the compose file, .env, server/db/schema.sql), the deploy and smoke
 # scripts, and the manifests a local build would need. It stops being a copy of the source.
 #
 # **Packed from the repository, not from the working tree** (#106). This used to `tar` the
@@ -52,7 +52,7 @@ files=(
   docker-compose.yml
   docker-compose.dev.yml
   .env.example
-  db/schema.sql
+  server/db/schema.sql
   tools/deploy-dev-host.sh
   tools/smoke.sh
   tools/run-smoke.sh

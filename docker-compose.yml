@@ -42,7 +42,7 @@ services:
       # crossing a mount boundary. Mounting the inner path is the pre-18 convention and
       # produces a wall of text about pg_ctlcluster rather than "wrong mount point".
       - ${DB_DIR:?set DB_DIR in .env — the directory this installation keeps its database in}:/var/lib/postgresql
-      # **No schema mounted here.** It used to be `./db/schema.sql` as an init script, which
+      # **No schema mounted here.** It used to be `./server/db/schema.sql` as an init script, which
       # made an installation three files instead of two — and the third was the one people
       # left behind, producing an empty database and a server failing against tables that were
       # never created. The schema now travels inside the server image, which applies it when
