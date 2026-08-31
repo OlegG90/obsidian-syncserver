@@ -11,9 +11,21 @@ import { clearRestoreRequest, readRestoreRequest } from './restore-request.js';
 import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema } from './schema.js';
+import { assertWritable } from './writable.js';
+import { dirname } from 'node:path';
 
 const cfg = loadConfig();
 const db = connect(cfg.databaseUrl);
+
+// Asked before the database, because the answer does not need one and because every one of
+// these fails later otherwise — the state file after the schema is applied, the destination
+// when somebody asks for a backup, the store on the first upload. A mount owned by the wrong
+// uid is the ordinary mistake here, and it deserves a sentence rather than an EACCES.
+await assertWritable([
+  { what: 'the restore state file', dir: dirname(cfg.restoreStateFile), setting: 'RESTORE_STATE_FILE' },
+  { what: 'the backup destination', dir: cfg.backup.destination, setting: 'BACKUP_DESTINATION' },
+  { what: 'the blob store', dir: cfg.blobStorePath, setting: 'BLOB_STORE_PATH' },
+]);
 
 // **Before the schema, before anything is served, and that is the whole point.** A restore asked for
 // from the console is carried out here, on the way back up: `pg_restore --clean` drops and recreates
