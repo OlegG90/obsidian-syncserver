@@ -15,8 +15,9 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { inProcessRateLimiter } from '../src/blobs/rate.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-rate-${process.pid}`;
+const STORE = testStore('rate');
 /** Small enough that two ordinary uploads cross it. */
 const PER_MINUTE = 8192;
 const cfg = {

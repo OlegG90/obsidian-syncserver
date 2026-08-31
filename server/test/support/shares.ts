@@ -18,6 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
+import { testStore } from './store.js';
 import { loadConfig } from '../../src/config.js';
 import { connect, type Db } from '../../src/db.js';
 
@@ -45,7 +46,7 @@ export const w = {
 
 /** Build the world: an app, two accounts, a vault each, and the seeded administrator claimed. */
 export const openWorld = async (label: string): Promise<void> => {
-  w.store = `var/test-${label}-${process.pid}`;
+  w.store = testStore(label);
   w.db = connect(loadConfig().databaseUrl);
   w.app = await buildApp(w.db, { ...loadConfig(), blobStorePath: w.store });
 

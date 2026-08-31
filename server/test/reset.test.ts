@@ -12,8 +12,9 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-reset-${process.pid}`;
+const STORE = testStore('reset');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
 
 let db: Db;

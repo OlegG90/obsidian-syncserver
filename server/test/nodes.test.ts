@@ -13,8 +13,9 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { removeNodesByDepth, DEPTH } from '../src/nodes/remove.js';
+import { testStore } from './support/store.js';
 
-const STORE = `var/test-nodes-${process.pid}`;
+const STORE = testStore('nodes');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
 
 let db: Db;
