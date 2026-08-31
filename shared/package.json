@@ -1,6 +1,6 @@
 {
   "name": "@syncserver/shared",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "description": "The wire contract both sides implement: nothing that runs, only what they must agree on",
