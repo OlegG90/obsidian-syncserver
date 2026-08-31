@@ -142,8 +142,16 @@ export class Panels {
                 removalWarning(v.nodes),
                 async () => {
                   try {
-                    await this.s.plugin.deleteVault(v.id);
-                    new Notice(`SyncServer: ${v.name} was removed.`);
+                    const { thawed } = await this.s.plugin.deleteVault(v.id);
+                    // The sentence somebody who removed a vault to make room is waiting for (#247).
+                    // Said only when it is true: an account that was never frozen has nothing to hear,
+                    // and "and you are not over your limit" would be noise on every ordinary removal.
+                    new Notice(
+                      thawed
+                        ? `SyncServer: ${v.name} was removed — that freed enough, and the account is accepting writes again.`
+                        : `SyncServer: ${v.name} was removed.`,
+                      thawed ? 10000 : undefined,
+                    );
                     this.s.refresh();
                   } catch (e) {
                     new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);

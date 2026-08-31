@@ -1102,8 +1102,8 @@ export default class SyncServerPlugin extends Plugin {
     return (await this.unlocked()).vaults();
   }
 
-  async deleteVault(vaultId: string): Promise<void> {
-    await (await this.unlocked()).deleteVault(vaultId);
+  async deleteVault(vaultId: string): Promise<{ thawed: boolean }> {
+    return (await this.unlocked()).deleteVault(vaultId);
   }
 
   /**

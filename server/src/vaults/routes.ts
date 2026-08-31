@@ -35,9 +35,13 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
   );
 
   app.delete<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preHandler: requireAuth }, async (req, reply) => {
-    const refusal = await deleteVault(db, req.caller!.userId, req.params.vaultId);
-    if (!refusal) return reply.code(204).send();
-    return refuse(reply, refusal);
+    // **`200` with a body, not `204`** (issue #247). Removing a vault is one of the three deletions
+    // that can lift a freeze (D-121's neighbours, docs/03), and it was the one that did it silently:
+    // the person did what they were told, watched the usage fall, and had to guess whether they were
+    // back in. The trash purge has answered `thawed` since it gained the same call.
+    const out = await deleteVault(db, req.caller!.userId, req.params.vaultId);
+    if ('kind' in out) return refuse(reply, out);
+    return out;
   });
 
   app.post<{ Params: { vaultId: string } }>(

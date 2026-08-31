@@ -560,13 +560,17 @@ export class SyncClient {
   }
 
   /**
-   * Remove one of this account's vaults (#157).
+   * Remove one of this account's vaults (#157), and learn whether that lifted a freeze (issue #247).
    *
-   * The server refuses one that still holds anything, one named by a share, and one that is not this
-   * account's — so the caller's job is to say which refusal came back rather than to decide any of it.
+   * The server refuses one named by a share and one that is not this account's — so the caller's job is
+   * to say which refusal came back rather than to decide any of it.
+   *
+   * **`200`, not `204`** — the change that made this a minor. A client from before it asks for `204`,
+   * meets a `200` and reports a removal that succeeded as a failure, which is the worst shape a break
+   * can take: the destructive half has already happened.
    */
-  deleteVault(vaultId: string): Promise<void> {
-    return this.json('DELETE', `/vaults/${vaultId}`, undefined, { expect: [204] });
+  deleteVault(vaultId: string): Promise<{ thawed: boolean }> {
+    return this.json('DELETE', `/vaults/${vaultId}`, undefined, { expect: [200] });
   }
 
   /**
