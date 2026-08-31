@@ -76,9 +76,13 @@ RUN mkdir -p /data/blobs && chown -R 1001:100 /data
 COPY --from=deps  /app/node_modules      node_modules
 COPY --from=deps  /app/server/node_modules server/node_modules
 COPY --from=build /app/server/dist        server/dist
-COPY --from=build /app/shared/types       shared/types
 # `server/src/console.ts` reads this at boot, relative to server/dist.
 COPY --from=build /app/console/dist       console/dist
+# `shared/` does NOT travel: it emits declarations and nothing else, and Node cannot load a
+# `.d.ts`. Its `package.json` does, because that one IS read — by the resolver, if anything
+# ever follows the workspace symlink in node_modules. Nothing does today, and this is checked
+# rather than assumed: no emitted `.js` under server/dist or console/dist names the package,
+# and the CI job that BUILDS this image also RUNS it.
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY package.json ./
