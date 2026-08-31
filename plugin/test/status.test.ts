@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { phaseIcon, shortStatus, statusLines, type SyncPhase } from '../src/obsidian/status.js';
+import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from '../src/obsidian/status.js';
 import type { SyncReport } from '../src/engine/engine.js';
 
 const report = (over: Partial<SyncReport>): SyncReport => ({
@@ -22,6 +22,40 @@ const report = (over: Partial<SyncReport>): SyncReport => ({
   errors: [],
   events: [],
   ...over,
+});
+
+/**
+ * The split the ribbon depends on (#285).
+ *
+ * On a phone the ribbon is an entry in a menu of ACTIONS, and its registered name can never
+ * be corrected — `addRibbonIcon` takes it once. So the name has to be the act and the state
+ * has to be reachable separately. If `phaseState` ever grows the heading back, the two would
+ * merge again and a control would go back to announcing a report it cannot keep true.
+ */
+describe('phaseState', () => {
+  const every: SyncPhase[] = [
+    { kind: 'disconnected' },
+    { kind: 'locked' },
+    { kind: 'syncing' },
+    { kind: 'failed', message: 'the server said no', at: 0 },
+    { kind: 'idle' },
+    { kind: 'idle', report: report({ scanned: 3 }) },
+    { kind: 'idle', report: report({ scanned: 0 }) },
+    { kind: 'idle', report: report({ pushed: [{ path: 'a.md' }], scanned: 5 }) },
+    { kind: 'idle', report: report({ conflicts: [{ path: 'a.md', conflictPath: 'a (conflict).md' }] }) },
+  ];
+
+  it('never carries the heading a surface puts in front of it', () => {
+    for (const phase of every) {
+      const state = phaseState(phase);
+      assert.doesNotMatch(state, /^Sync:/, `“${state}” is a whole sentence, not a state`);
+      assert.notEqual(state, '', 'every phase has something to say');
+    }
+  });
+
+  it('is exactly what shortStatus heads', () => {
+    for (const phase of every) assert.equal(shortStatus(phase), `Sync: ${phaseState(phase)}`);
+  });
 });
 
 describe('shortStatus', () => {
