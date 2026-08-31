@@ -6,7 +6,7 @@
   "description": "The wire contract both sides implement: nothing that runs, only what they must agree on",
   "//": "No runtime entry, deliberately: this package emits declarations only. Anything that tried to import it at run time would fail loudly here rather than load an empty module.",
   "exports": {
-    ".": { "types": "./dist/index.d.ts" }
+    ".": { "types": "./types/index.d.ts" }
   },
   "scripts": {
     "build": "tsc",

@@ -4,7 +4,7 @@
     "lib": [
       "ES2023"
     ],
-    "outDir": "dist",
+    "outDir": "types",
     "rootDir": "src",
     "composite": true,
     // Nothing here runs. Every import of this package across the three consuming workspaces
@@ -12,7 +12,7 @@
     // a docblock and `export {}` — 714 bytes that no bundle ever loaded and no `node` ever
     // resolved. Declarations are the whole product.
     "emitDeclarationOnly": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "tsBuildInfoFile": "types/.tsbuildinfo"
   },
   "include": [
     "src/**/*.ts"
