@@ -28,7 +28,35 @@ export interface VaultFile {
  * would only be a place to forget an encoding.
  */
 export interface VaultAdapter {
+  /**
+   * Where configuration lives, vault-relative and with no trailing slash — `.obsidian` unless the
+   * user changed it, which Obsidian allows and reports as `vault.configDir`.
+   *
+   * The scope rule needs it because the per-device exceptions are named relative to it, and a rule
+   * that assumed the default would let a renamed directory's `workspace.json` through as an ordinary
+   * file. It is a property rather than a constructor argument to the engine: the adapter is what
+   * knows where the vault keeps things, and one fact travelling from where it is known beats the same
+   * fact assembled by every caller.
+   */
+  readonly configDir: string;
+
+  /**
+   * Everything Obsidian tracks — which is the vault minus its configuration directory.
+   *
+   * That exclusion is Obsidian's, not a choice made here: `getFiles()` reads the file index, and the
+   * configuration directory is not in it.
+   */
   list(): Promise<VaultFile[]>;
+
+  /**
+   * The configuration directory, walked separately (#304).
+   *
+   * Asked only when the `.obsidian/` switch is on, because it is a directory walk the index cannot
+   * answer, and a vault with the switch off has no use for the paths. What comes back is filtered by
+   * the same `isSyncable` as everything else — the split is in how files are *found*, never in what
+   * is in scope.
+   */
+  listConfig(): Promise<VaultFile[]>;
   read(path: string): Promise<Uint8Array>;
   /**
    * Creates parent folders as needed, and overwrites.
@@ -95,11 +123,11 @@ export const SELF = 'plugins/syncserver';
  */
 const OBSIDIAN_DEVICE_LOCAL = ['workspace.json', 'workspace-mobile.json', 'graph.json', 'cache', SELF];
 
-export const isSyncable = (path: string, syncObsidian: boolean): boolean => {
+export const isSyncable = (path: string, syncObsidian: boolean, configDir = '.obsidian'): boolean => {
   if (path.startsWith('.trash/') || path.startsWith('_Reset ')) return false;
-  if (path.startsWith('.obsidian/')) {
+  if (path === configDir || path.startsWith(`${configDir}/`)) {
     if (!syncObsidian) return false;
-    const rel = path.slice('.obsidian/'.length);
+    const rel = path.slice(configDir.length + 1);
     return !OBSIDIAN_DEVICE_LOCAL.some((name) => rel === name || rel.startsWith(`${name}/`));
   }
   return true;
