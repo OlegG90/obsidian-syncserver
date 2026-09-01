@@ -27,6 +27,28 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   }
 
   async write(path: string, bytes: Uint8Array, _mtime?: number): Promise<void> {
+    // **A file Obsidian already tracks is written THROUGH Obsidian**, and this is the difference
+    // between a pull landing and a pull being undone.
+    //
+    // `vault.adapter.writeBinary` puts bytes on disk without telling the app. A note open in the
+    // editor therefore keeps the buffer it had, nothing invalidates it, and Obsidian writes that
+    // stale buffer back on its next save — silently reverting what was just pulled. The pass after
+    // that finds a file whose hash no longer matches what it recorded, which is indistinguishable
+    // from a person having typed, and the pull comes back as a conflict file holding the OLD text
+    // (#295). `modifyBinary` takes the same bytes and leaves the app knowing.
+    //
+    // **A duck check rather than `instanceof TFile`**, because this module imports nothing from
+    // `obsidian` at runtime — that is what lets every test here drive it with a stub, and it is how
+    // the folder-named-`Note.m` bug below was finally caught. `getFileByPath` would say it more
+    // plainly and is `@since 1.5.7`, above this plugin's floor of 1.5.0.
+    const tracked = this.vault.getAbstractFileByPath(path);
+    if (tracked && 'stat' in tracked) {
+      await this.vault.modifyBinary(tracked as Parameters<Vault['modifyBinary']>[0], arrayBufferOf(bytes));
+      return;
+    }
+
+    // Not tracked: the file does not exist yet, and creating it is what the rest of this does.
+    //
     // The parent folders first: writing into a folder that does not exist fails, and a pull
     // into an empty vault creates every folder it needs on the way down.
     //

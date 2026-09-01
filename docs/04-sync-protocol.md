@@ -734,6 +734,20 @@ still works; the notification channel is an optimisation, not a requirement of t
 
 ## Conflicts
 
+**A pull writes through Obsidian, not around it.** The ordinary state of a phone is the note open on
+screen, and a write that only puts bytes on disk leaves the editor holding the buffer it had. Obsidian
+saves that buffer on its next save and the pull is undone — after which the file's hash no longer
+matches what the pass recorded, which is indistinguishable from a person having typed. The next pass
+therefore pushes stale text, meets the newer revision, and resolves it into a conflict file holding the
+*older* copy. Nothing in the rules below is wrong when that happens; they are being applied to a file
+that was silently reverted, which is why the write is the place it has to be prevented.
+
+**Identical content is never a conflict, whatever led to the question.** Two devices reach the same
+text constantly — editing frontmatter back and forth — and one plaintext can sit at several addresses,
+because the content key is random and a pass makes its one dedup lookup before the walk. So an address
+is evidence and not proof: only the bytes decide, and they are compared in the one place a conflict
+file is written.
+
 The precondition for a write is **content**, not a revision number.
 
 `nodes.rev` increases on *any* operation, `move` included. Using it as the precondition would turn the
