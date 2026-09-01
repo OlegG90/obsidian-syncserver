@@ -77,6 +77,31 @@ describe('isSyncable and the .obsidian/ switch', () => {
   });
 
   /**
+   * The **Never** column of `docs/01`, which the rule never enforced (#312).
+   *
+   * Latent until #304: `getFiles()` could not see a hidden `.git` or anything under `.obsidian/`, so
+   * the missing rule had nothing to match. The configuration walk reads `vault.adapter`, which sees
+   * every path — and a plugin that vendors its dependencies put 29 MB of Windows debug symbols and
+   * native binaries in scope on a real vault.
+   */
+  it('never syncs node_modules or .git, at any depth or switch position', () => {
+    for (const on of [true, false]) {
+      assert.equal(isSyncable('.obsidian/plugins/lean-terminal/node_modules/node-pty/pty.node', on), false);
+      assert.equal(isSyncable('.obsidian/plugins/x/node_modules', on), false, 'the folder itself');
+      assert.equal(isSyncable('Projects/thing/node_modules/left-pad/index.js', on), false, 'outside the config dir too');
+      assert.equal(isSyncable('Projects/thing/.git/config', on), false);
+      assert.equal(isSyncable('.git/HEAD', on), false, 'a repository at the vault root');
+    }
+  });
+
+  // A segment, not a substring. Somebody writing about their dependencies keeps their notes.
+  it('does not take a note whose folder merely contains the word', () => {
+    assert.equal(isSyncable('Notes/my node_modules notes/a.md', true), true);
+    assert.equal(isSyncable('Notes/node_modules_explained.md', true), true);
+    assert.equal(isSyncable('Notes/.gitignore-explained/a.md', true), true);
+  });
+
+  /**
    * Obsidian lets a vault rename its configuration directory, and reports it as `vault.configDir`
    * (#304). The per-device exceptions are named relative to it, so a rule that assumed the default
    * would hand `workspace.json` to every other device — and would treat the renamed directory as

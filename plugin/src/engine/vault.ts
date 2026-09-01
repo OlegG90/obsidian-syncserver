@@ -123,7 +123,28 @@ export const SELF = 'plugins/syncserver';
  */
 const OBSIDIAN_DEVICE_LOCAL = ['workspace.json', 'workspace-mobile.json', 'graph.json', 'cache', SELF];
 
+/**
+ * Directories that are never synchronised, at any depth, whichever side of the switch they are on
+ * (docs/01, the **Never** column — #312).
+ *
+ * `docs/01` has named these since the beginning and `isSyncable` never implemented them. That cost
+ * nothing for as long as it could not: `getFiles()` returns Obsidian's index, and neither a hidden
+ * `.git` nor anything under `.obsidian/` was ever in it. The configuration walk added in #304 reads
+ * `vault.adapter` instead, which sees every path — so a plugin that vendors its dependencies handed
+ * the engine 29 MB of Windows debug symbols and native binaries, encrypted them, and sent them to a
+ * phone that can do nothing with any of it.
+ *
+ * **Matched as a path SEGMENT**, so a note folder called `my node_modules notes` is somebody's writing
+ * and syncs like anything else. A prefix test would take it, and a `includes()` would take more.
+ *
+ * Not a list to grow casually: everything here is a directory a person did not write and cannot lose.
+ * The other-synchroniser artefacts `docs/01` also names are a different argument — they are about not
+ * fighting another tool over the same vault — and are not settled here.
+ */
+const NEVER = ['node_modules', '.git'];
+
 export const isSyncable = (path: string, syncObsidian: boolean, configDir = '.obsidian'): boolean => {
+  if (path.split('/').some((segment) => NEVER.includes(segment))) return false;
   if (path.startsWith('.trash/') || path.startsWith('_Reset ')) return false;
   if (path === configDir || path.startsWith(`${configDir}/`)) {
     if (!syncObsidian) return false;
