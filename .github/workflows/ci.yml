@@ -51,6 +51,10 @@ jobs:
       - run: node checks/check-citations.mjs
       # One workspace, one name, two things — how a second `OpenedVault` reached a release.
       - run: node checks/check-names.mjs
+      # What Obsidian records ONCE must be a constant. The phase went into the ribbon's title, then
+      # into its icon, and both reached a release — a phone was offered "Sync: not connected" beside a
+      # vault that had synced.
+      - run: node checks/check-registration.mjs
 
   # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
   # only proves two numbers agree in two files; whether the pinned package actually exists in
