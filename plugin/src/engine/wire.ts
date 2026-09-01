@@ -11,6 +11,9 @@
  * structurally with no change to itself, a test double implements it natively, and the
  * protocol can grow without widening what synchronisation is coupled to.
  *
+ * That narrowing IS the seam, so it stays one (D-129): inlining this back into `SyncClient` while
+ * keeping the type "for tests" would keep the cost and lose the benefit.
+ *
  * The types come from the shared package because they ARE the wire's shapes — a second set
  * of identical interfaces here would be the duplication this file exists to argue against.
  * The client-only shapes (`Envelope`, the parsed `PutConflict`/`CursorRejected`) stay on

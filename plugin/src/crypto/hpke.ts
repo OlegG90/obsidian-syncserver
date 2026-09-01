@@ -8,6 +8,10 @@
  * "X25519 by itself wraps nothing — it agrees a shared secret — and composing HKDF and an
  * AEAD by hand where a standard exists has no justification."
  *
+ * It stays written out here rather than taken from a library (D-128). The vectors below make a
+ * swap verifiable; they do not make it free, and the trade is audited lines for a dependency
+ * inside the E2EE layer of a plugin that ships as one bundle to a phone.
+ *
  * **This is an implementation of that standard, not a composition of our own**, and the
  * difference is only worth anything if it is checked: `hpke.test.ts` runs the official
  * RFC 9180 Appendix A.1 vectors through it — the same KEM and KDF this suite uses, with the
