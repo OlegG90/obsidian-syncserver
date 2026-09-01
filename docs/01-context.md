@@ -43,7 +43,7 @@ The vault is a folder of files, so the boundary has to be stated explicitly rath
 | | Contents |
 |---|---|
 | **Always** | the whole vault tree — `.md`, attachments, canvas, bases, and any other file the user keeps in it |
-| **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json` and its mobile twin `workspace-mobile.json` (window layout), `graph.json` (graph view), and `cache` (the plugin cache) |
+| **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json` and its mobile twin `workspace-mobile.json` (window layout), `graph.json` (graph view), `cache` (the plugin cache), and `plugins/syncserver/` (this plugin's own folder) |
 | **Never** | `.trash/`, `.git/`, `node_modules/`, the `_Reset ` quarantine folder a `410 reset` moves the losing device's work into (docs/07), anything in the user's own ignore list, and the artefacts of other synchronisers: `.stfolder`, `.stversions`, `~sync-conflict-*`, `_remotely-save-metadata-on-remote.json`, `conflicted copy` |
 
 Three notes on the middle row, because it is the one that surprises people.
@@ -56,7 +56,19 @@ Even when it is on, the per-device exceptions are not optional. `workspace.json`
 open *on this screen*; propagating it between a laptop and a phone is not synchronisation, it is
 interference. `workspace-mobile.json` is the same fact for the phone, `graph.json` the same fact for the
 graph view, and `cache` is regenerated, not owned. Everything else under `.obsidian/` — appearance,
-hotkeys, the enabled-plugin list, plugin data — is configuration the user wants on every device.
+hotkeys, the enabled-plugin list, other plugins' data — is configuration the user wants on every device.
+
+`plugins/syncserver/` is on that list for a stronger reason than interference, and it is the one exception
+that is about correctness rather than taste. `data.json` holds `connection.deviceId`,
+`connection.wrappedSeed`, `state.cursor` and `state.nodes`: this device's identity and its private account
+of what it has synced. Another device receiving those is not a preference travelling — it is one device
+being told it is another, believing it has already synced files it does not have. And because the plugin
+reads `data.json` once at load and writes memory back at the end of every pass, a copy that did arrive
+would be overwritten inside the same pass, leaving a recorded hash that no longer matches the file. That
+reads as a local edit, so the two devices would push one node back and forth for ever and leave conflict
+files inside a folder the file explorer does not display. The whole folder rather than the one file:
+`main.js` is the running plugin, and nothing is lost by excluding it, since a device cannot sync at all
+until the plugin is installed on it (#303).
 
 Turning the switch off does not delete what is already on the server: `.obsidian/` files are frozen in
 place, exactly as the "never" list below treats files an earlier version uploaded. They stop being

@@ -16,13 +16,14 @@
   "scripts": {
     "db:reset": "./tools/db-reset.sh",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run check:version && npm run check:citations && npm run check:names && npm run check:registration && npm run test --workspaces --if-present",
+    "test": "npm run check:version && npm run check:citations && npm run check:names && npm run check:registration && npm run check:self-exclusion && npm run test --workspaces --if-present",
     "check:compose": "node checks/check-compose.mjs",
     "check:version": "node checks/check-version.mjs",
     "check:docblocks": "node checks/check-docblocks.mjs",
     "check:citations": "node checks/check-citations.mjs",
     "check:names": "node checks/check-names.mjs",
     "check:registration": "node checks/check-registration.mjs",
+    "check:self-exclusion": "node checks/check-self-exclusion.mjs",
     "pack": "./tools/pack.sh",
     "test:live": "SYNCSERVER_DB=syncserver_plugin ./tools/db-reset.sh && npm run build --workspace @syncserver/server && npm run test --workspace @syncserver/plugin",
     "clean": "./tools/clean.sh"
