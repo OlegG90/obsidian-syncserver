@@ -17,7 +17,7 @@ import { sealBlob } from '../src/crypto/blob.js';
 import { toHex, utf8, randomBytes } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encryptName, nameHmac, wrapContentKey, dedupTag } from '../src/crypto/scope.js';
-import { isSyncable, SELF } from '../src/engine/vault.js';
+import { isSyncable } from '../src/engine/vault.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
@@ -46,34 +46,56 @@ describe('isSyncable and the .obsidian/ switch', () => {
     assert.equal(isSyncable('.trash/gone.md', false), false);
   });
 
-  it('includes .obsidian/ config when the switch is on', () => {
+  it('includes what belongs to the vault when the switch is on', () => {
     assert.equal(isSyncable('.obsidian/appearance.json', true), true);
     assert.equal(isSyncable('.obsidian/hotkeys.json', true), true);
-    assert.equal(isSyncable('.obsidian/plugins/foo/data.json', true), true);
+    assert.equal(isSyncable('.obsidian/snippets/mermaid-palette.css', true), true);
+    assert.equal(isSyncable('.obsidian/themes/Minimal/theme.css', true), true);
+    assert.equal(isSyncable('.obsidian/templates.json', true), true);
   });
 
-  // #303. Another plugin's `data.json` is configuration; ours is the device's identity and its
-  // private account of what it has synced — `deviceId`, `wrappedSeed`, `cursor`, `nodes`. The line
-  // above and the line below look like a contradiction and are the whole point of the fix.
-  it('never includes this plugin, whatever the switch says', () => {
-    for (const on of [true, false]) {
-      assert.equal(isSyncable(`.obsidian/${SELF}/data.json`, on), false, `data.json, switch ${on}`);
-      assert.equal(isSyncable(`.obsidian/${SELF}/main.js`, on), false, `the running code, switch ${on}`);
-      assert.equal(isSyncable(`.obsidian/${SELF}`, on), false, `the folder itself, switch ${on}`);
+  /**
+   * The inversion, and the reason for it (#314).
+   *
+   * These three were synchronised until an allow list replaced the deny list, and one vault showed
+   * within a day what that meant: `community-plugins.json` held eleven plugins on a desktop and one
+   * on a phone, `core-plugins.json` disagreed about `switcher`, and `app.json` carried a mobile
+   * toolbar on the machine with no touchscreen. Every reconciliation produced a conflict file,
+   * because the two files were never two edits — they were two machines.
+   */
+  it('leaves what describes the machine on the machine', () => {
+    for (const path of [
+      '.obsidian/app.json',
+      '.obsidian/core-plugins.json',
+      '.obsidian/community-plugins.json',
+      '.obsidian/workspaces.json',
+      '.obsidian/workspace.json',
+      '.obsidian/graph.json',
+      '.obsidian/cache/whatever',
+    ]) {
+      assert.equal(isSyncable(path, true), false, path);
     }
   });
 
-  // A conflict file is written beside the file it came from, so the exclusion has to cover what the
-  // engine itself might create in there — otherwise the first pass to lose a race puts a syncable
-  // path inside a folder that is supposed to have none.
-  it('excludes what a pass could create inside that folder', () => {
-    assert.equal(isSyncable(`.obsidian/${SELF}/data (conflict 2026-09-01 android).json`, true), false);
+  /**
+   * Plugins are installed deliberately, per device — so the whole subtree stays put, and that is
+   * what now keeps this plugin's own `data.json` out of scope rather than a rule of its own (#303).
+   * `checks/check-config-scope.mjs` refuses any future allow-list entry under `plugins/`.
+   */
+  it('never synchronises a plugin, its code or its data', () => {
+    for (const on of [true, false]) {
+      assert.equal(isSyncable('.obsidian/plugins/syncserver/data.json', on), false, 'ours');
+      assert.equal(isSyncable('.obsidian/plugins/obsidian42-brat/data.json', on), false, "BRAT's beta list");
+      assert.equal(isSyncable('.obsidian/plugins/dataview/main.js', on), false, 'somebody else code');
+      assert.equal(isSyncable('.obsidian/plugins', on), false, 'the folder itself');
+    }
   });
 
-  // The prefix is a path segment, not a string. `plugins/syncserver-notes` is somebody else's
-  // plugin and syncs like any other.
-  it('does not swallow a plugin whose id merely starts the same', () => {
-    assert.equal(isSyncable(`.obsidian/${SELF}-notes/data.json`, true), true);
+  // The entries are path segments. A theme called `appearance.json.old` is not `appearance.json`.
+  it('matches an allow-list entry as a whole segment', () => {
+    assert.equal(isSyncable('.obsidian/appearance.json.bak', true), false);
+    assert.equal(isSyncable('.obsidian/snippets-old/a.css', true), false);
+    assert.equal(isSyncable('.obsidian/snippets/nested/deep.css', true), true, 'but depth inside one is fine');
   });
 
   /**
@@ -111,19 +133,22 @@ describe('isSyncable and the .obsidian/ switch', () => {
     assert.equal(isSyncable('.myconfig/appearance.json', false, '.myconfig'), false, 'off means off');
     assert.equal(isSyncable('.myconfig/appearance.json', true, '.myconfig'), true);
     assert.equal(isSyncable('.myconfig/workspace.json', true, '.myconfig'), false, 'still per-device');
-    assert.equal(isSyncable(`.myconfig/${SELF}/data.json`, true, '.myconfig'), false, 'still ours');
+    assert.equal(isSyncable('.myconfig/plugins/syncserver/data.json', true, '.myconfig'), false, 'still ours');
     // And a folder that merely looks like the default is then just a folder.
     assert.equal(isSyncable('.obsidian/appearance.json', false, '.myconfig'), true);
   });
 
-  it('keeps the per-device exceptions out even when the switch is on', () => {
+  /**
+   * The four the deny list used to name explicitly. They are still out, and now for a duller reason:
+   * nothing admits them. Kept as a test because they are the cases somebody will check by hand, and
+   * an allow list that quietly started matching `workspace.json` would be a laptop and a phone
+   * fighting over which panes are open — the original argument, still true.
+   */
+  it('keeps the old per-device exceptions out, now by not naming them', () => {
     assert.equal(isSyncable('.obsidian/workspace.json', true), false, 'window layout');
     assert.equal(isSyncable('.obsidian/workspace-mobile.json', true), false, 'mobile twin');
     assert.equal(isSyncable('.obsidian/graph.json', true), false, 'graph view');
-    assert.equal(isSyncable('.obsidian/cache', true), false, 'plugin cache');
-    assert.equal(isSyncable('.obsidian/cache/some-file', true), false, 'cache contents');
-    // A file under a device-local folder that is itself not device-local still syncs.
-    assert.equal(isSyncable('.obsidian/plugins/cache-manager/data.json', true), true);
+    assert.equal(isSyncable('.obsidian/cache/some-file', true), false, 'plugin cache');
   });
 });
 
@@ -298,24 +323,24 @@ describe('the engine applies the scope to scan, pull and delete', () => {
     const wire = new OneFileWire(
       [
         { path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-1', rev: 2 },
-        { path: `.obsidian/${SELF}/data.json`, text: '{"connection":{"deviceId":"other"}}', nodeId: 'node-2', rev: 3 },
+        { path: '.obsidian/plugins/syncserver/data.json', text: '{"connection":{"deviceId":"other"}}', nodeId: 'node-2', rev: 3 },
       ],
       continuous,
     );
     const vault = new FakeVault();
-    vault.seed(`.obsidian/${SELF}/data.json`, '{"connection":{"deviceId":"mine"}}');
+    vault.seed('.obsidian/plugins/syncserver/data.json', '{"connection":{"deviceId":"mine"}}');
     const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store({ nodes: {} }), 'device', true);
 
     const report = await engine.sync();
 
     assert.equal(vault.contents('.obsidian/appearance.json'), '{}', 'ordinary configuration still travels');
     assert.equal(
-      vault.contents(`.obsidian/${SELF}/data.json`),
+      vault.contents('.obsidian/plugins/syncserver/data.json'),
       '{"connection":{"deviceId":"mine"}}',
       "the other device's identity did not land here",
     );
-    assert.ok(!report.pulled.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pulled');
-    assert.ok(!report.pushed.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pushed');
+    assert.ok(!report.pulled.some((p) => p.path.startsWith('.obsidian/plugins/syncserver/')), 'nothing of ours is pulled');
+    assert.ok(!report.pushed.some((p) => p.path.startsWith('.obsidian/plugins/syncserver/')), 'nothing of ours is pushed');
   });
 
   /**

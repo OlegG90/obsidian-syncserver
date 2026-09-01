@@ -128,7 +128,7 @@ export class SyncServerSettings extends PluginSettingTab {
       new Setting(options)
         .setName('Synchronise .obsidian/ configuration')
         .setDesc(
-          'Plugins and appearance, not per-device state: workspace layout, the graph view, plugin caches and this plugin stay on this device (docs/01). Off by default. Changes here travel with the next sync rather than starting one.',
+          'Appearance and vault settings: snippets, themes, templates, daily notes, bookmarks, hotkeys. Plugins are installed per device, so nothing under plugins/ travels — nor does the window layout or the enabled-plugin list (docs/01). Off by default. Changes here travel with the next sync rather than starting one.',
         )
         .addToggle((t) =>
           t
