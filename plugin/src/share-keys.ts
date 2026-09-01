@@ -195,6 +195,13 @@ export const UNREADABLE_NAME = '(name unavailable)';
  * CONTEXT.md describes lives: scopes can be born no other way. Below that point the provenance
  * is already established, and a mapping function asking for a class it will call one method on
  * is asking for a guarantee somebody else has already made.
+ *
+ * **It stays a class rather than becoming a map of keys** (D-127). Two of the five methods are
+ * lookups and `bound-vault.ts` already guarantees one opening per operation, which is where the
+ * case for collapsing this comes from — but the two guarantees are different sizes. `BoundVault`
+ * stops an operation opening the vault *twice*; the private constructor stops anything assembling
+ * scopes *within* one opening out of whatever subset of `Scope[]` it happens to hold. A map is
+ * constructible by anyone from anything, so that second guarantee would have nowhere to live.
  */
 export class VaultScopes {
   private constructor(
