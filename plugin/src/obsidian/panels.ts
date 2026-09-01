@@ -113,7 +113,7 @@ export class Panels {
     asked(
       containerEl,
       'vault list',
-      () => this.s.plugin.vaults(),
+      () => this.s.plugin.account.vaults(),
       (v, list) => {
         // What it is USING, not only how many rows it has (#178) — which is the number somebody reads
         // when they are deciding which vault to remove to make room.
@@ -142,7 +142,7 @@ export class Panels {
                 removalWarning(v.nodes),
                 async () => {
                   try {
-                    const { thawed } = await this.s.plugin.deleteVault(v.id);
+                    const { thawed } = await this.s.plugin.account.deleteVault(v.id);
                     // The sentence somebody who removed a vault to make room is waiting for (#247).
                     // Said only when it is true: an account that was never frozen has nothing to hear,
                     // and "and you are not over your limit" would be noise on every ordinary removal.
@@ -180,7 +180,7 @@ export class Panels {
     asked(
       containerEl,
       'device list',
-      () => this.s.plugin.devices(),
+      () => this.s.plugin.account.devices(),
       (d, list) => {
         const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
         const row = new Setting(list)
@@ -205,7 +205,7 @@ export class Panels {
                 'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
                   'already holds stay where they are, and this account simply stops answering it.',
                 async () => {
-                  await this.s.plugin.revokeDevice(d.id);
+                  await this.s.plugin.account.revokeDevice(d.id);
                   new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
                   this.s.refresh();
                 },

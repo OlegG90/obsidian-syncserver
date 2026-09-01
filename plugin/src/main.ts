@@ -43,6 +43,7 @@ import {
   acceptInvitation, freeName, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
 } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
+import { openAccountAsks, type AccountAsks } from './account-asks.js';
 import { openGate } from './gate.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
@@ -129,12 +130,33 @@ export default class SyncServerPlugin extends Plugin {
   private gate = openGate();
   /** Which local folder each share is, and the badge that says so — see `shared-folder-marks.ts`. */
   private marks: SharedFolderMarks | undefined;
+
+  /**
+   * What a screen may ask of the account (`account-asks.ts`).
+   *
+   * Bound at the edge like `marks` and the coordinators: the module owns which operations need the
+   * seed and which only need a handle, and this file supplies the two ways in. Ten one-line methods
+   * used to live here, each carrying that rule in its own docblock.
+   */
+  account!: AccountAsks;
   /** The last thing said to the person, with when — rendered by the settings header (#130). */
   private lastSaid: Action | undefined;
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
     this.addSettingTab(new SyncServerSettings(this.app, this));
+
+    this.account = openAccountAsks({
+      seed: () => this.unlocked(),
+      handle: (fn) => this.withSession(fn),
+      // Both halves of writing an envelope down: the connection the session now holds, and the save.
+      // The port cannot reach either, and the two are one act — a saved file with the old wrapped seed
+      // asks for a passphrase that no longer opens anything.
+      keepEnvelope: async () => {
+        this.data.connection = this.sess!.connection;
+        await this.save();
+      },
+    });
 
     // The shared-folder subsystem, bound at the edge exactly like the coordinators: the
     // module owns the map and the reconcile guard, and Obsidian or the session is a port.
@@ -650,7 +672,7 @@ export default class SyncServerPlugin extends Plugin {
     this.pairingFlow ??= openPairingFlow({
       newCode: () => newHumanCode(),
       join: (args, waiting) => this.pair(args, waiting),
-      approve: (code) => this.approvePairing(code),
+      approve: (code) => this.account.approvePairing(code),
       showCode: (code) => this.renderPairingCode(code),
       setStatus: (text, failed) => this.renderPairingStatus(text, failed === true),
       notify: (message, durationMs) => this.say(message, durationMs),
@@ -1058,24 +1080,6 @@ export default class SyncServerPlugin extends Plugin {
     });
   }
 
-  /**
-   * Change the passphrase this vault is behind (#138), and take a change made elsewhere.
-   *
-   * Both need an open session and neither takes the shared gate: one row in `users`, nothing a
-   * sync touches, no vault key moved — the same reasoning #131 settled for pairing.
-   */
-  async changePassphrase(current: string, next: string): Promise<void> {
-    await (await this.unlocked()).changePassphrase(current, next);
-    this.data.connection = this.sess!.connection;
-    await this.save();
-  }
-
-  async adoptPassphrase(passphrase: string): Promise<void> {
-    await (await this.unlocked()).adoptEnvelope(passphrase);
-    this.data.connection = this.sess!.connection;
-    await this.save();
-  }
-
   /** Whether this device is behind a passphrase the account has stopped using (#138). */
   passphraseChangedElsewhere(): boolean {
     return this.sess?.envelopeIsStale === true;
@@ -1127,63 +1131,6 @@ export default class SyncServerPlugin extends Plugin {
     if (!existing) await leaf.setViewState({ type: SYNCSERVER_VIEW, active: true });
     this.app.workspace.revealLeaf(leaf);
     if (section && leaf.view instanceof SyncServerView) leaf.view.show(section);
-  }
-
-  /**
-   * The vaults this account has, and removing one (#157, #161).
-   *
-   * Through `unlocked()` rather than `withSession`, because naming them needs the seed: the server holds
-   * `name_enc` and no key to open it, so the decryption is the session's own.
-   */
-  async vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]> {
-    return (await this.unlocked()).vaults();
-  }
-
-  async deleteVault(vaultId: string): Promise<{ thawed: boolean }> {
-    return (await this.unlocked()).deleteVault(vaultId);
-  }
-
-  /**
-   * The devices of this account, and taking one away (#156).
-   *
-   * Through the session like everything else, and without the shared gate: reading a list and revoking
-   * one row touch nothing a sync touches (#131).
-   */
-  async devices(): Promise<OwnDeviceRow[]> {
-    return (await this.withSession((h) => h.client.devices())).devices;
-  }
-
-  async revokeDevice(deviceId: string): Promise<void> {
-    await this.withSession((h) => h.client.revokeDevice(deviceId));
-  }
-
-  /**
-   * Whether this account has a recovery code, and making one (M7).
-   *
-   * Both go through the session for the same reason `/auth/recovery-code` is authenticated at
-   * all: the proof that may file a way into an account is being able to open it. Neither takes
-   * the shared gate — one row in `users`, nothing a sync touches, and no vault key moves
-   * (#131 settled the same question for pairing).
-   */
-  async hasRecoveryCode(): Promise<boolean> {
-    return (await this.withSession((h) => h.client.recoveryCodeState())).present;
-  }
-
-  async createRecoveryCode(): Promise<{ code: string; replaced: boolean }> {
-    return (await this.unlocked()).createRecoveryCode();
-  }
-
-  /**
-   * Approve another device's pairing from here. Needs the seed, so it needs an open
-   * session — the passphrase is asked for exactly as a sync would ask.
-   *
-   * Through `withSession` like everything else. Its own copy of that sequence had drifted in
-   * the way a copy does: it never checked whether the unlock succeeded, so a wrong
-   * passphrase fell through to the approval and failed there instead — with a sentence about
-   * pairing, for a mistake about a passphrase.
-   */
-  async approvePairing(code: string): Promise<void> {
-    await (await this.unlocked()).approvePairing(code);
   }
 
   /**
