@@ -76,6 +76,21 @@ describe('isSyncable and the .obsidian/ switch', () => {
     assert.equal(isSyncable(`.obsidian/${SELF}-notes/data.json`, true), true);
   });
 
+  /**
+   * Obsidian lets a vault rename its configuration directory, and reports it as `vault.configDir`
+   * (#304). The per-device exceptions are named relative to it, so a rule that assumed the default
+   * would hand `workspace.json` to every other device — and would treat the renamed directory as
+   * ordinary notes, syncing the whole of it with the switch OFF.
+   */
+  it('takes the configuration directory from the vault rather than assuming it', () => {
+    assert.equal(isSyncable('.myconfig/appearance.json', false, '.myconfig'), false, 'off means off');
+    assert.equal(isSyncable('.myconfig/appearance.json', true, '.myconfig'), true);
+    assert.equal(isSyncable('.myconfig/workspace.json', true, '.myconfig'), false, 'still per-device');
+    assert.equal(isSyncable(`.myconfig/${SELF}/data.json`, true, '.myconfig'), false, 'still ours');
+    // And a folder that merely looks like the default is then just a folder.
+    assert.equal(isSyncable('.obsidian/appearance.json', false, '.myconfig'), true);
+  });
+
   it('keeps the per-device exceptions out even when the switch is on', () => {
     assert.equal(isSyncable('.obsidian/workspace.json', true), false, 'window layout');
     assert.equal(isSyncable('.obsidian/workspace-mobile.json', true), false, 'mobile twin');
@@ -276,5 +291,46 @@ describe('the engine applies the scope to scan, pull and delete', () => {
     );
     assert.ok(!report.pulled.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pulled');
     assert.ok(!report.pushed.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pushed');
+  });
+
+  /**
+   * The upload half of the switch, which never worked (#304).
+   *
+   * `FakeVault` now splits `list()` from `listConfig()` the way Obsidian's index does, and that split
+   * is what gives this test teeth: before it, every fake answered configuration files from the same
+   * map the engine already read, so a scan that never asked for them still looked complete.
+   */
+  it('pushes configuration once the switch is on', async () => {
+    const wire = new OneFileWire([], continuous);
+    const vault = new FakeVault();
+    vault.seed('Notes/a.md', 'a note');
+    vault.seed('.obsidian/appearance.json', '{}');
+    vault.seed('.obsidian/workspace.json', '{}');
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store({ nodes: {} }), 'device', true);
+
+    const report = await engine.sync();
+
+    assert.ok(report.pushed.some((p) => p.path === 'Notes/a.md'), 'the note still goes');
+    assert.ok(report.pushed.some((p) => p.path === '.obsidian/appearance.json'), 'and now the configuration does');
+    assert.ok(!report.pushed.some((p) => p.path === '.obsidian/workspace.json'), 'except what is this screen only');
+  });
+
+  // The other half of the same call: with the switch off the walk is not even made, so a vault that
+  // never opted in pays nothing for the directory being there.
+  it('does not walk the configuration directory when the switch is off', async () => {
+    const wire = new OneFileWire([], continuous);
+    const vault = new FakeVault();
+    vault.seed('.obsidian/appearance.json', '{}');
+    let walked = 0;
+    const counting = Object.create(vault) as FakeVault;
+    counting.listConfig = async () => {
+      walked += 1;
+      return vault.listConfig();
+    };
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), counting, new Store({ nodes: {} }));
+
+    await engine.sync();
+
+    assert.equal(walked, 0);
   });
 });

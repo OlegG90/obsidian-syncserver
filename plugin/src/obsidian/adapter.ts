@@ -16,10 +16,45 @@ import { arrayBufferOf } from './buffer.js';
 export class ObsidianVaultAdapter implements VaultAdapter {
   constructor(private readonly vault: Vault) {}
 
+  /** Where Obsidian keeps configuration. `.obsidian` unless the user renamed it. */
+  get configDir(): string {
+    return this.vault.configDir;
+  }
+
   async list(): Promise<VaultFile[]> {
     // `getFiles()` is Obsidian's own view of the vault: files it tracks, folders excluded,
     // and the configuration directory already absent.
     return this.vault.getFiles().map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size }));
+  }
+
+  /**
+   * The configuration directory, which `list()` cannot see (#304).
+   *
+   * That absence is not an oversight above — it is Obsidian's file index, and the index does not carry
+   * the configuration directory. So the `.obsidian/` switch had a scope rule, a settings toggle and a
+   * pull that all worked, over a set of local files that was always empty: everything under it could
+   * come down and nothing could ever go up.
+   *
+   * `vault.adapter` is the layer below the index and answers about any path, which is why the walk is
+   * here. `list()` returns files and folders separately, so this recurses on the folders; there is no
+   * depth to speak of — a configuration directory is plugin folders and a handful of JSON files.
+   *
+   * **`stat` is asked per file and may answer nothing.** A plugin rewriting its own `data.json` while
+   * this walks is ordinary, and a file that vanished between being listed and being asked about is not
+   * an error worth failing a whole pass over: it is simply not there this time.
+   */
+  async listConfig(): Promise<VaultFile[]> {
+    const out: VaultFile[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      const found = await this.vault.adapter.list(dir);
+      for (const path of found.files) {
+        const s = await this.vault.adapter.stat(path);
+        if (s) out.push({ path, mtime: s.mtime, size: s.size });
+      }
+      for (const folder of found.folders) await walk(folder);
+    };
+    if (await this.vault.adapter.exists(this.vault.configDir)) await walk(this.vault.configDir);
+    return out;
   }
 
   async read(path: string): Promise<Uint8Array> {

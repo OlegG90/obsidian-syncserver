@@ -121,10 +121,14 @@ export class SyncServerSettings extends PluginSettingTab {
           }),
         );
 
+      // **The last sentence is not a detail.** Obsidian raises no event when configuration changes, so
+      // nothing here can start a pass the way editing a note does (#304). Somebody who changes a
+      // hotkey, watches the vault sit still and concludes the switch is broken has been told the
+      // truth by the software, just not on this screen — which is where they are standing.
       new Setting(options)
         .setName('Synchronise .obsidian/ configuration')
         .setDesc(
-          'Plugins and appearance, not per-device state: workspace layout, the graph view and plugin caches stay on this device (docs/01). Off by default.',
+          'Plugins and appearance, not per-device state: workspace layout, the graph view, plugin caches and this plugin stay on this device (docs/01). Off by default. Changes here travel with the next sync rather than starting one.',
         )
         .addToggle((t) =>
           t

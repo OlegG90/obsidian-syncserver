@@ -27,8 +27,33 @@ export class FakeVault implements VaultAdapter {
     return [...this.files.keys()].sort();
   }
 
+  /**
+   * **The split mirrors Obsidian's, and that is the one quirk this double does model** (#304).
+   *
+   * Obsidian's file index does not carry the configuration directory, so `list()` cannot see it and a
+   * separate walk has to. A fake that answered everything from one map was more capable than the thing
+   * it stands for, and it hid #304 completely: the switch had a scope rule, a toggle and a pull that
+   * all passed here, over a set of local files that in Obsidian was always empty.
+   *
+   * The same argument as `write()` ignoring its advisory `mtime` below. A double that is easier to
+   * satisfy than reality is a suite that is green on a path that cannot work.
+   */
+  readonly configDir = '.obsidian';
+
+  private entries(under: (path: string) => boolean): VaultFile[] {
+    return [...this.files.entries()]
+      .filter(([path]) => under(path))
+      .map(([path, f]) => ({ path, mtime: f.mtime, size: f.bytes.length }));
+  }
+
+  private inConfig = (path: string): boolean => path === this.configDir || path.startsWith(`${this.configDir}/`);
+
   async list(): Promise<VaultFile[]> {
-    return [...this.files.entries()].map(([path, f]) => ({ path, mtime: f.mtime, size: f.bytes.length }));
+    return this.entries((path) => !this.inConfig(path));
+  }
+
+  async listConfig(): Promise<VaultFile[]> {
+    return this.entries(this.inConfig);
   }
 
   async read(path: string): Promise<Uint8Array> {

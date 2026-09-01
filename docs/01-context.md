@@ -70,6 +70,17 @@ files inside a folder the file explorer does not display. The whole folder rathe
 `main.js` is the running plugin, and nothing is lost by excluding it, since a device cannot sync at all
 until the plugin is installed on it (#303).
 
+Two mechanics follow from where the configuration directory lives, and both surprised us (#304).
+Obsidian's file index does not carry it, so the plugin walks it separately — `vault.adapter` rather than
+`getFiles()` — and only when the switch is on. And Obsidian raises no `create`/`modify`/`delete`/`rename`
+for anything inside it, so a configuration change **starts no pass**: it travels with the next one, which
+on a desk is the next note edit or the next press of the ribbon. The toggle says so, because a person who
+changes a hotkey and watches nothing happen will otherwise conclude the switch is broken.
+
+The directory is also not necessarily called `.obsidian` — a vault may rename it, and `vault.configDir` is
+what says so. The scope rule takes the name from the adapter rather than assuming it; the per-device
+exceptions are relative to it.
+
 Turning the switch off does not delete what is already on the server: `.obsidian/` files are frozen in
 place, exactly as the "never" list below treats files an earlier version uploaded. They stop being
 scanned and pulled, and their state rows are kept so the switch can come back on without re-uploading.

@@ -244,7 +244,21 @@ export class SyncEngine {
   ) {}
 
   /** The scope filter, applied to every direction: scan, pull, and the delete bookkeeping. */
-  private readonly scope = (path: string): boolean => isSyncable(path, this.syncObsidian);
+  private readonly scope = (path: string): boolean => isSyncable(path, this.syncObsidian, this.vault.configDir);
+
+  /**
+   * Every local file this pass may consider (#304).
+   *
+   * Two calls because they are two different questions to Obsidian — the file index, and a directory
+   * walk it does not cover — and the second is only worth asking when the switch is on. Scope is not
+   * decided here: whatever comes back goes through `inScope` with everything else, so turning the
+   * switch on widens where files are looked for and the rule still says what travels.
+   */
+  private async localFiles(): Promise<VaultFile[]> {
+    const tracked = await this.vault.list();
+    if (!this.syncObsidian) return tracked;
+    return [...tracked, ...(await this.vault.listConfig())];
+  }
 
   /**
    * The key for a key scope, resolved by the scope's `key_id`.
@@ -325,7 +339,7 @@ export class SyncEngine {
 
     report.unreadable = unreadable;
 
-    const local = (await this.vault.list()).filter((f) => inScope(f.path));
+    const local = (await this.localFiles()).filter((f) => inScope(f.path));
     report.scanned = local.length;
 
     // Read once, hash, tag — and let the bytes go. Holding every file in memory at once is
