@@ -43,7 +43,7 @@ The vault is a folder of files, so the boundary has to be stated explicitly rath
 | | Contents |
 |---|---|
 | **Always** | the whole vault tree — `.md`, attachments, canvas, bases, and any other file the user keeps in it |
-| **Optional**, behind a separate switch | `.obsidian/` — the plugin and appearance configuration, with **per-device exceptions**: `workspace.json` and its mobile twin `workspace-mobile.json` (window layout), `graph.json` (graph view), `cache` (the plugin cache), and `plugins/syncserver/` (this plugin's own folder) |
+| **Optional**, behind a separate switch | under `.obsidian/`, an **allow list** — `snippets/`, `themes/`, `appearance.json`, `templates.json`, `daily-notes.json`, `types.json`, `bookmarks.json`, `hotkeys.json`. Nothing else: not `app.json`, not `core-plugins.json`, not `community-plugins.json`, not `workspaces.json`, and not `plugins/` |
 | **Never** | `.trash/`, `.git/`, `node_modules/`, the `_Reset ` quarantine folder a `410 reset` moves the losing device's work into (docs/07), anything in the user's own ignore list, and the artefacts of other synchronisers: `.stfolder`, `.stversions`, `~sync-conflict-*`, `_remotely-save-metadata-on-remote.json`, `conflicted copy` |
 
 Three notes on the middle row, because it is the one that surprises people.
@@ -52,23 +52,35 @@ Three notes on the middle row, because it is the one that surprises people.
 window layout and plugin state forever. Someone arriving from Obsidian Sync expects the opposite and will
 wonder where their plugins went, so this belongs in the onboarding text and not only here.
 
-Even when it is on, the per-device exceptions are not optional. `workspace.json` describes which panes are
-open *on this screen*; propagating it between a laptop and a phone is not synchronisation, it is
-interference. `workspace-mobile.json` is the same fact for the phone, `graph.json` the same fact for the
-graph view, and `cache` is regenerated, not owned. Everything else under `.obsidian/` — appearance,
-hotkeys, the enabled-plugin list, other plugins' data — is configuration the user wants on every device.
+**It is an allow list, and the inversion was learned rather than designed** (#314). The rule used to be
+"everything under `.obsidian/` except a few per-device exceptions", on the assumption that configuration
+is mostly shared and the machine-specific part is the special case. A real vault answered that a day
+after the switch first worked: `community-plugins.json` held eleven plugins on a desktop and one on a
+phone, `core-plugins.json` disagreed about `switcher` and `backlink`, and `app.json` carried a mobile
+toolbar on the machine that has no touchscreen. Each produced a conflict file, and each would produce
+another after every reconciliation, because those files were never two edits meeting — they were two
+different machines. A deny list has to grow by one entry every time somebody finds another; an allow list
+names the minority that actually belongs to the vault, which turns out to be short.
 
-`plugins/syncserver/` is on that list for a stronger reason than interference, and it is the one exception
-that is about correctness rather than taste. `data.json` holds `connection.deviceId`,
-`connection.wrappedSeed`, `state.cursor` and `state.nodes`: this device's identity and its private account
-of what it has synced. Another device receiving those is not a preference travelling — it is one device
-being told it is another, believing it has already synced files it does not have. And because the plugin
-reads `data.json` once at load and writes memory back at the end of every pass, a copy that did arrive
-would be overwritten inside the same pass, leaving a recorded hash that no longer matches the file. That
-reads as a local edit, so the two devices would push one node back and forth for ever and leave conflict
-files inside a folder the file explorer does not display. The whole folder rather than the one file:
-`main.js` is the running plugin, and nothing is lost by excluding it, since a device cannot sync at all
-until the plugin is installed on it (#303).
+What travels is how the vault **looks** and what its content is shaped by: the snippets and themes a
+person chose or wrote, which of them are on, and the templates, daily-note settings, property types and
+bookmarks that describe the notes themselves. `hotkeys.json` travels with them because bindings follow a
+person rather than a machine.
+
+**`plugins/` stays on the device, all of it.** Plugins are installed deliberately, and a phone and a
+laptop do not run the same set. That covers the code — `main.js` is the running plugin, and a pass that
+overwrites its own code mid-walk is a self-reference, while nothing is lost by excluding it, since a
+device cannot sync at all until the plugin is installed on it. It also covers plugin `data.json`, which
+the earlier wording promised and should not have: BRAT's is the list of betas installed on *that*
+machine, and this plugin's holds `connection.deviceId`, `connection.wrappedSeed`, `state.cursor` and
+`state.nodes` — this device's identity and its private account of what it has synced. Another device
+receiving those is not a preference travelling; it is one device being told it is another, believing it
+has already synced files it does not have. Because the plugin reads `data.json` once at load and writes
+memory back at the end of every pass, a copy that did arrive would be overwritten inside the same pass,
+leaving a recorded hash that no longer matches the file — which reads as a local edit, so two devices
+would push one node back and forth for ever (#303). `checks/check-config-scope.mjs` refuses any allow-list
+entry under `plugins/`, because "plugin settings are configuration" is the most reasonable-looking edit
+anyone will ever propose to that array.
 
 Two mechanics follow from where the configuration directory lives, and both surprised us (#304).
 Obsidian's file index does not carry it, so the plugin walks it separately — `vault.adapter` rather than

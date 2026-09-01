@@ -81,47 +81,47 @@ export interface VaultAdapter {
 }
 
 /**
- * This plugin's own folder under `.obsidian/plugins/`, which is never synchronised (#303).
+ * What under the configuration directory belongs to the **vault**, and therefore travels (#314).
  *
- * The id is checked against `plugin/manifest.json` by `checks/check-self-exclusion.mjs`, because a
- * rename there and a stale string here would silently put `data.json` back in scope — and nothing
- * about the resulting sync would look wrong until two devices had been running for a while.
- */
-export const SELF = 'plugins/syncserver';
-
-/**
- * `.obsidian/` is behind a switch, off by default (D-7, docs/01). Off, the whole directory
- * is skipped. On, everything is synced EXCEPT the per-device exceptions — files that
- * describe *this screen*, not the vault: the workspace layout, its mobile twin, the graph
- * view, the plugin cache, and this plugin's own folder.
+ * An allow list, and the inversion is the decision. The rule used to synchronise everything under
+ * `.obsidian/` except a handful of named exceptions, on the assumption that configuration is mostly
+ * shared and per-device state is the special case. A live vault said the opposite a day after the
+ * switch first worked: `community-plugins.json` held eleven plugins on a desktop and one on a phone,
+ * `core-plugins.json` disagreed about `switcher` and `backlink`, and `app.json` carried a mobile
+ * toolbar on the machine that has no touchscreen. Those are not two edits meeting. They are two
+ * different machines, and a deny list has to grow by one entry every time somebody finds another.
  *
- * Propagating the first four is not synchronisation, it is interference: a laptop and a phone
- * must not fight over which panes are open (docs/01).
+ * So this names the minority instead: how the vault LOOKS and what it is made of.
  *
- * **`SELF` is there for a stronger reason than interference** (#303). `data.json` is where this
- * plugin keeps `connection.deviceId`, `connection.wrappedSeed`, `state.cursor` and `state.nodes` —
- * the device's identity and its private account of what it has synced. Handing that to another
- * device is not a preference travelling, it is one device being told it is another; and since the
- * plugin loads `this.data` once and writes memory back at the end of every pass, a pulled copy is
- * overwritten in the same pass it arrived. What survives is the recorded hash, which no longer
- * matches the file — indistinguishable from a person having edited it. Two devices then push one
- * node back and forth for ever, and any pass where both pushed between their pulls leaves a
- * conflict file inside a directory the file explorer does not show.
+ * - `snippets/` and `themes/` — CSS the person chose or wrote, about this vault's appearance;
+ * - `appearance.json` — which of those themes and snippets are on;
+ * - `templates.json`, `daily-notes.json`, `types.json`, `bookmarks.json` — what the vault's own
+ *   content is shaped by;
+ * - `hotkeys.json` — a person's own bindings, which follow them rather than a machine.
  *
- * The folder rather than the one file: `main.js` and `manifest.json` are the running plugin, and a
- * pass that overwrites its own code mid-walk is the same self-reference wearing different clothes.
- * Nothing is lost by excluding them — a device cannot sync at all until the plugin is installed on
- * it, so this folder is never how it arrives.
+ * **Everything else stays on the device**, and `plugins/` is the entry worth saying out loud:
+ * plugins are installed deliberately, per device. A phone and a laptop do not run the same set,
+ * and telling one that it runs the other's is how you get a conflict file every single pass.
  *
- * The exceptions apply even when the switch is on; they are not optional. Everything else
- * under `.obsidian/` — appearance, hotkeys, the enabled-plugin list, other plugins' data — is
- * configuration the user wants on every device.
+ * That also settles #303 without a rule of its own. This plugin's `data.json` — `deviceId`,
+ * `wrappedSeed`, `cursor`, `nodes` — is out of scope because all of `plugins/` is, and
+ * `checks/check-config-scope.mjs` refuses any future entry under `plugins/` so the answer cannot be
+ * undone by an edit that looks reasonable in isolation.
  *
  * `_Reset ` is the quarantine folder a `410 reset` moves the losing device's work into
  * (docs/07): it lives inside the vault so nothing is erased, and it must not be synced or
  * the very files the reset displaced come back up on the next pass.
  */
-const OBSIDIAN_DEVICE_LOCAL = ['workspace.json', 'workspace-mobile.json', 'graph.json', 'cache', SELF];
+export const OBSIDIAN_SHARED = [
+  'snippets',
+  'themes',
+  'appearance.json',
+  'templates.json',
+  'daily-notes.json',
+  'types.json',
+  'bookmarks.json',
+  'hotkeys.json',
+];
 
 /**
  * Directories that are never synchronised, at any depth, whichever side of the switch they are on
@@ -149,7 +149,7 @@ export const isSyncable = (path: string, syncObsidian: boolean, configDir = '.ob
   if (path === configDir || path.startsWith(`${configDir}/`)) {
     if (!syncObsidian) return false;
     const rel = path.slice(configDir.length + 1);
-    return !OBSIDIAN_DEVICE_LOCAL.some((name) => rel === name || rel.startsWith(`${name}/`));
+    return OBSIDIAN_SHARED.some((name) => rel === name || rel.startsWith(`${name}/`));
   }
   return true;
 };
