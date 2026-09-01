@@ -19,8 +19,17 @@ import { ObsidianVaultAdapter } from '../src/obsidian/adapter.js';
 const stubVault = () => {
   const made: string[] = [];
   const written: string[] = [];
+  /** Paths written THROUGH Obsidian, which is what an open note needs to be told about (#295). */
+  const modified: string[] = [];
+  /** What Obsidian tracks. A path in here is a file the app already knows and may have open. */
+  const tracked = new Map<string, { stat: { mtime: number; size: number } }>();
   const present = new Set<string>();
   const vault = {
+    getAbstractFileByPath: (p: string) => tracked.get(p) ?? null,
+    modifyBinary: async (f: { stat: unknown }, _data: ArrayBuffer) => {
+      const path = [...tracked.entries()].find(([, v]) => v === f)?.[0];
+      modified.push(path ?? '(untracked)');
+    },
     adapter: {
       exists: async (p: string) => present.has(p),
       mkdir: async (p: string) => {
@@ -36,7 +45,7 @@ const stubVault = () => {
     },
     getFiles: () => [],
   };
-  return { vault: vault as unknown as Vault, made, written, present };
+  return { vault: vault as unknown as Vault, made, written, modified, present, tracked };
 };
 
 describe('writing into the vault', () => {
@@ -74,5 +83,58 @@ describe('writing into the vault', () => {
 
     assert.deepEqual(made, []);
     assert.deepEqual(written, ['.hidden']);
+  });
+});
+
+/**
+ * A pull into a note the app already has open (#295).
+ *
+ * `vault.adapter.writeBinary` puts bytes on disk behind Obsidian's back. The editor keeps the buffer
+ * it had, writes it back on its next save, and the pull is undone — which the next pass reads as a
+ * local edit and resolves into a conflict file holding the OLD text. The whole of the fix is choosing
+ * the write that tells the app.
+ */
+describe('a file Obsidian already tracks', () => {
+  it('is written through the vault, not behind its back', async () => {
+    const { vault, written, modified, tracked } = stubVault();
+    tracked.set('Notes/open.md', { stat: { mtime: 1, size: 1 } });
+
+    await new ObsidianVaultAdapter(vault).write('Notes/open.md', new Uint8Array([1, 2, 3]));
+
+    assert.deepEqual(modified, ['Notes/open.md'], 'an open editor is never told by a raw adapter write');
+    assert.deepEqual(written, [], 'and the raw write must not also happen');
+  });
+
+  it('is not preceded by a folder check, because its folder is already there', async () => {
+    const { vault, made, tracked } = stubVault();
+    tracked.set('Folder AAA/deep/note.md', { stat: { mtime: 1, size: 1 } });
+
+    await new ObsidianVaultAdapter(vault).write('Folder AAA/deep/note.md', new Uint8Array([1]));
+
+    assert.deepEqual(made, [], 'a tracked file has a parent by definition');
+  });
+
+  it('still creates one Obsidian does not know, through the adapter', async () => {
+    // The other half, and the reason the module keeps both paths: a file the engine is about to
+    // create has no `TFile` to hand to `modifyBinary`, which is the original argument for writing
+    // by path.
+    const { vault, written, modified, made } = stubVault();
+
+    await new ObsidianVaultAdapter(vault).write('Folder AAA/new.md', new Uint8Array([1]));
+
+    assert.deepEqual(modified, [], 'there is nothing tracked to modify');
+    assert.deepEqual(written, ['Folder AAA/new.md']);
+    assert.deepEqual(made, ['Folder AAA']);
+  });
+
+  // A folder answers `getAbstractFileByPath` too, and it has no `stat`. Writing bytes into one is a
+  // bug wherever it comes from, and it must not become a `modifyBinary` call on a folder.
+  it('does not mistake a folder for a file', async () => {
+    const { vault, modified, tracked } = stubVault();
+    (tracked as unknown as Map<string, unknown>).set('Folder AAA', { children: [] });
+
+    await new ObsidianVaultAdapter(vault).write('Folder AAA/note.md', new Uint8Array([1]));
+
+    assert.deepEqual(modified, [], 'only a file is modified');
   });
 });
