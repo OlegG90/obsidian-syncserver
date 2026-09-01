@@ -85,9 +85,19 @@ Turning the switch off does not delete what is already on the server: `.obsidian
 place, exactly as the "never" list below treats files an earlier version uploaded. They stop being
 scanned and pulled, and their state rows are kept so the switch can come back on without re-uploading.
 
-The "never" list is enforced in two places: the watcher never queues those paths, and the pre-flight check
-before a migration reports them (see [07](07-onboarding.md)). A file already uploaded by an earlier version
-of the plugin is not retroactively removed — that would be a deletion the user did not ask for.
+`node_modules/` and `.git/` are enforced by `isSyncable` as **path segments**, at any depth and whichever
+side of the `.obsidian/` switch they fall on. That sentence used to describe a watcher and a pre-flight
+check rather than the scope rule, and the scope rule was where it had to be: for as long as the local scan
+was `getFiles()`, neither a hidden `.git` nor anything under `.obsidian/` could reach it, so the missing
+rule had nothing to match. The configuration walk reads `vault.adapter`, which sees every path — and a
+plugin that vendors its dependencies put 29 MB of native binaries and Windows debug symbols in scope on a
+real vault before anyone noticed (#312). The pre-flight check before a migration still reports these paths
+(see [07](07-onboarding.md)); it is the second place, not the first.
+
+A file already uploaded by an earlier version of the plugin is not retroactively removed — that would be a
+deletion the user did not ask for. Which means a vault that ran 0.7.5 with the switch on keeps whatever it
+sent: out-of-scope paths are frozen, and freezing is the right default even here, because the alternative
+is one device deciding to delete a directory off every other device that still uses it.
 
 **Placeholder files are never uploaded.** iCloud, OneDrive and similar leave stubs on disk when "optimise
 storage" is on; uploading a stub in place of the content is silent data loss, so the client refuses and
