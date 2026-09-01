@@ -52,8 +52,9 @@ import { toHex } from '../crypto/bytes.js';
 import { decryptName, dedupTag, dedupTagFromHash, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
+import { decide, type LocalMeta, type SyncPolicy } from './reconcile.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
-import { folderMoves, renameSourceFor, type Vanished } from './rename.js';
+import { folderMoves, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
 import { VaultScopes } from '../share-keys.js';
 
@@ -136,14 +137,6 @@ export interface PassOptions {
   rescan?: boolean;
 }
 
-interface LocalMeta {
-  plainHash: string;
-  /** `HMAC(vault key, sha256(plaintext))` — what the dedup lookup is keyed by (docs/06). */
-  tag: string;
-  mtime: number;
-  size: number;
-}
-
 
 /**
  * What the cursor probe says about the server relative to us, and so what an absence means.
@@ -152,15 +145,6 @@ interface LocalMeta {
  * algorithm (`resyncAfterReset`). The rest differ only in how a missing node is read.
  */
 type RemoteEpoch = 'continuous' | 'journal_ttl' | 'restore' | 'reset' | 'unverifiable';
-
-interface SyncPolicy {
-  /** A synced file gone from disk is pushed as a server delete. */
-  pushDeletes: boolean;
-  /** A known node missing from the walked tree deletes the local copy. */
-  applyRemoteDeletes: boolean;
-  /** Content the server lost is re-uploaded, not pulled over our newer copy. */
-  preferLocal: boolean;
-}
 
 const POLICY: Record<RemoteEpoch, SyncPolicy> = {
   // The walk is current, so a known node missing from it was genuinely deleted.
@@ -588,107 +572,88 @@ export class SyncEngine {
   // ---- one local file -----------------------------------------------------------
 
   /**
-   * Everything that can happen to ONE local file, in the shape of the table at the top of
-   * this file. The queue is the same FIFO `sync()` is draining — a conflict resolution
-   * pushes the local original onto it as a brand new file to upload.
+   * One local file: ask `reconcile.ts` what should happen, then do it.
+   *
+   * The choosing moved out (#309) and what is left is the doing — which is the half that needs a
+   * vault, a client and a state file, and the half no test could reach around. The `switch` is
+   * exhaustive over `Decision`, so a new outcome added there fails to compile here rather than
+   * falling quietly through to nothing.
+   *
+   * The queue is the same FIFO `sync()` is draining — a conflict resolution pushes the local
+   * original onto it as a brand new file to upload.
    */
   private async reconcileLocal(file: VaultFile, ctx: PassContext): Promise<void> {
     // A conflict file born during this same pass has no pre-pass entry; compute it now.
     const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file));
 
-    const known = ctx.state.nodes[file.path];
-    const onServer = ctx.tree.get(file.path);
+    const decision = decide({
+      meta: m,
+      known: ctx.state.nodes[file.path],
+      onServer: ctx.tree.get(file.path),
+      byNodeId: ctx.byNodeId,
+      dedup: ctx.dedup,
+      vanished: ctx.vanished,
+      tree: ctx.tree,
+      policy: ctx.policy,
+    });
 
-    // The node we know is still at this path on the server.
-    if (onServer && known && known.nodeId === onServer.nodeId) {
-      // Ordinary edit: this device has synced this exact node before. Local and remote
-      // movement are separate facts; treating any difference as a local edit would let an
-      // unchanged stale local file overwrite a newer server version.
-      const localChanged = known.plainHash !== m.plainHash;
-      const remoteChanged = known.address !== onServer.address;
-
-      if (!localChanged && !remoteChanged) {
-        // Content identical but mtime moved — refresh the hint so the next pass can skip.
-        if (known.mtime !== m.mtime || known.size !== m.size) {
-          ctx.state.nodes[file.path] = { ...known, ...SyncEngine.hintFrom(m) };
-        }
+    switch (decision.kind) {
+      case 'nothing':
         return;
-      }
 
-      // Under a restore the server's "change" is the backup going backwards, and our copy is
-      // the newer one — so the usual remote-wins pull is inverted into a push.
-      if (!localChanged && remoteChanged && !ctx.policy.preferLocal) {
-        await this.pull([onServer], ctx);
+      case 'refresh-hint':
+        // Content identical but the timestamp moved — record it so the next pass skips the read.
+        ctx.state.nodes[file.path] = { ...ctx.state.nodes[file.path]!, ...SyncEngine.hintFrom(m) };
         return;
-      }
 
-      // Local moved — alone, or with the server. Both go through the same PUT: the
-      // precondition is what decides which it was, and the server is a better arbiter of
-      // that than a client comparing two hashes it fetched a moment ago. If they diverged,
-      // the 409 comes back and `pushEdit` writes the conflict file (docs/04).
-      await this.pushEdit(file, m, known, onServer, ctx);
-      return;
-    }
+      case 'pull':
+        await this.pull([decision.node], ctx);
+        return;
 
-    // A node at this path, but not the one we know — deleted and recreated, or a fresh
-    // adoption. Content, not history, decides what happens next (docs/07).
-    if (onServer && (!known || known.nodeId !== onServer.nodeId)) {
-      const matched = ctx.dedup.get(m.tag);
-      if (matched === onServer.address) {
-        // Same plaintext, already at this exact address: record and move on.
-        ctx.state.nodes[file.path] = { nodeId: onServer.nodeId, rev: onServer.rev, plainHash: m.plainHash, address: onServer.address!, ...SyncEngine.hintFrom(m) };
+      case 'push-edit':
+        // **Local moved — alone, or with the server.** Both go through the same PUT: the
+        // precondition is what decides which it was, and the server is a better arbiter of that
+        // than a client comparing two hashes it fetched a moment ago. If they diverged, the 409
+        // comes back and `pushEdit` writes the conflict file (docs/04).
+        await this.pushEdit(file, m, decision.known, decision.onServer, ctx);
+        return;
+
+      case 'adopt':
+        ctx.state.nodes[file.path] = {
+          nodeId: decision.onServer.nodeId,
+          rev: decision.onServer.rev,
+          plainHash: m.plainHash,
+          address: decision.onServer.address!,
+          ...SyncEngine.hintFrom(m),
+        };
         ctx.report.matched.push({ path: file.path });
         return;
-      }
-      await this.resolveConflict(file, onServer, ctx);
-      return;
-    }
 
-    // Nothing at this path on the server. If we know the file, its node either moved or is
-    // gone — and which of those it is decides whether this is a rename, a delete, or a
-    // rescue. If we never knew it, it is a rename source or genuinely new.
-    if (known) {
-      const movedTo = ctx.byNodeId.get(known.nodeId);
-      if (movedTo) {
-        await this.applyRemoteRename(file, m, known, movedTo, ctx);
+      case 'conflict':
+        await this.resolveConflict(file, decision.onServer, ctx);
         return;
-      }
 
-      // Gone entirely. Deleted on the server — or lost to a restore. The policy knows which.
-      const localChanged = known.plainHash !== m.plainHash;
-      if (ctx.policy.applyRemoteDeletes && !localChanged) {
+      case 'remote-rename':
+        await this.applyRemoteRename(file, m, decision.known, decision.movedTo, ctx);
+        return;
+
+      case 'remove-local':
         await this.vault.delete(file.path);
         delete ctx.state.nodes[file.path];
         ctx.report.removed.push({ path: file.path });
         return;
-      }
-      // A restore (absence proves nothing) or local edits worth keeping: upload as new.
-      await this.pushNew(file, m, ctx);
-      return;
+
+      case 'push-move':
+        // **Consumed here, not in `decide`** — a second file with these bytes must not claim the
+        // same source, and a decision that mutated its own input could not be asked twice.
+        ctx.vanished.delete(m.plainHash);
+        await this.pushMove(file, m, decision.source, ctx);
+        return;
+
+      case 'push-new':
+        await this.pushNew(file, m, ctx);
+        return;
     }
-
-    // Never known here, not on the server: a rename source, or genuinely new.
-    const source = this.renameSourceFor(m, ctx);
-    if (source) {
-      await this.pushMove(file, m, source, ctx);
-      return;
-    }
-    await this.pushNew(file, m, ctx);
-  }
-
-  /**
-   * The decision is `rename.ts`'s; consuming the candidate is this pass's.
-   *
-   * Kept apart on purpose: a module that quietly mutated its own input could not be asked
-   * the same question twice, which is exactly what a fixture test does.
-   */
-  private renameSourceFor(m: LocalMeta, ctx: PassContext): Vanished | undefined {
-    const source = renameSourceFor(m, ctx.vanished, ctx.tree);
-    if (!source) return undefined;
-
-    // Consumed: a second file with these bytes must not claim the same source.
-    ctx.vanished.delete(m.plainHash);
-    return source;
   }
 
   /**

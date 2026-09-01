@@ -91,6 +91,28 @@ account anything, and they touch the push connection, the badges and the phase.
 The unlock, the borrow and the keeping of a replaced envelope arrive as functions, so the module
 holds no state and no keys — which is what lets a test assert the route by counting calls.
 
+## Situation / Decision
+
+*(plugin)* **What one local file's position looks like, and what a pass should therefore do about it.**
+
+A **Situation** is everything a pass knows about one path at the moment it reaches it: what this device
+measured on disk, what it recorded last time, what the walked tree holds there, plus the three lookups a
+choice can consult — the tree by node id, the dedup index, and the paths that vanished. Nothing in it is
+mutated.
+
+A **Decision** is one of ten answers: `nothing`, `refresh-hint`, `pull`, `push-edit`, `adopt`,
+`conflict`, `remote-rename`, `remove-local`, `push-move`, `push-new`.
+
+The pair exists because a pass does two jobs and only one of them needs a server. Choosing what a
+situation means is arithmetic over values; carrying it out reads files, seals bytes and writes state.
+They were one method, so every branch could only be reached by building a world that led to it — and
+two defects used that cover to ship (#295, #296), both of them a wrong branch rather than wrong work.
+
+**Deciding does not consume.** A `push-move` names its source; removing that source from the vanished
+map, so a second file with the same bytes cannot claim it, is the caller's act. `rename.ts` makes the
+same separation one level down, for the same reason: a decision that mutates its input cannot be asked
+the same question twice.
+
 ## SharedFolderMarks
 
 *(plugin)* The mapping from each live share to the path of its folder **in this vault**, plus
