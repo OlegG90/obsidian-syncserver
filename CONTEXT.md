@@ -63,6 +63,34 @@ is what this one adds beyond the opening.
 be the thing that asks for the passphrase; `withVault` goes through `unlocked()`, which would put a
 prompt in the middle of a background sync.
 
+## AccountAsks
+
+*(plugin)* **What a screen may ask of the account, as opposed to the vault** — and which of two ways
+in each ask needs.
+
+Ten operations: the account's vaults, its devices, its recovery code, its passphrase, approving
+another device. They were ten one-line methods on the plugin, and the forwarding was never their
+content. The content is a rule that differed per operation and lived only in the prose above it:
+
+- **seeded** — needs the seed, so it unlocks and **may ask for the passphrase**;
+- **handled** — a borrowed handle is enough, and asking for a passphrase to read a row would be a
+  question with no reason behind it.
+
+The two are wrappers, so an operation cannot be written without choosing one. A table of routes
+beside the definitions was considered and rejected: it is a second description of the same thing, and
+it drifts the first time an eleventh operation is added and the second edit forgotten.
+
+**None of them takes the one-at-a-time gate**, and that is one fact rather than ten — none touches
+what a sync touches (#131). The gate belongs to the flows that move a vault's contents.
+
+**The other half of the distinction is [BoundVault](#boundvault)**, deliberately: that value is one
+vault *opened*, and everything here works without opening any vault at all. `changeServerUrl` and
+`disconnect` are **not** here either — they change what this plugin *is* rather than asking the
+account anything, and they touch the push connection, the badges and the phase.
+
+The unlock, the borrow and the keeping of a replaced envelope arrive as functions, so the module
+holds no state and no keys — which is what lets a test assert the route by counting calls.
+
 ## SharedFolderMarks
 
 *(plugin)* The mapping from each live share to the path of its folder **in this vault**, plus

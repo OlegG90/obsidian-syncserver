@@ -504,7 +504,7 @@ export class SyncServerSettings extends PluginSettingTab {
               if (!phrase) return void new Notice('SyncServer: the new passphrase is needed.');
               b.setDisabled(true);
               try {
-                await this.plugin.adoptPassphrase(phrase);
+                await this.plugin.account.adoptPassphrase(phrase);
                 new Notice('SyncServer: this device is on the account’s current passphrase.', 8000);
                 this.display();
               } catch (e) {
@@ -523,7 +523,7 @@ export class SyncServerSettings extends PluginSettingTab {
 
     // Asked because the answer decides what this screen is allowed to promise. Until it
     // arrives the line stays empty rather than guessing in either direction.
-    void this.plugin
+    void this.plugin.account
       .hasRecoveryCode()
       .then((has) => {
         const said = wayBack(has);
@@ -559,7 +559,7 @@ export class SyncServerSettings extends PluginSettingTab {
             b.setDisabled(true);
             try {
               new Notice('SyncServer: deriving keys…');
-              await this.plugin.changePassphrase(draft.current, draft.next);
+              await this.plugin.account.changePassphrase(draft.current, draft.next);
               new Notice(
                 'SyncServer: changed. Your other devices still open with the old one — each will say so ' +
                   'the next time it unlocks.',
@@ -631,7 +631,7 @@ export class SyncServerSettings extends PluginSettingTab {
     // What the button means depends on whether there is already a code, and only the server
     // knows — this device may not be the one that made it. Until the answer arrives the
     // button says nothing it might have to take back.
-    void this.plugin
+    void this.plugin.account
       .hasRecoveryCode()
       .then(paint)
       .catch(() => setting.setDesc('The server could not be asked whether this account has one.'));
@@ -650,7 +650,7 @@ export class SyncServerSettings extends PluginSettingTab {
       shown.empty();
       shown.createEl('p', { text: 'Making it…' });
       try {
-        const { code, replaced } = await this.plugin.createRecoveryCode();
+        const { code, replaced } = await this.plugin.account.createRecoveryCode();
         this.showRecoveryCode(shown, code, replaced);
         // The row is now describing an account that has changed under it: from here on, this
         // button replaces, and must say so and ask before it does.
