@@ -1,22 +1,10 @@
 /**
- * A short, filename-safe label for THIS device, for one purpose only: naming a conflict file
- * so two devices editing the same note do not also collide on the conflict file's own name —
- * `Note (conflict 2026-08-01 laptop).md` (docs/04). It is not an identity; nothing checks it,
- * nothing depends on it matching between syncs. Readable is the only requirement.
+ * `deviceLabel`, bound to what Obsidian reports.
+ *
+ * Two lines, and both of them are the binding: this file imports `obsidian` at run time, so nothing
+ * that can be decided elsewhere is decided here. The decision is `device-label.ts` (#301).
  */
 import { Platform } from 'obsidian';
+import { labelFor } from '../device-label.js';
 
-export const deviceLabel = (): string => {
-  const os = Platform.isMacOS
-    ? 'macos'
-    : Platform.isWin
-      ? 'windows'
-      : Platform.isLinux
-        ? 'linux'
-        : Platform.isIosApp
-          ? 'ios'
-          : Platform.isAndroidApp
-            ? 'android'
-            : 'device';
-  return Platform.isDesktop ? `${os}-desktop` : os;
-};
+export const deviceLabel = (): string => labelFor(Platform);
