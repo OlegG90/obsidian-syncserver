@@ -66,10 +66,20 @@ class TrackingWire implements VaultWire {
    * only its id, and a fake that re-sealed made that case look like an address change. A mutation
    * dropping the node-id half of the pre-pass predicate then passed, because no test could reach the
    * one thing that half protects.
+   *
+   * **Protected, because that is the index once it HAS an entry** — and the day the files arrive it has
+   * none. A fake at the bottom of this file models that day by sealing every path afresh, which is what
+   * a pass does when its one dedup lookup, made before the walk, could not see addresses that did not
+   * exist yet.
    */
-  private seal(text: string) {
+  protected seal(text: string) {
     const already = this.byText.get(text);
     if (already) return already;
+    return this.sealFresh(text);
+  }
+
+  /** Seal under a new random `KC`, which is what a first upload of this text does. */
+  protected sealFresh(text: string) {
     const s = sealBlob(utf8(text));
     // The content key travels too, so this wire can actually serve a pull: an envelope from `blobKeys`
     // and the ciphertext from `getBlob`. Without both, every test here can only ever adopt or match.
@@ -79,9 +89,9 @@ class TrackingWire implements VaultWire {
     return out;
   }
 
-  private byText = new Map<string, { sha256: string; bytes: Uint8Array }>();
+  protected byText = new Map<string, { sha256: string; bytes: Uint8Array }>();
 
-  private byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
+  protected byAddress = new Map<string, { bytes: Uint8Array; wrappedKey: string }>();
   /** How many times the whole tree was fetched — what #252 is about. */
   listNodeCalls = 0;
   private snapshots = 0;
@@ -571,5 +581,60 @@ describe('sharing asks before it walks (issue #260)', () => {
     await engine.sync();
 
     assert.equal(wire.listNodeCalls, 2, 'the pass still found its own tree where it left it');
+  });
+});
+
+/**
+ * The vault where one plaintext lives at several paths, and what that does to a dedup answer.
+ *
+ * `TrackingWire` seals once per text and hands the same address back ever after, which is what a
+ * server looks like once its dedup index has an entry. It is not what a server looks like the day the
+ * files arrive: the lookup a pass makes is made ONCE, before the walk, so files pushed together cannot
+ * see each other's addresses and each seals under its own random `KC`. Eleven identical `CLAUDE.md`
+ * files created in one pass therefore sit at eleven addresses.
+ *
+ * A dedup tag answers with ONE of them. For every other node the answer is an address that is not
+ * theirs — and the adoption branch compared exactly that.
+ */
+class SeparateAddressWire extends TrackingWire {
+  /** No cache: every path gets its own address, as a first pass produces. */
+  override seal(text: string) {
+    return this.sealFresh(text);
+  }
+}
+
+describe('one plaintext at several paths', () => {
+  it('does not become a conflict when the dedup tag answers with a different address', async () => {
+    // The shape of eleven identical CLAUDE.md files: two paths, one text, two addresses. This device
+    // knows neither node, so both go through adoption.
+    const seed = randomBytes(32);
+    const kv = vaultKey(seed, vaultId);
+    const vault = new FakeVault();
+    vault.seed('a/CLAUDE.md', 'same text', 1000);
+    vault.seed('b/CLAUDE.md', 'same text', 1000);
+
+    const wire = new SeparateAddressWire(kv);
+    wire.setServerFiles([
+      { path: 'a/CLAUDE.md', text: 'same text', nodeId: 'node-a', rev: 1 },
+      { path: 'b/CLAUDE.md', text: 'same text', nodeId: 'node-b', rev: 1 },
+    ]);
+
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, makeStore());
+    const report = await engine.sync();
+
+    assert.deepEqual(
+      report.conflicts.map((c) => c.path),
+      [],
+      'identical content was called a conflict because one tag can only answer with one address',
+    );
+    assert.equal(report.matched.length, 2, 'both paths hold what the server holds');
+    // The copies are what the owner has been deleting by hand: byte-for-byte duplicates.
+    assert.equal(vault.contents('a/CLAUDE.md'), 'same text');
+    assert.equal(vault.contents('b/CLAUDE.md'), 'same text');
+    assert.equal(
+      vault.paths().filter((p) => p.includes('conflict')).length,
+      0,
+      'a conflict file was written for content that never diverged',
+    );
   });
 });

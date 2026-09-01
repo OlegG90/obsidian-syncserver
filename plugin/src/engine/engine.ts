@@ -857,27 +857,11 @@ export class SyncEngine {
       const current: ServerNode = { ...onServer, address: out.sha256 ?? onServer.address, rev: out.rev ?? onServer.rev };
       const serverPlain = await this.fetchPlain(current, ctx);
 
-      // Compared as PLAINTEXT, and it cannot be done any other way. `KC` is random, so the
-      // same text sealed twice lands at two different addresses (docs/06) — comparing the
-      // server's address against the one just uploaded would call every such case a
-      // conflict, which is precisely the case docs/04 says must not become one. Two devices
-      // reach identical content constantly, editing frontmatter back and forth.
-      if (toHex(sha256(serverPlain)) === m.plainHash) {
-        ctx.state.nodes[file.path] = {
-          nodeId: onServer.nodeId,
-          rev: current.rev,
-          plainHash: m.plainHash,
-          address: current.address!,
-          mtime: m.mtime,
-          size: m.size,
-        };
-        ctx.report.matched.push({ path: file.path });
-        return;
-      }
-
-      // A real conflict: both sides moved from a common base. Same resolution as adoption's
-      // no-common-ancestor case, because the outcome the user needs is identical — the
-      // server version takes the path, this device's work survives beside it.
+      // Whether this is a conflict at all is `resolveConflict`'s question, and it is asked there for
+      // every caller rather than here for one: the server's bytes are fetched, and identical content —
+      // which two devices reach constantly, editing frontmatter back and forth — binds instead.
+      // Otherwise both sides moved from a common base, and the resolution is adoption's: the server
+      // version takes the path, this device's work survives beside it.
       await this.resolveConflict(file, current, ctx, serverPlain);
       return;
     }
@@ -935,6 +919,31 @@ export class SyncEngine {
   ): Promise<void> {
     const serverPlain = fetched ?? (await this.fetchPlain(onServer, ctx));
     const localPlain = await this.vault.read(file.path);
+
+    // **Identical content is not a conflict, whatever led here.** Every caller reaches this with a
+    // reason to believe the two sides diverged, and one of those reasons is not proof: the adoption
+    // branch compares the address a dedup tag answers with against the node's, and one tag can
+    // legitimately answer with an address that is not this node's. The account holds that plaintext
+    // more than once — `KC` is random, and files pushed in a single pass cannot see each other's
+    // addresses, because the lookup is made once before the walk. Eleven identical `CLAUDE.md` files
+    // created together therefore sit at eleven addresses, and the map holds one.
+    //
+    // The comparison lives here rather than in the caller that lacks it, because this is the one place
+    // a conflict file is ever written and the bytes are already in hand. A rule each caller had to
+    // remember is one a new caller will not.
+    const localHash = toHex(sha256(localPlain));
+    if (localHash === toHex(sha256(serverPlain))) {
+      ctx.state.nodes[file.path] = {
+        nodeId: onServer.nodeId,
+        rev: onServer.rev,
+        plainHash: localHash,
+        address: onServer.address!,
+        ...(await this.hintFor(file.path)),
+      };
+      ctx.report.matched.push({ path: file.path });
+      return;
+    }
+
     const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
 
     // The same ordering rule (#242), and it reads inverted here because the *destination* is the
