@@ -17,7 +17,7 @@ import { sealBlob } from '../src/crypto/blob.js';
 import { toHex, utf8, randomBytes } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encryptName, nameHmac, wrapContentKey, dedupTag } from '../src/crypto/scope.js';
-import { isSyncable } from '../src/engine/vault.js';
+import { isSyncable, SELF } from '../src/engine/vault.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
@@ -50,6 +50,30 @@ describe('isSyncable and the .obsidian/ switch', () => {
     assert.equal(isSyncable('.obsidian/appearance.json', true), true);
     assert.equal(isSyncable('.obsidian/hotkeys.json', true), true);
     assert.equal(isSyncable('.obsidian/plugins/foo/data.json', true), true);
+  });
+
+  // #303. Another plugin's `data.json` is configuration; ours is the device's identity and its
+  // private account of what it has synced — `deviceId`, `wrappedSeed`, `cursor`, `nodes`. The line
+  // above and the line below look like a contradiction and are the whole point of the fix.
+  it('never includes this plugin, whatever the switch says', () => {
+    for (const on of [true, false]) {
+      assert.equal(isSyncable(`.obsidian/${SELF}/data.json`, on), false, `data.json, switch ${on}`);
+      assert.equal(isSyncable(`.obsidian/${SELF}/main.js`, on), false, `the running code, switch ${on}`);
+      assert.equal(isSyncable(`.obsidian/${SELF}`, on), false, `the folder itself, switch ${on}`);
+    }
+  });
+
+  // A conflict file is written beside the file it came from, so the exclusion has to cover what the
+  // engine itself might create in there — otherwise the first pass to lose a race puts a syncable
+  // path inside a folder that is supposed to have none.
+  it('excludes what a pass could create inside that folder', () => {
+    assert.equal(isSyncable(`.obsidian/${SELF}/data (conflict 2026-09-01 android).json`, true), false);
+  });
+
+  // The prefix is a path segment, not a string. `plugins/syncserver-notes` is somebody else's
+  // plugin and syncs like any other.
+  it('does not swallow a plugin whose id merely starts the same', () => {
+    assert.equal(isSyncable(`.obsidian/${SELF}-notes/data.json`, true), true);
   });
 
   it('keeps the per-device exceptions out even when the switch is on', () => {
@@ -219,5 +243,38 @@ describe('the engine applies the scope to scan, pull and delete', () => {
     assert.equal(report.removed.length, 0, 'and it is not removed locally');
     assert.equal(vault.contents('.obsidian/appearance.json'), undefined, 'the local copy stays gone — the switch froze it');
     // State kept the entry, so flipping the switch back on resumes it rather than re-uploading.
+  });
+
+  /**
+   * The switch ON, which is the configuration this matters in (#303).
+   *
+   * The rule is `isSyncable`'s and is tested directly above; this asks the engine, because the two
+   * directions are what the bug actually was. A `data.json` pulled from another device is the
+   * device's identity landing on this one, and a `data.json` pushed is this device handing its own
+   * away — and the plugin's own `save` at the end of the pass is what turns either into a node the
+   * two devices then push back and forth for ever.
+   */
+  it('leaves this plugin alone in both directions with the switch on', async () => {
+    const wire = new OneFileWire(
+      [
+        { path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-1', rev: 2 },
+        { path: `.obsidian/${SELF}/data.json`, text: '{"connection":{"deviceId":"other"}}', nodeId: 'node-2', rev: 3 },
+      ],
+      continuous,
+    );
+    const vault = new FakeVault();
+    vault.seed(`.obsidian/${SELF}/data.json`, '{"connection":{"deviceId":"mine"}}');
+    const engine = new SyncEngine(wire, vaultId, scopesOf(opened, kv), vault, new Store({ nodes: {} }), 'device', true);
+
+    const report = await engine.sync();
+
+    assert.equal(vault.contents('.obsidian/appearance.json'), '{}', 'ordinary configuration still travels');
+    assert.equal(
+      vault.contents(`.obsidian/${SELF}/data.json`),
+      '{"connection":{"deviceId":"mine"}}',
+      "the other device's identity did not land here",
+    );
+    assert.ok(!report.pulled.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pulled');
+    assert.ok(!report.pushed.some((p) => p.path.startsWith(`.obsidian/${SELF}/`)), 'nothing of ours is pushed');
   });
 });
