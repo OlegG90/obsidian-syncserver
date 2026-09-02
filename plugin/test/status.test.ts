@@ -3,6 +3,7 @@
  * nothing must not read the same as a sync that never saw the vault.
  */
 import assert from 'node:assert/strict';
+import { SLOW_MS } from '../src/pass-progress.js';
 import { describe, it } from 'node:test';
 import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from '../src/obsidian/status.js';
 import type { SyncReport } from '../src/engine/engine.js';
@@ -110,6 +111,21 @@ describe('shortStatus', () => {
       shortStatus({ kind: 'idle' }),
     ];
     assert.equal(new Set(words).size, words.length, 'every phase reads differently at a glance');
+  });
+
+  /**
+   * The counter on the desktop status bar (#320). It appears only once the pass has crossed the
+   * threshold — a pass over an unchanged vault is over in a fraction of a second, and a number that
+   * flashed on every save would be movement rather than information.
+   */
+  it('adds the counter to a pass that has been running a while, and not before', () => {
+    const progress = { done: 128, total: 1180, startedAt: 0 };
+    assert.equal(phaseState({ kind: 'syncing', progress }, SLOW_MS - 1), 'working…');
+    assert.equal(phaseState({ kind: 'syncing', progress }, SLOW_MS), 'working… 128 / 1180');
+  });
+
+  it('still says working when a pass carries no progress at all', () => {
+    assert.equal(phaseState({ kind: 'syncing' }, 60_000), 'working…');
   });
 });
 
