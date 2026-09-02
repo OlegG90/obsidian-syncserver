@@ -135,6 +135,18 @@ export interface PassOptions {
    * construction.
    */
   rescan?: boolean;
+
+  /**
+   * How far the walk has got, called after every queue item (#319).
+   *
+   * `total` is what the pass set out to handle and `done` can pass it: `resolveConflict` pushes the
+   * local original back onto the queue, so a pass creates work for itself. Reading that honestly is
+   * `pass-progress.ts`'s job, not this one's.
+   *
+   * **Never awaited and never able to fail a pass.** A surface that throws while redrawing must not
+   * cost somebody their upload, so the call is wrapped and a failure is logged and dropped.
+   */
+  onProgress?(p: { done: number; total: number }): void;
 }
 
 
@@ -438,6 +450,10 @@ export class SyncEngine {
       } catch (e) {
         ctx.report.errors.push({ path: file.path, message: message(e) });
       }
+      // After the file, including after a failed one: progress is how far the walk has got, not how
+      // much of it went well, and a pass that stalled its counter on the first error would look
+      // wedged exactly when somebody is watching to find out whether it is.
+      this.report(opts.onProgress, ctx.handled.size, local.length);
     }
 
     // Whatever the walk did not claim as a rename source is a file this device deleted.
@@ -485,6 +501,21 @@ export class SyncEngine {
     // means no node has been written, moved or removed since this cursor — so the tree cannot have
     // changed either, which is what lets the last walk be reused (issue #252, `tree-cache.ts`).
     return { epoch: 'continuous', events: res.events, quiet: res.changes.length === 0 && !res.has_more };
+  }
+
+  /**
+   * Tell a listener how far the walk is, and let nothing it does matter to the pass.
+   *
+   * Synchronous by design: awaiting a surface would put a redraw between two files and make the
+   * walk's pace depend on how fast something paints.
+   */
+  private report(onProgress: PassOptions['onProgress'], done: number, total: number): void {
+    if (!onProgress) return;
+    try {
+      onProgress({ done, total });
+    } catch (e) {
+      console.error('SyncServer: a progress listener failed', e);
+    }
   }
 
   /**
