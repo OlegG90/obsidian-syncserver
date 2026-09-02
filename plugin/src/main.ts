@@ -45,6 +45,7 @@ import {
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openAccountAsks, type AccountAsks } from './account-asks.js';
 import { openGate } from './gate.js';
+import { openPassNotice, type PassNotice } from './pass-notice.js';
 import { openPairingView, type PairingView } from './obsidian/pairing-view.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
@@ -61,6 +62,24 @@ import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
  * is exactly why unloading has to say so.
  */
 const SHARED_MARKS_STYLE = 'syncserver-shared-folders';
+
+/**
+ * The stylesheet that makes the ribbon icon turn while a pass runs (#320).
+ *
+ * A class on the LIVE element, never a different registered icon: `addRibbonIcon` takes its glyph
+ * once and hands back only an element, so an icon computed from the phase freezes at load — which
+ * shipped twice (#285, #290) and is what `checks/check-registration.mjs` now refuses.
+ *
+ * `prefers-reduced-motion` turns it off. Somebody who has asked their system not to animate things
+ * has asked this too, and the status bar and the notice carry the same fact in words.
+ */
+const SPINNER_STYLE = 'syncserver-spinner';
+const SPINNING = 'syncserver-spinning';
+const SPINNER_CSS = `
+@keyframes syncserver-turn { to { transform: rotate(360deg); } }
+.${SPINNING} svg { animation: syncserver-turn 1.4s linear infinite; transform-origin: 50% 50%; }
+@media (prefers-reduced-motion: reduce) { .${SPINNING} svg { animation: none; } }
+`;
 
 interface PluginData {
   connection?: Connection;
@@ -116,6 +135,7 @@ export default class SyncServerPlugin extends Plugin {
   private sess: Session | undefined;
 
   private phase: SyncPhase = { kind: 'disconnected' };
+  private passNotice!: PassNotice;
   private statusBar: HTMLElement | undefined;
   /** The glanceable surface that renders on a phone, which the status bar does not. */
   private ribbon: HTMLElement | undefined;
@@ -259,6 +279,48 @@ export default class SyncServerPlugin extends Plugin {
     // and synced, for ever (#285). The state lives on the element, which `setPhase` can reach.
     this.ribbon = this.addRibbonIcon(RIBBON_GLYPH, RIBBON_ACTION, () => void this.syncNow());
 
+    const spinner = document.createElement('style');
+    spinner.id = SPINNER_STYLE;
+    spinner.textContent = SPINNER_CSS;
+    document.head.appendChild(spinner);
+
+    /**
+     * The notice, and the only place `Notice` is held rather than fired and forgotten.
+     *
+     * `noticeEl` is deprecated in favour of `messageEl`, and this uses it anyway: `messageEl` is
+     * `@since 1.8.7` and this plugin's floor is 1.5.0, so the modern name is not available to
+     * everyone who can install it. The element is wanted for one reason — a click has to be heard,
+     * so a person can put a ten-minute upload out of sight without losing the sync.
+     */
+    let live: Notice | undefined;
+    this.passNotice = openPassNotice({
+      now: () => Date.now(),
+      surface: {
+        show: (text) => {
+          if (live) return void live.setMessage(text);
+          // Duration 0: it stays until `hide()`, which is the whole point — a pass is not an event.
+          live = new Notice(text, 0);
+          live.noticeEl.addEventListener('click', () => this.passNotice.dismiss());
+        },
+        hide: () => {
+          live?.hide();
+          live = undefined;
+        },
+      },
+    });
+
+    /**
+     * **The threshold is a duration, so something has to ask again while nothing happens.**
+     *
+     * Phases arrive per file, and the pass that most needs saying something is the one stuck on a
+     * single large attachment: it crosses five seconds without a second phase ever arriving, and a
+     * surface driven only by `setPhase` would stay silent for exactly the case it exists for.
+     *
+     * `registerInterval` so it dies with the plugin. One second is under the threshold and far
+     * above anything a person perceives as lag.
+     */
+    this.registerInterval(window.setInterval(() => this.paint(), 1000));
+
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
     if (this.data.connection) {
@@ -355,6 +417,8 @@ export default class SyncServerPlugin extends Plugin {
     await teardownStep('stop watching for local changes', () => this.localChanges?.stop());
     await teardownStep('close the push connection', () => this.stopPush());
     await teardownStep('remove the shared-folder styles', () => document.getElementById(SHARED_MARKS_STYLE)?.remove());
+    await teardownStep('remove the spinner styles', () => document.getElementById(SPINNER_STYLE)?.remove());
+    await teardownStep('take down any progress notice', () => this.passNotice?.stop());
   }
 
   async save(): Promise<void> {
@@ -426,9 +490,25 @@ export default class SyncServerPlugin extends Plugin {
 
   private setPhase(phase: SyncPhase): void {
     this.phase = phase;
-    const text = shortStatus(phase);
-    this.statusBar?.setText(text);
+    this.paint();
+    // After the two glanceable surfaces, because those are the ones a phone and a desktop always have;
+    // a watcher is a screen that happens to be open, and it must not be able to stop them being told.
+    for (const listener of this.phaseWatchers) listener(phase);
+  }
+
+  /**
+   * Draw the current phase. Called when it changes, and once a second while one is running (#320).
+   *
+   * Separate from `setPhase` because the counter and the threshold are functions of the CLOCK as
+   * well as the phase: a pass that has been stuck on one file for a minute has had no new phase to
+   * announce, and is precisely the pass somebody wants told about.
+   */
+  private paint(): void {
+    const phase = this.phase;
+    this.statusBar?.setText(shortStatus(phase));
+    this.passNotice?.onPhase(phase);
     if (this.ribbon) {
+      this.ribbon.toggleClass(SPINNING, phase.kind === 'syncing');
       setIcon(this.ribbon, phaseIcon(phase));
       // The action first, then the state: this is the control's accessible name as well as its
       // tooltip, and a button whose name reads "Sync: 3 conflicts" announces a report rather
@@ -436,9 +516,6 @@ export default class SyncServerPlugin extends Plugin {
       // title above, which is why that one has to stand alone.
       this.ribbon.setAttribute('aria-label', `${RIBBON_ACTION} — ${phaseState(phase)}`);
     }
-    // After the two glanceable surfaces, because those are the ones a phone and a desktop always have;
-    // a watcher is a screen that happens to be open, and it must not be able to stop them being told.
-    for (const listener of this.phaseWatchers) listener(phase);
   }
 
   /**

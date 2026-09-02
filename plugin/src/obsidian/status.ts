@@ -16,7 +16,7 @@
  * looked empty. A summary that cannot distinguish success from doing nothing is not a status.
  */
 import type { SyncReport } from '../engine/engine.js';
-import type { PassProgress } from '../pass-progress.js';
+import { counterText, displayFor, type PassProgress } from '../pass-progress.js';
 import { categories, priority, type ReportCategory } from '../engine/report.js';
 
 export type SyncPhase =
@@ -59,7 +59,7 @@ const accountState = (phase: SyncPhase): string | undefined => {
  * accessible name — the desktop tooltip — is the place the state belongs. One string cannot
  * be both, and the one that was tried read as a report and reported the wrong thing (#285).
  */
-export const phaseState = (phase: SyncPhase): string => {
+export const phaseState = (phase: SyncPhase, now = Date.now()): string => {
   const state = accountState(phase);
   if (state) return state;
   switch (phase.kind) {
@@ -67,8 +67,13 @@ export const phaseState = (phase: SyncPhase): string => {
       return 'not connected';
     case 'locked':
       return 'locked';
-    case 'syncing':
-      return 'working…';
+    case 'syncing': {
+      // The counter only once the pass has earned it (#319): a pass over an unchanged vault is over
+      // in a fraction of a second, and a number that appeared and vanished on every save would be
+      // movement rather than information. `working…` is what those say, as they always did.
+      const display = phase.progress ? displayFor(phase.progress, now) : { kind: 'quiet' as const };
+      return display.kind === 'counting' ? `working… ${counterText(display)}` : 'working…';
+    }
     case 'failed':
       return 'failed';
     case 'idle': {
