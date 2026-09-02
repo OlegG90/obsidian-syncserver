@@ -95,8 +95,23 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
         if (!passphrase) return; // dismissed
         if (!(await deps.unlock(passphrase))) return; // refused
       }
-      deps.setPhase({ kind: 'syncing' });
-      const report = await deps.runPass({ rescan });
+      /**
+       * The pass reports its own progress, and the phase carries it (#319).
+       *
+       * `startedAt` is taken here rather than in the engine because it is the moment the PERSON is
+       * waiting from — the unlock prompt above can sit open for a minute, and a duration measured
+       * from after it would say a pass was quick when the wait was not.
+       *
+       * Every update replaces the phase, so a surface that only re-reads on change still sees each
+       * one. Nothing is throttled here: the engine calls this once per file, and a surface that
+       * cannot afford that rate is the surface that should be throttling.
+       */
+      const startedAt = Date.now();
+      deps.setPhase({ kind: 'syncing', progress: { done: 0, total: 0, startedAt } });
+      const report = await deps.runPass({
+        rescan,
+        onProgress: ({ done, total }) => deps.setPhase({ kind: 'syncing', progress: { done, total, startedAt } }),
+      });
       deps.setPhase({ kind: 'idle', at: Date.now(), report });
       render(report, attended);
     } catch (e) {

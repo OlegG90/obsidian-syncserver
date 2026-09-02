@@ -16,13 +16,14 @@
  * looked empty. A summary that cannot distinguish success from doing nothing is not a status.
  */
 import type { SyncReport } from '../engine/engine.js';
+import type { PassProgress } from '../pass-progress.js';
 import { categories, priority, type ReportCategory } from '../engine/report.js';
 
 export type SyncPhase =
   | { kind: 'disconnected' }
   | { kind: 'locked' }
   | { kind: 'idle'; at?: number; report?: SyncReport }
-  | { kind: 'syncing' }
+  | { kind: 'syncing'; progress?: PassProgress }
   | { kind: 'failed'; message: string; at: number };
 
 /**

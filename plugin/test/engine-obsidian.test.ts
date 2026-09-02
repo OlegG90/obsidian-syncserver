@@ -6,37 +6,28 @@
  * freezes `.obsidian/` in place rather than deleting it.
  */
 import assert from 'node:assert/strict';
+import type { Delta } from '@syncserver/shared';
+import type { VaultState } from '../src/engine/state.js';
+import { dedupTag } from '../src/crypto/scope.js';
 import type { OpenedVault } from '@syncserver/shared';
 import { describe, it } from 'node:test';
 
-import type { CursorRejected, Envelope, CursorUnverifiable } from '../src/api/client.js';
-import type { Change, Delta } from '@syncserver/shared';
-import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
 import { sealBlob } from '../src/crypto/blob.js';
 import { toHex, utf8, randomBytes } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { encryptName, nameHmac, wrapContentKey, dedupTag } from '../src/crypto/scope.js';
 import { isSyncable } from '../src/engine/vault.js';
 import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
-import type { StateStore, VaultState } from '../src/engine/state.js';
+import { OneFileWire, Store, type VaultConstants } from './one-file-wire.js';
 import { FakeVault } from './fake-vault.js';
 
 const vaultId = '11111111-1111-4111-8111-111111111111';
 const rootNodeId = 'root';
 const scopeId = 'scope-vault';
 const kv = vaultKey(randomBytes(32), vaultId);
+const V: VaultConstants = { vaultId, rootNodeId, scopeId, kv };
 
-class Store implements StateStore {
-  constructor(public state: VaultState) {}
-  async load(): Promise<VaultState> {
-    return structuredClone(this.state);
-  }
-  async save(state: VaultState): Promise<void> {
-    this.state = structuredClone(state);
-  }
-}
 
 describe('isSyncable and the .obsidian/ switch', () => {
   it('excludes .obsidian/ entirely when the switch is off (the default)', () => {
@@ -165,91 +156,13 @@ const opened: OpenedVault = {
 };
 
 /** A minimal wire: serves the given server files (sealed once) and records pushes. */
-class OneFileWire implements VaultWire {
-  created = 0;
-  deleted: string[] = [];
-  private readonly sealed = new Map<string, { sha256: string; bytes: Uint8Array; contentKey: Uint8Array }>();
-  constructor(
-    private readonly server: { path: string; text: string; nodeId: string; rev: number }[],
-    private readonly deltaAnswer: Delta | CursorRejected | CursorUnverifiable,
-  ) {
-    for (const f of server) this.sealed.set(f.path, sealBlob(utf8(f.text)));
-  }
-
-  async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
-    const nodes: Change[] = [
-      {
-        node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null,
-        op: 'put', rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      },
-    ];
-    for (const f of this.server) {
-      const s = this.sealed.get(f.path)!;
-      nodes.push({
-        node_id: f.nodeId, parent_id: rootNodeId,
-        name_enc: encryptName(kv, f.path), name_hmac: nameHmac(kv, f.path), name_key_id: scopeId,
-        op: 'put', rev: f.rev, sha256: s.sha256, size: s.bytes.length,
-        mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      });
-    }
-    return { nodes, snapshot: 'cursor-new' };
-  }
-
-  async delta(): Promise<Delta | CursorRejected | CursorUnverifiable> {
-    return this.deltaAnswer;
-  }
-
-  async dedupLookup(): Promise<Map<string, string>> {
-    return new Map();
-  }
-
-  async putBlob(sealed: { sha256: string; bytes: Uint8Array; keyId: string }): Promise<{ sha256: string; size: number }> {
-    return { sha256: sealed.sha256, size: sealed.bytes.length };
-  }
-
-  async getBlob(address: string): Promise<Uint8Array | undefined> {
-    for (const s of this.sealed.values()) {
-      if (s.sha256 === address) return s.bytes;
-    }
-    return undefined;
-  }
-
-  async blobKeys(_v: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
-    const out = new Map<string, Envelope[]>();
-    for (const s of this.sealed.values()) {
-      if (addresses.includes(s.sha256)) {
-        out.set(s.sha256, [{ scopeId, wrappedKey: wrapContentKey(kv, s.contentKey) }]);
-      }
-    }
-    return out;
-  }
-
-  async createNode(): Promise<{ node_id: string; rev: number }> {
-    this.created++;
-    return { node_id: `new-${this.created}`, rev: 10 + this.created };
-  }
-
-  async putContent(): Promise<{ rev: number }> {
-    return { rev: 20 };
-  }
-
-  async moveNode(): Promise<{ rev: number }> {
-    return { rev: 30 };
-  }
-
-  async deleteNode(_v: string, nodeId: string): Promise<{ rev: number }> {
-    this.deleted.push(nodeId);
-    return { rev: 40 };
-  }
-}
 
 const continuous: Delta = { changes: [], events: [], next_cursor: 'cursor-new', has_more: false };
 
 describe('the engine applies the scope to scan, pull and delete', () => {
   it('does not pull .obsidian/ files from the server when the switch is off', async () => {
     // The server has a note AND an .obsidian file (uploaded by a device with the switch on).
-    const wire = new OneFileWire(
-      [
+    const wire = new OneFileWire(V, [
         { path: 'Notes/a.md', text: 'a note', nodeId: 'node-1', rev: 2 },
         { path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-2', rev: 3 },
       ],
@@ -267,7 +180,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
   });
 
   it('does not push .obsidian/ files when the switch is off', async () => {
-    const wire = new OneFileWire([], continuous);
+    const wire = new OneFileWire(V, [], continuous);
     const vault = new FakeVault();
     vault.seed('Notes/a.md', 'a note');
     vault.seed('.obsidian/appearance.json', '{}');
@@ -295,8 +208,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
       },
     };
     // The server still holds it.
-    const wire = new OneFileWire(
-      [{ path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-9', rev: 4 }],
+    const wire = new OneFileWire(V, [{ path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-9', rev: 4 }],
       continuous,
     );
     const vault = new FakeVault();
@@ -320,8 +232,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
    * two devices then push back and forth for ever.
    */
   it('leaves this plugin alone in both directions with the switch on', async () => {
-    const wire = new OneFileWire(
-      [
+    const wire = new OneFileWire(V, [
         { path: '.obsidian/appearance.json', text: '{}', nodeId: 'node-1', rev: 2 },
         { path: '.obsidian/plugins/syncserver/data.json', text: '{"connection":{"deviceId":"other"}}', nodeId: 'node-2', rev: 3 },
       ],
@@ -351,7 +262,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
    * map the engine already read, so a scan that never asked for them still looked complete.
    */
   it('pushes configuration once the switch is on', async () => {
-    const wire = new OneFileWire([], continuous);
+    const wire = new OneFileWire(V, [], continuous);
     const vault = new FakeVault();
     vault.seed('Notes/a.md', 'a note');
     vault.seed('.obsidian/appearance.json', '{}');
@@ -368,7 +279,7 @@ describe('the engine applies the scope to scan, pull and delete', () => {
   // The other half of the same call: with the switch off the walk is not even made, so a vault that
   // never opted in pays nothing for the directory being there.
   it('does not walk the configuration directory when the switch is off', async () => {
-    const wire = new OneFileWire([], continuous);
+    const wire = new OneFileWire(V, [], continuous);
     const vault = new FakeVault();
     vault.seed('.obsidian/appearance.json', '{}');
     let walked = 0;
