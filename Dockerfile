@@ -9,15 +9,19 @@
 # Building where it runs needs no flag, which is why the deployment copies source rather
 # than an image.
 
-FROM node:22-alpine AS build
+FROM node:22-alpine3.23 AS build
 WORKDIR /app
 
 # Manifests first, so a change to source does not re-resolve the dependency tree.
+#
+# **The plugin's is not among them, and `npm ci` does not mind** (#324). The root manifest still
+# declares four workspaces, and the belief here — and in `tools/pack.sh` — used to be that every
+# member's manifest therefore had to be on disk. It does not: `npm ci` resolves the lockfile and
+# skips a workspace whose directory is absent. What that belief cost is below, in `deps`.
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY console/package.json console/
-COPY plugin/package.json plugin/
 RUN npm ci
 
 COPY tsconfig.base.json ./
@@ -34,13 +38,17 @@ RUN npm run build -w @syncserver/console
 # The runtime tree is installed separately rather than pruned out of the build one: a
 # prune leaves whatever the build happened not to touch, an install brings exactly what
 # the manifests declare.
-FROM node:22-alpine AS deps
+FROM node:22-alpine3.23 AS deps
 WORKDIR /app
+# **Without the plugin**, which is the whole of what this stage installs for nobody (#324).
+# The server's cryptography is `@noble/hashes`; the plugin also declares `@noble/ciphers` and
+# `@noble/curves`, workspace hoisting lands them in the root `node_modules`, and the runtime
+# below copies that wholesale. So the image shipped a phone's cryptography to a process that
+# never calls it — 2 MB of the 16 this stage produces.
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY console/package.json console/
-COPY plugin/package.json plugin/
 RUN npm ci --omit=dev
 # npm workspaces HOIST: with no dev dependencies to force a conflict, everything lands in
 # the root node_modules and the per-workspace ones are never created. The COPY below has
@@ -48,10 +56,15 @@ RUN npm ci --omit=dev
 # decide to nest later.
 RUN mkdir -p server/node_modules shared/node_modules
 
-# The runtime base is pinned to an Alpine RELEASE, unlike the build stages, and the reason is
-# the package below: `postgresql18-client` exists in Alpine 3.23 and does not exist in 3.22.
-# A floating `node:22-alpine` therefore builds today and stops building — or, worse, starts
-# resolving a different major — on whichever Tuesday the tag moves.
+# Every stage is pinned to an Alpine RELEASE, and this one has the sharpest reason: the package
+# below. `postgresql18-client` exists in Alpine 3.23 and does not exist in 3.22, so a floating
+# `node:22-alpine` builds today and stops building — or, worse, starts resolving a different
+# major — on whichever Tuesday the tag moves.
+#
+# The build stages used to float, on the argument that only this one had a package to lose. They
+# are pinned now for a duller reason (#324): a floating base means the compiler can change under
+# a rebuild of an unchanged commit, and a release that cannot be rebuilt into the same bytes is
+# a release nobody can check.
 FROM node:22-alpine3.23 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production

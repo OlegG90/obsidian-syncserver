@@ -95,6 +95,15 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.sha }}
+          # **The same cache `ci.yml` has, and this job had none** (#324). Every release rebuilt
+          # from nothing — a full `npm ci` and both compilations — for a commit CI had already
+          # built minutes earlier on the way to `main`. `mode=max` keeps the intermediate stages,
+          # which is what makes the `deps` stage reusable rather than only the last layer.
+          #
+          # It cannot make a release stale: the cache is keyed on the layer inputs, so a changed
+          # manifest or a changed source file misses it and rebuilds.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # The plugin half of the same release, which is how it is INSTALLED (docs/13).
   #
