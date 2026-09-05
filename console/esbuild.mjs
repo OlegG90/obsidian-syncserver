@@ -23,7 +23,10 @@ await build({
   target: 'es2022',
   platform: 'browser',
   sourcemap: false,
-  minify: false,
+  // Minified because this bundle is COPIED INTO THE IMAGE and served from the server's own
+  // process (docs/11), so its size is the deployment's, not a developer's (#324). Debugging the
+  // console is done against `npm run dev` in the workspace, where this file is not involved.
+  minify: true,
   logLevel: 'info',
 });
 

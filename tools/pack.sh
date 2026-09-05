@@ -65,9 +65,10 @@ files=(
   console/package.json
   console/tsconfig.json
   console/esbuild.mjs
-  # npm ci installs the whole workspace, so every member's manifest must be present even
-  # though the plugin's source is not built here.
-  plugin/package.json
+  # The plugin's manifest is deliberately absent. It used to travel on the belief that `npm ci`
+  # needs every declared workspace on disk — it does not, it skips a workspace whose directory
+  # is missing (#324). Shipping it meant the runtime install also brought the plugin's
+  # `@noble/ciphers` and `@noble/curves`, which nothing on a server calls.
 )
 
 # **Refused when the tree disagrees with the ref.** Packing HEAD while there are uncommitted
