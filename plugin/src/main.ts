@@ -40,13 +40,14 @@ import type { BoundVault } from './bound-vault.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
 import {
-  acceptInvitation, freeName, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
+  acceptInvitation, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
 } from './sharing.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openAccountAsks, type AccountAsks } from './account-asks.js';
 import { openGate } from './gate.js';
 import { openPassNotice, type PassNotice } from './pass-notice.js';
 import { openSessionHold, type SessionHold } from './session-hold.js';
+import { landingFor } from './share-landing.js';
 import { openPairingView, type PairingView } from './obsidian/pairing-view.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
@@ -1012,16 +1013,16 @@ export default class SyncServerPlugin extends Plugin {
       accept: (shareId) =>
         this.withVault(async (v) => {
           const tree = await v.engine.readTree();
-          const siblings = new Set([...tree.keys()].filter((p) => !p.includes('/')));
 
           // Asked, not invented. The initiator's own label for that folder is under THEIR
           // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
           // docs/05 says they do. Offering who shared it is the one fact this side holds.
           const from = (await v.client.shares()).invitations.find((i) => i.share_id === shareId);
-          const chosen = await askFolderName(this.app, freeName(`Shared by ${from?.initiator_login ?? 'someone'}`, siblings));
-          if (!chosen) throw new Error('a name is needed for the folder before it can land here');
 
-          const name = freeName(chosen, siblings);
+          // What to offer, what may collide with it, and what to do with the answer: four rules that
+          // used to sit in this closure, where nothing could ask them anything (`share-landing.ts`).
+          const landing = landingFor(tree.keys(), from?.initiator_login);
+          const name = landing.settle((await askFolderName(this.app, landing.suggestion)) ?? '');
           await acceptInvitation(
             {
               client: v.client,
