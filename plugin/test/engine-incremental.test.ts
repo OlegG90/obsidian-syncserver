@@ -18,6 +18,7 @@ import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
 import { openTreeCache } from '../src/engine/tree-cache.js';
 import { FakeVault } from './fake-vault.js';
+import { rootRow, row } from './wire-shapes.js';
 
 const vaultId = '11111111-1111-4111-8111-111111111111';
 const rootNodeId = 'root';
@@ -99,16 +100,14 @@ class TrackingWire implements VaultWire {
   async listNodes() {
     this.listNodeCalls++;
     const nodes: import('@syncserver/shared').Change[] = [
-      { node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null, op: 'put' as const, rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null },
+      rootRow(rootNodeId),
     ];
     for (const f of this.serverFiles) {
       const s = this.sealed.get(f.path) ?? this.seal(f.text);
-      nodes.push({
-        node_id: f.nodeId, parent_id: rootNodeId,
-        name_enc: encryptName(this.kv, f.path), name_hmac: nameHmac(this.kv, f.path), name_key_id: scopeId,
-        op: 'put' as const, rev: f.rev, sha256: s.sha256, size: s.bytes.length,
-        mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      } as import('@syncserver/shared').Change);
+      nodes.push(
+        row({ nodeId: f.nodeId, parentId: rootNodeId, name: f.path, key: this.kv, scopeId, rev: f.rev,
+              content: { sha256: s.sha256, size: s.bytes.length } }),
+      );
     }
     // **A fresh snapshot per walk, because a real one is fresh.** The cursor pins the position the walk
     // was taken at, so two walks a moment apart return two cursors. A constant made every walk look like
@@ -284,8 +283,8 @@ describe('engine #237 — incremental pre-pass', () => {
     const origList = wire.listNodes.bind(wire);
     wire.listNodes = async () => ({
       nodes: [
-        { node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null, op: 'put' as const, rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null },
-        { node_id: 'node-old', parent_id: rootNodeId, name_enc: encryptName(kv, 'old.md'), name_hmac: nameHmac(kv, 'old.md'), name_key_id: scopeId, op: 'put' as const, rev: 2, sha256: '0'.repeat(64), size: 6, mtime: new Date(0).toISOString(), share_id: null, author_id: null },
+        rootRow(rootNodeId),
+        row({ nodeId: 'node-old', parentId: rootNodeId, name: 'old.md', key: kv, scopeId, rev: 2, content: { sha256: '0'.repeat(64), size: 6 } }),
       ],
       snapshot: 'cur',
     });
