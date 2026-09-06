@@ -46,6 +46,7 @@ import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openAccountAsks, type AccountAsks } from './account-asks.js';
 import { openGate } from './gate.js';
 import { openPassNotice, type PassNotice } from './pass-notice.js';
+import { openSessionHold, type SessionHold } from './session-hold.js';
 import { openPairingView, type PairingView } from './obsidian/pairing-view.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
@@ -136,6 +137,8 @@ export default class SyncServerPlugin extends Plugin {
 
   private phase: SyncPhase = { kind: 'disconnected' };
   private passNotice!: PassNotice;
+  /** The four ways this device's grip on the account changes, and the only writer of `data.connection`. */
+  private held!: SessionHold;
   private statusBar: HTMLElement | undefined;
   /** The glanceable surface that renders on a phone, which the status bar does not. */
   private ribbon: HTMLElement | undefined;
@@ -165,6 +168,27 @@ export default class SyncServerPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
+
+    /**
+     * First, because everything below either changes this device's grip on the account or reads what
+     * it left. The four deps are the whole of what the rule needs from a plugin: somewhere to put the
+     * session, somewhere to write the connection down, the phase, and the socket.
+     */
+    this.held = openSessionHold({
+      hold: (s) => {
+        this.sess = s;
+      },
+      record: async ({ connection, state }) => {
+        if (connection === undefined) delete this.data.connection;
+        else this.data.connection = connection;
+        if (state === 'empty') this.data.state = emptyState();
+        if (state === 'erase') delete this.data.state;
+        await this.save();
+      },
+      phase: (p) => this.setPhase(p),
+      push: (what) => (what === 'start' ? this.startPush() : this.stopPush()),
+    });
+
     this.addSettingTab(new SyncServerSettings(this.app, this));
 
     this.account = openAccountAsks({
@@ -173,10 +197,7 @@ export default class SyncServerPlugin extends Plugin {
       // Both halves of writing an envelope down: the connection the session now holds, and the save.
       // The port cannot reach either, and the two are one act — a saved file with the old wrapped seed
       // asks for a passphrase that no longer opens anything.
-      keepEnvelope: async () => {
-        this.data.connection = this.sess!.connection;
-        await this.save();
-      },
+      keepEnvelope: () => this.held.keep(this.sess!),
     });
 
     // The shared-folder subsystem, bound at the edge exactly like the coordinators: the
@@ -324,9 +345,7 @@ export default class SyncServerPlugin extends Plugin {
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
     if (this.data.connection) {
-      this.sess = session.create(this.data.connection, transport);
-      this.setPhase({ kind: 'locked' });
-      this.startPush();
+      await this.held.resume(session.create(this.data.connection, transport));
     } else {
       this.setPhase({ kind: 'disconnected' });
     }
@@ -600,12 +619,7 @@ export default class SyncServerPlugin extends Plugin {
       },
       transport,
     );
-    this.sess = s;
-    this.data.connection = s.connection;
-    this.data.state = emptyState();
-    await this.save();
-    this.setPhase({ kind: 'idle' });
-    this.startPush();
+    await this.held.take(s);
   }
 
   /**
@@ -633,7 +647,7 @@ export default class SyncServerPlugin extends Plugin {
    * which is the same branch a paired device takes.
    */
   async recover(args: { serverUrl: string; login: string; passphrase: string }): Promise<void> {
-    await this.adopt(
+    await this.held.take(
       await session.recover(
         {
           ...args,
@@ -662,7 +676,7 @@ export default class SyncServerPlugin extends Plugin {
     code: string;
     passphrase: string;
   }): Promise<void> {
-    await this.adopt(
+    await this.held.take(
       await session.recoverWithCode(
         {
           ...args,
@@ -675,17 +689,6 @@ export default class SyncServerPlugin extends Plugin {
     );
   }
 
-  /** What both recoveries do with the session they end up holding. */
-  private async adopt(s: Session): Promise<void> {
-    this.sess = s;
-    this.data.connection = s.connection;
-    // Empty, so adoption runs: this vault may hold nothing, or an old copy of everything,
-    // and only reconciliation can tell which.
-    this.data.state = emptyState();
-    await this.save();
-    this.setPhase({ kind: 'idle' });
-    this.startPush();
-  }
 
   /**
    * Join an account that already exists, as a second device (docs/07).
@@ -709,14 +712,7 @@ export default class SyncServerPlugin extends Plugin {
       transport,
       waiting,
     );
-    this.sess = s;
-    this.data.connection = s.connection;
-    // A paired device meets a vault that already has contents on both sides, which is
-    // adoption's own case (docs/07) — an empty state is exactly right to start it from.
-    this.data.state = emptyState();
-    await this.save();
-    this.setPhase({ kind: 'idle' });
-    this.startPush();
+    await this.held.take(s);
   }
 
   /**
@@ -1188,12 +1184,9 @@ export default class SyncServerPlugin extends Plugin {
     const conn = this.data.connection;
     if (!conn || serverUrl === conn.serverUrl) return;
 
-    await this.stopPush();
-    this.data.connection = { ...conn, serverUrl };
-    await this.save();
-    this.sess = session.create(this.data.connection, transport);
-    this.setPhase({ kind: 'locked' });
-    this.startPush();
+    // Moving servers is a resume with one field changed — which is why `resume` takes the session
+    // rather than the URL: the two callers stop being two blocks that must be kept in step.
+    await this.held.resume(session.create({ ...conn, serverUrl }, transport));
   }
 
   /**
@@ -1217,12 +1210,9 @@ export default class SyncServerPlugin extends Plugin {
       // Offline, locked, or already revoked. The local half is what disconnecting means.
     }
 
-    await this.stopPush();
-    this.sess = undefined;
-    delete this.data.connection;
-    delete this.data.state;
-    // Nothing is shared with anybody from here any more, whatever the badges said.
+    await this.held.release();
+    // Nothing is shared with anybody from here any more, whatever the badges said. Outside the
+    // release because it is a different domain: the hold knows nothing about shared folders.
     await this.marks!.clear();
-    this.setPhase({ kind: 'disconnected' });
   }
 }

@@ -63,6 +63,32 @@ is what this one adds beyond the opening.
 be the thing that asks for the passphrase; `withVault` goes through `unlocked()`, which would put a
 prompt in the middle of a background sync.
 
+## SessionHold
+
+*(plugin)* **What this device is holding an account by, and the four ways that changes.**
+
+`BoundVault` is one opening of one vault. This is its longer-lived twin: one device's grip on one
+account, which outlives every opening and is what a restart finds waiting.
+
+| act | when | what moves |
+| --- | --- | --- |
+| **take** | a session opened here for the first time — connecting, recovering, pairing | connection written, sync ledger **emptied** so adoption runs |
+| **resume** | a connection already written down becomes a session again — a restart, or moving to another server | connection written, ledger untouched |
+| **keep** | the connection changed under a live session: a passphrase change re-wraps the seed | connection only |
+| **release** | the device lets go | both erased |
+
+**The rule it holds is that the connection and the ledger move together.** It used to be a sentence
+in a comment, and the six lines enforcing it were re-typed at three sites while a private method
+containing exactly those lines sat between them, used by two others — the shape #303 was, where a
+device holding one device's identity and another's account of what it has synced looks healthy and
+writes conflict files for ever. `checks/check-connection-writes.mjs` refuses an assignment to
+`data.connection` anywhere but here.
+
+It does **not** own the session: `this.sess` is read in seventeen places, and a module owning the
+field would be a middle man for all of them. It owns the transition, and the ordering is part of it —
+the session is held before the socket asks for its token, and the file is saved before any surface
+says `idle`.
+
 ## AccountAsks
 
 *(plugin)* **What a screen may ask of the account, as opposed to the vault** — and which of two ways
