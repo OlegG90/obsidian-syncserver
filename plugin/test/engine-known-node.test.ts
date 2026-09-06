@@ -12,6 +12,8 @@ import { SyncEngine } from '../src/engine/engine.js';
 import { scopesOf } from './vault-scopes.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
 import { FakeVault } from './fake-vault.js';
+import { rootRow, row } from './wire-shapes.js';
+import type { Change } from '@syncserver/shared';
 
 const vaultId = '11111111-1111-4111-8111-111111111111';
 const rootNodeId = 'root';
@@ -66,54 +68,17 @@ class FakeSyncClient implements VaultWire {
     return this.remoteAddress;
   }
 
-  async listNodes(_vaultId: string): Promise<{
-    nodes: {
-      node_id: string;
-      parent_id: string | null;
-      name_enc: string | null;
-      name_hmac: string | null;
-      name_key_id: string | null;
-      op: 'put';
-      rev: number;
-      sha256: string | null;
-      size: number | null;
-      mtime: string;
-      share_id: string | null;
-      author_id: string | null;
-    }[];
-    snapshot: string;
-  }> {
+  async listNodes(_vaultId: string): Promise<{ nodes: Change[]; snapshot: string }> {
     return {
       snapshot: 'cursor-2',
       nodes: [
-        {
-          node_id: rootNodeId,
-          parent_id: null,
-          name_enc: null,
-          name_hmac: null,
-          name_key_id: null,
-          op: 'put',
-          rev: 1,
-          sha256: null,
-          size: null,
-          mtime: new Date(0).toISOString(),
-          share_id: null,
-          author_id: null,
-        },
-        {
-          node_id: nodeId,
-          parent_id: rootNodeId,
-          name_enc: encryptName(this.kv, this.serverPath),
-          name_hmac: nameHmac(this.kv, this.serverPath),
-          name_key_id: scopeId,
-          op: 'put',
-          rev: 2,
-          sha256: this.remoteAddress,
-          size: this.remoteBytes.length,
+        rootRow(rootNodeId),
+        // A later instant than the root's, so a test can tell the two nodes apart by time.
+        row({
+          nodeId, parentId: rootNodeId, name: this.serverPath, key: this.kv, scopeId, rev: 2,
+          content: { sha256: this.remoteAddress, size: this.remoteBytes.length },
           mtime: new Date(1).toISOString(),
-          share_id: null,
-          author_id: null,
-        },
+        }),
       ],
     };
   }

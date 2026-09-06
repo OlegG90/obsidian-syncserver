@@ -16,6 +16,7 @@ import type { Change, Delta } from '@syncserver/shared';
 import type { VaultWire } from '../src/engine/wire.js';
 import { vaultKey } from '../src/crypto/account.js';
 import { sealBlob } from '../src/crypto/blob.js';
+import { rootRow, row } from './wire-shapes.js';
 import { toHex, utf8, randomBytes } from '../src/crypto/bytes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encryptName, nameHmac, wrapContentKey, unwrapContentKey, dedupTag, decryptName } from '../src/crypto/scope.js';
@@ -59,46 +60,18 @@ const folderSpec = (path: string, nodeId: string, rev: number): FileSpec => ({ p
  */
 const nodeListFor = (files: FileSpec[]): { nodes: Change[]; sealed: Map<string, { sha256: string; bytes: Uint8Array; contentKey: Uint8Array }> } => {
   const sealed = new Map<string, { sha256: string; bytes: Uint8Array; contentKey: Uint8Array }>();
-  const nodes: Change[] = [
-    {
-      node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null,
-      op: 'put', rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-    },
-  ];
+  const nodes: Change[] = [rootRow(rootNodeId)];
   for (const f of files) {
     if (f.folder) {
-      nodes.push({
-        node_id: f.nodeId,
-        parent_id: rootNodeId,
-        name_enc: encryptName(kv, f.path),
-        name_hmac: nameHmac(kv, f.path),
-        name_key_id: scopeId,
-        op: 'put',
-        rev: f.rev,
-        sha256: null,
-        size: null,
-        mtime: new Date(0).toISOString(),
-        share_id: null,
-        author_id: null,
-      });
+      nodes.push(row({ nodeId: f.nodeId, parentId: rootNodeId, name: f.path, key: kv, scopeId, rev: f.rev }));
       continue;
     }
     const s = sealBlob(utf8(f.text));
     sealed.set(f.path, s);
-    nodes.push({
-      node_id: f.nodeId,
-      parent_id: rootNodeId,
-      name_enc: encryptName(kv, f.path),
-      name_hmac: nameHmac(kv, f.path),
-      name_key_id: scopeId,
-      op: 'put',
-      rev: f.rev,
-      sha256: s.sha256,
-      size: s.bytes.length,
-      mtime: new Date(0).toISOString(),
-      share_id: null,
-      author_id: null,
-    });
+    nodes.push(
+      row({ nodeId: f.nodeId, parentId: rootNodeId, name: f.path, key: kv, scopeId, rev: f.rev,
+            content: { sha256: s.sha256, size: s.bytes.length } }),
+    );
   }
   return { nodes, sealed };
 };
@@ -129,29 +102,17 @@ class FakeWire implements VaultWire {
   ) {}
 
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
-    const nodes: Change[] = [
-      {
-        node_id: rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null,
-        op: 'put', rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      },
-    ];
+    const nodes: Change[] = [rootRow(rootNodeId)];
     for (const f of this.files) {
       if (f.folder) {
-        nodes.push({
-          node_id: f.nodeId, parent_id: rootNodeId,
-          name_enc: encryptName(kv, f.path), name_hmac: nameHmac(kv, f.path), name_key_id: scopeId,
-          op: 'put', rev: f.rev, sha256: null, size: null,
-          mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-        });
+        nodes.push(row({ nodeId: f.nodeId, parentId: rootNodeId, name: f.path, key: kv, scopeId, rev: f.rev }));
         continue;
       }
       const s = this.sealed.get(f.path)!;
-      nodes.push({
-        node_id: f.nodeId, parent_id: rootNodeId,
-        name_enc: encryptName(kv, f.path), name_hmac: nameHmac(kv, f.path), name_key_id: scopeId,
-        op: 'put', rev: f.rev, sha256: s.sha256, size: s.bytes.length,
-        mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      });
+      nodes.push(
+        row({ nodeId: f.nodeId, parentId: rootNodeId, name: f.path, key: kv, scopeId, rev: f.rev,
+              content: { sha256: s.sha256, size: s.bytes.length } }),
+      );
     }
     return { nodes, snapshot: 'cursor-new' };
   }

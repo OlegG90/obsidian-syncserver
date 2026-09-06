@@ -16,7 +16,7 @@ import type { VaultWire } from '../src/engine/wire.js';
 import type { StateStore, VaultState } from '../src/engine/state.js';
 import { sealBlob } from '../src/crypto/blob.js';
 import { utf8 } from '../src/crypto/bytes.js';
-import { encryptName, nameHmac, wrapContentKey } from '../src/crypto/scope.js';
+import { envelopesFor, rootRow, row } from './wire-shapes.js';
 
 /** The four values an engine test picks for itself, and the wire needs to answer consistently. */
 export interface VaultConstants {
@@ -66,20 +66,16 @@ export class OneFileWire implements VaultWire {
   }
 
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
-    const nodes: Change[] = [
-      {
-        node_id: this.vault.rootNodeId, parent_id: null, name_enc: null, name_hmac: null, name_key_id: null,
-        op: 'put', rev: 1, sha256: null, size: null, mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      },
-    ];
+    const nodes: Change[] = [rootRow(this.vault.rootNodeId)];
     for (const f of this.server) {
       const s = this.sealed.get(f.path)!;
-      nodes.push({
-        node_id: f.nodeId, parent_id: this.vault.rootNodeId,
-        name_enc: encryptName(this.vault.kv, f.path), name_hmac: nameHmac(this.vault.kv, f.path), name_key_id: this.vault.scopeId,
-        op: 'put', rev: f.rev, sha256: s.sha256, size: s.bytes.length,
-        mtime: new Date(0).toISOString(), share_id: null, author_id: null,
-      });
+      nodes.push(
+        row({
+          nodeId: f.nodeId, parentId: this.vault.rootNodeId, name: f.path,
+          key: this.vault.kv, scopeId: this.vault.scopeId, rev: f.rev,
+          content: { sha256: s.sha256, size: s.bytes.length },
+        }),
+      );
     }
     return { nodes, snapshot: 'cursor-new' };
   }
@@ -104,13 +100,10 @@ export class OneFileWire implements VaultWire {
   }
 
   async blobKeys(_v: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
-    const out = new Map<string, Envelope[]>();
-    for (const s of this.sealed.values()) {
-      if (addresses.includes(s.sha256)) {
-        out.set(s.sha256, [{ scopeId: this.vault.scopeId, wrappedKey: wrapContentKey(this.vault.kv, s.contentKey) }]);
-      }
-    }
-    return out;
+    const offers = [...this.sealed.values()].map((s) => ({
+      sha256: s.sha256, contentKey: s.contentKey, scopeId: this.vault.scopeId, key: this.vault.kv,
+    }));
+    return envelopesFor(offers, addresses);
   }
 
   async createNode(): Promise<{ node_id: string; rev: number }> {
