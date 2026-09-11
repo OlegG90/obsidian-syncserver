@@ -39,6 +39,19 @@ describe('a schema refusal, turned into one the caller can act on', () => {
     }
   });
 
+  it('names a freeze as a freeze, by the hint the frozen trigger carries (#339)', () => {
+    // The client explains being over quota only for `frozen`; as `invalid_write` the person
+    // was told their write was malformed.
+    const frozen = refusalFromDatabase({ code: '23001', hint: 'frozen', message: 'account … is over quota' });
+    assert.deepEqual(frozen, { kind: 'frozen' });
+
+    // Every other trigger refusal keeps its sentence — the hint is the mark, not the code.
+    const other = refusalFromDatabase({ code: '23001', message: 'cannot leave before finalization starts' });
+    assert.equal(other?.kind, 'invalid_write');
+    const checked = refusalFromDatabase({ code: CHECK_VIOLATION, hint: 'frozen', message: 'x' });
+    assert.equal(checked?.kind, 'invalid_write', 'and only on the code the frozen trigger raises');
+  });
+
   it('survives being handed something that is not an error at all', () => {
     assert.equal(refusalFromDatabase(null), undefined);
     assert.equal(refusalFromDatabase('a string'), undefined);

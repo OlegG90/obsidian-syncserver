@@ -203,7 +203,9 @@ Two consequences worth knowing before they are met:
 
 - **Freezing frees nothing.** The frozen copy still counts, and leaving keeps the copy too (SH-05), so the
   only way out of over-quota is deleting something. "Leave to free space" is two acts: leave, then delete
-  what became yours.
+  what became yours. Both work while frozen: the replica does not move, but leaving is not the replica
+  moving — it converts the copy to the member's own and grows nothing, so the freeze exempts exactly that
+  transition. Deleting inside the share is still refused, as `frozen`.
 - **A frozen participant can still edit locally**, because there is no read-only state to enforce (SH-10)
   and Obsidian has none to offer. The server refuses those writes; they are resolved as ordinary conflicts
   when the copy catches up.

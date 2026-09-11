@@ -74,7 +74,7 @@ export const eventSentence = (event: DeltaEvent): string => {
     case 'share_ended':
       return 'A shared folder has ended. Your copy stays — open the plugin settings and press Leave to finish, which returns it to your own key.';
     case 'account_frozen':
-      return 'Your account is over its limit and is frozen. Nothing new is accepted, from you or from anyone sharing with you; reading and deleting still work, and freeing space lifts it.';
+      return 'Your account is over its limit and is frozen. Nothing new is accepted, from you or from anyone sharing with you; reading and deleting still work, and freeing space lifts it. A shared folder does not change until then — to free space held in one, leave it first: its files become yours, and yours to delete.';
     default:
       // A state this build does not know is still worth saying: the server is newer, and
       // silence would be indistinguishable from nothing being wrong.

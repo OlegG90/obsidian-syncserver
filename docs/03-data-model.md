@@ -199,7 +199,7 @@ answers "have I uploaded this before".
 | `nodes_share_membership_is_real` | the share mark is checked **both ways**: a marked node is the share's root item or has a parent in the same share, its owner is a live participant, and it sits in the vault that participant accepted in; and a node inside a shared folder is **itself** marked. **Deferred** | D-105, AC-Q4, SH-26 |
 | `nodes_no_delete_of_share_root` | the root of a live share cannot be soft-deleted; end the share first | SH-17 |
 | `nodes_unmark_drops_history` | clearing a share mark leaves an added participant's node with no version rows; the initiator keeps theirs. **Deferred** | SH-22, SH-25 |
-| `nodes_frozen_account_sends_nothing` | while an account is frozen, nothing that **grows** usage may be written in any of its vaults, and its replicas do not move at all in either direction. Renames, moves and deletes stay allowed, because deleting is the only way out | SH-20 |
+| `nodes_frozen_account_sends_nothing` | while an account is frozen, nothing that **grows** usage may be written in any of its vaults, and its replicas do not move at all in either direction. Renames, moves and deletes of its own content stay allowed, because deleting is the only way out; so does unsharing a replica node on leaving, which changes nothing but its name and mark (#338). Both refusals carry `HINT 'frozen'`, answered as `frozen` (#339) | SH-20 |
 
 ### Membership
 

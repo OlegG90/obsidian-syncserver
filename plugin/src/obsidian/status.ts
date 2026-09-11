@@ -196,7 +196,8 @@ export const statusLines = (
       // stopped, what still works, and what to do about it (SH-20).
       lines.push(
         'FROZEN — over the limit. Nothing new is accepted, here or from anyone sharing with ' +
-          'you; reading and deleting still work, and freeing space lifts it.',
+          'you; reading and deleting still work, and freeing space lifts it. Shared folders ' +
+          'stay as they are until then — leave one to make its files yours to delete.',
       );
     }
   }

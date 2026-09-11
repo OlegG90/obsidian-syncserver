@@ -1172,19 +1172,51 @@ SELECT expect_fail($$
 $$, '23001', 'keeps the files alone',
    'an added participant unmarks a replica that still carries history');
 
+-- Leaving is the way out of a freeze (docs/05, #338), so the unmarking below happens while
+-- the member is FROZEN: it converts the replica to their own content and grows nothing. The
+-- exception is exactly that transition — unsharing that also changes content is still a
+-- replica moving, and still refused.
 SELECT expect_ok($$
+    UPDATE users SET frozen_at = now()
+     WHERE id = '22222222-2222-2222-2222-222222222222'
+$$, 'the leaving member is over quota');
+
+SELECT expect_fail($$
     DO $inner$
     BEGIN
         DELETE FROM versions WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
                                AND node_id = 'b0000000-0000-0000-0000-0000000000b3';
          UPDATE nodes SET share_id = NULL, share_item_id = NULL,
+                          name_enc = '\xbb0b'::bytea, name_hmac = nh('Kept on leaving'),
+                          name_key_id = 'bc000000-0000-0000-0000-000000000001',
+                          mtime = mtime + interval '1 second'
+         WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
+           AND id = 'b0000000-0000-0000-0000-0000000000b3';
+    END $inner$
+$$, '23001', 'their copy does not move until the freeze lifts',
+   'a frozen member unsharing a node and changing more than its name');
+
+SELECT expect_ok($$
+    DO $inner$
+    BEGIN
+        DELETE FROM versions WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
+                               AND node_id = 'b0000000-0000-0000-0000-0000000000b3';
+         -- The name changes too, as it does in a real departure (KS → KV): that is the
+         -- column the frozen trigger fires on, and without it this would not reach the rule.
+         UPDATE nodes SET share_id = NULL, share_item_id = NULL,
+                          name_enc = '\xbb0b'::bytea, name_hmac = nh('Kept on leaving'),
                           name_key_id = 'bc000000-0000-0000-0000-000000000001'
          WHERE vault_id = 'bb000000-0000-0000-0000-000000000001'
            AND id = 'b0000000-0000-0000-0000-0000000000b3';
         SET CONSTRAINTS nodes_unmark_drops_history IMMEDIATE;
         SET CONSTRAINTS nodes_unmark_drops_history DEFERRED;
     END $inner$
-$$, 'with the history dropped, the replica becomes an ordinary file');
+$$, 'with the history dropped, the replica becomes an ordinary file — frozen or not');
+
+SELECT expect_ok($$
+    UPDATE users SET frozen_at = NULL
+     WHERE id = '22222222-2222-2222-2222-222222222222'
+$$, 'the freeze lifts again');
 
 -- ---- leaving requires the marks cleared first
 SELECT expect_fail($$

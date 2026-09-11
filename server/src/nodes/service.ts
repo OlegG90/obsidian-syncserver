@@ -242,7 +242,9 @@ export const deleteNode = async (
     if (Number(row.rev) !== input.ifMatchRev) return { kind: 'rev_mismatch', rev: Number(row.rev) };
 
     // Deleting stays available to a frozen account: it is the only way out of over-quota,
-    // so a freeze that blocked it would be a deadlock (SH-20).
+    // so a freeze that blocked it would be a deadlock (SH-20). Inside a share the schema
+    // refuses it as `frozen` — the replica does not move — and the way out there is to
+    // leave first, which converts the copy into the member's own (#338).
     const rev = await nextRev(c, input.vaultId);
     await c.query(
       `UPDATE nodes SET deleted_at = now(), rev = $3 WHERE vault_id = $1 AND id = $2`,
@@ -276,7 +278,10 @@ export const moveNode = async (
   txGuarded(db, async (c) => {
     const access = await ownerAndFrozen(oneFrom(c), input.vaultId);
     if (access.kind === 'not_found') return fail('not_found');
-    if (access.kind === 'frozen') return fail('frozen');
+    // No freeze check here, unlike create and put (#339). A move grows nothing, so the rule
+    // is the schema's: a frozen account may rename and move its own notes, and not a node in
+    // a share — the replica does not move until the freeze lifts. The trigger holds that
+    // distinction and answers `frozen`; a blanket refusal here refused the private half too.
 
     const cur = await c.query<{
       rev: string; parentId: string | null; ancestry: string[]; shareId: string | null; shareItemId: string | null;

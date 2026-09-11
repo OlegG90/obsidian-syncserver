@@ -1669,6 +1669,15 @@ CREATE TRIGGER shares_activation_has_all_key_material
 --   * a replica — does not move at all, in either direction. Propagation is all-or-none
 --     (SH-11), so a partially-updated replica is worse than a stalled one; the gap is
 --     restored on thaw (SH-21).
+-- One exception to the second arm: LEAVING (#338). Unsharing a node converts it to the
+-- member's own — the name goes from KS to KV, the mark goes, and nothing else changes —
+-- so it grows nothing and propagates nothing. docs/05 gives "leave, then delete what
+-- became yours" as the way out of a freeze; refusing the first step made that a dead end.
+-- The exception is exactly that transition: any other column moving with it is refused.
+--
+-- Both refusals carry HINT 'frozen', which the server reads to answer `frozen` rather
+-- than a generic schema refusal (#339): the person is told they are over quota, not that
+-- their write was malformed.
 CREATE FUNCTION nodes_reject_frozen_write() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -1682,14 +1691,25 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    IF TG_OP = 'UPDATE'
+       AND OLD.share_id IS NOT NULL AND NEW.share_id IS NULL
+       AND NEW.parent_id  IS NOT DISTINCT FROM OLD.parent_id
+       AND NEW.sha256     IS NOT DISTINCT FROM OLD.sha256
+       AND NEW.size       IS NOT DISTINCT FROM OLD.size
+       AND NEW.mtime      IS NOT DISTINCT FROM OLD.mtime
+       AND NEW.rev        IS NOT DISTINCT FROM OLD.rev
+       AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at THEN
+        RETURN NEW;
+    END IF;
+
     IF COALESCE(NEW.share_id, OLD.share_id) IS NOT NULL THEN
         RAISE EXCEPTION 'account % is over quota; their copy does not move until the freeze lifts',
-            owner USING ERRCODE = 'restrict_violation';
+            owner USING ERRCODE = 'restrict_violation', HINT = 'frozen';
     END IF;
 
     IF TG_OP = 'INSERT' OR NEW.sha256 IS DISTINCT FROM OLD.sha256 THEN
         RAISE EXCEPTION 'account % is over quota; nothing that grows usage may be sent until the freeze lifts',
-            owner USING ERRCODE = 'restrict_violation';
+            owner USING ERRCODE = 'restrict_violation', HINT = 'frozen';
     END IF;
 
     RETURN NEW;
