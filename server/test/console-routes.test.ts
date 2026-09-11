@@ -59,7 +59,7 @@ describe('the console and the server agree on paths', () => {
   it('has a route for each of them', async () => {
     const missing: string[] = [];
     for (const { method, url } of consoleCalls()) {
-      const r = await app.inject({ method: method as 'GET', url, payload: method === 'GET' ? undefined : {} });
+      const r = await app.inject({ method: method as 'GET', url, ...(method === 'GET' ? {} : { payload: {} }) });
       const body = r.statusCode === 404 ? (r.json() as { message?: string }) : {};
       if (body.message?.startsWith('Route ')) missing.push(`${method} ${url}`);
     }
