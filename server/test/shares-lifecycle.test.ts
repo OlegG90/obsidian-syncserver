@@ -999,6 +999,58 @@ describe('finalizing a departure', () => {
     assert.equal(still!.keyId, await strangerVaultKey(), 'and everything is back under their own key');
   });
 
+  it('is open to a frozen member, for whom it is the way out (#338)', async () => {
+    // docs/05: over quota, "leave to free space" is two acts — leave, then delete what became
+    // yours. Inside the share nothing of theirs may move while they are frozen, and the
+    // refusal says so in the one word the client acts on (#339). Leaving converts the copy to
+    // their own, and then deleting is an ordinary private delete.
+    const { shareId, replicaRoot } = await sharedWith('frozen-leave');
+    const interior = (await theirReplicaNodes(shareId)).find((n) => n.node_id !== replicaRoot)!.node_id;
+    const stranger = { authorization: `Bearer ${w.strangerAccess}` };
+    const revOf = async (id: string) =>
+      (await w.db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [
+        w.strangerVaultId,
+        id,
+      ]))!.rev;
+    const remove = async (id: string) =>
+      w.app.inject({
+        method: 'DELETE',
+        url: `/vaults/${w.strangerVaultId}/nodes/${id}`,
+        headers: { ...stranger, 'if-match': await revOf(id) },
+      });
+
+    await w.db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [w.strangerId]);
+    try {
+      const deleting = await remove(interior);
+      assert.equal(deleting.statusCode, 413, deleting.body);
+      assert.equal(deleting.json().error, 'frozen', 'a freeze, named as one — not a malformed write');
+
+      const name = `moved while frozen ${randomUUID()}`;
+      const moving = await w.app.inject({
+        method: 'POST',
+        url: `/vaults/${w.strangerVaultId}/nodes/${interior}/move`,
+        headers: { ...stranger, 'if-match': await revOf(interior) },
+        payload: {
+          parent_id: replicaRoot,
+          name_enc: b64(name),
+          name_hmac: sha(Buffer.from(name)),
+          name_key_id: await shareKeyOf(shareId),
+        },
+      });
+      assert.equal(moving.statusCode, 413, moving.body);
+      assert.equal(moving.json().error, 'frozen', 'and a move inside the share is the same freeze');
+
+      assert.ok((await leaveBegin(shareId)).statusCode < 300);
+      const left = await finalize(shareId, await theirReplicaNodes(shareId));
+      assert.equal(left.statusCode, 204, left.body);
+
+      const deleted = await remove(interior);
+      assert.equal(deleted.statusCode, 200, `what became theirs can go: ${deleted.body}`);
+    } finally {
+      await w.db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [w.strangerId]);
+    }
+  });
+
   it('is refused before finalization has been begun', async () => {
     const { shareId } = await sharedWith('too-early');
     const r = await finalize(shareId, await theirReplicaNodes(shareId));

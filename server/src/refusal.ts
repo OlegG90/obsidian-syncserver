@@ -108,6 +108,8 @@ const CHECK_VIOLATION = '23514';
  * here was authored deliberately by `server/db/schema.sql`.
  */
 const RESTRICT_VIOLATION = '23001';
+/** The `HINT` `nodes_reject_frozen_write` puts on both of its refusals. */
+const FROZEN_HINT = 'frozen';
 
 /**
  * A schema refusal, turned into one the caller can act on.
@@ -133,6 +135,10 @@ const RESTRICT_VIOLATION = '23001';
 export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
   const code = (e as { code?: unknown } | null)?.code;
   if (code !== CHECK_VIOLATION && code !== RESTRICT_VIOLATION) return undefined;
+  // The freeze is the one schema refusal with a name of its own (#339). Answered as
+  // `invalid_write` it reached the person as "your write was malformed", and the client's
+  // over-quota explanation — keyed on `frozen` — never showed.
+  if (code === RESTRICT_VIOLATION && (e as { hint?: unknown }).hint === FROZEN_HINT) return { kind: 'frozen' };
   const detail = (e as { message?: unknown }).message;
   return { kind: 'invalid_write', detail: typeof detail === 'string' ? detail : 'the write violates a schema rule' };
 };

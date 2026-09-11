@@ -252,6 +252,11 @@ sharing with you. Reading and deleting keep working, and **nothing is ever delet
 The way out is yours and needs no administrator: empty the trash, wait for the next collector pass, and
 the account thaws on its own. Anything that arrived while it was frozen is delivered then.
 
+**A shared folder is the exception to "deleting keeps working".** Your copy of it does not change while
+you are frozen — not even by you — because everybody else's copy would have to change with it. If the
+space is in a shared folder, **leave it first**: leaving works while frozen, the files become yours, and
+then they delete like any others.
+
 ---
 
 ## Moving the server

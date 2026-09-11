@@ -241,6 +241,26 @@ describe('move', () => {
       'a descendant left claiming its old parent is a subtree in a folder it was moved out of');
   });
 
+  it('stays open to a frozen account for its own notes, since a move grows nothing (#339)', async () => {
+    // The schema allowed it and docs/03 says so; a blanket check in front of it did not, and
+    // a frozen user could not so much as rename a private note.
+    const note = await createFile(rootId, 'frozen-rename.md');
+    const dest = await createFolder(rootId, 'frozen-dest');
+    const owner = `(SELECT user_id FROM vaults WHERE id = $1)`;
+    await db.query(`UPDATE users SET frozen_at = now() WHERE id = ${owner}`, [vaultId]);
+    try {
+      const r = await app.inject({
+        method: 'POST', url: `/vaults/${vaultId}/nodes/${note.node_id}/move`,
+        headers: { ...auth(), 'if-match': String(note.rev) },
+        payload: { parent_id: dest.node_id, name_enc: Buffer.from('renamed while frozen.md').toString('base64'),
+                   name_hmac: sha(Buffer.from('renamed while frozen.md')), name_key_id: vaultKeyId },
+      });
+      assert.equal(r.statusCode, 200, r.body);
+    } finally {
+      await db.query(`UPDATE users SET frozen_at = NULL WHERE id = ${owner}`, [vaultId]);
+    }
+  });
+
   it('requires the revision, because here placement is the subject', async () => {
     const f = await createFolder(rootId, 'if-match-check');
     const r = await app.inject({
