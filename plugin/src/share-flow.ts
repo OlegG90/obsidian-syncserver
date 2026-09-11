@@ -53,7 +53,11 @@ export interface ShareFlowDeps {
   share(folderPath: string): Promise<{ shareId: string }>;
   /** Seal the share key to a login and register the invitation. */
   invite(shareId: string, login: string): Promise<void>;
-  accept(shareId: string): Promise<void>;
+  /**
+   * Join the share this invitation is for. The row, not just its id: the invitation already
+   * carries who sent it, which is what the joiner's folder is named after (#330).
+   */
+  accept(invitation: InvitationRow): Promise<void>;
   decline(shareId: string): Promise<void>;
   /** Leave; `ended` is true when this departure closed the share for everybody. */
   leave(shareId: string): Promise<{ ended: boolean }>;
@@ -84,7 +88,8 @@ export interface ShareFlow {
   shareable(shared: readonly string[]): { offered: string[]; reason?: string | undefined };
   share(folderPath: string): Promise<void>;
   invite(shareId: string, login: string): Promise<void>;
-  accept(shareId: string): Promise<void>;
+  /** Answer an invitation from the list this screen was drawn from. */
+  accept(invitation: InvitationRow): Promise<void>;
   decline(shareId: string): Promise<void>;
   leave(shareId: string): Promise<void>;
   members(shareId: string): Promise<ShareMember[] | undefined>;
@@ -197,9 +202,9 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       deps.done();
     },
 
-    async accept(shareId) {
+    async accept(invitation) {
       const done = await once('accepting', async () => {
-        await deps.accept(shareId);
+        await deps.accept(invitation);
         return true;
       });
       if (!done) return;
