@@ -67,6 +67,10 @@ const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
  *
  * The union is the seam; this is the only way through it. A new refusal has to be declared before it can
  * be sent, and declaring it makes the console fail to compile until it has words.
+ *
+ * **`detail` is for what the code cannot say** — what the backup ran into, which copy — never for
+ * words the console already has for the code. A static detail beside it was read out twice:
+ * "…as a positive number of bytes. (a positive number of bytes)".
  */
 const refuseWith = (
   reply: FastifyReply,
@@ -85,15 +89,19 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.get<{ Querystring: { target?: string; limit?: string } }>(
     '/admin/audit',
     admin,
-    async (req) => ({
-      entries: await listAudit(db, {
-        targetUserId: req.query.target,
-        // Bounded here rather than trusted: the log is the one table that only grows.
-        limit: Math.min(Number(req.query.limit) || 100, 500),
-      }),
-      // The size of the whole thing, beside a page of it (D-117).
-      size: await auditSize(db),
-    }),
+    async (req) => {
+      // Two questions that do not wait on each other: a page of the log, and the size of the whole
+      // thing beside it (D-117).
+      const [entries, size] = await Promise.all([
+        listAudit(db, {
+          targetUserId: req.query.target,
+          // Bounded here rather than trusted: the log is the one table that only grows.
+          limit: Math.min(Number(req.query.limit) || 100, 500),
+        }),
+        auditSize(db),
+      ]);
+      return { entries, size };
+    },
   );
 
   app.post<{ Body: { login: string; quota_bytes: string; ttl_seconds?: number } }>(
@@ -103,7 +111,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
       const { login, quota_bytes: quota } = req.body ?? {};
       if (!login || typeof login !== 'string') return refuseWith(reply, 400, 'login_required');
       if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
-        return refuseWith(reply, 400, 'quota_bytes_required', 'a positive number of bytes');
+        return refuseWith(reply, 400, 'quota_bytes_required');
       }
 
       const out = await invite(db, req.admin!, {
@@ -187,7 +195,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     async (req, reply) => {
       const quota = req.body?.quota_bytes;
       if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
-        return refuseWith(reply, 400, 'quota_bytes_required', 'a positive number of bytes');
+        return refuseWith(reply, 400, 'quota_bytes_required');
       }
       const out = await setQuota(db, req.admin!, req.params.userId, String(quota));
       if ('kind' in out) return refuse(reply, out);
@@ -330,7 +338,7 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     // there is nothing to resolve.
     const status = await restoreStatus(db, backup.restoreStateFile);
     if (!status.pending) {
-      return refuseWith(reply, 409, 'nothing_to_confirm', 'the database is not behind its state file');
+      return refuseWith(reply, 409, 'nothing_to_confirm');
     }
     const out = await confirmRestore(db, req.admin!, backup.restoreStateFile);
     return { epoch: out.epoch };

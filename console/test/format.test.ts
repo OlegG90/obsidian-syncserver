@@ -9,8 +9,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  accountBadge, accountKind, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver,
-  mib, serverLine, usageFraction, usageMarker, type AccountLine,
+  accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver,
+  holdsStorage, mib, serverLine, usageFraction, usageMarker, type AccountLine,
 } from '../src/format.js';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
@@ -31,13 +31,13 @@ describe('what a row of the accounts table says', () => {
   // One sentence per account became four columns (#123). The judgement did not move: which
   // kind of thing a row IS, and whether storage is even a question about it, are still
   // decided here — a table that answered those in its markup would decide them twice.
-  it('names which kind of thing the row is', () => {
-    assert.equal(accountKind(line()), 'vault account');
-    assert.equal(accountKind(line({ role: 'admin' })), 'console account');
+  it('asks about storage only of a vault account', () => {
+    assert.equal(holdsStorage(line()), true);
+    assert.equal(holdsStorage(line({ role: 'admin' })), false, 'a console account owns no vault');
   });
 
-  it('calls an invitation an invitation, because it is not an account yet (D-115)', () => {
-    assert.equal(accountKind(line({ state: 'provisioned' })), 'invitation');
+  it('does not ask it of an invitation, because it is not an account yet (D-115)', () => {
+    assert.equal(holdsStorage(line({ state: 'provisioned' })), false);
   });
 
   it('leaves usage off a console account, which owns no vault (D-115)', () => {
@@ -155,14 +155,12 @@ describe('which server this console is talking to', () => {
   it('dates a server too old to report one, rather than calling it unknown', () => {
     // `/health` has carried `version` since 0.1.0, so its absence is a fact about the server.
     assert.equal(serverLine(null), 'Server before 0.1.0');
-    assert.equal(serverLine(undefined), 'Server before 0.1.0');
   });
 
-  it('keeps "cannot ask" separate from "answered without one"', () => {
+  it('keeps "no answer" separate from "answered without one"', () => {
     // A console that could not reach /health must not claim the server is ancient. Two
     // different situations, and only one of them is about the server's age.
-    assert.equal(serverLine(undefined, false), 'Server version unknown');
-    assert.equal(serverLine('0.5.0-d', false), 'Server version unknown');
+    assert.equal(serverLine(undefined), 'Server version unknown');
   });
 });
 
@@ -197,15 +195,8 @@ describe('over the limit is not the same question as frozen', () => {
   // exactly like one at 1%, and the FROZEN tile said 0 — truthfully. The two come apart because
   // a freeze is raised where somebody ELSE's write crosses the boundary (SH-20), so an account
   // syncing on its own sits over its limit indefinitely with `frozen_at` null.
-  const account = (over: Partial<AccountLine> = {}): AccountLine => ({
-    role: 'user',
-    state: 'active',
-    quotaBytes: '2097152',
-    usedBytes: '1048576',
-    frozenAt: null,
-    inviteExpiresAt: null,
-    ...over,
-  });
+  const account = (over: Partial<AccountLine> = {}): AccountLine =>
+    line({ quotaBytes: '2097152', usedBytes: '1048576', ...over });
 
   it('is over when it stores more than its quota, frozen or not', () => {
     assert.equal(isOver(account({ usedBytes: '2408221' })), true);

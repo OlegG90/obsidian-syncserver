@@ -6,6 +6,8 @@
     "lib": ["ES2023", "DOM"],
     "types": [],
     "noEmit": true,
+    // The server holds itself to this; the console had nothing reporting an import it no longer used.
+    "noUnusedLocals": true,
     "rootDir": "src",
     "composite": false
   },

@@ -32,6 +32,12 @@ export type AccountLine = Pick<
 export const mib = (bytes: string | null): string =>
   bytes === null ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
 
+/** What an operator typed in the quota field, in MiB, as the bytes the server takes. */
+export const bytesFromMib = (typed: string): string => String(Math.round(Number(typed) * 1024 * 1024));
+
+/** The other direction, for putting a quota back in the field: whole MiB, the unit it is typed in. */
+export const mibOf = (bytes: string): string => String(Math.round(Number(bytes) / (1024 * 1024)));
+
 /**
  * Bytes at whatever scale makes them readable.
  *
@@ -123,15 +129,16 @@ export const accountBadge = (a: AccountLine): { text: string; tone: 'active' | '
 };
 
 /**
- * What kind of thing this row is.
+ * Whether storage is a question about this row at all.
  *
- * Three, not two, and the third is the one that matters: **an invitation is not an account
- * yet** (D-115). It has a login and a quota and nothing else — no keys, no vault, nobody has
- * claimed it — so calling it an account in the kind column would be the table asserting
- * something the row does not support.
+ * Not for a console account, which owns no vault and holds a zero quota (D-115), and not for an
+ * invitation, which **is not an account yet**: a login and a quota and nothing else — no keys,
+ * no vault, nobody has claimed it. The card draws a usage bar only where this is true, and the
+ * usage line reads a dash where it is not; one predicate for both, where the card had its own
+ * inverted copy of it.
  */
-export const accountKind = (a: AccountLine): string =>
-  a.state === 'provisioned' ? 'invitation' : a.role === 'admin' ? 'console account' : 'vault account';
+export const holdsStorage = (a: Pick<AccountLine, 'role' | 'state'>): boolean =>
+  a.role !== 'admin' && a.state !== 'provisioned';
 
 /**
  * Where this row stands, in the words the state means rather than the enum's spelling.
@@ -160,7 +167,7 @@ export const accountState = (a: AccountLine): string => {
  * between them. There is none. One fact, one place.
  */
 export const accountUsage = (a: AccountLine): string => {
-  if (a.role === 'admin' || a.state === 'provisioned') return '—';
+  if (!holdsStorage(a)) return '—';
   return `${mib(a.usedBytes)} of ${mib(a.quotaBytes)}`;
 };
 
@@ -244,14 +251,12 @@ const ACTIONS: Record<string, string> = {
  * of the plugin's line, which shows both precisely because they can (D-111).
  *
  * A server too old to report one is not an unknown: `/health` has carried `version` since
- * 0.1.0, so its absence dates the server rather than hiding it. `undefined` from a failed
- * request is a different thing and says so — a console that cannot reach `/health` should not
- * claim the server is ancient.
+ * 0.1.0, so its absence — `null` — dates the server rather than hiding it. `undefined` is not
+ * having an answer at all (not asked yet, or `/health` unreachable) and says so: a console that
+ * cannot reach `/health` should not claim the server is ancient.
  */
-export const serverLine = (version: string | null | undefined, reachable = true): string => {
-  if (!reachable) return 'Server version unknown';
-  return `Server ${version ?? 'before 0.1.0'}`;
-};
+export const serverLine = (version: string | null | undefined): string =>
+  version === undefined ? 'Server version unknown' : `Server ${version ?? 'before 0.1.0'}`;
 
 /**
  * What the second press says, and why it is not "Are you sure?".

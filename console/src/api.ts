@@ -15,7 +15,7 @@ import { operatorRefusal } from './format.js';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals };
+export type { AccountRow, AuditRow, BackupRun, DeletionProgress, StorageTotals };
 
 export class ApiError extends Error {
   constructor(
@@ -259,11 +259,11 @@ export const deletionProgress = (userId: string): Promise<DeletionProgress> =>
 export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage');
 
 /** The administrative log, newest first (D-87, D-94). Append-only on the server; read-only here. */
-export const audit = (limit = 100): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
-  call('GET', `/admin/audit?limit=${limit}`);
+export const audit = (): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
+  call('GET', '/admin/audit');
 
 /** Start a backup now. Refused with `backup_not_ready` when something is in the way of one. */
-export const runBackup = (): Promise<{ id?: string; status: string; bytes?: number; blob_count?: number }> =>
+export const runBackup = (): Promise<{ self_check?: string }> =>
   call('POST', '/admin/backups');
 
 /** The previous runs, newest first. */

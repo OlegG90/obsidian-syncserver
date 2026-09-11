@@ -13,7 +13,7 @@
  * have.
  */
 import {
-  accounts, ApiError, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
+  accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
   changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup,
   restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
@@ -22,10 +22,10 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, accountState, accountUsage, auditAction, confirmLabel, freezeWarning, human, isOver, mib,
-  serverLine, usageFraction, usageMarker,
+  accountBadge, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
+  isOver, mib, mibOf, serverLine, usageFraction, usageMarker,
 } from './format.js';
-import { chooseScreen, sessionEnded, type Screen } from './screen.js';
+import { chooseScreen, sessionEnded } from './screen.js';
 import { whatIsWrong } from './password-form.js';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -43,13 +43,24 @@ const el = <K extends keyof HTMLElementTagNameMap>(
 const say = (message: string, bad = false): HTMLElement =>
   el('p', { className: bad ? 'bad' : 'ok', textContent: message });
 
+/** The placeholder a list shows until `loads` fills it — or replaces it with why it could not. */
+const pending = (text = 'Loading…'): HTMLElement => el('p', { className: 'muted', textContent: text });
+
+/**
+ * A failure as the screen shows it: the sentence the server sent, not a status — or nothing,
+ * when the session ended and the sign-in screen has already taken over. What `attempt` and
+ * `loads` both do with a failure; they differ only in where they put it.
+ */
+const failure = (e: unknown): HTMLElement | undefined =>
+  endedSession(e) ? undefined : say(e instanceof Error ? e.message : String(e), true);
+
 /** Every failure reaches the screen as the sentence the server sent, not as a status. */
 const attempt = async (where: HTMLElement, run: () => Promise<void>): Promise<void> => {
   try {
     await run();
   } catch (e) {
-    if (endedSession(e)) return;
-    where.append(say(e instanceof Error ? e.message : String(e), true));
+    const shown = failure(e);
+    if (shown) where.append(shown);
   }
 };
 
@@ -63,12 +74,17 @@ const attempt = async (where: HTMLElement, run: () => Promise<void>): Promise<vo
  */
 const endedSession = (e: unknown): boolean => {
   if (!sessionEnded(e)) return false;
-  forgetSession();
-  signInScreen(
+  signOut(
     'Your session ended. Nothing about it is written down, so a reload or a closed tab means ' +
       'signing in again — and so does an administrator revoking this console.',
   );
   return true;
+};
+
+/** Forget this console's session and go to the sign-in screen, with the reason if there is one. */
+const signOut = (note?: string): void => {
+  forgetSession();
+  signInScreen(note);
 };
 
 /**
@@ -81,8 +97,8 @@ const endedSession = (e: unknown): boolean => {
  */
 const loads = (list: HTMLElement, fill: () => Promise<void>): void => {
   void fill().catch((e: unknown) => {
-    if (endedSession(e)) return;
-    list.replaceChildren(say(e instanceof Error ? e.message : String(e), true));
+    const shown = failure(e);
+    if (shown) list.replaceChildren(shown);
   });
 };
 
@@ -145,7 +161,7 @@ let side: HTMLElement | undefined;
  */
 let serverVersion: string | null | undefined;
 
-const shell = (current: Where, login: string, ...content: Node[]): void => {
+const shell = (current: Where, ...content: Node[]): void => {
   side ??= el('nav', { className: 'side' });
   app.before(side);
   side.replaceChildren(el('div', { className: 'brand', textContent: 'SyncServer' }));
@@ -166,13 +182,9 @@ const shell = (current: Where, login: string, ...content: Node[]): void => {
   // a console that can be signed into and not out of leaves a session on a shared machine with
   // no way to end it but closing the tab and hoping.
   const who = el('div', { className: 'who' });
-  who.append(el('div', { className: 'muted', textContent: `Signed in as ${login}` }));
+  who.append(el('div', { className: 'muted', textContent: `Signed in as ${currentLogin()}` }));
   const out = el('button', { className: 'link', textContent: 'Sign out' });
-  out.onclick = (): void => {
-    forgetSession();
-    side?.remove();
-    signInScreen();
-  };
+  out.onclick = (): void => signOut();
   who.append(out);
 
   // Beside the way out, because both are about the person using the console rather than the
@@ -184,7 +196,7 @@ const shell = (current: Where, login: string, ...content: Node[]): void => {
   // Which server this is, under the way out (#135). Asked once per page load and remembered:
   // `/health` answers before authentication, and the version does not change under a running
   // console — an image is replaced by restarting the container, which ends this session anyway.
-  const line = el('div', { className: 'muted version', textContent: serverLine(serverVersion, serverVersion !== undefined) });
+  const line = el('div', { className: 'muted version', textContent: serverLine(serverVersion) });
   who.append(line);
   if (serverVersion === undefined) {
     void health()
@@ -192,7 +204,7 @@ const shell = (current: Where, login: string, ...content: Node[]): void => {
         serverVersion = h.version ?? null;
         line.textContent = serverLine(serverVersion);
       })
-      .catch(() => (line.textContent = serverLine(undefined, false)));
+      .catch(() => (line.textContent = serverLine(undefined)));
   }
   side.append(who);
 
@@ -316,12 +328,10 @@ const passwordScreen = (): void => {
     if (wrong) throw new Error(wrong);
 
     await changePassword(current.input.value, next.input.value);
-    forgetSession();
-    side?.remove();
-    signInScreen('Password changed. Sign in with the new one.');
+    signOut('Password changed. Sign in with the new one.');
   });
 
-  shell('none', currentLogin(), card);
+  shell('none', card);
 };
 
 /**
@@ -356,8 +366,7 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
     drawer.replaceChildren(el('div', { className: 'drawer' }, build()));
   };
 
-  const storing = a.role !== 'admin' && a.state !== 'provisioned';
-  if (storing) {
+  if (holdsStorage(a)) {
     // **The bar is red for being OVER, not for being frozen.** It asked the second question and
     // printed the first, so an account at 115% of its quota looked exactly like one at 1% —
     // found on a live console. The two come apart: a freeze is raised where somebody else's
@@ -479,7 +488,7 @@ const enableForm = (a: AccountRow, done: () => Promise<void>, report: Report): H
  */
 const deviceList = (a: AccountRow, report: Report): HTMLElement => {
   const box = el('div', {});
-  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+  const list = el('div', {}, pending());
   box.append(
     el('p', {
       className: 'muted',
@@ -608,7 +617,7 @@ const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report):
   // Already begun — by a previous session, or by this one before a reload.
   if (a.state === 'deleting') {
     body.replaceChildren(el('p', { className: 'muted', textContent: 'Reading where it got to…' }));
-    void attempt(body, async () => underway(await deletionProgress(a.id)));
+    loads(body, async () => underway(await deletionProgress(a.id)));
     return box;
   }
 
@@ -714,12 +723,13 @@ const quotaControl = (
 ): HTMLElement => {
   const box = el('div', {});
   const quota = field('Quota in MiB');
-  quota.input.value = String(Math.round(Number(a.quotaBytes) / (1024 * 1024)));
+  quota.input.value = mibOf(a.quotaBytes);
   const save = el('button', { textContent: 'Save' });
   box.append(quota.row, save);
 
-  const apply = async (): Promise<void> => {
-    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+  // Takes the bytes rather than reading the field again: what is applied is exactly what the
+  // warning described, even if the field was edited between the two presses.
+  const apply = async (bytes: string): Promise<void> => {
     const out = await setQuota(a.id, bytes);
     // Reported before the refresh and OUTSIDE the list, because `done()` replaces every card
     // — including the one this control is drawn in.
@@ -737,16 +747,16 @@ const quotaControl = (
   box.append(cancel);
 
   submits(save, box, async () => {
-    const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
+    const bytes = bytesFromMib(quota.input.value);
     const warning = freezeWarning(bytes, a.usedBytes);
-    if (!warning) return apply();
+    if (!warning) return apply(bytes);
 
     // Said once, and replaced by the act rather than stacking: pressing Save twice with the
     // same number should not grow a column of identical warnings.
     save.remove();
     const anyway = el('button', { textContent: 'Lower it anyway' });
     box.append(say(warning, true), anyway);
-    submits(anyway, box, apply);
+    submits(anyway, box, () => apply(bytes));
   });
 
   return box;
@@ -759,7 +769,7 @@ const accountsScreen = (): void => {
   // reading, and a column of them is a log nobody asked this screen for.
   const notices = el('div', {});
   const report: Report = (message, bad = false) => notices.replaceChildren(say(message, bad));
-  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+  const list = el('div', {}, pending());
 
   /**
    * Inviting somebody, folded away until it is wanted (#123).
@@ -799,8 +809,7 @@ const accountsScreen = (): void => {
     login.input.focus();
 
     submits(button, form, async () => {
-      const bytes = String(Math.round(Number(quota.input.value) * 1024 * 1024));
-      const out = await invite(login.input.value, bytes);
+      const out = await invite(login.input.value, bytesFromMib(quota.input.value));
       // The token stays where it was produced, and the form stays open behind it: this is the
       // one value in the console that is shown once and never again, so a screen that tidied
       // itself away on success would take it with it.
@@ -816,7 +825,7 @@ const accountsScreen = (): void => {
     list.replaceChildren(tiles(out.accounts, totals), ...out.accounts.map((a) => accountCard(a, fill, report)));
   };
 
-  shell('accounts', currentLogin(), page, notices, list, inviteCard);
+  shell('accounts', page, notices, list, inviteCard);
   loads(list, fill);
 };
 
@@ -835,7 +844,7 @@ const accountsScreen = (): void => {
 const auditScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Audit log' }));
   const size = el('div', { className: 'usage' });
-  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+  const list = el('div', {}, pending());
 
 
   const fill = async (): Promise<void> => {
@@ -855,7 +864,7 @@ const auditScreen = (): void => {
     );
   };
 
-  shell('audit', currentLogin(), page, size, list);
+  shell('audit', page, size, list);
   loads(list, fill);
 };
 
@@ -893,7 +902,7 @@ const backupRow = (b: BackupRun): HTMLElement => {
   const card = el('div', { className: 'card' });
   card.append(
     el('strong', { textContent: `${b.status} — ${when(b.startedAt)}` }),
-    el('div', { className: 'muted', textContent: `${mib(b.bytes)}, ${b.blobCount ?? '—'} blobs` }),
+    el('div', { className: 'muted', textContent: `${human(b.bytes)}, ${b.blobCount ?? '—'} blobs` }),
   );
   if (b.error) card.append(el('p', { className: 'bad', textContent: b.error }));
   if (b.verifiedAt) card.append(el('div', { className: 'muted', textContent: `verified ${when(b.verifiedAt)}` }));
@@ -1023,24 +1032,20 @@ const verifyButton = (run: BackupRun): HTMLElement => {
   const where = el('div', {});
   submits(button, where, async () => {
     const out = await verify(run.id);
+    // A whole copy is the one the server stamps verified, now — said here rather than learned
+    // by fetching every run again to read one field of this one.
     where.append(
       out.whole
-        ? say(`whole: all ${out.checked} blobs present`)
+        ? say(`whole: all ${out.checked} blobs present — verified ${when(new Date().toISOString())}`)
         : say(`${out.missing.length} of ${out.checked} blobs missing from the copy`, true),
     );
-    // Refresh the list so `verified` appears.
-    void attempt(where, async () => {
-      const fresh = await backups();
-      const row = fresh.backups.find((x) => x.id === run.id);
-      if (row?.verifiedAt) where.append(say(`verified ${when(row.verifiedAt)}`));
-    });
   });
   return el('div', {}, button, where);
 };
 
 const backupsScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Backups' }));
-  const list = el('div', {}, el('p', { className: 'muted', textContent: 'Loading…' }));
+  const list = el('div', {}, pending());
 
   const runCard = el('div', { className: 'card' });
   const runButton = el('button', { textContent: 'Back up now' });
@@ -1057,7 +1062,14 @@ const backupsScreen = (): void => {
   );
   submits(runButton, runCard, async () => {
     const out = await runBackup();
-    runCard.append(say(out.status === 'ok' ? 'Backup taken.' : `Backup: ${out.status}`));
+    // Anything but a finished run is refused before this line, so what is left to say is whether
+    // the copy it wrote passed its own check — "Backup taken." over a copy nobody can restore
+    // from is the one sentence this card must not print.
+    runCard.append(
+      out.self_check
+        ? say(`Backup taken, and it is not restorable: ${out.self_check}`, true)
+        : say('Backup taken.'),
+    );
     await fill();
   });
 
@@ -1066,20 +1078,13 @@ const backupsScreen = (): void => {
     list.replaceChildren(...out.backups.map(backupRow));
   };
 
-  /**
-   * Whether the newest copy has ever been **loaded**, which is not what "verified" on a row says (#159).
-   *
-   * Its own line rather than a badge on a row, because it is about the practice and not about one copy:
-   * the question an operator has is "when did we last prove we can restore", and "never" is a real and
-   * important answer that no row can carry.
-   */
-  shell('backups', currentLogin(), page, list, runCard);
+  shell('backups', page, list, runCard);
   loads(list, fill);
 };
 
 const restoreScreen = (): void => {
   const page = el('div', { className: 'card' });
-  const status = el('div', {}, el('p', { className: 'muted', textContent: 'Checking…' }));
+  const status = el('div', {}, pending('Checking…'));
   const button = el('button', { textContent: 'Confirm the restore' });
 
   page.append(
