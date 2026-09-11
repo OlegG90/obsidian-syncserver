@@ -43,25 +43,20 @@ export interface ServerNode {
 }
 
 export interface VaultWire {
-  /**
-   * No `openVault` here, deliberately.
-   *
-   * The engine is **given** the opened vault it works on, because opening one is a decision
-   * about an operation and not about a pass: a leave opens it once and hands the same value
-   * to the tree walk, the share key and the scope lookup. Leaving the call on this seam
-   * invited exactly what it produced — every helper opening its own.
-   */
+  // No `openVault` here, deliberately.
+  //
+  // The engine is **given** the opened vault it works on, because opening one is a decision
+  // about an operation and not about a pass: a leave opens it once and hands the same value
+  // to the tree walk, the share key and the scope lookup. Leaving the call on this seam
+  // invited exactly what it produced — every helper opening its own.
 
   /** The whole tree as it stands, with the cursor it was taken at. */
-  listNodes(vaultId: string, under?: string): Promise<{ nodes: Change[]; snapshot: string }>;
+  listNodes(vaultId: string): Promise<{ nodes: Change[]; snapshot: string }>;
 
   /** Which of these content tags this vault's own scope already knows (docs/07, adoption). */
   dedupLookup(vaultId: string, tags: string[]): Promise<Map<string, string>>;
 
-  putBlob(
-    sealed: { sha256: string; bytes: Uint8Array; keyId: string },
-    encAlg?: string,
-  ): Promise<{ sha256: string; size: number }>;
+  putBlob(sealed: { sha256: string; bytes: Uint8Array; keyId: string }): Promise<{ sha256: string; size: number }>;
 
   /** `undefined` means the caller holds no live reference (D-20), not that it is missing. */
   getBlob(sha256: string): Promise<Uint8Array | undefined>;

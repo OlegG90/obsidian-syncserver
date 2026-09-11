@@ -12,6 +12,7 @@
 import type { Vault } from 'obsidian';
 import type { VaultAdapter, VaultFile } from '../engine/vault.js';
 import { arrayBufferOf } from './buffer.js';
+import { parentPath } from '../engine/rename.js';
 
 export class ObsidianVaultAdapter implements VaultAdapter {
   constructor(private readonly vault: Vault) {}
@@ -87,13 +88,11 @@ export class ObsidianVaultAdapter implements VaultAdapter {
     // The parent folders first: writing into a folder that does not exist fails, and a pull
     // into an empty vault creates every folder it needs on the way down.
     //
-    // **A file at the root has no parent, and saying so takes an explicit check.**
-    // `lastIndexOf('/')` answers -1 there, and `slice(0, -1)` is not "nothing" — it is the
-    // path minus its last character. That created a FOLDER called `Note.m` beside every
-    // `Note.md` pulled into the root, which then synced up as a real folder and came back
-    // down on every other device.
-    const cut = path.lastIndexOf('/');
-    const parent = cut === -1 ? '' : path.slice(0, cut);
+    // **A file at the root has no parent**, and `parentPath` says so with `''`. Computed by hand
+    // here once, `slice(0, lastIndexOf('/'))` at the root is not "nothing" — it is the path minus
+    // its last character — and that created a FOLDER called `Note.m` beside every `Note.md`
+    // pulled into the root, which then synced up and came back down on every other device.
+    const parent = parentPath(path);
     if (parent && !(await this.vault.adapter.exists(parent))) {
       await this.vault.adapter.mkdir(parent);
     }

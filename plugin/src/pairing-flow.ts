@@ -32,6 +32,7 @@
  */
 import { ApiError } from './api/client.js';
 import type { PairArgs } from './session/index.js';
+import { errorText } from './error-text.js';
 
 export interface PairingFlowDeps {
   /** A fresh 128-bit code, grouped for reading. */
@@ -84,14 +85,14 @@ export interface PairingFlow {
  */
 const explain = (e: unknown): string => {
   if (e instanceof ApiError) {
-    if (e.code === 'already_settled') {
+    if (e.is('already_settled')) {
       return 'that code has already been approved — by this press or an earlier one. The other device should be finishing on its own.';
     }
-    if (e.code === 'not_found') {
+    if (e.is('not_found')) {
       return 'no pairing is waiting for that code. Check it against the other screen; codes last ten minutes, and one that has expired reads the same as one that never existed.';
     }
   }
-  return e instanceof Error ? e.message : String(e);
+  return errorText(e);
 };
 
 /** A second: long enough that a person is still walking, short enough not to feel stuck. */
@@ -150,7 +151,7 @@ export const openPairingFlow = (deps: PairingFlowDeps): PairingFlow => {
       } catch (e) {
         // Twice, and on purpose: the notice is seen, and the line under the code is where
         // somebody who has been staring at that code will look.
-        const message = e instanceof Error ? e.message : String(e);
+        const message = errorText(e);
         status(message, true);
         deps.notify(`SyncServer: ${message}`, 10000);
       } finally {

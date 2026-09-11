@@ -19,7 +19,8 @@
 import type { PassOptions, SyncReport } from './engine/engine.js';
 import { eventSentence, priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
-import { busyLine, type Gate } from './gate.js';
+import { busyNotice, type Gate } from './gate.js';
+import { errorText } from './error-text.js';
 
 export interface SyncCoordinatorDeps {
   /** The one gate every operation family shares — one operation at a time, across all of them. */
@@ -72,7 +73,7 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
     // finds it held and yields instead of meeting interior names with no key.
     if (!deps.gate.tryBegin('a sync')) {
-      if (attended) deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
+      if (attended) deps.notify(busyNotice(deps.gate), 8000);
       return;
     }
     try {
@@ -115,7 +116,7 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
       deps.setPhase({ kind: 'idle', at: Date.now(), report });
       render(report, attended);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorText(e);
       deps.setPhase({ kind: 'failed', message, at: Date.now() });
       deps.notify(`SyncServer: ${message}`, 10000);
     } finally {

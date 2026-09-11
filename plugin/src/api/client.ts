@@ -104,6 +104,11 @@ export class ApiError extends Error {
   carries<K extends keyof RefusalDetails>(code: K): RefusalDetails[K] | undefined {
     return this.code === code ? (this.details as RefusalDetails[K]) : undefined;
   }
+
+  /** Whether this is that refusal — against a code `shared` declares, so a typo does not compile. */
+  is(code: RefusalCode): boolean {
+    return this.code === code;
+  }
 }
 
 /** Never throws: a body that is not JSON is a refusal without fields, not a second failure. */
@@ -117,28 +122,31 @@ const parseDetails = (body: string): Record<string, unknown> => {
   }
 };
 
+/** The one sealing this client writes (`crypto/blob.ts`), named on every blob it uploads. */
+const ENC_ALG = 'xchacha20-poly1305';
+
 /** docs/04: 8 MB per part, and the same number is the threshold for using parts at all. */
 const PART_BYTES = 8 * 1024 * 1024;
 
 
-/** One node converted to the share key, with the material its bytes need under it. */
-export interface PrepareItem {
+/** A node renamed into another scope: its id, and its name sealed under that scope. */
+interface ConvertedName {
   node_id: string;
   name_enc: string;
   name_hmac: string;
   name_key_id: string;
-  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
 }
 
-/** One node converted back to the vault key, when a participant leaves. */
-export interface FinalizeNode {
-  node_id: string;
-  name_enc: string;
-  name_hmac: string;
-  name_key_id: string;
-  vault_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
+/** One node converted to the share key, with the material its bytes need under it. */
+export type PrepareItem = ConvertedName & Material;
+
+/**
+ * One node converted back to the vault key, when a participant leaves. The same material under
+ * other names — deliberately, so a body meant for one endpoint fails at the other.
+ */
+export interface FinalizeNode extends ConvertedName {
+  vault_envelopes?: Material['blob_envelopes'];
+  vault_dedup_tags?: Material['dedup_tags'];
 }
 
 /**
@@ -158,6 +166,58 @@ export interface ShareMember {
 }
 
 /**
+ * What the account is using, and whether it has been stopped for using too much (`GET /usage`).
+ *
+ * A freeze is an account **state**, not a message (docs/02): the server does not ask
+ * anything, it stops accepting what would grow usage and waits. Which means the only way a
+ * person learns of it is a surface that says so — and until the status line showed this there
+ * was none, in any client, while the server computed and shipped the fact on every delta page
+ * to nobody.
+ */
+export interface AccountUsage {
+  used: number;
+  quota: number;
+  frozen: boolean;
+}
+
+/** A share this account is in (`GET /shares`, `joined`). */
+export interface JoinedShare {
+  share_id: string;
+  vault_id: string | null;
+  is_initiator: boolean;
+  state: string;
+  /** This member's OWN root for the share — a different node in each participant's vault. */
+  root_node_id: string | null;
+}
+
+/** One entry of the trash (`GET /vaults/:id/trash`). */
+export interface TrashEntry {
+  node_id: string;
+  parent_id: string | null;
+  name_enc: string | null;
+  type: string;
+  deleted_at: string;
+  versions: number;
+  /** The scope the name is under — a trashed node of a share is still under `KS`. */
+  name_key_id: string | null;
+  share_id: string | null;
+}
+
+/** One node still carrying a share in this vault (`GET /shares/:id/replica`). */
+export interface ReplicaEntry {
+  node_id: string;
+  name_enc: string | null;
+  name_key_id: string | null;
+  type: string;
+  deleted: boolean;
+  sha256: string | null;
+  /** The server's answer to "does this still need KV material" — not the client's guess. */
+  needs_vault_material: boolean;
+  /** Superseded blobs of the same node that still owe an envelope; no tag is possible. */
+  history_needing_material: string[];
+}
+
+/**
  * How many 64-character identifiers travel in one query string (issue #230).
  *
  * **The arithmetic is the whole reason for the number.** A `sha256` address or a dedup tag is 64 hex
@@ -170,11 +230,8 @@ export interface ShareMember {
  * Sixty, not two hundred and forty. The transport ceiling is not the binding one — a reverse proxy in
  * front of this server commonly caps a request line at 4 KB, and sizing against the limit that happens
  * to apply today is how this defect gets rediscovered behind nginx. Sixty items is a little under 4 KB
- * with the path and the bearer token counted.
- *
- * The batches go **one at a time**. A vault large enough to need several is a vault whose owner is
- * already waiting for a scan, and firing thirty concurrent lookups at a home server to save a second of
- * that is the wrong trade.
+ * with the path and the bearer token counted. How many batches are in the air at once is
+ * `LOOKUP_CONCURRENCY`, below.
  */
 const LOOKUP_BATCH = 60;
 
@@ -266,11 +323,6 @@ export class SyncClient {
     return this.access;
   }
 
-  /** Refresh the access token now; `false` when the refresh token is spent or revoked. */
-  refreshToken(): Promise<boolean> {
-    return this.tryRefresh();
-  }
-
   private async send(
     req: Omit<HttpRequest, 'url'> & { path: string; auth?: boolean; timeoutMs?: number },
     retried = false,
@@ -290,7 +342,7 @@ export class SyncClient {
     // for a less specific one. `auth === false` requests (kdf, redeem, login, refresh
     // itself) are never retried, which is what stops this from recursing into itself.
     if (res.status === 401 && req.auth !== false && !retried && this.refresh) {
-      if (errorIs(res.text(), 'unauthenticated') && (await this.tryRefresh())) {
+      if (errorIs(res.text(), 'unauthenticated') && (await this.refreshToken())) {
         return this.send(req, true);
       }
     }
@@ -298,10 +350,15 @@ export class SyncClient {
     return res;
   }
 
-  private async tryRefresh(): Promise<boolean> {
+  /**
+   * Refresh the access token now; `false` when the refresh token is spent or revoked.
+   *
+   * Single-flight: every request that meets an expired token at once waits on the same refresh.
+   */
+  async refreshToken(): Promise<boolean> {
     this.refreshing ??= (async () => {
       try {
-        const out = await this.refreshAccess(this.refresh!);
+        const out = await this.json<{ access: string }>('POST', '/auth/refresh', { refresh: this.refresh! }, { auth: false });
         this.access = out.access;
         return true;
       } catch {
@@ -333,7 +390,7 @@ export class SyncClient {
     });
 
     const ok = opts.expect ?? [200, 201, 204];
-    if (!ok.includes(res.status)) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    if (!ok.includes(res.status)) throw refused(res);
     return (res.text() ? JSON.parse(res.text()) : undefined) as T;
   }
 
@@ -363,9 +420,6 @@ export class SyncClient {
     wrapped_seed: string;
     /** Proof this account can later be recovered from the passphrase alone (D-112). */
     kek_verifier: string;
-    /** The recovery code's envelope and verifier, or neither — never one of the two. */
-    recovery_key?: string;
-    recovery_code_hash?: string;
     initial_vault_id: string;
     initial_vault_name_enc: string;
     device_name?: string;
@@ -449,10 +503,6 @@ export class SyncClient {
     device_id: string;
   }> {
     return this.json('POST', '/auth/recover', body, { auth: false });
-  }
-
-  refreshAccess(refresh: string): Promise<{ access: string }> {
-    return this.json('POST', '/auth/refresh', { refresh }, { auth: false });
   }
 
   // ---- pairing a second device (docs/07) ---------------------------------------
@@ -540,7 +590,7 @@ export class SyncClient {
     }
   }
 
-  usage(): Promise<{ used: number; quota: number; frozen: boolean }> {
+  usage(): Promise<AccountUsage> {
     return this.json('GET', '/usage');
   }
 
@@ -590,20 +640,7 @@ export class SyncClient {
   trash(
     vaultId: string,
     under?: string,
-  ): Promise<{
-    total: number;
-    entries: {
-      node_id: string;
-      parent_id: string | null;
-      name_enc: string | null;
-      type: string;
-      deleted_at: string;
-      versions: number;
-      /** The scope the name is under — a trashed node of a share is still under `KS`. */
-      name_key_id: string | null;
-      share_id: string | null;
-    }[];
-  }> {
+  ): Promise<{ total: number; entries: TrashEntry[] }> {
     const q = under ? `?under=${encodeURIComponent(under)}` : '';
     return this.json('GET', `/vaults/${vaultId}/trash${q}`);
   }
@@ -635,11 +672,9 @@ export class SyncClient {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ node_id: nodeId, rev }),
     });
-    if (res.status === 409) {
-      const body = JSON.parse(res.text()) as { error?: string; blocked_by?: string };
-      if (isCode(body.error, 'name_taken')) throw new ApiError(409, 'name_taken', `blocked by ${body.blocked_by}`);
-    }
-    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    // A `409 name_taken` is an ordinary refusal: `carries('name_taken')` reads the blocker out of
+    // it. This used to rewrite the body into a sentence, which kept the code and lost the field.
+    if (res.status !== 200) throw refused(res);
     return JSON.parse(res.text()) as RestoreResult;
   }
 
@@ -696,7 +731,7 @@ export class SyncClient {
       throw new ApiError(res.status, parsed.error ?? 'unknown_conflict', res.text());
     }
 
-    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    if (res.status !== 200) throw refused(res);
     return JSON.parse(res.text()) as { rev: number };
   }
 
@@ -726,9 +761,8 @@ export class SyncClient {
    * carry from then on — pinned, so a resync of a large vault cannot lose a change that
    * happened mid-walk or apply it twice (D-24).
    */
-  listNodes(vaultId: string, under?: string): Promise<{ nodes: Change[]; snapshot: string }> {
-    const q = under ? `?under=${encodeURIComponent(under)}` : '';
-    return this.json('GET', `/vaults/${vaultId}/list${q}`);
+  listNodes(vaultId: string): Promise<{ nodes: Change[]; snapshot: string }> {
+    return this.json('GET', `/vaults/${vaultId}/list`);
   }
 
   // ---- delta -------------------------------------------------------------------
@@ -752,7 +786,7 @@ export class SyncClient {
         return { unverifiable: true, fault };
       }
     }
-    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    if (res.status !== 200) throw refused(res);
     return JSON.parse(res.text()) as Delta;
   }
 
@@ -769,16 +803,13 @@ export class SyncClient {
    * and wrong for the second: a connection that dies at 90% of a large file costs the whole
    * file again, which on a phone is the ordinary case rather than the unlucky one.
    */
-  async putBlob(
-    sealed: { sha256: string; bytes: Uint8Array; keyId: string },
-    encAlg = 'xchacha20-poly1305',
-  ): Promise<{ sha256: string; size: number }> {
-    if (sealed.bytes.length > this.partBytes) return this.putBlobResumable(sealed, encAlg);
+  async putBlob(sealed: { sha256: string; bytes: Uint8Array; keyId: string }): Promise<{ sha256: string; size: number }> {
+    if (sealed.bytes.length > this.partBytes) return this.putBlobResumable(sealed);
 
     const q = new URLSearchParams({
       sha256: sealed.sha256,
       size: String(sealed.bytes.length),
-      enc_alg: encAlg,
+      enc_alg: ENC_ALG,
       key_id: sealed.keyId,
     });
     const res = await this.send({
@@ -791,7 +822,7 @@ export class SyncClient {
       // same thing and must not share a clock.
       timeoutMs: BLOB_TIMEOUT_MS,
     });
-    if (res.status !== 201) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    if (res.status !== 201) throw refused(res);
     return JSON.parse(res.text()) as { sha256: string; size: number };
   }
 
@@ -803,10 +834,7 @@ export class SyncClient {
    * it turns "upload this 200 MB file again" into "send the four parts that did not land".
    * Making it unconditional keeps one code path where a flag would give two.
    */
-  private async putBlobResumable(
-    sealed: { sha256: string; bytes: Uint8Array; keyId: string },
-    encAlg: string,
-  ): Promise<{ sha256: string; size: number }> {
+  private async putBlobResumable(sealed: { sha256: string; bytes: Uint8Array; keyId: string }): Promise<{ sha256: string; size: number }> {
     const total = sealed.bytes.length;
     const count = Math.ceil(total / this.partBytes);
 
@@ -815,7 +843,7 @@ export class SyncClient {
       path: `/blobs/${sealed.sha256}/parts`,
       headers: {},
     });
-    if (staged.status !== 200) throw new ApiError(staged.status, errorCode(staged.text()), staged.text());
+    if (staged.status !== 200) throw refused(staged);
     const have = new Set((JSON.parse(staged.text()) as { parts: number[] }).parts);
 
     for (let n = 1; n <= count; n++) {
@@ -830,17 +858,17 @@ export class SyncClient {
         body: slice,
         timeoutMs: BLOB_TIMEOUT_MS,
       });
-      if (res.status !== 204) throw new ApiError(res.status, errorCode(res.text()), res.text());
+      if (res.status !== 204) throw refused(res);
     }
 
-    const q = new URLSearchParams({ size: String(total), enc_alg: encAlg, key_id: sealed.keyId });
+    const q = new URLSearchParams({ size: String(total), enc_alg: ENC_ALG, key_id: sealed.keyId });
     const done = await this.send({
       method: 'POST',
       path: `/blobs/${sealed.sha256}/complete?${q}`,
       headers: {},
       timeoutMs: BLOB_TIMEOUT_MS,
     });
-    if (done.status !== 201) throw new ApiError(done.status, errorCode(done.text()), done.text());
+    if (done.status !== 201) throw refused(done);
     return JSON.parse(done.text()) as { sha256: string; size: number };
   }
 
@@ -848,7 +876,7 @@ export class SyncClient {
   async getBlob(sha256: string): Promise<Uint8Array | undefined> {
     const res = await this.send({ method: 'GET', path: `/blobs/${sha256}`, headers: {}, timeoutMs: BLOB_TIMEOUT_MS });
     if (res.status === 404) return undefined;
-    if (res.status !== 200) throw new ApiError(res.status, errorCode(res.text()), res.text());
+    if (res.status !== 200) throw refused(res);
     return res.bytes;
   }
 
@@ -868,7 +896,7 @@ export class SyncClient {
   async blobKeys(vaultId: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
     const answers = await inFlight(inBatches(addresses), (batch) => {
       const q = new URLSearchParams({ sha256: batch.join(',') });
-      return this.json<{ keys: { sha256: string; scope_id: string; wrapped_key: string }[] }>(
+      return this.json<{ keys: NonNullable<Material['blob_envelopes']> }>(
         'GET',
         `/vaults/${vaultId}/blob-keys?${q}`,
       );
@@ -962,10 +990,6 @@ export class SyncClient {
     return this.json('POST', `/shares/${shareId}/activate`);
   }
 
-  cancelShare(shareId: string): Promise<void> {
-    return this.json('POST', `/shares/${shareId}/cancel`, undefined, { expect: [204] });
-  }
-
   /**
    * The recipient's public key, for sealing `KS` to them.
    *
@@ -982,14 +1006,7 @@ export class SyncClient {
 
   /** What this account is in, and what is waiting for it. */
   shares(): Promise<{
-    joined: {
-      share_id: string;
-      vault_id: string | null;
-      is_initiator: boolean;
-      state: string;
-      /** This member's OWN root for the share — a different node in each participant's vault. */
-      root_node_id: string | null;
-    }[];
+    joined: JoinedShare[];
     invitations: { share_id: string; initiator_login: string; invited_at: string }[];
   }> {
     return this.json('GET', '/shares');
@@ -1027,22 +1044,7 @@ export class SyncClient {
   }
 
   /** Everything still carrying this share in this vault — what a departure must convert. */
-  shareReplica(
-    shareId: string,
-  ): Promise<
-    {
-      node_id: string;
-      name_enc: string | null;
-      name_key_id: string | null;
-      type: string;
-      deleted: boolean;
-      sha256: string | null;
-      /** The server's answer to "does this still need KV material" — not the client's guess. */
-      needs_vault_material: boolean;
-      /** Superseded blobs of the same node that still owe an envelope; no tag is possible. */
-      history_needing_material: string[];
-    }[]
-  > {
+  shareReplica(shareId: string): Promise<ReplicaEntry[]> {
     return this.json('GET', `/shares/${shareId}/replica`);
   }
 
@@ -1091,3 +1093,11 @@ const errorCode = (text: string): string => {
   if (body.error && body.error !== 'Internal Server Error') return body.error;
   return body.message ?? body.error ?? (text.slice(0, 200) || 'unknown');
 };
+
+/**
+ * A response that was not the answer asked for, as the error every caller catches.
+ *
+ * The body goes in whole, so `carries` can read whatever fields the refusal holds. One
+ * spelling for the nine requests that check their own status, where there had been nine.
+ */
+const refused = (res: HttpResponse): ApiError => new ApiError(res.status, errorCode(res.text()), res.text());

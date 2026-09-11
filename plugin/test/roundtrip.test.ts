@@ -1254,7 +1254,7 @@ describe('a shared folder whose key this device cannot open, live', () => {
 
     const tree = await (await engineHere()).readTree();
     const nodes = [...tree.values()].map((n) => ({
-      path: n.path, nodeId: n.nodeId, address: n.address, nameKeyId: n.nameKeyId ?? '',
+      path: n.path, nodeId: n.nodeId, address: n.address,
     }));
 
     const opened = await client.openVault(shareVaultId);

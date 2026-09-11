@@ -17,10 +17,12 @@
  * join. Everything *below* it must move to `KS`, because a participant may create and rename
  * there and their names have to be readable by everyone else.
  */
+import type { Material } from '@syncserver/shared';
 import type { FinalizeNode, PrepareItem, ShareMember, SyncClient } from './api/client.js';
 import { newShareKey, wrapShareKey } from './crypto/share.js';
-import { dedupTag, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from './crypto/scope.js';
+import { dedupTag, nameUnder, unwrapContentKey, wrapContentKey } from './crypto/scope.js';
 import { sealTo } from './crypto/hpke.js';
+import { basePath } from './engine/rename.js';
 import { concat, fromBase64, toBase64, utf8 } from './crypto/bytes.js';
 import { WRAP_VERSION } from './crypto/sealed.js';
 
@@ -30,8 +32,6 @@ export interface SharedNode {
   nodeId: string;
   /** The ciphertext address, for a file. Folders carry none. */
   address: string | null;
-  /** The scope this node is named under today — the vault's, before preparation. */
-  nameKeyId: string;
 }
 
 /** What one node needs to become part of the share, before any of it is performed. */
@@ -63,12 +63,6 @@ export interface PlannedItem {
   history?: readonly string[];
 }
 
-/** Everything after the last separator — the name a node is known by inside its folder. */
-const basename = (path: string): string => {
-  const cut = path.lastIndexOf('/');
-  return cut === -1 ? path : path.slice(cut + 1);
-};
-
 /**
  * Which nodes preparation must convert, and what each needs.
  *
@@ -82,7 +76,7 @@ export const preparePlan = (root: string, nodes: readonly SharedNode[]): Planned
   const prefix = root === '' ? '' : `${root}/`;
   return nodes
     .filter((n) => n.path !== root && n.path.startsWith(prefix))
-    .map((n) => ({ nodeId: n.nodeId, path: n.path, name: basename(n.path), address: n.address }));
+    .map((n) => ({ nodeId: n.nodeId, path: n.path, name: basePath(n.path), address: n.address }));
 };
 
 /** What `shareFolder` needs that it cannot know: the vault, its keys, and a way to talk. */
@@ -201,9 +195,7 @@ const rekey = async (
 ): Promise<Rekeyed> => {
   const out: Rekeyed = {
     node_id: item.nodeId,
-    name_enc: encryptName(to.key, item.name),
-    name_hmac: nameHmac(to.key, item.name),
-    name_key_id: to.scopeId,
+    ...nameUnder(to.key, to.scopeId, item.name),
   };
   // The head and every superseded version it still owes, in one round trip.
   const addresses = [...new Set([item.address, ...(item.history ?? [])].filter((a): a is string => !!a))];
@@ -242,8 +234,8 @@ interface Rekeyed {
   name_enc: string;
   name_hmac: string;
   name_key_id: string;
-  envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  tags?: { sha256: string; scope_id: string; content_tag: string }[];
+  envelopes?: Material['blob_envelopes'];
+  tags?: Material['dedup_tags'];
 }
 
 const asPrepareItem = (r: Rekeyed): PrepareItem => ({
@@ -331,9 +323,7 @@ export const acceptInvitation = async (
   const { root_node_id: rootNodeId } = await deps.client.joinShare(shareId, {
     vault_id: deps.vaultId,
     parent_id: parentNodeId,
-    name_enc: encryptName(deps.vaultKey, name),
-    name_hmac: nameHmac(deps.vaultKey, name),
-    name_key_id: deps.vaultScopeId,
+    ...nameUnder(deps.vaultKey, deps.vaultScopeId, name),
   });
   return { rootNodeId };
 };

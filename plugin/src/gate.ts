@@ -50,6 +50,15 @@ export interface Gate {
 export const busyLine = (holding: string): string =>
   `Waiting for ${holding} to finish. Syncing, sharing and trash actions come back when it does.`;
 
+/**
+ * The notice for an operation the gate just turned away, said the one way every flow says it.
+ *
+ * Asked right after `tryBegin` refused, so somebody holds the gate; the fallback exists only
+ * because `holding()` is typed for the moments nobody does.
+ */
+export const busyNotice = (gate: Pick<Gate, 'holding'>): string =>
+  `SyncServer: ${busyLine(gate.holding() ?? 'another operation')}`;
+
 export const openGate = (): Gate => {
   let busy: string | undefined;
   const listeners = new Set<(holding: string | undefined) => void>();

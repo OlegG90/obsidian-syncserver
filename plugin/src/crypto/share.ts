@@ -14,9 +14,7 @@
  */
 import { randomBytes } from './bytes.js';
 import { open, seal } from './sealed.js';
-
-/** 256 bits, matching every other key here. */
-const KEY_BYTES = 32;
+import { KEY_BYTES } from './format.js';
 
 /** A fresh share key. Random, because it is shared with people the seed never reaches. */
 export const newShareKey = (): Uint8Array => randomBytes(KEY_BYTES);

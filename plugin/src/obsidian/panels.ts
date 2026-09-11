@@ -19,6 +19,7 @@ import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
+import { errorText } from '../error-text.js';
 
 /**
  * A list the server has to answer before it can be drawn (#182).
@@ -154,7 +155,7 @@ export class Panels {
                     );
                     this.s.refresh();
                   } catch (e) {
-                    new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+                    new Notice(`SyncServer: ${errorText(e)}`, 10000);
                   }
                 },
                 'Remove',

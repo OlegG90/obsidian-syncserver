@@ -13,7 +13,9 @@ import { describe, it } from 'node:test';
 import { newKeypair, openFrom } from '../src/crypto/hpke.js';
 import { concat as concatBytes, fromBase64, toBase64, utf8 } from '../src/crypto/bytes.js';
 import { decryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../src/crypto/scope.js';
+import type { OpenedVault, Scope } from '@syncserver/shared';
 import type { FinalizeNode } from '../src/api/client.js';
+import { VaultScopes, type ShareKeyDeps } from '../src/share-keys.js';
 import { createAccount, unwrapIdentity } from '../src/crypto/account.js';
 import { newShareKey, unwrapShareKey, wrapShareKey } from '../src/crypto/share.js';
 import {
@@ -36,7 +38,6 @@ const node = (path: string, address: string | null = null): SharedNode => ({
   path,
   nodeId: `node:${path}`,
   address,
-  nameKeyId: VAULT_SCOPE,
 });
 
 describe('what preparation must convert', () => {
@@ -415,6 +416,10 @@ describe('making the wrapped keys usable', () => {
 });
 
 describe('finding which scope is whose', () => {
+  /** One opening of a vault that reports these scopes — all a share-key lookup reads of it. */
+  const scopesOf = (scopes: Scope[], deps: ShareKeyDeps) =>
+    VaultScopes.open({ root_node_id: 'root', scopes } as unknown as OpenedVault, deps);
+
   const setup = () => ({
     account: createAccount('a passphrase', { v: 19, m: 65536, t: 3, p: 1 }),
     vaultKey: newShareKey(),
@@ -424,19 +429,17 @@ describe('finding which scope is whose', () => {
   it('answers the key and its scope id together, from one lookup', async () => {
     // They were two `find` expressions a line apart, and every caller needed both: the key
     // opens the names, the id says which names it opens.
-    const { shareKeyFor } = await import('../src/share-keys.js');
     const { account, vaultKey, userId } = setup();
     const ks = newShareKey();
 
-    const found = shareKeyFor(
+    const found = scopesOf(
       [
         { scope: 'vault', key_id: 'vault-scope' },
         { scope: 'share', key_id: 'other', share_id: 'share-2', wrapped_key: wrapShareKey(vaultKey, newShareKey()), wrapping: 'vault' },
         { scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: wrapShareKey(vaultKey, ks), wrapping: 'vault' },
       ],
-      'share-1',
       { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId },
-    );
+    ).shareKey('share-1');
 
     assert.equal(found.keyId, SHARE_SCOPE, 'the scope of the share that was asked for');
     assert.deepEqual(found.key, ks, 'and the key of the same one');
@@ -446,21 +449,22 @@ describe('finding which scope is whose', () => {
     // The opposite of `shareKeysFrom`, deliberately: that one is asked about every scope a
     // vault reports and must not fail a sync over one bad envelope. This is asked about a
     // share somebody just pressed a button on, where silence means failing later, elsewhere.
-    const { shareKeyFor } = await import('../src/share-keys.js');
     const { account, vaultKey, userId } = setup();
     const deps = { vaultKey, openIdentity: () => unwrapIdentity(account.seed, account.encPrivkey), userId };
 
     assert.throws(
-      () => shareKeyFor([{ scope: 'vault', key_id: 'vault-scope' }], 'share-1', deps),
+      () => scopesOf([{ scope: 'vault', key_id: 'vault-scope' }], deps).shareKey('share-1'),
       /holds no key for that share/,
     );
     assert.throws(
       () =>
-        shareKeyFor(
-          [{ scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: 'AAAA', wrapping: 'vault' }],
-          'share-1',
+        scopesOf(
+          [
+            { scope: 'vault', key_id: 'vault-scope' },
+            { scope: 'share', key_id: SHARE_SCOPE, share_id: 'share-1', wrapped_key: 'AAAA', wrapping: 'vault' },
+          ],
           deps,
-        ),
+        ).shareKey('share-1'),
       /cannot open the key for that share/,
       'holding the envelope and being unable to open it is a different sentence',
     );

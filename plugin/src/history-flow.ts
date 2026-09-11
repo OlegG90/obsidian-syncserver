@@ -24,21 +24,10 @@
  *   only act in the product that cannot be undone, and the answer says whether it freed
  *   enough to lift a freeze — because making room is usually why anybody asked.
  */
-import { ApiError } from './api/client.js';
-import { busyLine, type Gate } from './gate.js';
-
-/** One node in the trash, as the person sees it. */
-export interface TrashRow {
-  nodeId: string;
-  /** Decrypted, or the node id when this device holds no key for the scope it is named under. */
-  name: string;
-  type: string;
-  deletedAt: string;
-  /** How many revisions are still behind it — what restoring has to choose from. */
-  versions: number;
-  /** True when this node belonged to a shared folder, which changes nothing but is worth seeing. */
-  shared: boolean;
-}
+import { ApiError, type AccountUsage } from './api/client.js';
+import { busyNotice, type Gate } from './gate.js';
+import type { TrashRow } from './trash-map.js';
+import { errorText } from './error-text.js';
 
 /** One revision of a node. */
 export interface VersionRow {
@@ -81,7 +70,7 @@ export interface HistoryFlowDeps {
   /** Discard for good: one subtree, or the whole trash. */
   discard(nodeId?: string): Promise<{ purged: number; thawed: boolean }>;
   /** How much of the limit is used, and whether the account is frozen. */
-  usage(): Promise<{ used: number; quota: number; frozen: boolean }>;
+  usage(): Promise<AccountUsage>;
   /** Asked before anything irreversible. `false` means the person said no. */
   confirm(question: string): Promise<boolean>;
   notify(message: string, durationMs?: number): void;
@@ -95,7 +84,7 @@ export interface HistoryFlow {
   restore(nodeId: string, rev: number): Promise<void>;
   discard(nodeId: string, name: string): Promise<void>;
   empty(count: number): Promise<void>;
-  usage(): Promise<{ used: number; quota: number; frozen: boolean } | undefined>;
+  usage(): Promise<AccountUsage | undefined>;
 }
 
 export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
@@ -130,7 +119,7 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
     // "could not …" and `doing` completes "waiting for … to finish". One string cannot be both
     // without one of the two reading like a fault in the software.
     if (!deps.gate.tryBegin(doing)) {
-      deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
+      deps.notify(busyNotice(deps.gate), 8000);
       return undefined;
     }
     try {
@@ -210,11 +199,11 @@ const said = (out: { purged: number; thawed: boolean }): string => {
  * than repeating the status.
  */
 const reason = (e: unknown): string => {
-  if (e instanceof ApiError && e.code === 'name_taken') {
+  if (e instanceof ApiError && e.is('name_taken')) {
     return 'something is already there under that name. Rename it and try again.';
   }
-  if (e instanceof ApiError && e.code === 'frozen') {
+  if (e instanceof ApiError && e.is('frozen')) {
     return 'the account is over its limit, and restoring would add to it. Discard something first.';
   }
-  return e instanceof Error ? e.message : String(e);
+  return errorText(e);
 };

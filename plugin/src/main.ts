@@ -35,7 +35,7 @@ import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
-import { shareKeyFor, VaultScopes, type ShareKeyDeps } from './share-keys.js';
+import { VaultScopes, type ShareKeyDeps } from './share-keys.js';
 import type { BoundVault } from './bound-vault.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
@@ -110,6 +110,18 @@ interface PluginData {
 const DEFAULT_DATA: PluginData = {};
 
 /**
+ * How this device introduces itself to the server, at every route that registers one.
+ *
+ * Written out at each of the four — connect, pair, and both recoveries — the platform drifted:
+ * `connect` said `desktop` on a phone too. Asked at call time, not load, like every other
+ * reading of `Platform` here.
+ */
+const thisDevice = (): { deviceName: string; devicePlatform: string } => ({
+  deviceName: 'obsidian',
+  devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+});
+
+/**
  * What the ribbon is called, everywhere it is named rather than drawn.
  *
  * Names the plugin as well as the act: on a phone this sits in one list with every other
@@ -137,6 +149,8 @@ export default class SyncServerPlugin extends Plugin {
   private sess: Session | undefined;
 
   private phase: SyncPhase = { kind: 'disconnected' };
+  /** The glyph last drawn on the ribbon, so an unchanged phase does not redraw it. */
+  private paintedIcon: string | undefined;
   private passNotice!: PassNotice;
   /** The four ways this device's grip on the account changes, and the only writer of `data.connection`. */
   private held!: SessionHold;
@@ -148,7 +162,6 @@ export default class SyncServerPlugin extends Plugin {
   private sync: SyncCoordinator | undefined;
   /** The quiet period after a local edit — see `local-changes.ts` (#238). */
   private localChanges: LocalChangeWatcher | undefined;
-  /** Kept so a finished pairing can rebuild the screen that was showing its code. */
   /** One unlock in flight at a time, so a screen that asks for three things asks once. */
   private unlocking: Promise<Session> | undefined;
   /** One operation at a time across sync, sharing and the trash — created once, shared by all three. */
@@ -529,12 +542,19 @@ export default class SyncServerPlugin extends Plugin {
     this.passNotice?.onPhase(phase);
     if (this.ribbon) {
       this.ribbon.toggleClass(SPINNING, phase.kind === 'syncing');
-      setIcon(this.ribbon, phaseIcon(phase));
+      // Only when it changed. This runs once per file of a pass and once a second besides, and
+      // `setIcon` rebuilds the SVG each time — hundreds of identical rebuilds on an idle pass.
+      const icon = phaseIcon(phase);
+      if (icon !== this.paintedIcon) {
+        setIcon(this.ribbon, icon);
+        this.paintedIcon = icon;
+      }
       // The action first, then the state: this is the control's accessible name as well as its
       // tooltip, and a button whose name reads "Sync: 3 conflicts" announces a report rather
       // than what it will do. Only the desktop sees it — the mobile sheet uses the registered
       // title above, which is why that one has to stand alone.
-      this.ribbon.setAttribute('aria-label', `${RIBBON_ACTION} — ${phaseState(phase)}`);
+      const label = `${RIBBON_ACTION} — ${phaseState(phase)}`;
+      if (label !== this.ribbon.getAttribute('aria-label')) this.ribbon.setAttribute('aria-label', label);
     }
   }
 
@@ -615,8 +635,7 @@ export default class SyncServerPlugin extends Plugin {
         invitationToken,
         passphrase,
         vaultName: this.app.vault.getName(),
-        deviceName: 'obsidian',
-        devicePlatform: 'desktop',
+        ...thisDevice(),
       },
       transport,
     );
@@ -652,8 +671,7 @@ export default class SyncServerPlugin extends Plugin {
       await session.recover(
         {
           ...args,
-          deviceName: 'obsidian',
-          devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+          ...thisDevice(),
           // The same hazard as pairing, through the same branch: recovering into an Obsidian
           // vault other than the original merges the two. Issue #117 names pairing; the code path is
           // one, and asking here costs a caller nothing.
@@ -681,8 +699,7 @@ export default class SyncServerPlugin extends Plugin {
       await session.recoverWithCode(
         {
           ...args,
-          deviceName: 'obsidian',
-          devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+          ...thisDevice(),
           askVault: (v) => this.askVault(v),
         },
         transport,
@@ -706,8 +723,7 @@ export default class SyncServerPlugin extends Plugin {
     const s = await session.pair(
       {
         ...args,
-        deviceName: 'obsidian',
-        devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
+        ...thisDevice(),
         askVault: (v) => this.askVault(v),
       },
       transport,
@@ -798,7 +814,6 @@ export default class SyncServerPlugin extends Plugin {
           const tree = await engine.readTree();
           return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
         },
-        handle: h,
       });
     });
   }
@@ -986,14 +1001,13 @@ export default class SyncServerPlugin extends Plugin {
             path,
             nodeId: n.nodeId,
             address: n.address,
-            nameKeyId: n.nameKeyId ?? '',
           }));
           const out = await shareFolder(
             {
               client: v.client,
               read: (p) => this.vault().read(p),
               vaultId: v.id,
-              vaultKey: v.handle.kv,
+              vaultKey: v.scopes.vaultKey,
               vaultScopeId: v.scopes.vaultScopeId,
               newScopeId: () => crypto.randomUUID(),
             },
@@ -1006,7 +1020,7 @@ export default class SyncServerPlugin extends Plugin {
 
       invite: (shareId, login) =>
         this.withVault(async (v) => {
-          const key = shareKeyFor(v.scopes.opened.scopes, shareId, this.keyDeps(v.handle)).key;
+          const { key } = v.scopes.shareKey(shareId);
           await inviteTo({ client: v.client }, shareId, login, key);
         }),
 
@@ -1028,7 +1042,7 @@ export default class SyncServerPlugin extends Plugin {
             {
               client: v.client,
               vaultId: v.id,
-              vaultKey: v.handle.kv,
+              vaultKey: v.scopes.vaultKey,
               vaultScopeId: v.scopes.vaultScopeId,
             },
             shareId,
@@ -1043,7 +1057,7 @@ export default class SyncServerPlugin extends Plugin {
 
       leave: (shareId) =>
         this.withVault(async (v) => {
-          const { key, keyId: scopeId } = shareKeyFor(v.scopes.opened.scopes, shareId, this.keyDeps(v.handle));
+          const { key, keyId: scopeId } = v.scopes.shareKey(shareId);
           // Asked of the server rather than assembled from the tree: the set that must be
           // converted includes nodes no listing this client has would show — a folder in
           // the trash carries the mark, has no versions, and appears in neither.
@@ -1067,7 +1081,7 @@ export default class SyncServerPlugin extends Plugin {
               client: v.client,
               read: (p) => this.vault().read(p),
               vaultId: v.id,
-              vaultKey: v.handle.kv,
+              vaultKey: v.scopes.vaultKey,
               vaultScopeId: v.scopes.vaultScopeId,
             },
             shareId,
