@@ -10,7 +10,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { OperatorRefusalCode } from '@syncserver/shared';
 import { copyAt } from '../backup-copy.js';
-import { join } from 'node:path';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
 import { deleteAccount, deletionProgress } from './deletion.js';

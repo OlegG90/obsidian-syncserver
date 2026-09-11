@@ -10,7 +10,6 @@
  * is the only place it happens. Keeping it explicit is what makes the three-way write one
  * visible unit; a trigger would scatter the same fact across rows nobody reads together.
  */
-import type { PoolClient } from 'pg';
 import { bindBlob, recordVersion } from '../holdings.js';
 import type { Db } from '../db.js';
 import { oneFrom } from '../db.js';

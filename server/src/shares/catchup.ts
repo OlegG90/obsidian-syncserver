@@ -287,7 +287,6 @@ export const catchUpMember = async (c: PoolClient, userId: string): Promise<Caug
 
   const out: CaughtUp[] = [];
   for (const s of shares.rows) {
-    if (!s.vaultId) continue;
     out.push(await catchUpShare(c, { userId, vaultId: s.vaultId }, s.shareId));
   }
   return out;

@@ -18,7 +18,8 @@ import {
   redeemInvitation,
   verifyAuthSecret,
 } from './service.js';
-import { inProcessAttemptLimiter, type AttemptLimiter } from './attempts.js';
+import type { AttemptLimiter } from './attempts.js';
+import { requireAuth } from './guard.js';
 import type { KdfParams } from '@syncserver/shared';
 
 const b64 = (s: string): Buffer => Buffer.from(s, 'base64');
@@ -45,7 +46,7 @@ export const registerAuthRoutes = (
   cfg: Config,
   // Injected so a test can drive the clock instead of waiting a minute for a lockout to
   // expire, and so one limiter is shared by every route that needs it.
-  attempts: AttemptLimiter = inProcessAttemptLimiter(),
+  attempts: AttemptLimiter,
 ): void => {
   /**
    * Answers before authentication, so an unknown login must not be distinguishable.
@@ -373,13 +374,11 @@ export const registerAuthRoutes = (
     };
   });
 
-  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
 
     const row = await db.one<{ id: string }>(
       `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, $3) RETURNING id`,
-      [claims.sub, req.body.name, req.body.platform],
+      [req.caller!.userId, req.body.name, req.body.platform],
     );
     return reply.code(201).send({ device_id: row!.id });
   });
@@ -396,13 +395,11 @@ export const registerAuthRoutes = (
    * Authenticated, and that is proof enough: reaching here at all took `auth_secret`, which
    * comes from the seed, which comes from the envelope this verifier guards.
    */
-  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', { preHandler: requireAuth }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
     await db.query(`UPDATE users SET kek_verifier_hash = $2 WHERE id = $1 AND state = 'active'`, [
-      claims.sub,
+      req.caller!.userId,
       hashToken(req.body.kek_verifier),
     ]);
     return reply.code(204).send();
@@ -425,9 +422,7 @@ export const registerAuthRoutes = (
    * so this browser and any other holding it sign in again with the new password. That is the
    * point when a password is changed because it leaked.
    */
-  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', { preHandler: requireAuth }, async (req, reply) => {
 
     const b = req.body ?? {};
     if (typeof b.current !== 'string' || !b.current) {
@@ -438,17 +433,17 @@ export const registerAuthRoutes = (
     // Counted against the account, not the token: a stolen token is exactly the case this
     // check exists for, and letting it guess freely because it is authenticated would be the
     // whole point missed.
-    const allowed = attempts.check(claims.sub);
+    const allowed = attempts.check(req.caller!.userId);
     if (!allowed.ok) {
       return reply.code(429).send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
     }
 
-    const out = await changePassword(db, claims.sub, b.current, b.password);
+    const out = await changePassword(db, req.caller!.userId, b.current, b.password);
     if (out === 'wrong') {
-      attempts.fail(claims.sub);
+      attempts.fail(req.caller!.userId);
       return reply.code(401).send({ error: 'invalid_credentials' });
     }
-    attempts.succeed(claims.sub);
+    attempts.succeed(req.caller!.userId);
     // `gone` is an account with no password to change — a vault account, or one still
     // provisioned. Not a 404: the endpoint is right, this account simply has no password.
     if (out === 'gone') return reply.code(409).send({ error: 'no_password_to_change' });
@@ -471,12 +466,10 @@ export const registerAuthRoutes = (
    *
    * Through the attempt limiter for the same reason recovery is: it is a passphrase guess.
    */
-  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', { preHandler: requireAuth }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
-    const allowed = attempts.check(claims.sub);
+    const allowed = attempts.check(req.caller!.userId);
     if (!allowed.ok) {
       return reply.code(429).send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
     }
@@ -484,15 +477,15 @@ export const registerAuthRoutes = (
     const row = await db.one<{ wrappedSeed: string; hash: string | null }>(
       `SELECT encode(wrapped_seed, 'base64') AS "wrappedSeed", kek_verifier_hash AS hash
          FROM users WHERE id = $1 AND state = 'active'`,
-      [claims.sub],
+      [req.caller!.userId],
     );
     if (!row?.hash || !tokenMatches(req.body.kek_verifier, row.hash)) {
-      attempts.fail(claims.sub);
+      attempts.fail(req.caller!.userId);
       // The same refusal a wrong passphrase gets everywhere else. An account whose verifier is
       // missing is indistinguishable from a wrong one here, deliberately (D-73).
       return reply.code(401).send({ error: 'invalid_credentials' });
     }
-    attempts.succeed(claims.sub);
+    attempts.succeed(req.caller!.userId);
     return { wrapped_seed: row.wrappedSeed };
   });
 
@@ -513,9 +506,7 @@ export const registerAuthRoutes = (
    * this endpoint — other devices keep their own copy of the envelope and would go on opening
    * with the old phrase — and that half is still open.
    */
-  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', { preHandler: requireAuth }, async (req, reply) => {
 
     const b = req.body ?? {};
     // Both, always. They describe one KEK from two sides, and a half write leaves the account
@@ -525,7 +516,7 @@ export const registerAuthRoutes = (
       return reply.code(400).send({ error: 'passphrase_pair_incomplete' });
     }
 
-    const done = await setPassphrase(db, claims.sub, {
+    const done = await setPassphrase(db, req.caller!.userId, {
       wrappedSeed: b64(b.wrapped_seed),
       kekVerifier: b.kek_verifier,
     });
@@ -546,17 +537,14 @@ export const registerAuthRoutes = (
    * server could show again would be a code the server could use, and this one is stored as a
    * hash precisely so that it cannot.
    */
-  app.get('/auth/recovery-code', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
-    return { present: await hasRecoveryCode(db, claims.sub) };
+  app.get('/auth/recovery-code', { preHandler: requireAuth }, async (req, reply) => {
+    return { present: await hasRecoveryCode(db, req.caller!.userId) };
   });
 
   app.put<{ Body: { recovery_key?: string; recovery_code_hash?: string } }>(
     '/auth/recovery-code',
+    { preHandler: requireAuth },
     async (req, reply) => {
-      const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-      if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
 
       const b = req.body ?? {};
       // Both or neither, checked here as well as by `recovery_code_is_whole` in the schema:
@@ -574,7 +562,7 @@ export const registerAuthRoutes = (
         return reply.code(400).send({ error: 'recovery_code_hash_invalid' });
       }
 
-      const out = await setRecoveryCode(db, claims.sub, {
+      const out = await setRecoveryCode(db, req.caller!.userId, {
         recoveryKey: b64(b.recovery_key),
         recoveryCodeHash: b.recovery_code_hash,
       });
@@ -601,15 +589,13 @@ export const registerAuthRoutes = (
    * client cannot answer for itself once a person is looking at several — and it is what stops somebody
    * revoking the device they are holding.
    */
-  app.get('/auth/devices', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string; device?: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.get('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
 
-    const rows = await activeDevices(db, claims.sub);
+    const rows = await activeDevices(db, req.caller!.userId);
 
     // Spread, not four assignments: `last_seen_at` is as fresh as the access token's lifetime and no
     // fresher (D-118), and `current` is the only field this surface adds — see `OwnDeviceRow`.
-    return { devices: rows.map((d): OwnDeviceRow => ({ ...d, current: d.id === claims.device })) };
+    return { devices: rows.map((d): OwnDeviceRow => ({ ...d, current: d.id === req.caller!.deviceId })) };
   });
 
   /**
@@ -623,14 +609,12 @@ export const registerAuthRoutes = (
    * Idempotent, and silent about devices that are not the caller's — a 404 for someone
    * else's id would confirm it exists.
    */
-  app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', async (req, reply) => {
-    const claims = await req.jwtVerify<{ sub: string }>().catch(() => undefined);
-    if (!claims) return reply.code(401).send({ error: 'unauthenticated' });
+  app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', { preHandler: requireAuth }, async (req, reply) => {
 
     await db.query(
       `UPDATE devices SET revoked_at = now(), refresh_token_hash = NULL
         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-      [req.params.deviceId, claims.sub],
+      [req.params.deviceId, req.caller!.userId],
     );
     return reply.code(204).send();
   });

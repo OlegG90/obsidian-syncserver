@@ -15,8 +15,7 @@
  * restored ahead of their database are content nothing references, which is harmless and is what the
  * collector sweeps. The window where a copy is half-applied should be the harmless half.
  */
-import { cp, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { cp } from 'node:fs/promises';
 import { missingBlobs } from './backup.js';
 import { copyAt, whatIsMissing } from './backup-copy.js';
 import type { Db } from './db.js';

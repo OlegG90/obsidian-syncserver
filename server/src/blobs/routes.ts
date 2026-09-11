@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
-import type { Config } from '../config.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
 import { BlobService, envelopesFor, parseRange, storageKeyIfHeld } from './service.js';

@@ -21,7 +21,7 @@
  * anyway, and never before.
  */
 import type { Db } from '../db.js';
-import { hashToken } from '../crypto.js';
+import { hashToken, tokenMatches } from '../crypto.js';
 import type { Refusal } from '../refusal.js';
 
 export interface PairingLimits {
@@ -160,7 +160,7 @@ export const claimPairing = async (
       [input.pairingId],
     );
     const row = found.rows[0];
-    if (!row || row.expired || hashToken(input.pairingSecret) !== row.hash) return { kind: 'not_found' } as Refusal;
+    if (!row || row.expired || !tokenMatches(input.pairingSecret, row.hash)) return { kind: 'not_found' } as Refusal;
     // Not yet approved is a state to wait in, not a failure: the new device polls.
     if (!row.approved) return { kind: 'not_approved' } as Refusal;
     if (row.claimed) return { kind: 'already_settled' } as Refusal;

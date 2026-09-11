@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import { subscribe, type NotificationMsg } from './listen.js';
+import { subscribe } from './listen.js';
 
 /**
  * A row is whatever the query asked for. The driver's own row type is deliberately not in

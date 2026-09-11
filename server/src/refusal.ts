@@ -15,7 +15,7 @@
  * are the service's own names (`currentSha256`, `retryAfterSeconds`, `blockedBy`). What each
  * one becomes on the wire is `refuse-http.ts` and nowhere else.
  */
-import type { RefusalCode } from '@syncserver/shared';
+import type { PreparationGap, RefusalCode } from '@syncserver/shared';
 import type { PoolClient } from 'pg';
 
 export type Refusal =
@@ -65,7 +65,7 @@ export type Refusal =
    * The gaps travel with it — the initiator's client has to know WHICH nodes to prepare,
    * and a bare "not prepared" would send it to re-scan the whole subtree.
    */
-  | { kind: 'share_not_prepared'; gaps: { nodeId: string; missing: string }[] }
+  | { kind: 'share_not_prepared'; gaps: PreparationGap[] }
   /**
    * An invitation did not apply, and deliberately does not say why: no such account and
    * already a member answer identically, because distinguishing them would turn this into
