@@ -390,7 +390,7 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
   if (a.state === 'provisioned') {
     // An invitation nobody claimed: the two things an operator actually does with one. The
     // token is shown once and never stored, so reissuing is the only answer to a lost one.
-    act('Reissue', opens(() => reissueForm(a, done)));
+    act('Reissue', opens(() => reissueForm(a, done, report)));
     act(
       'Revoke',
       opens(() =>
@@ -423,7 +423,7 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
 };
 
 /** A fresh token for an invitation nobody redeemed — shown once here, exactly as the first was. */
-const reissueForm = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
+const reissueForm = (a: AccountRow, done: () => Promise<void>, report: Report): HTMLElement => {
   const box = el('div', {});
   const go = el('button', { textContent: 'Reissue the token' });
   box.append(
@@ -435,7 +435,9 @@ const reissueForm = (a: AccountRow, done: () => Promise<void>): HTMLElement => {
   );
   submits(go, box, async () => {
     const out = await reissue(a.id);
-    box.append(say(`Token: ${out.token}`));
+    // Reported OUTSIDE the card, like every outcome here: `done()` replaces the card, and a token
+    // drawn inside it was gone the moment it appeared — the one time it is ever shown.
+    report(`New token for ${a.login}: ${out.token}`);
     await done();
   });
   return box;
@@ -593,7 +595,11 @@ const deletionForm = (a: AccountRow, done: () => Promise<void>, report: Report):
     submits(carry, body, async () => {
       const next = await beginDeletion(a.id);
       underway(next);
-      if (next.finished) report(`${a.login} was deleted.`);
+      // Refreshed only when the row itself changed. A deletion still waiting is the same row it
+      // was, and the refresh replaced this card — progress just drawn, gone, and a request to
+      // read it back when the operator opened the drawer again.
+      if (!next.finished) return;
+      report(`${a.login} was deleted.`);
       await done();
     });
     submits(look, body, async () => underway(await deletionProgress(a.id)));

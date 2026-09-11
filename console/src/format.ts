@@ -231,6 +231,7 @@ const ACTIONS: Record<string, string> = {
   'invitation.reissue': 'invitation reissued',
   'invitation.revoke': 'invitation revoked',
   'quota.change': 'quota changed',
+  'restore.request': 'restore requested',
   'restore.confirm': 'restore confirmed',
 };
 

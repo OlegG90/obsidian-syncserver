@@ -208,7 +208,7 @@ export const changePassword = (current: string, password: string): Promise<void>
 
 /** Mint a fresh token for an invitation nobody redeemed — the answer to a token that got lost. */
 export const reissue = (userId: string): Promise<{ token: string; expires_at: string }> =>
-  call('POST', `/admin/invitations/${userId}`, {});
+  call('POST', `/admin/invitations/${userId}/reissue`, {});
 
 /** Withdraw an invitation. Only ever an unclaimed one; the server refuses anything else. */
 export const revokeInvitation = (userId: string): Promise<void> =>
