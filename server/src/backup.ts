@@ -28,8 +28,7 @@
  */
 import type { Db } from './db.js';
 import { holdForBackup, inRefusalWindow } from './interlock.js';
-import { openStore, storageKeyFor } from './blobs/store.js';
-import { join } from 'node:path';
+import { storageKeyFor } from './blobs/store.js';
 import type { BackupRun } from '@syncserver/shared';
 
 /** What each leg reports, so the run can record what it actually produced. */

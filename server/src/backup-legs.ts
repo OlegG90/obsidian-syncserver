@@ -16,13 +16,8 @@ import { copyAt } from './backup-copy.js';
 import { cp, mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from './db.js';
+import { runCommand } from './restore-argv.js';
 import type { Legs } from './backup.js';
-
-/** `pg_dump`, awaited, and rejected when it exits non-zero. */
-const run = (cmd: string, args: string[]): Promise<void> =>
-  new Promise((resolve, reject) => {
-    execFile(cmd, args, (err) => (err ? reject(err) : resolve()));
-  });
 
 /**
  * What `SELECT version()` says about the database this server is talking to, read once (D-89).
@@ -135,7 +130,7 @@ export const backupLegs = (
     const [cmd, ...args] = dumpCommand;
     const file = copyAt(join(destination, runDir)).dump;
     if (!cmd) throw new Error('BACKUP_DB_COMMAND is empty — it must name the dump binary');
-    await run(cmd, [...args, '-f', file]);
+    await runCommand(cmd, [...args, '-f', file]);
     const size = await stat(file);
     return { bytes: size.size };
   },

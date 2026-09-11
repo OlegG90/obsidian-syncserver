@@ -31,7 +31,6 @@
  * left here is the orchestration, and turning the schema's refusal into one a caller can
  * act on.
  */
-import type { DeltaEvent } from '@syncserver/shared';
 import type { PoolClient } from 'pg';
 import { oneFrom, type Db } from '../db.js';
 import { writeMaterial, type Material } from '../material.js';

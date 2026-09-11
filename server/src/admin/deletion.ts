@@ -38,13 +38,7 @@ import { PRESENT } from '../shares/membership.js';
 /** The reserved account authorship is reassigned to. Seeded by `schema.sql` (D-55). */
 const TOMBSTONE = '00000000-0000-0000-0000-000000000000';
 
-export interface DeletionProgress {
-  state: string;
-  /** Participants still converting a copy of a folder this account shared. */
-  awaiting: { shareId: string; login: string }[];
-  /** True once the account and everything it held are gone. */
-  finished: boolean;
-}
+import type { DeletionProgress } from '@syncserver/shared';
 
 /**
  * Start the procedure, or push it along if it has started.

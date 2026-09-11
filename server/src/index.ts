@@ -1,6 +1,6 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns } from './backup.js';
-import { assertPgDumpMatches, backupLegs, pgDumpVersion, serverVersionLine } from './backup-legs.js';
+import { assertPgDumpMatches, pgDumpVersion, serverVersionLine } from './backup-legs.js';
 import { hasActiveAdministrator } from './bootstrap.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';

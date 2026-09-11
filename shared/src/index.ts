@@ -429,7 +429,9 @@ export type StorageTotals = {
  */
 export type DeletionProgress = {
   state: string;
+  /** Participants still converting a copy of a folder this account shared. */
   awaiting: { shareId: string; login: string }[];
+  /** True once the account and everything it held are gone. */
   finished: boolean;
 };
 
