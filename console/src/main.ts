@@ -654,8 +654,8 @@ const tiles = (rows: readonly AccountRow[], totals: StorageTotals): HTMLElement 
     ['Accounts', String(rows.filter((a) => a.state !== 'provisioned').length)],
     ['On disk', human(totals.storedBytes)],
     // Two counts, because they are two facts and the operator's question — "is anybody in
-    // trouble" — is answered by the first. A console showing FROZEN 0 above a row that is over
-    // its limit is telling the truth and answering nothing.
+    // trouble" — is answered by the first. They should agree, since setting a limit settles
+    // the freeze (#333); when they do not, the difference is the thing worth looking at.
     ['Over limit', String(rows.filter(isOver).length)],
     ['Frozen', String(rows.filter((a) => a.frozenAt).length)],
     ['Pending invites', String(rows.filter((a) => a.state === 'provisioned').length)],

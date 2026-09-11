@@ -19,8 +19,10 @@
  */
 import type { AccountRow, AuditRow, DeviceRow, StorageTotals } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
-import type { Db } from '../db.js';
+import { oneFrom, type Db } from '../db.js';
 import { activeDevices } from '../devices.js';
+import { usageOf } from '../quota.js';
+import { settleFreeze } from '../shares/thaw.js';
 import { refusalFromDatabase, txGuarded, type Refusal } from '../refusal.js';
 import { record, type Actor } from './audit.js';
 
@@ -246,7 +248,8 @@ export const setEnabled = async (
  * it: nothing is deleted, the account freezes (SH-20), and everything they have stays
  * exactly where it is with reads and deletions still available. Saying that **before** the
  * change is the difference between a considered decision and a surprise, so the number goes
- * back to the caller rather than being left for them to look up.
+ * back to the caller rather than being left for them to look up. Raising a limit above usage
+ * is the other half: a frozen account thaws, here, with the catch-up its shares are owed.
  */
 export const setQuota = async (
   db: Db,
@@ -255,28 +258,32 @@ export const setQuota = async (
   quotaBytes: string,
 ): Promise<{ usedBytes: string; freezes: boolean } | Refusal> =>
   txGuarded(db, async (c) => {
-    const target = await c.query<{ login: string; used: string; quota: string }>(
-      `SELECT u.login, u.quota_bytes::text AS quota,
-              COALESCE((SELECT sum(b.size) FROM user_blobs ub JOIN blobs b ON b.sha256 = ub.sha256
-                         WHERE ub.user_id = u.id), 0)::text AS used
+    const target = await c.query<{ login: string; quota: string }>(
+      `SELECT u.login, u.quota_bytes::text AS quota
          FROM users u WHERE u.id = $1 AND u.state NOT IN ('provisioned', 'tombstone') FOR UPDATE`,
       [userId],
     );
     if (target.rowCount === 0) return { kind: 'not_found' } as Refusal;
     const row = target.rows[0]!;
+    // Usage is `quota.ts`'s one statement, not a second `SUM` here that could drift from it.
+    const used = String((await usageOf(oneFrom(c), userId))!.used);
 
     await c.query(`UPDATE users SET quota_bytes = $2 WHERE id = $1`, [userId, quotaBytes]);
     await record(c, {
       actor,
       action: 'quota.change',
       target: { id: userId, login: row.login },
-      details: { from: row.quota, to: quotaBytes, used: row.used },
+      details: { from: row.quota, to: quotaBytes, used },
     });
 
-    // Not frozen here. The freeze is `freezeIfOverQuota`, which runs where a write crosses
-    // the line, and a second place deciding the same thing is the drift this repository
-    // spends its comments on. What this reports is what the next write will find.
-    return { usedBytes: row.used, freezes: BigInt(row.used) > BigInt(quotaBytes) };
+    // The limit is one of the two numbers a freeze depends on, so moving it settles the freeze
+    // in the same transaction (#333): lowered below usage, the account freezes now — which is
+    // what the console tells the operator it did — and raised above it, the account thaws and
+    // its shares catch up. It used to decide neither, and a raised limit left the account
+    // frozen until its owner happened to empty a trash. `freezes` is therefore a fact, not a
+    // forecast: whether the account is frozen once this change has been applied.
+    const settled = await settleFreeze(c, userId);
+    return { usedBytes: used, freezes: settled.frozen };
   });
 
 /**

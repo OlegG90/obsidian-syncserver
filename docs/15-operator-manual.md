@@ -143,10 +143,12 @@ again.
 nothing**: the account freezes — nothing that grows usage is accepted, while reading and deleting keep
 working. The console asks you to confirm that specifically, because it is not what most people expect a
 lowered quota to do. A frozen account thaws by itself once its owner empties the trash, with no
-administrator involved.
+administrator involved — or at once when you raise its limit above what it stores, which also brings its
+shared folders up to date.
 
-The **Over limit** and **Frozen** tiles are two different counts on purpose: an account can be over its
-quota for months without being frozen, and it is refused new files either way.
+The **Over limit** and **Frozen** tiles count two facts, and they should agree: changing a limit settles
+the freeze in the same step, and so does everything that frees space. An account over its limit and not
+frozen is one that no such step has touched since — the next one will freeze it.
 
 ### They install the plugin
 

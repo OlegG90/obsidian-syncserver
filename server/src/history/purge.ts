@@ -27,7 +27,7 @@ import type { Db } from '../db.js';
 import { dropUnreferenced } from '../holdings.js';
 import { removeNodesByDepth, DEPTH } from '../nodes/remove.js';
 import { txGuarded, type Refusal } from '../refusal.js';
-import { thawIfUnderQuota } from '../shares/thaw.js';
+import { settleFreeze } from '../shares/thaw.js';
 
 export interface PurgeResult {
   /** How many node rows went, their versions with them. */
@@ -109,7 +109,7 @@ export const purgeTrash = async (
     // And if that was enough, the freeze lifts in the same transaction, with the catch-up
     // SH-21 requires. A purge that freed the space and left the account frozen until some
     // later write happened to check would be the deadlock this exists to end.
-    const thawed = await thawIfUnderQuota(c, userId);
+    const { thawed } = await settleFreeze(c, userId);
 
     return { purged, thawed: thawed !== undefined };
   });

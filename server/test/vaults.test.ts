@@ -182,7 +182,7 @@ describe('deleting a vault', () => {
  *
  * SH-20 tells a frozen account to delete something, and `thaw.ts` says why that has to work: *"a freeze
  * that only ever went on is a state with no exit"*. Removing a vault is the largest deletion this
- * product offers and it was the one that did not lift the freeze — `thawIfUnderQuota` was called by the
+ * product offers and it was the one that did not lift the freeze — the thaw was called by the
  * trash purge and by a vault reset, and not here. The bytes went, the usage fell, and every write was
  * still refused until the person went and emptied a trash somewhere unrelated.
  *
