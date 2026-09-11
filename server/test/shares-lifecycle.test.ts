@@ -1189,6 +1189,92 @@ describe('finishing a departure that was interrupted', () => {
 });
 
 describe('leaving a share that never got off the ground', () => {
+  /**
+   * #334, against a real database. `finalizeLeave` deletes an added participant's whole version
+   * history FIRST, then walks the nodes — and a node that is not part of the share made it return
+   * a refusal mid-walk. `db.tx` committed that: history gone, some nodes already converted out of
+   * the share, `left_at` never set, so the participant was still a member with no history. The
+   * client heard an ordinary refusal and would retry against a state already half-applied.
+   *
+   * The bogus node goes LAST on purpose, so the refusal comes after real writes rather than before
+   * them — a refusal before any write was never the bug.
+   */
+  it('commits nothing when it refuses a node partway through the leave', async () => {
+    // A file with two revisions inside the share BEFORE the stranger joins, so `joinShare` copies
+    // that history into their replica. `sharedWith` builds folders only, and a folder has no
+    // versions — the first draft of this test ran against it and proved nothing.
+    const { shareId, inside, ks } = await invitedShare('refused-leave-keeps-history');
+    const file = await createFile(inside, `note-${randomUUID()}`, 'first', ks);
+    await putFile(file, 'second');
+    const joined = await join(shareId);
+    assert.equal(joined.statusCode, 201, joined.body);
+
+    await w.app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/leave/begin`,
+      headers: { authorization: `Bearer ${w.strangerAccess}` },
+    });
+
+    const historyOf = async (): Promise<number> =>
+      Number(
+        (
+          await w.db.query<{ n: string }>(
+            `SELECT count(*)::text AS n FROM versions v
+               JOIN nodes n ON n.vault_id = v.vault_id AND n.id = v.node_id
+              WHERE v.vault_id = $1 AND n.share_id = $2`,
+            [w.strangerVaultId, shareId],
+          )
+        )[0]!.n,
+      );
+    const before = await historyOf();
+    // Without history there is nothing for the bug to destroy, and this test would pass by saying
+    // nothing. Refuse to run it that way.
+    assert.ok(before > 0, 'the replica has version history to lose');
+
+    const keyId = await strangerVaultKey();
+    const replica = await w.db.query<{ id: string; sha: string | null }>(
+      `SELECT id, encode(sha256,'hex') AS sha FROM nodes WHERE vault_id = $1 AND share_id = $2`,
+      [w.strangerVaultId, shareId],
+    );
+    const item = (id: string, hash: string | null) => ({
+      node_id: id,
+      name_enc: b64(`kv-${id}`),
+      name_hmac: sha(Buffer.from(`kv-${id}`)),
+      name_key_id: keyId,
+      ...(hash
+        ? {
+            vault_envelopes: [{ sha256: hash, scope_id: keyId, wrapped_key: Buffer.alloc(48, 7).toString('base64') }],
+            vault_dedup_tags: [{ sha256: hash, scope_id: keyId, content_tag: sha(Buffer.from(`kv:${hash}`)) }],
+          }
+        : {}),
+    });
+
+    const refused = await w.app.inject({
+      method: 'POST',
+      url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${w.strangerAccess}` },
+      payload: { nodes: [...replica.map((n) => item(n.id, n.sha)), item(randomUUID(), null)] },
+    });
+    assert.equal(refused.statusCode, 400, refused.body);
+    assert.equal(refused.json().error, 'invalid_write');
+
+    assert.equal(await historyOf(), before, 'the version history is all still there');
+
+    const stillShared = await w.db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM nodes WHERE vault_id = $1 AND share_id = $2`,
+      [w.strangerVaultId, shareId],
+    );
+    assert.equal(Number(stillShared[0]!.n), replica.length, 'no node was converted out of the share');
+
+    const member = await w.db.query<{ leftAt: string | null }>(
+      `SELECT left_at AS "leftAt" FROM share_members m
+         JOIN users u ON u.id = m.user_id
+        WHERE m.share_id = $1 AND m.vault_id = $2`,
+      [shareId, w.strangerVaultId],
+    );
+    assert.equal(member[0]?.leftAt, null, 'and the participant has not left');
+  });
+
   it('cancels it rather than ending it, which the schema does not allow', async () => {
     // A 500 in a live vault: departMember wrote `ended` unconditionally, and `preparing`
     // may go only to `cancelled`. The share could not be left, and had no other way out
