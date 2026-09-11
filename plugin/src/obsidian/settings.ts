@@ -33,6 +33,7 @@ import { installWarning, PLUGIN_VERSION, versionWarning } from '../version.js';
 import { ConfirmModal } from './modals.js';
 import type SyncServerPlugin from '../main.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
+import { errorText } from '../error-text.js';
 
 export class SyncServerSettings extends PluginSettingTab {
   /**
@@ -231,7 +232,7 @@ export class SyncServerSettings extends PluginSettingTab {
 
     /** A transport failure names a category, never an address — and the address is the likeliest mistake. */
     const explain = (e: unknown): string => {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = errorText(e);
       return /ERR_|network|fetch|refused|timeout/i.test(reason)
         ? `nothing answered at ${draft.serverUrl} — ${reason}`
         : reason;
@@ -448,20 +449,6 @@ export class SyncServerSettings extends PluginSettingTab {
   }
 
   /**
-   * A section that opens when somebody wants it, summarised on its closed row (#130).
-   *
-   * `<details>` rather than a toggle this file implements: it is what the platform gives, it
-   * survives a rebuilt tab without state to keep in step, and it is what a keyboard and a
-   * screen reader already know how to work.
-   *
-   * **The summary is the point, not the collapsing.** A closed row that says only "Devices"
-   * makes somebody open it to find out whether they need to; one that says "mbp-14, iphone ·
-   * add another" has already answered. A section whose summary cannot say anything useful
-   * should not be a section.
-   */
-
-
-  /**
    * Changing the passphrase, and catching up with a change made on another device (#138).
    *
    * **Two different things on one heading, because they are two sides of one fact:** every
@@ -512,7 +499,7 @@ export class SyncServerSettings extends PluginSettingTab {
                 new Notice('SyncServer: this device is on the account’s current passphrase.', 8000);
                 this.display();
               } catch (e) {
-                new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 10000);
+                new Notice(`SyncServer: ${errorText(e)}`, 10000);
               } finally {
                 b.setDisabled(false);
               }
@@ -571,7 +558,7 @@ export class SyncServerSettings extends PluginSettingTab {
               );
               this.display();
             } catch (e) {
-              new Notice(`SyncServer: ${e instanceof Error ? e.message : String(e)}`, 12000);
+              new Notice(`SyncServer: ${errorText(e)}`, 12000);
             } finally {
               b.setDisabled(false);
             }
@@ -662,7 +649,7 @@ export class SyncServerSettings extends PluginSettingTab {
       } catch (e) {
         shown.empty();
         const failed = shown.createEl('p', {
-          text: `The code was not made — ${e instanceof Error ? e.message : String(e)}`,
+          text: `The code was not made — ${errorText(e)}`,
         });
         failed.style.color = 'var(--text-error)';
       }

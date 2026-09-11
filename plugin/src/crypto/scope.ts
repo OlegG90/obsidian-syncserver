@@ -29,6 +29,23 @@ export const decryptName = (scopeKey: Uint8Array, nameEnc: string): string => fr
 export const nameHmac = (scopeKey: Uint8Array, name: string): string =>
   toHex(hmac(sha256, scopeKey, utf8(name.normalize('NFC').toLowerCase())));
 
+/**
+ * A name as the wire carries it: sealed and keyed under one scope, and naming that scope.
+ *
+ * The three travel together at every write that names a node — create, move, join, both
+ * conversions — and a pairing spelled out by hand at each is one where the key and the id
+ * that says which key can come apart, which writes a name nobody can read.
+ */
+export const nameUnder = (
+  scopeKey: Uint8Array,
+  scopeId: string,
+  name: string,
+): { name_enc: string; name_hmac: string; name_key_id: string } => ({
+  name_enc: encryptName(scopeKey, name),
+  name_hmac: nameHmac(scopeKey, name),
+  name_key_id: scopeId,
+});
+
 /** `blob_keys.wrapped_key`: the content key under this scope. Adding a scope is adding one of these. */
 export const wrapContentKey = (scopeKey: Uint8Array, contentKey: Uint8Array): string => seal(scopeKey, contentKey);
 

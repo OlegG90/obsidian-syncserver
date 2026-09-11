@@ -15,7 +15,7 @@ import {
   deriveKek,
   newSeed,
   openAccount,
-  recoveryCodeHash,
+  humanCodeHash,
   unwrapWithRecovery,
   vaultKey,
   wrapForRecovery,
@@ -359,8 +359,8 @@ describe('the recovery code, wrapping the same seed a second time', () => {
     // The server hashes the string it receives at recovery, and that string has crossed a
     // human. Both sides must normalise first or a correctly kept code hashes to nothing.
     const code = newHumanCode();
-    assert.equal(recoveryCodeHash(code), recoveryCodeHash(code.replace(/-/g, '').toLowerCase()));
-    assert.match(recoveryCodeHash(code), /^[0-9a-f]{64}$/, 'sha-256, hex, like every other stored verifier');
+    assert.equal(humanCodeHash(code), humanCodeHash(code.replace(/-/g, '').toLowerCase()));
+    assert.match(humanCodeHash(code), /^[0-9a-f]{64}$/, 'sha-256, hex, like every other stored verifier');
   });
 
   it('gives two accounts with the same code different envelopes', () => {

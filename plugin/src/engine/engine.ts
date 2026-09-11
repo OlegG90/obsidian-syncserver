@@ -47,15 +47,17 @@ import type { TreeCache, WalkedTree } from './tree-cache.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
 import type { VaultWire } from './wire.js';
+import type { Envelope } from '../api/client.js';
 import { openBlob, sealBlob } from '../crypto/blob.js';
 import { toHex } from '../crypto/bytes.js';
-import { decryptName, dedupTag, dedupTagFromHash, encryptName, nameHmac, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
+import { decryptName, dedupTagFromHash, nameUnder, unwrapContentKey, wrapContentKey } from '../crypto/scope.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { decide, type LocalMeta, type SyncPolicy } from './reconcile.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
-import { folderMoves, type Vanished } from './rename.js';
+import { basePath, folderMoves, parentPath, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
+import { errorText } from '../error-text.js';
 import { VaultScopes } from '../share-keys.js';
 
 export interface SyncReport {
@@ -119,7 +121,6 @@ export interface SyncReport {
 
 
 
-/** What the pre-pass learns about one local file without holding onto its bytes. */
 /**
  * What a caller may ask of one pass.
  *
@@ -268,7 +269,6 @@ export class SyncEngine {
     return this.scopes.keyFor(nameKeyId);
   }
 
-  /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
   /** `content.ts`, with this engine's key for the scope and its client's upload. */
   private content(plain: Uint8Array, scopeId: string, ctx: PassContext) {
     return resolveContent(plain, { id: scopeId, key: this.scopeKeyFor(scopeId) }, ctx.dedup, (sealed) =>
@@ -276,8 +276,9 @@ export class SyncEngine {
     );
   }
 
+  /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
   private contentScopeId(ctx: PassContext, path: string): string {
-    const parent = parentOf(path);
+    const parent = parentPath(path);
     return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
   }
 
@@ -313,9 +314,8 @@ export class SyncEngine {
      *
      * A pass with no cache (a test, a share operation) simply walks, which is what every pass did before.
      */
-    const at = { cursor: state.cursor ?? '', scopes: this.scopes.fingerprint() };
-    const remembered = probe.quiet && state.cursor ? this.cache?.get(at) : undefined;
-    const walked = remembered ?? { ...(await this.readServerTree(rootNodeId)), scopes: at.scopes };
+    const remembered = this.rememberedTree(state.cursor, probe);
+    const walked = remembered ?? { ...(await this.readServerTree(rootNodeId)), scopes: this.scopes.fingerprint() };
     if (!remembered) this.cache?.put(walked);
     const { tree, cursor, unreadable } = walked;
     const byNodeId = new Map<string, ServerNode>();
@@ -359,13 +359,7 @@ export class SyncEngine {
         });
         continue;
       }
-      const bytes = await this.vault.read(f.path);
-      meta.set(f.path, {
-        plainHash: toHex(sha256(bytes)),
-        tag: dedupTag(this.scopes.vaultKey, bytes),
-        mtime: f.mtime,
-        size: bytes.length,
-      });
+      meta.set(f.path, await this.hashAndTag(f));
     }
     /**
      * **Only for the files whose reconciliation could consult it** (issue #250).
@@ -448,7 +442,7 @@ export class SyncEngine {
       try {
         await this.reconcileLocal(file, ctx);
       } catch (e) {
-        ctx.report.errors.push({ path: file.path, message: message(e) });
+        ctx.report.errors.push({ path: file.path, message: errorText(e) });
       }
       // After the file, including after a failed one: progress is how far the walk has got, not how
       // much of it went well, and a pass that stalled its counter on the first error would look
@@ -478,6 +472,15 @@ export class SyncEngine {
     ctx.state.cursor = cursor;
     await this.store.save(ctx.state);
     return ctx.report;
+  }
+
+  /**
+   * The tree walked at this cursor, if the probe says nothing has moved since and this device reads
+   * names with the same keys it did then — the one condition a pass and `readTree` both reuse on
+   * (#252). A quiet probe is always a continuous one, so the epoch needs no second look.
+   */
+  private rememberedTree(cursor: string | undefined, probe: { quiet: boolean }): WalkedTree | undefined {
+    return probe.quiet && cursor ? this.cache?.get({ cursor, scopes: this.scopes.fingerprint() }) : undefined;
   }
 
   /**
@@ -546,11 +549,8 @@ export class SyncEngine {
      */
     const state = await this.store.load();
     if (state.cursor && this.cache) {
-      const probe = await this.probeEpoch(state.cursor);
-      if (probe.epoch === 'continuous' && probe.quiet) {
-        const remembered = this.cache.get({ cursor: state.cursor, scopes: this.scopes.fingerprint() });
-        if (remembered) return remembered.tree;
-      }
+      const remembered = this.rememberedTree(state.cursor, await this.probeEpoch(state.cursor));
+      if (remembered) return remembered.tree;
     }
 
     /**
@@ -720,9 +720,12 @@ export class SyncEngine {
    */
   private async hashAndTag(file: VaultFile): Promise<LocalMeta> {
     const bytes = await this.vault.read(file.path);
+    // Hashed once: the tag is keyed over that same hash, so it is derived from it rather than
+    // hashing the bytes a second time.
+    const plainHash = toHex(sha256(bytes));
     return {
-      plainHash: toHex(sha256(bytes)),
-      tag: dedupTag(this.scopes.vaultKey, bytes),
+      plainHash,
+      tag: dedupTagFromHash(this.scopes.vaultKey, plainHash),
       mtime: file.mtime,
       size: bytes.length,
     };
@@ -748,17 +751,15 @@ export class SyncEngine {
     // What is left here is what only this class can do: name the folder under the right
     // scope, call the server, and repair the walk's own view of the tree afterwards.
     for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
-      const name = basename(move.to);
-      const destParent = move.to ? parentOf(move.to) : '';
+      const name = basePath(move.to);
+      const destParent = move.to ? parentPath(move.to) : '';
       const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
       try {
         // The moved folder's new name is named under the destination parent's scope.
         const nameScopeId = this.contentScopeId(ctx, move.to);
         const out = await this.client.moveNode(this.vaultId, move.nodeId, move.rev, {
           parent_id: destParentId,
-          name_enc: encryptName(this.scopeKeyFor(nameScopeId), name),
-          name_hmac: nameHmac(this.scopeKeyFor(nameScopeId), name),
-          name_key_id: nameScopeId,
+          ...nameUnder(this.scopeKeyFor(nameScopeId), nameScopeId, name),
         });
         ctx.tree = remapTree(ctx.tree, move.from, move.to, out.rev);
         ctx.state.nodes = remapState(ctx.state.nodes, move.from, move.to);
@@ -775,7 +776,7 @@ export class SyncEngine {
       } catch (e) {
         // A refused move is not a failure we can resolve here — the per-file fallback ran
         // nothing for these, so report and let the next pass retry.
-        ctx.report.errors.push({ path: move.from, message: message(e) });
+        ctx.report.errors.push({ path: move.from, message: errorText(e) });
       }
     }
   }
@@ -793,16 +794,14 @@ export class SyncEngine {
    */
   private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished, ctx: PassContext): Promise<void> {
     const parentId = await this.ensureFolders(file.path, ctx);
-    const name = basename(file.path);
+    const name = basePath(file.path);
     // The moved node's new name is named under the scope of its destination folder.
     const nameScopeId = this.contentScopeId(ctx, file.path);
     const nameKey = this.scopeKeyFor(nameScopeId);
 
     const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
       parent_id: parentId,
-      name_enc: encryptName(nameKey, name),
-      name_hmac: nameHmac(nameKey, name),
-      name_key_id: nameScopeId,
+      ...nameUnder(nameKey, nameScopeId, name),
     });
 
     delete ctx.state.nodes[source.path];
@@ -886,7 +885,7 @@ export class SyncEngine {
     const scopeId = this.contentScopeId(ctx, file.path);
     const { sha256: address, material } = await this.content(plain, scopeId, ctx);
     const parentId = await this.ensureFolders(file.path, ctx);
-    const name = basename(file.path);
+    const name = basePath(file.path);
     const nameKey = this.scopeKeyFor(scopeId);
 
     const created = await this.client.createNode(this.vaultId, {
@@ -895,9 +894,7 @@ export class SyncEngine {
       sha256: address,
       size: plain.length,
       mtime: new Date(file.mtime).toISOString(),
-      name_enc: encryptName(nameKey, name),
-      name_hmac: nameHmac(nameKey, name),
-      name_key_id: scopeId,
+      ...nameUnder(nameKey, scopeId, name),
       ...material,
     });
     ctx.state.nodes[file.path] = { nodeId: created.node_id, rev: created.rev, plainHash: m.plainHash, address, ...SyncEngine.hintFrom(m) };
@@ -905,15 +902,6 @@ export class SyncEngine {
     ctx.byNodeId.set(created.node_id, ctx.tree.get(file.path)!);
     ctx.report.pushed.push({ path: file.path });
   }
-
-  /**
-   * Content already known to this scope needs no envelope, no tag and no upload —
-   * `nodes_check_private_material` only checks that the rows EXIST (docs/04). Content that
-   * is not sealed, uploaded and tagged fresh, same as before this slice.
-   *
-   * Both the envelope and the dedup tag are scoped to `scopeId` — the vault's own scope or a
-   * share's — because the trigger checks them together under the node's scope.
-   */
 
   /**
    * No common ancestor (docs/07): the server version becomes the file at this path, and the
@@ -942,7 +930,8 @@ export class SyncEngine {
     // a conflict file is ever written and the bytes are already in hand. A rule each caller had to
     // remember is one a new caller will not.
     const localHash = toHex(sha256(localPlain));
-    if (localHash === toHex(sha256(serverPlain))) {
+    const serverHash = toHex(sha256(serverPlain));
+    if (localHash === serverHash) {
       ctx.state.nodes[file.path] = {
         nodeId: onServer.nodeId,
         rev: onServer.rev,
@@ -965,7 +954,7 @@ export class SyncEngine {
     ctx.state.nodes[file.path] = {
       nodeId: onServer.nodeId,
       rev: onServer.rev,
-      plainHash: toHex(sha256(serverPlain)),
+      plainHash: serverHash,
       address: onServer.address!,
       ...(await this.hintFor(file.path)),
     };
@@ -980,16 +969,22 @@ export class SyncEngine {
   /** The server's own bytes for a node, opened with the content key its envelope carries. */
   private async fetchPlain(node: ServerNode, ctx: PassContext): Promise<Uint8Array> {
     if (!node.address) throw new Error('a folder has no content — this is a bug if it happens');
+    return this.openNode(node, await this.client.blobKeys(this.vaultId, [node.address]), ctx);
+  }
 
-    // The node's content is sealed under the scope it is named in; its envelope carries the
-    // content key wrapped to that scope.
+  /**
+   * One node's bytes, given the envelopes already fetched for it.
+   *
+   * The node's content is sealed under the scope it is named in, and its envelope carries the
+   * content key wrapped to that scope. One reading of that rule for a single conflicted file and
+   * for a whole pull, which used to spell it out twice.
+   */
+  private async openNode(node: ServerNode, envelopes: Map<string, Envelope[]>, ctx: PassContext): Promise<Uint8Array> {
     const scopeId = node.nameKeyId ?? ctx.vaultScopeId;
-    const envelope = (await this.client.blobKeys(this.vaultId, [node.address]))
-      .get(node.address)
-      ?.find((e) => e.scopeId === scopeId);
+    const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === scopeId);
     if (!envelope) throw new Error(`no content-key envelope under the node's scope (${scopeId})`);
 
-    const ciphertext = await this.client.getBlob(node.address);
+    const ciphertext = await this.client.getBlob(node.address!);
     if (!ciphertext) throw new Error('the server holds no bytes at that address');
     return openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
   }
@@ -1015,7 +1010,7 @@ export class SyncEngine {
       delete ctx.state.nodes[v.path];
       ctx.report.deleted.push({ path: v.path });
     } catch (e) {
-      ctx.report.errors.push({ path: v.path, message: message(e) });
+      ctx.report.errors.push({ path: v.path, message: errorText(e) });
     }
   }
 
@@ -1083,7 +1078,7 @@ export class SyncEngine {
         // If the winning tree has its own file at this path, it now comes down.
         if (onServer && onServer.isFile) await this.pull([onServer], ctx);
       } catch (e) {
-        ctx.report.errors.push({ path: file.path, message: message(e) });
+        ctx.report.errors.push({ path: file.path, message: errorText(e) });
       }
     }
 
@@ -1102,14 +1097,7 @@ export class SyncEngine {
 
     for (const node of nodes) {
       try {
-        const scopeId = node.nameKeyId ?? ctx.vaultScopeId;
-        const envelope = envelopes.get(node.address!)?.find((e) => e.scopeId === scopeId);
-        if (!envelope) throw new Error(`no content-key envelope under the node's scope (${scopeId})`);
-
-        const ciphertext = await this.client.getBlob(node.address!);
-        if (!ciphertext) throw new Error('the server holds no bytes at that address');
-
-        const plain = openBlob(unwrapContentKey(this.scopeKeyFor(scopeId), envelope.wrappedKey), ciphertext);
+        const plain = await this.openNode(node, envelopes, ctx);
         await this.vault.write(node.path, plain);
 
         ctx.state.nodes[node.path] = {
@@ -1118,7 +1106,7 @@ export class SyncEngine {
         };
         ctx.report.pulled.push({ path: node.path });
       } catch (e) {
-        ctx.report.errors.push({ path: node.path, message: message(e) });
+        ctx.report.errors.push({ path: node.path, message: errorText(e) });
       }
     }
   }
@@ -1144,9 +1132,7 @@ export class SyncEngine {
         parent_id: parentId,
         type: 'folder',
         mtime: new Date().toISOString(),
-        name_enc: encryptName(scopeKey, part),
-        name_hmac: nameHmac(scopeKey, part),
-        name_key_id: scopeId,
+        ...nameUnder(scopeKey, scopeId, part),
       });
       ctx.tree.set(sofar, { nodeId: created.node_id, parentId, path: sofar, rev: created.rev, address: null, isFile: false, nameKeyId: scopeId });
       ctx.byNodeId.set(created.node_id, ctx.tree.get(sofar)!);
@@ -1158,12 +1144,6 @@ export class SyncEngine {
 }
 
 const depth = (path: string): number => path.split('/').length;
-const basename = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
-const parentOf = (path: string): string => {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? '' : path.slice(0, slash);
-};
-const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * `Note (conflict 2026-08-01 laptop).md` — the exact form docs/04 specifies for a content

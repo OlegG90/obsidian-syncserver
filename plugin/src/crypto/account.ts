@@ -208,15 +208,16 @@ export const unwrapWithRecovery = (
 ): Uint8Array => open(recoveryKek(code, accountSalt), recoveryKey);
 
 /**
- * `recovery_code_hash` — what the server stores, and what it compares a presented code to.
+ * The hash a server stores for a code a person carries — `recovery_code_hash`, and the pairing
+ * token's `pairing_token_hash` — and compares a presented code to.
  *
  * SHA-256 over the code's UTF-8 bytes, hex, exactly as every other stored verifier (docs/06,
- * D-108). **Over the NORMALISED code**, because that is what the server will be handed at
- * recovery: the code crosses a human, arriving with or without dashes and with whatever they
- * made of a `0`. Hashing the displayed form here and the typed form there is the bug that
- * made pairing fail on real hardware, one layer down.
+ * D-108). **Over the NORMALISED code**, because that is what the server will be handed: the code
+ * crosses a human, arriving with or without dashes and with whatever they made of a `0`.
+ * Hashing the displayed form on one side and the typed form on the other is the bug that made
+ * pairing fail on real hardware — which is why pairing and recovery share this line.
  */
-export const recoveryCodeHash = (code: string): string =>
+export const humanCodeHash = (code: string): string =>
   toHex(sha256(utf8(normaliseHumanCode(code))));
 
 /** The other direction: a device that has the passphrase and what the server stores. */

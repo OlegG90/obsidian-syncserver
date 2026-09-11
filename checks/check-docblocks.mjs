@@ -40,17 +40,31 @@ const files = execSync('git ls-files --cached --others --exclude-standard', { en
   .filter((f) => /\.(ts|mjs)$/.test(f));
 const problems = [];
 
+// Where a block ends: its own closing line, or the whole block on one line. Both shapes strand the
+// same way — the first version saw only the first, and seven one-line and blank-line-separated
+// strays sat in the plugin undetected until a review found them by hand.
+const closesMultiLine = /^\s*\*\/\s*$/;
+const oneLine = /^\s*\/\*\*.*\*\/\s*$/;
+
 for (const file of files) {
   const lines = readFileSync(file, 'utf8').split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*\*\/\s*$/.test(lines[i])) continue;
-    if (!(lines[i + 1] ?? '').trim().startsWith('/**')) continue;
+    const single = oneLine.test(lines[i]);
+    if (!single && !closesMultiLine.test(lines[i])) continue;
+
+    // Blank lines between are no excuse: a block with only whitespace under it before the next
+    // block describes nothing either.
+    let next = i + 1;
+    while (next < lines.length && lines[next].trim() === '') next++;
+    if (!(lines[next] ?? '').trim().startsWith('/**')) continue;
 
     let open = i;
-    while (open > 0 && !/^\s*\/\*\*/.test(lines[open])) open--;
+    if (!single) while (open > 0 && !/^\s*\/\*\*/.test(lines[open])) open--;
     if (open === 0) continue; // the file header, above the first declaration's own block
 
-    const summary = (lines[open + 1] ?? '').replace(/^\s*\*\s?/, '').trim();
+    const summary = single
+      ? lines[open].replace(/^\s*\/\*\*\s?/, '').replace(/\s*\*\/\s*$/, '').trim()
+      : (lines[open + 1] ?? '').replace(/^\s*\*\s?/, '').trim();
     problems.push(`${file}:${open + 1} — “${summary}” is followed by a docblock, not by code`);
   }
 }

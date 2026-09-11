@@ -36,15 +36,6 @@ import { SCHEMA_LOCK_ID } from './interlock.js';
  */
 export const SCHEMA_FILE = fileURLToPath(new URL('../db/schema.sql', import.meta.url));
 
-/**
- * A lock of its own, beside the collector's rather than shared with it.
- *
- * Two servers starting against one empty database would otherwise both apply the schema, and
- * the second would fail halfway through with a duplicate-object error that looks like
- * corruption. It is a **transaction** lock: it goes when the transaction ends, including when
- * it ends badly, so a crash mid-apply cannot leave the next start waiting for ever.
- */
-
 /** The marker: `server_meta` is seeded by the schema itself, so its absence is "no schema here". */
 const MARKER = 'public.server_meta';
 
@@ -93,6 +84,11 @@ export const ensureSchema = async (
   const sql = await readFile(opts.file ?? SCHEMA_FILE, 'utf8');
 
   return db.tx(async (c) => {
+    // A lock of its own, beside the collector's rather than shared with it. Two servers starting
+    // against one empty database would otherwise both apply the schema, and the second would fail
+    // halfway through with a duplicate-object error that looks like corruption. A **transaction**
+    // lock: it goes when the transaction ends, including when it ends badly, so a crash mid-apply
+    // cannot leave the next start waiting for ever.
     await c.query('SELECT pg_advisory_xact_lock($1)', [SCHEMA_LOCK_ID]);
 
     // Asked INSIDE the lock. Two servers reaching this line together would otherwise both read

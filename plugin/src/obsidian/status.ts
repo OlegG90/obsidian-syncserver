@@ -15,6 +15,8 @@
  * "0 up, 0 down" and there was no way to tell whether nothing had changed or the vault had
  * looked empty. A summary that cannot distinguish success from doing nothing is not a status.
  */
+import type { AccountUsage } from '../api/client.js';
+import { mib } from './format.js';
 import type { SyncReport } from '../engine/engine.js';
 import { counterText, displayFor, type PassProgress } from '../pass-progress.js';
 import { categories, priority, type ReportCategory } from '../engine/report.js';
@@ -149,31 +151,6 @@ export const phaseIcon = (phase: SyncPhase): string => {
   }
 };
 
-/**
- * What the account is using, and whether it has been stopped for using too much.
- *
- * A freeze is an account **state**, not a message (docs/02): the server does not ask
- * anything, it stops accepting what would grow usage and waits. Which means the only way a
- * person learns of it is a surface that says so — and until this line existed there was
- * none, in any client, while the server computed and shipped the fact on every delta page
- * to nobody.
- */
-export interface AccountUsage {
-  used: number;
-  quota: number;
-  frozen: boolean;
-}
-
-const bytes = (n: number): string => {
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let v = n;
-  let u = 0;
-  while (v >= 1024 && u < units.length - 1) {
-    v /= 1024;
-    u++;
-  }
-  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
-};
 
 /** The long form: everything the short one had to leave out. */
 export const statusLines = (
@@ -190,7 +167,8 @@ export const statusLines = (
   }
 
   if (usage) {
-    lines.push(`Account: ${bytes(usage.used)} of ${bytes(usage.quota)} used`);
+    // In MiB, like the header above it: one figure, one unit, on every surface that shows it.
+    lines.push(`Account: ${mib(usage.used)} of ${mib(usage.quota)} used`);
     if (usage.frozen) {
       // Said in full, because every part of it is a question somebody would ask next: what
       // stopped, what still works, and what to do about it (SH-20).

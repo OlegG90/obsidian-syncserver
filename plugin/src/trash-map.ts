@@ -12,19 +12,11 @@
  * worse reason to hide something than to show it plainly. `VaultScopes.readName` is the
  * lenient reader that answers "the name, or the stand-in".
  */
+import type { TrashEntry } from './api/client.js';
 import type { VaultScopes } from './share-keys.js';
 
 /** One entry of the trash, as the server reports it (`GET /vaults/:id/trash`). */
-export interface TrashEntryRow {
-  node_id: string;
-  parent_id: string | null;
-  name_enc: string | null;
-  type: string;
-  deleted_at: string;
-  versions: number;
-  name_key_id: string | null;
-  share_id: string | null;
-}
+export type TrashEntryRow = TrashEntry;
 
 /** One row of the trash, as a screen shows it. */
 export interface TrashRow {

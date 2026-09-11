@@ -12,7 +12,6 @@
 import { App, Modal, Setting } from 'obsidian';
 import type { VaultChoice } from '../session/index.js';
 
-/** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
 /**
  * What to call a folder somebody shared with you.
  *
@@ -36,6 +35,7 @@ export const askFolderName = (app: App, suggestion: string): Promise<string | un
     ).open();
   });
 
+/** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
 export const askPassphrase = (app: App): Promise<string | undefined> =>
   new Promise((resolve) => {
     const modal = new PassphraseModal(app, resolve);

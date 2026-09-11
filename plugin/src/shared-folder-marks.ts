@@ -14,6 +14,7 @@
  */
 import { sharedFolderCss } from './obsidian/shared-marks.js';
 import type { ShareRow } from './share-flow.js';
+import type { JoinedShare } from './api/client.js';
 
 /**
  * What `GET /shares` says about one share this account is in, cut to what the marks need.
@@ -21,13 +22,7 @@ import type { ShareRow } from './share-flow.js';
  * `vault_id` is omitted on purpose — nothing here cares which vault a share was created in,
  * only where its root lands in this one.
  */
-export interface JoinedShareWire {
-  share_id: string;
-  is_initiator: boolean;
-  state: string;
-  /** This member's OWN root for the share — a different node in each participant's vault. */
-  root_node_id: string | null;
-}
+export type JoinedShareWire = Omit<JoinedShare, 'vault_id'>;
 
 /** What the marks module needs that only main.ts can supply. */
 export interface SharedFolderMarksDeps {

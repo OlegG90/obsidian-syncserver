@@ -21,13 +21,12 @@
  * So the opening is the value. `withVault` hands one out; nothing else can be assembled by accident,
  * because assembling it is no longer something a caller does.
  *
- * **`handle` is still here**, and deliberately narrow in use: two operations need the account identity
- * rather than the vault (receiving a share is sealed to the account, not to a vault), and hiding it
- * would only make those two reach around this value instead of through it.
+ * No session handle rides along. The two operations it was kept for — leaving and inviting, which
+ * need a share key sealed to the account — reopened that key from the handle, and `scopes` already
+ * holds it (`VaultScopes.shareKey`).
  */
 import type { SyncClient } from './api/client.js';
 import type { SyncEngine } from './engine/engine.js';
-import type { Handle } from './session/session.js';
 import type { VaultScopes } from './share-keys.js';
 
 export interface BoundVault {
@@ -46,6 +45,4 @@ export interface BoundVault {
    * whole tree; the ones that do not should not pay for it to exist.
    */
   paths(): Promise<Map<string, string>>;
-  /** The session handle, for the two operations whose subject is the account rather than the vault. */
-  handle: Handle;
 }

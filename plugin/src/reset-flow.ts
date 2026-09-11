@@ -15,7 +15,8 @@
  *   forgotten what it synced against a server that still holds everything, and the next pass would
  *   re-upload the lot as new files beside the old ones.
  */
-import { busyLine, type Gate } from './gate.js';
+import { busyNotice, type Gate } from './gate.js';
+import { errorText } from './error-text.js';
 
 export interface ResetFlowDeps {
   /** The one gate every operation family shares — one operation at a time, across all of them. */
@@ -41,7 +42,7 @@ export const openResetFlow = (deps: ResetFlowDeps): ResetFlow => ({
     // Taken synchronously before any await, as everywhere else: two presses arrive as two calls before
     // either has reached the network.
     if (!deps.gate.tryBegin('a reset')) {
-      deps.notify(`SyncServer: ${busyLine(deps.gate.holding() ?? 'another operation')}`, 8000);
+      deps.notify(busyNotice(deps.gate), 8000);
       return false;
     }
 
@@ -52,7 +53,7 @@ export const openResetFlow = (deps: ResetFlowDeps): ResetFlow => ({
     } catch (e) {
       // The gate is released by the `finally` below, so a failed reset leaves the device exactly as it
       // was: the server refused, and nothing here has forgotten anything.
-      deps.notify(`SyncServer: the reset failed — ${e instanceof Error ? e.message : String(e)}`, 12000);
+      deps.notify(`SyncServer: the reset failed — ${errorText(e)}`, 12000);
       return false;
     } finally {
       deps.gate.end();

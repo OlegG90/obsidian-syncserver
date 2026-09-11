@@ -5,7 +5,7 @@
  * `connect`, Argon2id in `open`, tokens set by hand on a client the engine then borrowed.
  * Each piece was right; what was missing was a module. The session owns the lifecycle and
  * nothing else: no persistence (the plugin owns `data.json`), no UI (the plugin owns the
- * passphrase modal), no wire vocabulary (`SyncClient` keeps that, and `tryRefresh` stays in
+ * passphrase modal), no wire vocabulary (`SyncClient` keeps that, and `refreshToken` stays in
  * it — the seam is tested there).
  *
  * Two entry points, bound to the real derivation at the edge (see `index.ts`):
@@ -26,7 +26,7 @@
  *
  * - **persist.** It returns the record; the plugin stores it. `data.json` is worthless
  *   without the passphrase, and a persisted refresh token would quietly change that (docs/06).
- * - **re-login on refresh failure.** `tryRefresh` already distinguishes `device_revoked`;
+ * - **re-login on refresh failure.** `refreshToken` already distinguishes `device_revoked`;
  *   building a hook here would repeat it one layer up. A sync that cannot be re-logged-in
  *   surfaces its own 401.
  * - **check the passphrase.** `open()` on an already-open session ignores the phrase. That is
@@ -40,7 +40,7 @@ import {
   authSecret,
   deriveKek,
   kekVerifier,
-  recoveryCodeHash,
+  humanCodeHash,
   unwrapIdentity,
   unwrapWithRecovery,
   vaultKey,
@@ -57,6 +57,7 @@ import { SyncClient } from '../api/client.js';
 import { openTreeCache, type TreeCache } from '../engine/tree-cache.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
+import { errorText } from '../error-text.js';
 
 /**
  * The HPKE `info` for a seed envelope. It names what the envelope is for, so one made for
@@ -116,7 +117,6 @@ export interface Derivation {
   open(passphrase: string, accountSalt: Uint8Array, kdfParams: KdfParams, wrappedSeed: string): OpenedAccount;
 }
 
-/** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
 /**
  * What a caller may answer when asked which vault a device is for (issue #116).
  *
@@ -133,13 +133,10 @@ export type VaultChoice =
 /** Put the account's vaults, by name, to whoever can ask. */
 export type AskVault = (vaults: { id: string; name: string }[]) => Promise<VaultChoice>;
 
-export interface PairArgs {
+/** What every route that brings this device into an existing account carries besides its proof. */
+interface JoiningArgs {
   serverUrl: string;
   login: string;
-  passphrase: string;
-  pairingCode: string;
-  /** Only needed when the account holds more than one vault. */
-  vaultId?: string;
   /**
    * Ask which vault this device is for, by name (issue #117, issue #116).
    *
@@ -152,23 +149,15 @@ export interface PairArgs {
   devicePlatform?: string;
 }
 
-/** What `recover()` needs: where, who, and the passphrase — everything the user carries in their head. */
-export interface RecoverArgs {
-  serverUrl: string;
-  login: string;
+/** What `pair()` needs: where, who, the code read off the other device, and the passphrase. */
+export interface PairArgs extends JoiningArgs {
   passphrase: string;
-  /** Only needed when the account holds more than one vault. */
-  vaultId?: string;
-  /**
-   * Ask which vault this device is for, by name (issue #117, issue #116).
-   *
-   * Optional, and shaped as a question rather than a flag: a caller with no way to ask — a
-   * test, a headless flow — passes nothing and keeps the old silent behaviour, while one with
-   * a screen puts the vaults in front of the person before adoption merges anything.
-   */
-  askVault?: AskVault;
-  deviceName?: string;
-  devicePlatform?: string;
+  pairingCode: string;
+}
+
+/** What `recover()` needs: where, who, and the passphrase — everything the user carries in their head. */
+export interface RecoverArgs extends JoiningArgs {
+  passphrase: string;
 }
 
 /**
@@ -178,17 +167,11 @@ export interface RecoverArgs {
  * code has none, and an account left under the forgotten phrase would be openable by its code
  * and nothing else, for ever.
  */
-export interface RecoverWithCodeArgs {
-  serverUrl: string;
-  login: string;
+export interface RecoverWithCodeArgs extends JoiningArgs {
   /** As the person kept it. Normalised before it is sent — the server hashes what it is handed. */
   code: string;
   /** The passphrase this account will have from now on. */
   passphrase: string;
-  vaultId?: string;
-  askVault?: AskVault;
-  deviceName?: string;
-  devicePlatform?: string;
 }
 
 /** What connect() needs that the plugin cannot know: the raw vault name, device strings, and the passphrase itself. */
@@ -345,18 +328,15 @@ export class Session {
   private static async chooseVault(
     client: SyncClient,
     seed: Uint8Array,
-    wanted: string | undefined,
     purpose: string,
     ask?: AskVault,
   ): Promise<string> {
     const rows = await client.listVaults();
-    // Already decided by the caller: they named one, so there is nothing to ask about.
-    if (wanted) return wanted;
 
     if (!ask) {
       if (rows.length === 1) return rows[0]!.id;
       throw new Error(
-        `this account has ${rows.length} vaults; name the one to ${purpose}: ${rows.map((v) => v.id).join(', ')}`,
+        `this account has ${rows.length} vaults, and nothing here can ask which one to ${purpose}: ${rows.map((v) => v.id).join(', ')}`,
       );
     }
 
@@ -446,7 +426,7 @@ export class Session {
         this.conn.wrappedSeed,
       );
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = errorText(e);
       // A version or algorithm the client does not know is a different sentence and keeps
       // its own; only the tag failure is rephrased.
       if (/unknown (wrapping version|algorithm)/.test(reason)) throw e;
@@ -589,7 +569,9 @@ export class Session {
     // Opened before it is stored. The server proved the verifier matches; this proves the
     // envelope it handed back is one this passphrase actually opens, and a device that stored
     // an unopenable envelope would be locked out at the next restart with nothing to try.
-    this.derivation.open(passphrase, accountSalt, this.conn.kdfParams, wrapped_seed);
+    // With the key already derived above — a second derivation is another 64 MiB of Argon2id
+    // for an answer this one already holds.
+    openSealed(kek, wrapped_seed);
     this.conn.wrappedSeed = wrapped_seed;
     this.stale = false;
   }
@@ -663,7 +645,7 @@ export class Session {
     const { replaced } = await this.use((h) =>
       h.client.setRecoveryCode({
         recovery_key: wrapForRecovery(seed, code, accountSalt),
-        recovery_code_hash: recoveryCodeHash(code),
+        recovery_code_hash: humanCodeHash(code),
       }),
     );
     return { code, replaced };
@@ -746,21 +728,19 @@ export class Session {
 
     const { pairing_id } = await client.beginPairing({
       device_pubkey: toBase64(ephemeral.publicKey),
-      pairing_token_hash: toHex(sha256(utf8(code))),
+      pairing_token_hash: humanCodeHash(code),
     });
 
-    let claimed = await client.claimPairing(pairing_id, {
-      pairing_secret: code,
-      name: args.deviceName ?? 'obsidian',
-      platform: args.devicePlatform ?? 'unknown',
-    });
-    while (!claimed) {
-      if (!(await poll())) throw new Error('pairing was cancelled before it was approved');
-      claimed = await client.claimPairing(pairing_id, {
+    const claim = () =>
+      client.claimPairing(pairing_id, {
         pairing_secret: code,
         name: args.deviceName ?? 'obsidian',
         platform: args.devicePlatform ?? 'unknown',
       });
+    let claimed = await claim();
+    while (!claimed) {
+      if (!(await poll())) throw new Error('pairing was cancelled before it was approved');
+      claimed = await claim();
     }
 
     const envelope = fromBase64(claimed.seed_envelope);
@@ -782,7 +762,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'sync', args.askVault);
+    const vaultId = await Session.chooseVault(client, seed, 'sync', args.askVault);
 
     return Session.finishBootstrap(
       {
@@ -860,7 +840,7 @@ export class Session {
       accountSalt,
     });
 
-    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.askVault);
+    const vaultId = await Session.chooseVault(client, seed, 'recover into', args.askVault);
 
     return Session.finishBootstrap(
       {
@@ -948,7 +928,7 @@ export class Session {
       kek_verifier: kekVerifier(kek, args.login, accountSalt),
     });
 
-    const vaultId = await Session.chooseVault(client, seed, args.vaultId, 'recover into', args.askVault);
+    const vaultId = await Session.chooseVault(client, seed, 'recover into', args.askVault);
 
     return Session.finishBootstrap(
       {

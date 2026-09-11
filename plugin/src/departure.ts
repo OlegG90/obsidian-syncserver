@@ -12,22 +12,13 @@
  * mapping is pure: rows in, `PlannedItem[]` out, with a `VaultScopes`-shaped seam and a
  * path table the caller has already resolved.
  */
+import type { ReplicaEntry } from './api/client.js';
 import { decryptName } from './crypto/scope.js';
 import type { VaultScopes } from './share-keys.js';
 import type { PlannedItem } from './sharing.js';
 
-/** One row of the replica, as the server reports it (`GET /shares/:id/replica`). */
-export interface ReplicaRow {
-  node_id: string;
-  name_enc: string | null;
-  name_key_id: string | null;
-  deleted: boolean;
-  sha256: string | null;
-  /** The server's answer to "does this still need KV material" — not the client's guess. */
-  needs_vault_material: boolean;
-  /** Superseded blobs of the same node that still owe an envelope; no tag is possible. */
-  history_needing_material: string[];
-}
+/** One row of the replica, as the server reports it — everything a departure reads of it. */
+export type ReplicaRow = Omit<ReplicaEntry, 'type'>;
 
 /**
  * Turn the replica listing into the plan a departure performs.
