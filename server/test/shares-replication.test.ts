@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
+import { catchUpShare } from '../src/shares/catchup.js';
 import {
   activeShare,
   auth,
@@ -351,7 +352,7 @@ describe('history arrives with the folder', () => {
     const theirs = await theirCopyOf(file.nodeId);
     const versions = await w.db.query<{ rev: string; author: string }>(
       `SELECT rev::text AS rev, author_id AS author FROM versions
-        WHERE vault_id = $1 AND node_id = $2 ORDER BY rev`,
+        WHERE vault_id = $1 AND node_id = $2 ORDER BY versions.rev`,
       [w.strangerVaultId, theirs],
     );
     assert.equal(versions.length, 2, 'both revisions came across');
@@ -630,5 +631,262 @@ describe('reading the CONTENT of a folder somebody shared', () => {
     });
     const keys = (r.json().keys ?? []) as { scope_id: string }[];
     assert.ok(!keys.some((k) => k.scope_id === ks), 'the share key is no longer theirs to use');
+  });
+});
+
+/** The initiator's current revision of a node, which every write to it must match. */
+const revOf = async (nodeId: string): Promise<string> =>
+  (await w.db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [w.vaultId, nodeId]))!.rev;
+
+/** Move and rename in one, as the client does — the initiator's own write. */
+const moveTo = async (nodeId: string, parentId: string, name: string, ks: string): Promise<void> => {
+  const r = await w.app.inject({
+    method: 'POST',
+    url: `/vaults/${w.vaultId}/nodes/${nodeId}/move`,
+    headers: { ...auth(), 'if-match': await revOf(nodeId) },
+    payload: { parent_id: parentId, name_enc: b64(name), name_hmac: sha(Buffer.from(name)), name_key_id: ks },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+};
+
+const trash = async (nodeId: string): Promise<void> => {
+  const r = await w.app.inject({
+    method: 'DELETE',
+    url: `/vaults/${w.vaultId}/nodes/${nodeId}`,
+    headers: { ...auth(), 'if-match': await revOf(nodeId) },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+};
+
+/** Restore one version of a node: the node's oldest unless told otherwise. */
+const restore = async (nodeId: string, which: 'oldest' | 'newest' = 'oldest'): Promise<void> => {
+  const v = await w.db.one<{ rev: string }>(
+    `SELECT rev::text AS rev FROM versions WHERE vault_id = $1 AND node_id = $2
+      ORDER BY versions.rev ${which === 'oldest' ? 'ASC' : 'DESC'} LIMIT 1`,
+    [w.vaultId, nodeId],
+  );
+  const r = await w.app.inject({
+    method: 'POST',
+    url: `/vaults/${w.vaultId}/restore`,
+    headers: auth(),
+    payload: { node_id: nodeId, rev: Number(v!.rev) },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+};
+
+const freezeStranger = () => w.db.query(`UPDATE users SET frozen_at = now() WHERE id = $1`, [w.strangerId]);
+
+/** Lift the freeze and catch the stranger's copy up, as a thaw does. */
+const thawStranger = async (shareId: string) => {
+  await w.db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [w.strangerId]);
+  return w.db.tx((c) => catchUpShare(c, { userId: w.strangerId, vaultId: w.strangerVaultId }, shareId));
+};
+
+/** The stranger's copy of an item, as their vault holds it. */
+const theirNode = async (srcNodeId: string) => {
+  const id = await theirCopyOf(srcNodeId);
+  assert.ok(id, 'their replica holds the item');
+  const row = await w.db.one<{
+    id: string; parentId: string; nameEnc: string; ancestry: string[]; sha256: string | null; rev: string; deleted: boolean;
+  }>(
+    `SELECT id, parent_id AS "parentId", encode(name_enc,'base64') AS "nameEnc", ancestry,
+            encode(sha256,'hex') AS sha256, rev::text AS rev, deleted_at IS NOT NULL AS deleted
+       FROM nodes WHERE vault_id = $1 AND id = $2`,
+    [w.strangerVaultId, id],
+  );
+  return row!;
+};
+
+/** A node's versions in one vault, oldest first. */
+const versionsOf = (vaultId: string, nodeId: string) =>
+  w.db.query<{ rev: string; sha256: string; authorId: string }>(
+    `SELECT rev::text AS rev, encode(sha256,'hex') AS sha256, author_id AS "authorId"
+       FROM versions WHERE vault_id = $1 AND node_id = $2 ORDER BY versions.rev`,
+    [vaultId, nodeId],
+  );
+
+describe('a frozen member catches up with everything, not only content (#337)', () => {
+  it('takes the renames and moves made while they were frozen, with the subtree following', async () => {
+    const { shareId, inside, ks } = await sharedWith('catchup-move');
+    const a = await createNode('folder', `a-${randomUUID()}`, inside, ks);
+    const b = await createNode('folder', `b-${randomUUID()}`, inside, ks);
+    const child = await createNode('folder', `child-${randomUUID()}`, a, ks);
+    const fileName = `note-${randomUUID()}.md`;
+    const file = await createFile(inside, fileName, `body ${randomUUID()}`, ks);
+    const other = await createFile(inside, `other-${randomUUID()}.md`, `body ${randomUUID()}`, ks);
+
+    // Three shapes, kept apart so each is its own evidence: a new parent under the same name,
+    // a new name in the same place, and both at once.
+    await freezeStranger();
+    await moveTo(file.nodeId, b, fileName, ks);
+    const otherName = `other-renamed-${randomUUID()}.md`;
+    await moveTo(other.nodeId, inside, otherName, ks);
+    const aName = `a-renamed-${randomUUID()}`;
+    await moveTo(a, b, aName, ks);
+    assert.notEqual((await theirNode(file.nodeId)).parentId, await theirCopyOf(b), 'the freeze held the moves back');
+
+    const done = await thawStranger(shareId);
+    assert.equal(done.moved, 3, 'every move is delivered');
+
+    const theirB = await theirCopyOf(b);
+    const theirFile = await theirNode(file.nodeId);
+    assert.equal(theirFile.parentId, theirB, 'the file is where the source has it');
+    assert.equal(theirFile.nameEnc, b64(fileName), 'under the name it kept');
+
+    const theirOther = await theirNode(other.nodeId);
+    assert.equal(theirOther.parentId, await theirCopyOf(inside), 'the renamed file stayed where it was');
+    assert.equal(theirOther.nameEnc, b64(otherName), 'under its new name');
+
+    const theirA = await theirNode(a);
+    assert.equal(theirA.parentId, theirB);
+    assert.equal(theirA.nameEnc, b64(aName));
+    assert.ok(
+      (await theirNode(child)).ancestry.includes(theirB!),
+      'and the moved folder took its subtree along, rather than leaving it claiming the old chain',
+    );
+
+    const again = await w.db.tx((c) => catchUpShare(c, { userId: w.strangerId, vaultId: w.strangerVaultId }, shareId));
+    assert.deepEqual({ moved: again.moved, restored: again.restored }, { moved: 0, restored: 0 }, 'and a second pass moves nothing');
+  });
+
+  it('survives a gap that hands names from one file to another', async () => {
+    // Sibling names are unique among live nodes, and the gap reorders them: a swap, and a
+    // file deleted and another created under its name. The end state is sound; a walk that
+    // applied it node by node would collide halfway and fail the thaw.
+    const { shareId, inside, ks } = await sharedWith('catchup-names');
+    const xName = `x-${randomUUID()}.md`;
+    const yName = `y-${randomUUID()}.md`;
+    const zName = `z-${randomUUID()}.md`;
+    const x = await createFile(inside, xName, `x ${randomUUID()}`, ks);
+    const y = await createFile(inside, yName, `y ${randomUUID()}`, ks);
+    const z = await createFile(inside, zName, `z ${randomUUID()}`, ks);
+
+    await freezeStranger();
+    await moveTo(x.nodeId, inside, `swap-${randomUUID()}`, ks);
+    await moveTo(y.nodeId, inside, xName, ks);
+    await moveTo(x.nodeId, inside, yName, ks);
+    await trash(z.nodeId);
+    const z2 = await createFile(inside, zName, `z again ${randomUUID()}`, ks);
+
+    const done = await thawStranger(shareId);
+    assert.equal(done.moved, 2);
+    assert.equal(done.deleted, 1);
+    assert.equal(done.created, 1);
+
+    assert.equal((await theirNode(x.nodeId)).nameEnc, b64(yName), 'the two names swapped');
+    assert.equal((await theirNode(y.nodeId)).nameEnc, b64(xName));
+    assert.equal((await theirNode(z.nodeId)).deleted, true, 'the old file is in the trash');
+    const theirZ2 = await theirNode(z2.nodeId);
+    assert.equal(theirZ2.nameEnc, b64(zName), 'and the new one holds its name');
+    assert.equal(theirZ2.deleted, false);
+  });
+
+  it('brings back what was restored from the trash while they were frozen', async () => {
+    const { shareId, inside, ks } = await sharedWith('catchup-undelete');
+    const file = await createFile(inside, `back-${randomUUID()}.md`, `body ${randomUUID()}`, ks);
+    await trash(file.nodeId);
+    assert.equal((await theirNode(file.nodeId)).deleted, true, 'the deletion reached them while they were live');
+
+    await freezeStranger();
+    await restore(file.nodeId, 'newest');
+
+    const done = await thawStranger(shareId);
+    assert.equal(done.restored, 1);
+    const theirs = await theirNode(file.nodeId);
+    assert.equal(theirs.deleted, false, 'their copy is out of the trash too');
+    assert.equal(theirs.sha256, file.sha256);
+  });
+});
+
+describe('a catch-up delivers history once, numbered as the member numbers it (#340)', () => {
+  it('does not repeat what propagation already brought, and the newest version is the head', async () => {
+    const { shareId, inside, ks } = await sharedWith('catchup-history');
+    const file = await createFile(inside, `hist-${randomUUID()}.md`, `v1 ${randomUUID()}`, ks);
+    await putFile(file, `v2 ${randomUUID()}`);
+
+    await freezeStranger();
+    await putFile(file, `v3 ${randomUUID()}`);
+    await putFile(file, `v4 ${randomUUID()}`);
+    // The source's revision counter pulled far ahead of the member's, so a copy numbered by
+    // the source's revisions would land above anything the member wrote itself.
+    for (let i = 0; i < 5; i++) await createNode('folder', `elsewhere-${randomUUID()}`);
+
+    const done = await thawStranger(shareId);
+    assert.equal(done.versions, 2, 'the two versions of the gap, not the two before it again');
+
+    const theirs = await theirNode(file.nodeId);
+    const source = await versionsOf(w.vaultId, file.nodeId);
+    const mine = await versionsOf(w.strangerVaultId, theirs.id);
+    assert.deepEqual(
+      mine.map((v) => v.sha256),
+      source.map((v) => v.sha256),
+      'one history, in order, with nothing twice',
+    );
+    assert.equal(mine.at(-1)!.sha256, theirs.sha256, 'the highest revision is the content the file holds');
+    assert.equal(mine.at(-1)!.rev, theirs.rev, 'and it is the revision the node itself carries');
+    assert.ok(mine.every((v) => v.authorId === w.userId), 'written by the person who wrote them (SH-19)');
+
+    const again = await w.db.tx((c) => catchUpShare(c, { userId: w.strangerId, vaultId: w.strangerVaultId }, shareId));
+    assert.equal(again.versions, 0, 'a second pass delivers nothing');
+  });
+
+  it('does not refill a version the member already thinned, above the head', async () => {
+    // Retention thins each vault on its own schedule. A catch-up that delivered every version
+    // "missing" would put an old one back — numbered above the current head.
+    const { shareId, inside, ks } = await sharedWith('catchup-thinned');
+    const file = await createFile(inside, `thin-${randomUUID()}.md`, `v1 ${randomUUID()}`, ks);
+    await putFile(file, `v2 ${randomUUID()}`);
+    const theirId = (await theirNode(file.nodeId)).id;
+    const oldest = (await versionsOf(w.strangerVaultId, theirId))[0]!;
+    await w.db.query(`DELETE FROM versions WHERE vault_id = $1 AND node_id = $2 AND rev = $3`, [
+      w.strangerVaultId,
+      theirId,
+      oldest.rev,
+    ]);
+
+    await freezeStranger();
+    await putFile(file, `v3 ${randomUUID()}`);
+
+    const done = await thawStranger(shareId);
+    assert.equal(done.versions, 1, 'only the version of the gap');
+    const mine = await versionsOf(w.strangerVaultId, theirId);
+    assert.equal(mine.length, 2, 'the thinned one stays thinned');
+    assert.equal(mine.at(-1)!.sha256, file.sha256, 'and the head is the current content');
+  });
+});
+
+describe('a restore inside a shared folder reaches every copy (#336)', () => {
+  it('puts the old content into the other member’s copy, as a new version', async () => {
+    const { inside, ks } = await sharedWith('restore-content');
+    const file = await createFile(inside, `r-${randomUUID()}.md`, `first ${randomUUID()}`, ks);
+    const first = file.sha256;
+    await putFile(file, `second ${randomUUID()}`);
+    const theirId = (await theirNode(file.nodeId)).id;
+    const before = (await versionsOf(w.strangerVaultId, theirId)).length;
+
+    await restore(file.nodeId, 'oldest');
+
+    const theirs = await theirNode(file.nodeId);
+    assert.equal(theirs.sha256, first, 'their copy holds the restored content');
+    const mine = await versionsOf(w.strangerVaultId, theirId);
+    assert.equal(mine.length, before + 1, 'as a new version — going back is something that happened');
+    assert.equal(mine.at(-1)!.sha256, first);
+  });
+
+  it('brings a deleted file back out of their trash, and the folder it was lifted with', async () => {
+    const { inside, ks } = await sharedWith('restore-undelete');
+    const folder = await createNode('folder', `d-${randomUUID()}`, inside, ks);
+    const file = await createFile(folder, `f-${randomUUID()}.md`, `body ${randomUUID()}`, ks);
+    await trash(file.nodeId);
+    await trash(folder);
+    assert.equal((await theirNode(folder)).deleted, true);
+    assert.equal((await theirNode(file.nodeId)).deleted, true);
+
+    await restore(file.nodeId, 'newest');
+
+    assert.equal((await theirNode(folder)).deleted, false, 'the lifted folder is out of their trash');
+    const theirs = await theirNode(file.nodeId);
+    assert.equal(theirs.deleted, false, 'and so is the file');
+    assert.equal(theirs.sha256, file.sha256);
   });
 });

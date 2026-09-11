@@ -120,24 +120,15 @@ export interface VersionRow {
    * is not a past. Omitted for a version being written now, which takes the default.
    */
   at?: string;
-  /**
-   * Tolerate a row that is already there.
-   *
-   * Only the catch-up needs it: it walks a whole replica and may meet versions a previous
-   * pass delivered. Everywhere else a collision means two writers claimed one revision, and
-   * that must fail rather than be absorbed.
-   */
-  ifAbsent?: boolean;
 }
 
-export const recordVersion = async (c: PoolClient, v: VersionRow): Promise<{ written: boolean }> => {
-  const res = await c.query(
+/** A collision fails: two writers claimed one revision, and that must not be absorbed. */
+export const recordVersion = async (c: PoolClient, v: VersionRow): Promise<void> => {
+  await c.query(
     `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id${v.at ? ', at' : ''})
-     VALUES ($1, $2, $3, decode($4,'hex'), $5, $6${v.at ? ', $7' : ''})
-     ${v.ifAbsent ? 'ON CONFLICT (vault_id, node_id, rev) DO NOTHING' : ''}`,
+     VALUES ($1, $2, $3, decode($4,'hex'), $5, $6${v.at ? ', $7' : ''})`,
     v.at
       ? [v.vaultId, v.nodeId, v.rev, v.sha256, v.size, v.authorId, v.at]
       : [v.vaultId, v.nodeId, v.rev, v.sha256, v.size, v.authorId],
   );
-  return { written: res.rowCount === 1 };
 };

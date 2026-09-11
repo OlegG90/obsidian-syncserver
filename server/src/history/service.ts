@@ -14,6 +14,10 @@ import { oneFrom } from '../db.js';
 import { ownerAndFrozen } from '../account.js';
 import { txGuarded, type Refusal } from '../refusal.js';
 import { journalEntry, nextRev } from '../revision.js';
+import { fanOut } from '../shares/propagate.js';
+
+/** Which share a node is part of, if any — what `fanOut` reads to decide it travels. */
+type Shared = { shareId: string | null; shareItemId: string | null };
 
 /** The schema's own refusals, returned rather than thrown — see `nodes/service.ts`. */
 export type Version = { rev: number; sha256: string; size: number; at: string; author_id: string };
@@ -131,8 +135,9 @@ export const restoreNode = async (
     if (access.kind === 'frozen') return { kind: 'frozen' } as Refusal;
     const userId = access.userId;
 
-    const node = await c.query<{ parentId: string | null; nameHmac: Buffer | null; ancestry: string[]; type: string }>(
-      `SELECT parent_id AS "parentId", name_hmac AS "nameHmac", ancestry, type::text AS type
+    const node = await c.query<{ parentId: string | null; nameHmac: Buffer | null; ancestry: string[]; type: string } & Shared>(
+      `SELECT parent_id AS "parentId", name_hmac AS "nameHmac", ancestry, type::text AS type,
+              share_id AS "shareId", share_item_id AS "shareItemId"
          FROM nodes WHERE vault_id = $1 AND id = $2 FOR UPDATE`,
       [input.vaultId, input.nodeId],
     );
@@ -148,8 +153,9 @@ export const restoreNode = async (
     // The ancestors first, outermost in: a name collision anywhere in the chain stops the
     // whole restore, and finding out after half of it had been lifted would leave the tree
     // in a state nobody asked for.
-    const deletedAncestors = await c.query<{ id: string; parentId: string | null; nameHmac: Buffer | null }>(
-      `SELECT id, parent_id AS "parentId", name_hmac AS "nameHmac"
+    const deletedAncestors = await c.query<{ id: string; parentId: string | null; nameHmac: Buffer | null } & Shared>(
+      `SELECT id, parent_id AS "parentId", name_hmac AS "nameHmac",
+              share_id AS "shareId", share_item_id AS "shareItemId"
          FROM nodes
         WHERE vault_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NOT NULL
         ORDER BY array_length(ancestry, 1)`,
@@ -169,6 +175,7 @@ export const restoreNode = async (
       await c.query(`UPDATE nodes SET deleted_at = NULL, rev = $3 WHERE vault_id = $1 AND id = $2`,
         [input.vaultId, a.id, rev]);
       await journalEntry(c, input.vaultId, rev, a.id, 'put');
+      await fanOut(c, { kind: 'undelete', vaultId: input.vaultId, shareId: a.shareId, shareItemId: a.shareItemId });
       lifted.push(a.id);
     }
 
@@ -176,12 +183,18 @@ export const restoreNode = async (
     const sha = version.rows[0]!.sha256;
     const size = Number(version.rows[0]!.size);
 
-    await c.query(
+    const restored = await c.query<{ mtime: Date }>(
       `UPDATE nodes SET deleted_at = NULL, sha256 = $3, size = $4, rev = $5, mtime = now()
-        WHERE vault_id = $1 AND id = $2`,
+        WHERE vault_id = $1 AND id = $2
+    RETURNING mtime`,
       [input.vaultId, input.nodeId, n.type === 'folder' ? null : sha, n.type === 'folder' ? null : size, rev],
     );
     await journalEntry(c, input.vaultId, rev, input.nodeId, 'put');
+
+    // Inside a share, every other copy restores too (#336) — the same two acts a restore is
+    // here: out of the trash if it was there, then the old content as an ordinary put, which
+    // overwrites what the other members hold exactly as an edit would (docs/04).
+    await fanOut(c, { kind: 'undelete', vaultId: input.vaultId, shareId: n.shareId, shareItemId: n.shareItemId });
 
     if (n.type !== 'folder') {
       // The author is the person restoring, not whoever wrote the version being restored:
@@ -198,6 +211,17 @@ export const restoreNode = async (
       // but it is a new reference, and it changes in the same transaction as the reference
       // that caused it (invariant 8).
       await claimBlob(c, userId, sha.toString('hex'));
+
+      await fanOut(c, {
+        kind: 'put',
+        vaultId: input.vaultId,
+        shareId: n.shareId,
+        shareItemId: n.shareItemId,
+        sha256: sha.toString('hex'),
+        size,
+        mtime: restored.rows[0]!.mtime.toISOString(),
+        authorId: userId,
+      });
     }
 
     return { rev, lifted };

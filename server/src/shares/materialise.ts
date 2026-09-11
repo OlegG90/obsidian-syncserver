@@ -3,40 +3,34 @@
  * half of both arrival paths.
  *
  * Joining and catching up are **different walks**, not one walk duplicated: joining
- * *creates* an empty replica (a source-id → new-id mapping, every node inserted fresh,
- * history renumbered), while catching up *levels* an existing replica (correspondence by
- * `share_item_id`, nodes updated in place, the source's own revisions kept). What the two
- * genuinely share is this module: placing the version rows behind a counterpart, keeping
- * authorship (SH-19) and moments (SH-23), and claiming each blob once for the receiving
- * account. That common core is deliberately not a single "walk" abstraction — the iteration
- * bodies differ enough that merging them would be a module whose deletion test fails.
+ * *creates* an empty replica (a source-id → new-id mapping, every node inserted fresh),
+ * while catching up *levels* an existing replica (correspondence by `share_item_id`, nodes
+ * updated in place, only the history it lacks). What the two genuinely share is this module:
+ * placing the version rows behind a counterpart, keeping authorship (SH-19) and moments
+ * (SH-23), and claiming each blob once for the receiving account. That common core is
+ * deliberately not a single "walk" abstraction — the iteration bodies differ enough that
+ * merging them would be a module whose deletion test fails.
  *
- * The difference between the two modes:
+ * **Revisions are the receiving vault's own**, reserved by the caller **before** the write
+ * that creates or updates the head — so the head is the highest revision by construction,
+ * the invariant `retention.ts` reads when it decides what is history at all (`is_head =
+ * max(rev)` is what the ladder spares). The catch-up used to write under the SOURCE's
+ * revision numbers instead, which duplicated every version a member already had by
+ * propagation and could leave an old one numbered above the head (#340).
  *
- * - **`renumber`** is joining's: a fresh copy cannot collide, so history is written
- *   unconditionally under revisions the caller reserved **before** creating the head. The
- *   head is then the highest revision by construction — the invariant `retention.ts` reads
- *   when it decides what is history at all (`is_head = max(rev)` is what the ladder spares).
- * - **`keep`** is catching-up's: the replica may already hold some of these from an earlier
- *   pass, so a collision is absorbed rather than failed (`ifAbsent`), and only what was
- *   actually written is claimed.
- *
- * Both modes keep the **original author** (SH-19) and the **original moment** (SH-23): a
- * past that all happened at the instant of arrival is not a past. And both claim each blob
- * once for the account receiving the content — which the catch-up used to skip entirely,
- * leaving its member uncharged for bytes they now reference.
+ * Both keep the **original author** (SH-19) and the **original moment** (SH-23): a past that
+ * all happened at the instant of arrival is not a past. And both claim each blob once for
+ * the account receiving the content — which the catch-up used to skip entirely, leaving its
+ * member uncharged for bytes they now reference.
  */
 import type { PoolClient } from 'pg';
 import { claimBlob, recordVersion } from '../holdings.js';
-
-/** How the copy places revisions: fresh, or the source's own. */
-export type CopyMode = 'renumber' | 'keep';
 
 /** One version to place in a counterpart, already resolved to the node it belongs to. */
 export interface VersionToCopy {
   /** The counterpart node this history belongs to. */
   targetNodeId: string;
-  /** `renumber`: a revision reserved below the head; `keep`: the source's own. */
+  /** A revision of the receiving vault, reserved by the caller. */
   rev: number;
   sha256: string;
   size: number;
@@ -48,20 +42,17 @@ export interface VersionToCopy {
 /**
  * Place versions into counterparts, keeping authorship and moments, claiming each blob once.
  *
- * `renumber` writes under the revisions the caller reserved, so the caller must reserve them
- * and create the head **after** this returns. `keep` writes under the source's own revisions
- * and absorbs collisions, so a repeat pass writes nothing and claims nothing — which is what
- * makes a second catch-up idempotent.
+ * Writes under the revisions the caller reserved. A collision is a failure, not something to
+ * absorb: two writers claiming one revision is a defect, and absorbing it would hide one.
  *
- * @returns how many version rows were actually written.
+ * @returns how many version rows were written.
  */
 export const copyVersions = async (
   c: PoolClient,
-  opts: { vaultId: string; userId: string; versions: VersionToCopy[]; mode: CopyMode },
+  opts: { vaultId: string; userId: string; versions: VersionToCopy[] },
 ): Promise<number> => {
-  let written = 0;
   for (const v of opts.versions) {
-    const out = await recordVersion(c, {
+    await recordVersion(c, {
       vaultId: opts.vaultId,
       nodeId: v.targetNodeId,
       rev: v.rev,
@@ -69,13 +60,8 @@ export const copyVersions = async (
       size: v.size,
       authorId: v.authorId,
       at: v.at,
-      ifAbsent: opts.mode === 'keep',
     });
-    // Nothing written means the replica already had it — an absorbed collision. Only a row
-    // that was actually placed is claimed, or a repeat pass would charge the account twice.
-    if (opts.mode === 'keep' && !out.written) continue;
     await claimBlob(c, opts.userId, v.sha256);
-    written++;
   }
-  return written;
+  return opts.versions.length;
 };
