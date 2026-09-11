@@ -731,8 +731,8 @@ export const joinShare = async (
         [share.vaultId, n.id],
       );
       // Revisions for the history are taken BEFORE the node's own, so the head is the
-      // highest and "latest version" means what it says. `copyVersions`' `renumber` mode
-      // writes under these, after which `createCounterpart` below allocates the head — the
+      // highest and "latest version" means what it says. `copyVersions` writes under these,
+      // after which `createCounterpart` below allocates the head — the
       // head is then the highest revision by construction, which retention.ts reads.
       const pastRevs: number[] = [];
       for (let i = 0; i < past.rows.length - 1; i++) pastRevs.push(await nextRev(c, input.vaultId));
@@ -788,7 +788,6 @@ export const joinShare = async (
         await copyVersions(c, {
           vaultId: input.vaultId,
           userId,
-          mode: 'renumber',
           versions: past.rows.slice(0, -1).map((v, i) => ({
             targetNodeId: newId,
             rev: pastRevs[i]!,

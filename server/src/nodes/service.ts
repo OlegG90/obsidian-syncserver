@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { writeMaterial, type Material } from '../material.js';
 import { fanOut } from '../shares/propagate.js';
 import { journalEntry, nextRev } from '../revision.js';
+import { rewriteSubtreeAncestry } from '../ancestry.js';
 
 /**
  * Which of these content tags the vault's own key scope already knows, and what address
@@ -313,13 +314,7 @@ export const moveNode = async (
 
     // The subtree follows in the same statement: everything that had the moved node in its
     // ancestry keeps the part below it and takes the new chain above.
-    await c.query(
-      `UPDATE nodes
-          SET ancestry = $3::uuid[] || $2::uuid ||
-                         ancestry[array_position(ancestry, $2::uuid) + 1 : array_length(ancestry, 1)]
-        WHERE vault_id = $1 AND ancestry @> ARRAY[$2::uuid]`,
-      [input.vaultId, input.nodeId, newAncestry],
-    );
+    await rewriteSubtreeAncestry(c, input.vaultId, input.nodeId, newAncestry);
 
     await journalEntry(c, input.vaultId, rev, input.nodeId, 'move', row.parentId);
 

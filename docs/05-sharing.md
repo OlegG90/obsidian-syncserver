@@ -94,12 +94,16 @@ history. The remedy is a new share, which by SH-08 starts from nothing.
 
 ## Propagation
 
-A write inside a shared folder — put, delete or move — is applied by one server command/transaction to the
+A write inside a shared folder — put, delete, move, or a restore — is applied by one server command/transaction to the
 writer's own node and to corresponding nodes in the **live non-frozen** participant set: `joined_at` is set,
 `finalization_started_at` and `left_at` are unset, and the member's account is not frozen (SH-11, SH-20).
 Each is an ordinary node
 write in that vault: it bumps **that vault's** `head_rev`, appends to **that vault's** journal (AC-12), and
 appends a version row.
+
+A restore is two of those: the node leaves the trash in every copy (and so does each deleted ancestor it
+lifts), and a restored file's content travels as the put it is — a new put with an old hash (docs/04),
+which overwrites every other participant's copy exactly as an edit would.
 
 There is no queue and no eventual convergence among that set. Either every eligible replica advanced or none
 did. This is a service/API transaction contract, not a database-trigger guarantee; an integration test must
@@ -208,6 +212,12 @@ Two consequences worth knowing before they are met:
 
 Catching up delivers the **current state and the version history of the whole frozen interval** (SH-21) —
 not merely the latest snapshot. A freeze leaves no hole in the record.
+
+The current state is everything a node can go through, not only its content: created, deleted, renamed,
+moved, brought back from the trash. The history is numbered in the member's **own** revision sequence, like
+everything else in their vault, and starts after the last version they already hold — what reached them by
+propagation before the freeze is recognised and not delivered twice, and the newest version is the highest
+revision, which is what retention spares as the head.
 
 The history comes from another replica's `versions`, which lives by the retention policy, not from
 `journal`, which is a 90-day transport buffer. So a freeze that outlasts the journal TTL still catches up

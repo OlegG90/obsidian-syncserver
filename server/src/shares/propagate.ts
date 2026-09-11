@@ -12,7 +12,7 @@
  * (SH-11), and that ceiling exists for this reason rather than as a product limit.
  *
  * **One interface, not four.** The write path describes what happened to one node and hands
- * it over; deciding whether that fans out, to whom, and in which of the four shapes is this
+ * it over; deciding whether that fans out, to whom, and in which shape is this
  * module's alone. It used to be four guards and four `fanoutTargets` calls spread across
  * `nodes/service.ts`, each restating by hand what a write must be for it to travel — and the
  * four disagreed in shape even where they agreed in intent.
@@ -28,7 +28,7 @@
  */
 import type { PoolClient } from 'pg';
 import { claimBlob, recordVersion } from '../holdings.js';
-import { counterpartOf, createCounterpart } from './replica.js';
+import { counterpartOf, createCounterpart, moveCounterpart } from './replica.js';
 import { journalEntry } from '../revision.js';
 import { freezeIfOverQuota } from '../quota.js';
 import { nextRev } from '../revision.js';
@@ -75,6 +75,7 @@ export type FanoutEvent =
       authorId: string;
     }
   | { kind: 'delete'; vaultId: string; shareId: string | null; shareItemId: string | null }
+  | { kind: 'undelete'; vaultId: string; shareId: string | null; shareItemId: string | null }
   | {
       kind: 'move';
       vaultId: string;
@@ -91,7 +92,7 @@ export type FanoutEvent =
  *
  * The one place the guard, the set, and the shape are decided. A write outside any share
  * fans out to nobody; the targets are computed here at execution time rather than
- * remembered (docs/04); and which of the four shapes applies falls out of the event.
+ * remembered (docs/04); and which shape applies falls out of the event.
  *
  * **Nothing here can throw for a reason the write path should absorb.** A replica that
  * lacks the item is skipped, because it can only mean the item was created while that
@@ -118,9 +119,18 @@ export const fanOut = async (c: PoolClient, event: FanoutEvent): Promise<void> =
     case 'delete':
       await propagateDelete(c, targets, event.shareItemId!);
       break;
+    case 'undelete':
+      await propagateUndelete(c, targets, event.shareItemId!);
+      break;
     case 'move':
       await propagateMove(c, targets, { ...event, shareId: event.shareId!, shareItemId: event.shareItemId!, parentShareItemId: event.parentShareItemId! });
       break;
+    default: {
+      // A kind added to the union and not here is a compile error rather than a write that
+      // silently reaches nobody — which is how a restore went unshared (#336).
+      const unhandled: never = event;
+      throw new Error(`fan-out has no shape for ${(unhandled as { kind: string }).kind}`);
+    }
   }
 };
 
@@ -234,29 +244,37 @@ const propagateMove = async (c: PoolClient, targets: Target[], item: MoveItem): 
     const node = await counterpartOf(c, t.vaultId, item.shareItemId);
     const parent = await counterpartOf(c, t.vaultId, item.parentShareItemId);
     if (!node || !parent) continue;
+    await moveCounterpart(c, t.vaultId, node.id, parent, item);
+  }
+};
+
+/**
+ * A node brought back out of the trash (#336): by a restore of the node itself, or lifted as
+ * the deleted ancestor of one.
+ *
+ * Only the deletion is undone here. A restored file's content travels separately, as the
+ * ordinary put it is (docs/04: "a new put with an old hash"), which reaches only live copies
+ * — so this has to come first, or the put would find nothing to write to.
+ */
+const propagateUndelete = async (c: PoolClient, targets: Target[], shareItemId: string): Promise<void> => {
+  for (const t of targets) {
+    // Only a copy that is in the trash. One already live has nothing to lift, and a revision
+    // it did not need is a change every one of that member's devices would come and fetch.
+    const trashed = await c.query<{ id: string }>(
+      `SELECT id FROM nodes
+        WHERE vault_id = $1 AND share_item_id = $2 AND deleted_at IS NOT NULL
+          FOR UPDATE`,
+      [t.vaultId, shareItemId],
+    );
+    const node = trashed.rows[0];
+    if (!node) continue;
 
     const rev = await nextRev(c, t.vaultId);
-    const ancestry = [...parent.ancestry, parent.id];
-    const prevParent = await c.query<{ parentId: string | null }>(
-      `SELECT parent_id AS "parentId" FROM nodes WHERE vault_id = $1 AND id = $2`,
-      [t.vaultId, node.id],
-    );
-
-    await c.query(
-      `UPDATE nodes SET parent_id = $3, name_enc = decode($4,'base64'), name_hmac = decode($5,'hex'),
-                        name_key_id = $6, rev = $7, ancestry = $8
-        WHERE vault_id = $1 AND id = $2`,
-      [t.vaultId, node.id, parent.id, item.nameEnc, item.nameHmac, item.nameKeyId, rev, ancestry],
-    );
-    // The subtree follows, exactly as it does for a local move: descendants keep the part
-    // of their chain below the moved node and take the new chain above it.
-    await c.query(
-      `UPDATE nodes
-          SET ancestry = $3::uuid[] || $2::uuid ||
-                         ancestry[array_position(ancestry, $2::uuid) + 1 : array_length(ancestry, 1)]
-        WHERE vault_id = $1 AND ancestry @> ARRAY[$2::uuid]`,
-      [t.vaultId, node.id, ancestry],
-    );
-    await journalEntry(c, t.vaultId, rev, node.id, 'move', prevParent.rows[0]?.parentId ?? undefined);
+    await c.query(`UPDATE nodes SET deleted_at = NULL, rev = $3 WHERE vault_id = $1 AND id = $2`, [
+      t.vaultId,
+      node.id,
+      rev,
+    ]);
+    await journalEntry(c, t.vaultId, rev, node.id, 'put');
   }
 };
