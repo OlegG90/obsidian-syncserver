@@ -153,16 +153,93 @@ export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
  * Anything that is not a `check_violation` still throws. A unique violation or a
  * serialization failure usually means a defect on this side, and mapping them all to `400`
  * would file the server's own bugs under the caller's name.
+ *
+ * **A refusal the callback RETURNS rolls back, exactly like one the database throws** (#334).
+ * `db.tx` rolls back only on an exception, so a callback that wrote and then returned
+ * `{ kind: … }` used to have its writes committed under a refusal. Three share operations did
+ * exactly that, inside loops that meant to refuse the whole batch: `finalizeLeave` deleted a
+ * participant's entire version history and then refused, leaving them still in the share;
+ * `joinShare` marked a member joined and then refused with a half-built replica;
+ * `prepareShare` committed every item before the one it refused.
+ *
+ * Fixed here rather than at those three, because the trap was the mechanism: the next loop that
+ * refuses mid-batch would not know it needed to. Every caller was checked before this changed —
+ * the only others that write before refusing do so with a statement that matched no rows, so
+ * rolling it back changes nothing, and no audit `record()` precedes a refusal anywhere.
  */
 export const txGuarded = async <T>(
   db: { tx<R>(fn: (c: PoolClient) => Promise<R>): Promise<R> },
   fn: (c: PoolClient) => Promise<T>,
 ): Promise<T | Refusal> => {
   try {
-    return await db.tx(fn);
+    return await db.tx(async (c) => {
+      const out = await fn(c);
+      // Thrown so `db.tx` takes the path that rolls back; caught below and handed back as the
+      // answer it was. The caller sees the same refusal either way — only the commit changes.
+      if (isRefusal(out)) throw new RefusedInside(out);
+      return out;
+    });
   } catch (e) {
+    if (e instanceof RefusedInside) return e.refusal;
     const refusal = refusalFromDatabase(e);
     if (refusal) return refusal;
     throw e;
   }
 };
+
+/** Carries a returned refusal out through `db.tx`'s rollback. Never escapes `txGuarded`. */
+class RefusedInside extends Error {
+  constructor(readonly refusal: Refusal) {
+    super(`refused inside a transaction: ${refusal.kind}`);
+  }
+}
+
+/**
+ * Every refusal kind, typed as a record over the union so the compiler holds the two equal.
+ *
+ * A kind added to `Refusal` and missed here is a compile error, not a refusal that silently
+ * commits — which is the whole failure this set exists to prevent. An extra key is an error too.
+ */
+const REFUSAL_KINDS: Record<Refusal['kind'], true> = {
+  address_mismatch: true,
+  already_settled: true,
+  base_mismatch: true,
+  console_account: true,
+  device_revoked: true,
+  finalization_incomplete: true,
+  frozen: true,
+  initiator_cannot_be_removed: true,
+  invalid_write: true,
+  invite_failed: true,
+  name_taken: true,
+  named_by_a_share: true,
+  no_such_version: true,
+  not_approved: true,
+  not_found: true,
+  over_quota: true,
+  part_too_large: true,
+  parts_missing: true,
+  rate_limited: true,
+  rev_mismatch: true,
+  share_boundary: true,
+  share_not_active: true,
+  share_not_prepared: true,
+  share_not_preparing: true,
+  size_mismatch: true,
+  too_large: true,
+  too_many_unfinished: true,
+  vault_exists: true,
+};
+
+/**
+ * Whether a transaction callback's result is a refusal rather than a success.
+ *
+ * By `kind`, against the exhaustive set above. The one other kind-tagged value whose kinds
+ * overlap a refusal's is `OwnerAccess` (`not_found`, `frozen`), and it is only ever checked,
+ * never returned from a callback — so a success is never mistaken for one.
+ */
+export const isRefusal = (x: unknown): x is Refusal =>
+  typeof x === 'object' &&
+  x !== null &&
+  typeof (x as { kind?: unknown }).kind === 'string' &&
+  Object.hasOwn(REFUSAL_KINDS, (x as { kind: string }).kind);
