@@ -81,6 +81,14 @@ export const rejectionFor = (cursor: CursorPayload, at: VaultPosition): CursorRe
  *
  * The upper bound is the **pinned snapshot**, never `now`: without it a resync of a large
  * vault will reliably either lose a change that happened mid-walk or apply it twice (D-24).
+ *
+ * **A page is cut on the axis the cursor moves on** (#332). Each node's row is its latest
+ * inside the snapshot, and the page takes those in revision order, so the next cursor — the
+ * last row's revision — is past exactly the nodes this page returned. It used to collapse
+ * with `DISTINCT ON (node_id)`, which made `LIMIT` keep the lowest node ids instead: a node
+ * whose id sorted after the cut, at a revision below the page's highest, was stepped over by
+ * the cursor and never delivered. `journal_by_node` makes the "is there a later row" probe an
+ * index lookup, so a page is a range scan that stops at `LIMIT`.
  */
 export const readChanges = async (
   db: Db,
@@ -90,8 +98,7 @@ export const readChanges = async (
   limit: number,
 ): Promise<Change[]> =>
   db.query<ChangeRow>(
-    `SELECT DISTINCT ON (j.node_id)
-            j.node_id,
+    `SELECT j.node_id,
             n.parent_id,
             encode(n.name_enc, 'base64')  AS name_enc,
             encode(n.name_hmac, 'hex')    AS name_hmac,
@@ -108,13 +115,13 @@ export const readChanges = async (
        FROM journal j
        JOIN nodes n ON n.vault_id = j.vault_id AND n.id = j.node_id
       WHERE j.vault_id = $1 AND j.rev > $2 AND j.rev <= $3
-      ORDER BY j.node_id, j.rev DESC
+        AND NOT EXISTS (SELECT 1 FROM journal l
+                         WHERE l.vault_id = j.vault_id AND l.node_id = j.node_id
+                           AND l.rev > j.rev AND l.rev <= $3)
+      ORDER BY j.rev
       LIMIT $4`,
     [vaultId, after, upTo, limit],
-  ).then((rows) =>
-    // DISTINCT ON needs its own ordering; the client wants them in the order they happened.
-    rows.map(toChange).sort((a, b) => a.rev - b.rev),
-  );
+  ).then((rows) => rows.map(toChange));
 
 export const listSubtree = async (
   db: Db,

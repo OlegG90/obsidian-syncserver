@@ -882,6 +882,9 @@ CREATE TABLE journal (
 );
 
 CREATE INDEX journal_by_age ON journal (at);
+-- The delta's "is there a later entry for this node" probe (#332): one lookup per row,
+-- rather than a scan of the rest of the snapshot for every row of a page.
+CREATE INDEX journal_by_node ON journal (vault_id, node_id, rev);
 
 -- ============================================================ sharing
 --
