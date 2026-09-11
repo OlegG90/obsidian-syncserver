@@ -1,5 +1,5 @@
 /**
- * Lifting a freeze, and what has to happen in the same breath (SH-20, SH-21).
+ * Settling a freeze, and what has to happen in the same breath (SH-20, SH-21).
  *
  * **Why this is not in `quota.ts`.** Quota answers one question — how much of the limit is
  * used, and whether more will fit — and it answers it for the blob intake, the account
@@ -13,33 +13,49 @@
  */
 import type { PoolClient } from 'pg';
 import { oneFrom } from '../db.js';
-import { headroom } from '../quota.js';
+import { isFrozen } from '../account.js';
+import { freezeIfOverQuota, headroom } from '../quota.js';
 import { catchUpMember, type CaughtUp } from './catchup.js';
 
+/** Where settling left the account, and the catch-up it owed if it thawed. */
+export interface Settled {
+  /** Frozen now — after the catch-up, which can put an account straight back over its limit. */
+  frozen: boolean;
+  /** Present only if this call lifted a freeze: what each share had to be brought forward by. */
+  thawed?: CaughtUp[];
+}
+
 /**
- * Lift the freeze once the account is back inside its limit, and catch its replicas up.
+ * Make the freeze agree with the account's usage and limit, whichever of the two just moved.
  *
- * The mirror of `freezeIfOverQuota`, and it has to be one: a freeze that only ever went on
- * is a state with no exit, and "delete something" — the advice SH-20 gives — would be advice
- * that changes nothing.
+ * Being frozen depends on two numbers, and it used to be re-evaluated when only one of them
+ * changed (#333): every way of freeing space called a thaw, added by hand as each was found,
+ * and raising the limit — the other way out docs/05 names — was never one of them. An
+ * administrator raised a frozen account's quota above what it stored and it stayed frozen
+ * until its owner happened to empty a trash. So this is not a thaw any more but "one of the
+ * two numbers changed": called wherever usage falls and wherever the limit is set, it freezes
+ * an account over its limit and thaws one under it.
+ *
+ * Usage **rising** is not a caller: that is `freezeIfOverQuota`, where somebody else's write
+ * crosses the line (SH-20), and growth never thaws.
  *
  * **Thawing is not the end of it.** Propagation skipped this account for the whole freeze, so
  * lifting it leaves every shared folder behind by exactly that interval and nothing will ever
  * mention those writes again. The catch-up runs here, in the same transaction, because a
  * thawed account that is level with nobody is a worse state than a frozen one: it looks
  * current and is not.
- *
- * @returns what each share had to be brought forward by, or `undefined` if nothing thawed.
  */
-export const thawIfUnderQuota = async (c: PoolClient, userId: string): Promise<CaughtUp[] | undefined> => {
+export const settleFreeze = async (c: PoolClient, userId: string): Promise<Settled> => {
   const room = await headroom(oneFrom(c), userId);
-  if (room === undefined || room < 0n) return undefined;
+  if (room === undefined) return { frozen: false };
+  if (room < 0n) return { frozen: await freezeIfOverQuota(c, userId) };
 
-  const thawed = await c.query(
+  const lifted = await c.query(
     `UPDATE users SET frozen_at = NULL WHERE id = $1 AND frozen_at IS NOT NULL`,
     [userId],
   );
-  if (!thawed.rowCount) return undefined;
+  if (!lifted.rowCount) return { frozen: false };
 
-  return catchUpMember(c, userId);
+  const thawed = await catchUpMember(c, userId);
+  return { frozen: await isFrozen(oneFrom(c), userId), thawed };
 };

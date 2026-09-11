@@ -15,7 +15,7 @@ import { refusalFromDatabase, type Refusal } from '../refusal.js';
 /** PostgreSQL's `unique_violation`. */
 const UNIQUE_VIOLATION = '23505';
 import { usageOf } from '../quota.js';
-import { thawIfUnderQuota } from '../shares/thaw.js';
+import { settleFreeze } from '../shares/thaw.js';
 
 /**
  * A vault as its owner's client sees it: the id, the name it cannot read, and how much is in it.
@@ -175,7 +175,7 @@ export const deleteVault = async (
 
     // **And if that was enough, the freeze lifts here** (issue #236). SH-20's advice to a frozen
     // account is "delete something", and removing a vault is the largest deletion this product offers —
-    // it was also the only one that freed the space and left the freeze on, because `thawIfUnderQuota`
+    // it was also the only one that freed the space and left the freeze on, because the thaw
     // was called by the trash purge and the vault reset and not by this. The person did exactly what
     // they were told, watched the usage fall, and was still refused every write until they went and
     // emptied a trash somewhere unrelated.
@@ -192,7 +192,7 @@ export const deleteVault = async (
     // same call, and for the same reason: a person who has just deleted something to get back in wants
     // to know whether it worked, and the only surface that can say so at that moment is the one they
     // pressed. What it costs is a `204` becoming a `200`, which is why this waited for a minor.
-    return { thawed: (await thawIfUnderQuota(c, userId)) !== undefined };
+    return { thawed: (await settleFreeze(c, userId)).thawed !== undefined };
   });
 
 /**

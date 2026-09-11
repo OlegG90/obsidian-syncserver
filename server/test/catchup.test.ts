@@ -14,7 +14,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { catchUpShare } from '../src/shares/catchup.js';
-import { thawIfUnderQuota } from '../src/shares/thaw.js';
+import { settleFreeze } from '../src/shares/thaw.js';
 
 const cfg = loadConfig();
 let db: Db;
@@ -298,7 +298,7 @@ describe('catching a thawed replica up (SH-21)', () => {
        ON CONFLICT (user_id, sha256) DO UPDATE SET refs_own = user_blobs.refs_own + 1`,
       [share.away.id, written.sha256],
     );
-    assert.equal(await db.tx((c) => thawIfUnderQuota(c, share.away.id)), undefined, 'over quota stays frozen');
+    assert.equal((await db.tx((c) => settleFreeze(c, share.away.id))).thawed, undefined, 'over quota stays frozen');
 
     const stillFrozen = await db.one<{ frozen: boolean }>(
       `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`,
@@ -308,7 +308,7 @@ describe('catching a thawed replica up (SH-21)', () => {
 
     // Room again — the limit was raised, which is the other way out of SH-20.
     await db.query(`UPDATE users SET quota_bytes = 10000000 WHERE id = $1`, [share.away.id]);
-    const caught = await db.tx((c) => thawIfUnderQuota(c, share.away.id));
+    const caught = (await db.tx((c) => settleFreeze(c, share.away.id))).thawed;
     assert.ok(caught, 'the freeze lifts');
     assert.ok(caught!.some((s) => s.created + s.updated > 0), 'and the gap is delivered in the same breath');
 

@@ -192,8 +192,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
       const out = await setQuota(db, req.admin!, req.params.userId, String(quota));
       if ('kind' in out) return refuse(reply, out);
 
-      // What the next write will find, said before it finds it: lowering a limit below
-      // usage deletes nothing and freezes the account (SH-20).
+      // Whether the account is frozen now that the limit moved: lowering it below usage
+      // deletes nothing and freezes the account (SH-20); raising it above usage lifts a
+      // freeze (#333).
       return { used_bytes: out.usedBytes, freezes: out.freezes };
     },
   );

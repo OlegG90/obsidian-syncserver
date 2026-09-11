@@ -297,6 +297,56 @@ describe('quotas', () => {
     const held = await db.one<{ n: string }>(
       `SELECT count(*)::text AS n FROM user_blobs WHERE user_id = $1`, [holder.id]);
     assert.equal(held!.n, '1', 'and not one byte was taken away');
+
+    // And the freeze is a fact, not a forecast (#333): the console tells the operator the
+    // account "is frozen", and it used to be true only after some later write happened by.
+    const frozen = await db.one<{ frozen: boolean }>(
+      `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`, [holder.id]);
+    assert.equal(frozen!.frozen, true, 'the account is frozen as of this change');
+  });
+
+  it('lifts a freeze when the limit is raised above what they hold, with nothing deleted (#333)', async () => {
+    // docs/05: "Freeing space or raising the limit lifts it." Only freeing space did — an
+    // administrator raised the limit and the account stayed frozen until its owner happened to
+    // empty a trash.
+    const holder = await makeAccount(`raised-${randomUUID()}`, 'user');
+    const as = { authorization: `Bearer ${holder.token}` };
+    const vaultId = randomUUID();
+    const made = await app.inject({
+      method: 'POST', url: '/vaults', headers: as, payload: { id: vaultId, name_enc: Buffer.from('v').toString('base64') },
+    });
+    assert.equal(made.statusCode, 201, made.body);
+    const rootId = made.json().root_node_id as string;
+    const keyId = (await db.one<{ id: string }>(`SELECT vault_key_id AS id FROM vaults WHERE id = $1`, [vaultId]))!.id;
+    const folder = () => {
+      const name = `f-${randomUUID()}`;
+      return app.inject({
+        method: 'POST', url: `/vaults/${vaultId}/nodes`, headers: as,
+        payload: { parent_id: rootId, type: 'folder', mtime: new Date().toISOString(),
+                   name_enc: Buffer.from(name).toString('base64'),
+                   name_hmac: createHash('sha256').update(name).digest('hex'), name_key_id: keyId },
+      });
+    };
+
+    const sha = Buffer.from(randomUUID().replace(/-/g, '').padEnd(64, 'b').slice(0, 64), 'hex');
+    await db.query(`INSERT INTO blobs (sha256, size, storage_key, enc_alg, key_id)
+                    VALUES ($1, 4096, $2, 'xchacha20poly1305', $3)`,
+      [sha, `k-${randomUUID()}`, randomUUID()]);
+    await db.query(`INSERT INTO user_blobs (user_id, sha256, refs_own) VALUES ($1, $2, 1)`, [holder.id, sha]);
+    const setTo = (quota: string) => app.inject({
+      method: 'PUT', url: `/admin/accounts/${holder.id}/quota`, headers: asAdmin(), payload: { quota_bytes: quota },
+    });
+
+    assert.equal((await setTo('1024')).json().freezes, true);
+    assert.equal((await folder()).statusCode, 413, 'frozen: a write is refused');
+
+    const raised = await setTo('1048576');
+    assert.equal(raised.statusCode, 200, raised.body);
+    assert.equal(raised.json().freezes, false, 'the answer says the freeze is gone');
+    const thawed = await db.one<{ frozen: boolean }>(
+      `SELECT frozen_at IS NOT NULL AS frozen FROM users WHERE id = $1`, [holder.id]);
+    assert.equal(thawed!.frozen, false, 'and it is');
+    assert.equal((await folder()).statusCode, 201, 'so the next write goes through — no purge in between');
   });
 
   it('refuses a quota that is not a positive number of bytes', async () => {
