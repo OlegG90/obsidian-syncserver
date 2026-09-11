@@ -14,15 +14,16 @@
  * server answers everything else with `restore_pending` anyway — the first thing shown is
  * the way out.
  */
+import type { HealthResponse, RestoreStatus } from '@syncserver/shared';
 
 /** Which server question a signed-in console asks first. */
 export interface ScreenDeps {
   /** Whether a console token is held — synchronous, from memory. */
   signedIn(): boolean;
   /** `GET /admin/restore` — only asked of a signed-in console. */
-  restoreStatus(): Promise<{ pending: boolean }>;
+  restoreStatus(): Promise<Pick<RestoreStatus, 'pending'>>;
   /** `GET /health` — only asked before a console has signed in. */
-  health(): Promise<{ bootstrap_pending: boolean }>;
+  health(): Promise<Pick<HealthResponse, 'bootstrap_pending'>>;
 }
 
 /** The screen to draw. */

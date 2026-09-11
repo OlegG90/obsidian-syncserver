@@ -5,6 +5,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // Test files keep fixtures a later case may want; the rule is for the bundle.
+    "noUnusedLocals": false,
     "rootDir": ".",
     "types": ["node"]
   },
