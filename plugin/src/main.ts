@@ -1010,18 +1010,19 @@ export default class SyncServerPlugin extends Plugin {
           await inviteTo({ client: v.client }, shareId, login, key);
         }),
 
-      accept: (shareId) =>
+      accept: ({ shareId, initiatorLogin }) =>
         this.withVault(async (v) => {
           const tree = await v.engine.readTree();
 
           // Asked, not invented. The initiator's own label for that folder is under THEIR
           // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
-          // docs/05 says they do. Offering who shared it is the one fact this side holds.
-          const from = (await v.client.shares()).invitations.find((i) => i.share_id === shareId);
-
+          // docs/05 says they do. Offering who shared it is the one fact this side holds, and
+          // it arrived with the invitation the button was drawn from: fetching the whole share
+          // list again to recover it was a round trip for a field already on screen (#330).
+          //
           // What to offer, what may collide with it, and what to do with the answer: four rules that
           // used to sit in this closure, where nothing could ask them anything (`share-landing.ts`).
-          const landing = landingFor(tree.keys(), from?.initiator_login);
+          const landing = landingFor(tree.keys(), initiatorLogin);
           const name = landing.settle((await askFolderName(this.app, landing.suggestion)) ?? '');
           await acceptInvitation(
             {

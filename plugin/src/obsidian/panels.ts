@@ -256,7 +256,7 @@ export class Panels {
           this.s.waits(b)
             .setButtonText('Accept')
             .setCta()
-            .onClick(() => void flow.accept(inv.shareId)),
+            .onClick(() => void flow.accept(inv)),
         );
         row.addButton((b) => this.s.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }

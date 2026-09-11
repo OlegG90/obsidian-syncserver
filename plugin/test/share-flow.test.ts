@@ -166,10 +166,20 @@ describe('answering an invitation', () => {
     // The replica is materialised server-side; the files arrive with the next delta. A
     // message implying otherwise sends somebody looking for a folder that is not there.
     const h = harness();
-    await h.flow.accept('share-1');
+    await h.flow.accept({ shareId: 'share-1', initiatorLogin: 'alice' });
 
     assert.match(h.notices[0]!, /arrives on the next sync/);
     assert.equal(h.rebuilt(), 1);
+  });
+
+  it('hands on the invitation it was given, sender included, rather than asking again (#330)', async () => {
+    // The login names the joiner's folder, and the list the Accept button was drawn from
+    // already carries it. The port takes the row, so nothing downstream re-fetches it.
+    const answered: unknown[] = [];
+    const h = harness({ accept: async (invitation) => void answered.push(invitation) });
+    await h.flow.accept({ shareId: 'share-1', initiatorLogin: 'alice' });
+
+    assert.deepEqual(answered, [{ shareId: 'share-1', initiatorLogin: 'alice' }]);
   });
 
   it('confirms a decline, which is the only place it is ever recorded', async () => {
