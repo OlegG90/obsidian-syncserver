@@ -141,6 +141,35 @@ describe('reading the delta', () => {
     assert.equal(forThisNode.length, 1, 'four revisions, one change: the state it is in now');
   });
 
+  it('delivers every changed node across pages, whatever order their ids sort in (#332)', async () => {
+    // A page used to pick its nodes by uuid while the cursor advanced by revision, so a node
+    // whose id sorted after the page's cut and whose revision sat below the page's highest was
+    // skipped for good. Built to force exactly that: the last change goes to the lowest id.
+    const made = [];
+    for (let i = 0; i < 6; i++) made.push(await createFile(`paged-${i}-${randomUUID()}.md`));
+    made.sort((a, b) => (a.node_id < b.node_id ? 1 : -1));
+    for (const f of made) {
+      const r = await app.inject({
+        method: 'DELETE', url: `/vaults/${vaultId}/nodes/${f.node_id}`,
+        headers: { ...auth(), 'if-match': String(f.rev) },
+      });
+      assert.equal(r.statusCode, 200, r.body);
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 200; guard++) {
+      const body = (await delta(cursor, 1)).json();
+      for (const c of body.changes) seen.push(c.node_id);
+      cursor = body.next_cursor;
+      if (!body.has_more) break;
+    }
+
+    const missing = made.filter((f) => !seen.includes(f.node_id));
+    assert.deepEqual(missing, [], 'every changed node arrives on some page');
+    assert.equal(new Set(seen).size, seen.length, 'and none arrives twice in one series');
+  });
+
   it('pins a snapshot, so a change made mid-walk is neither lost nor applied twice (D-24)', async () => {
     await createFile('page-a.md');
     await createFile('page-b.md');
