@@ -345,6 +345,11 @@ propagation; `left_at` is written only when the client supplied KV envelopes, KV
 whole replica and the server validated/unmarked it atomically. Added participants also lose their local version
 rows; the initiator keeps theirs. A revoked offline device can finish later but receives no further changes.
 
+Because the pass is one request, it is the one request with a raised size limit: 16 MiB, against the 1 MiB
+every other route keeps. Measured, that is about 20 000 files with no history, or about 5 000 files with ten
+versions each — every version behind the head carries its own envelope. Preparation needs no such limit: it
+is sent in batches.
+
 Nor can any of them recall data. Anyone who was a participant holds a full copy (SH-02). That is a property
 of the model, stated here so it is not mistaken for an oversight: **revocation stops the flow of new
 content; it does not take back old content.**

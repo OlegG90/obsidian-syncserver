@@ -40,6 +40,7 @@ import {
   w,
   type ReplicaRow,
 } from './support/shares.js';
+import { FINALIZE_BODY_LIMIT } from '../src/shares/routes.js';
 
 before(() => openWorld('shares-lifecycle'));
 after(closeWorld);
@@ -1049,6 +1050,45 @@ describe('finalizing a departure', () => {
     } finally {
       await w.db.query(`UPDATE users SET frozen_at = NULL WHERE id = $1`, [w.strangerId]);
     }
+  });
+
+  it('takes a whole replica larger than the default body limit (#335)', async () => {
+    // The pass cannot be split — a partial one is refused — so under Fastify's default 1 MiB a
+    // share past ~1300 files could not be left at all. 2 MiB of well-formed nodes has to reach
+    // the handler: the refusal that comes back must be the handler's, never the parser's 413.
+    const { shareId } = await sharedWith('large-departure');
+    await leaveBegin(shareId);
+    const keyId = await strangerVaultKey();
+    const padding = Array.from({ length: 12_000 }, () => {
+      const name = `padding-${randomUUID()}`;
+      return { node_id: randomUUID(), name_enc: b64(name), name_hmac: sha(Buffer.from(name)), name_key_id: keyId };
+    });
+    const nodes = [...(await theirReplicaNodes(shareId)), ...padding];
+    assert.ok(Buffer.byteLength(JSON.stringify({ nodes })) > 2 * 1024 * 1024, 'the body is past the default');
+
+    const r = await finalize(shareId, nodes);
+    assert.notEqual(r.statusCode, 413, 'it reached the handler');
+    assert.equal(r.json().error, 'invalid_write', 'which refused the nodes that are not part of the share');
+  });
+
+  it('still has a limit, and only this route has it raised (#335)', async () => {
+    const { shareId } = await sharedWith('too-large-departure');
+    await leaveBegin(shareId);
+    const huge = JSON.stringify({ nodes: [{ node_id: randomUUID(), name_enc: 'x'.repeat(FINALIZE_BODY_LIMIT), name_hmac: 'x', name_key_id: 'x' }] });
+    const over = await w.app.inject({
+      method: 'POST', url: `/shares/${shareId}/finalize-leave`,
+      headers: { authorization: `Bearer ${w.strangerAccess}`, 'content-type': 'application/json' },
+      payload: huge,
+    });
+    assert.equal(over.statusCode, 413, 'past the raised limit, the parser refuses');
+
+    const twoMiB = JSON.stringify({ items: [{ node_id: randomUUID(), name_enc: 'x'.repeat(2 * 1024 * 1024) }] });
+    const elsewhere = await w.app.inject({
+      method: 'POST', url: `/shares/${shareId}/prepare`,
+      headers: { ...auth(), 'content-type': 'application/json' },
+      payload: twoMiB,
+    });
+    assert.equal(elsewhere.statusCode, 413, 'and a route with no reason to take megabytes keeps the default');
   });
 
   it('is refused before finalization has been begun', async () => {

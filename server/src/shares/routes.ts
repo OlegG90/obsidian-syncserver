@@ -73,6 +73,22 @@ const converted = (n: WireName, envelopes: WireEnvelope[] = [], tags: WireTag[] 
   dedupTags: tags.map((t) => ({ sha256: t.sha256, scopeId: t.scope_id, contentTag: t.content_tag })),
 });
 
+/**
+ * How large a departure may be, in bytes of request body (#335).
+ *
+ * Finalizing a departure is the one request that must carry a **whole replica**: the server
+ * refuses a pass that misses a live node, so it cannot be split the way preparation is. Under
+ * Fastify's default of 1 MiB, a share past a certain size could not be left at all.
+ *
+ * Measured from the plugin's own `leaveShare` output, per node: a folder 281 B, a file 804 B,
+ * and every version behind the head another ~245 B (its envelope). 1 MiB was therefore about
+ * 1300 files with no history — about 320 with ten versions each. 16 MiB takes ~20k plain files
+ * or ~5k files ten versions deep. The body is held in memory several times over while it is
+ * parsed, so this stays well inside a 256 MB container rather than raising every route with it:
+ * the rest keep the default, having no reason to accept megabytes.
+ */
+export const FINALIZE_BODY_LIMIT = 16 * 1024 * 1024;
+
 export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
   /**
    * Who to seal the share key to. Answers an unknown login with a deterministic fake rather
@@ -290,7 +306,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/finalize-leave', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/shares/:shareId/finalize-leave', { preHandler: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT }, async (req, reply) => {
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {
