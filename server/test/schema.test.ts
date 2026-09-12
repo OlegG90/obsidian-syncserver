@@ -1,29 +1,58 @@
 /**
- * The schema, applied by the server to a database that has none.
+ * The schema, applied to an empty database and brought forward on an existing one (#354).
  *
- * Against a **real, empty database** created for each case, because that is the only state the
- * interesting half is about: the file used to be mounted into PostgreSQL's entrypoint, which
- * runs it once on an empty data directory, and every failure came from a database that had
- * never seen it — an install that left the file behind, or an upgrade whose schema had grown.
+ * Against **real databases** created for each case, because every interesting state is a
+ * database: empty, from before migrations, one migration behind, ahead of the image, or holding a
+ * migration whose file has since changed. Migrations beyond the real ones are written into a
+ * temporary directory, so the runner is exercised without shipping a test migration.
  */
 import assert from 'node:assert/strict';
+import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { declaredNames, ensureSchema, missingFrom, SCHEMA_FILE } from '../src/schema.js';
+import {
+  baselineNames,
+  declaredNames,
+  ensureSchema,
+  MIGRATIONS_DIR,
+  missingFrom,
+  readMigrations,
+  SCHEMA_FILE,
+  SchemaRefusal,
+  schemaVersion,
+} from '../src/schema.js';
 
 let admin: Db;
 const made: string[] = [];
+const dirs: string[] = [];
+const quiet = { log: () => undefined };
 
 /** A fresh, empty database — the state a first start meets. Dropped again in `after`. */
 const emptyDatabase = async (name: string): Promise<Db> => {
-  await admin.query(`DROP DATABASE IF EXISTS ${name}`);
+  await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await admin.query(`CREATE DATABASE ${name}`);
   made.push(name);
   const url = new URL(loadConfig().databaseUrl ?? 'postgres:///syncserver_dev?host=/var/run/postgresql');
   url.pathname = `/${name}`;
   return connect(url.toString());
 };
+
+/** The real migrations, plus extra files, in a directory of their own. */
+const migrationsWith = async (extra: Record<string, string>): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), 'syncserver-migrations-'));
+  dirs.push(dir);
+  for (const f of await readdir(MIGRATIONS_DIR)) await copyFile(join(MIGRATIONS_DIR, f), join(dir, f));
+  for (const [name, sql] of Object.entries(extra)) await writeFile(join(dir, name), sql);
+  return dir;
+};
+
+const count = async (db: Db, sql: string): Promise<number> => Number((await db.one<{ n: string }>(sql))!.n);
+
+const tableExists = async (db: Db, name: string): Promise<boolean> =>
+  Boolean((await db.one<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [name]))?.r);
 
 before(() => {
   admin = connect(loadConfig().databaseUrl);
@@ -34,89 +63,209 @@ after(async () => {
   // nobody can drop and the next run cannot create.
   for (const name of made) await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await admin.close();
+  for (const dir of dirs) await rm(dir, { recursive: true, force: true });
 });
 
 describe('applying it to an empty database', () => {
-  it('creates everything the file declares, and says so', async () => {
+  it('creates everything, and records every migration in the image as already had', async () => {
     const db = await emptyDatabase('syncserver_schema_fresh');
     const said: string[] = [];
 
     const out = await ensureSchema(db, { log: (m) => said.push(m) });
-    assert.equal(out.state, 'applied');
+    const real = await readMigrations();
+    assert.deepEqual(out, { state: 'applied', ran: [], version: real.length });
     assert.match(said.join(' '), /schema applied/);
 
-    // The seeds are part of it, and the one that matters is the invitation a first run redeems
-    // (D-107): a database with tables and no seeded administrator invitation is a server nobody
-    // can sign into.
-    const users = await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM users`);
-    assert.equal(Number(users!.n) >= 2, true, 'the tombstone and the first invitation');
+    // The seeds are part of it: a database with tables and no seeded invitation is a server
+    // nobody can sign into (D-107).
+    assert.ok((await count(db, 'SELECT count(*)::text AS n FROM users')) >= 2, 'the tombstone and the first invitation');
+    // A fresh database already IS every migration; running them again would fail on objects the
+    // file created. So schema.sql seeds one ledger row per migration, and a new migration fails
+    // here until its row — with the checksum this assertion prints — is added beside the table.
+    const rows = await db.query<{ id: number; name: string; checksum: string }>(
+      'SELECT id, name, checksum FROM schema_migrations ORDER BY id',
+    );
+    assert.deepEqual(
+      rows,
+      real.map((m) => ({ id: m.id, name: m.name, checksum: m.checksum })),
+      'the rows schema.sql seeds must be exactly the migrations beside it',
+    );
+    assert.equal(await schemaVersion(db), real.length);
     await db.close();
   });
 
   it('does nothing the second time, rather than failing on what is already there', async () => {
-    // This runs at every start. The whole file is `CREATE TABLE`, not `IF NOT EXISTS`, so a
-    // second application would not be a no-op — it would be an error that reads like damage.
     const db = await emptyDatabase('syncserver_schema_twice');
-    assert.equal((await ensureSchema(db, { log: () => undefined })).state, 'applied');
-    assert.equal((await ensureSchema(db, { log: () => undefined })).state, 'level');
+    assert.equal((await ensureSchema(db, quiet)).state, 'applied');
+    assert.equal((await ensureSchema(db, quiet)).state, 'level');
     await db.close();
   });
 
   it('lets only one of two servers apply it', async () => {
-    // Two containers starting against one empty database. Without the lock both read "empty"
-    // and both apply; the loser fails halfway through with a duplicate-object error, which is
-    // indistinguishable from a corrupt database at three in the morning.
+    // Two containers starting against one empty database. The file used to carry a COMMIT that
+    // ended the locked transaction halfway; the loser would then find a half-built schema.
     const db = await emptyDatabase('syncserver_schema_race');
-    const [a, b] = await Promise.all([
-      ensureSchema(db, { log: () => undefined }),
-      ensureSchema(db, { log: () => undefined }),
-    ]);
-    assert.deepEqual([a!.state, b!.state].sort(), ['applied', 'level']);
+    const [a, b] = await Promise.all([ensureSchema(db, quiet), ensureSchema(db, quiet)]);
+    assert.deepEqual([a.state, b.state].sort(), ['applied', 'level']);
     await db.close();
   });
 });
 
-describe('meeting a database that is behind', () => {
-  it('names what is missing and does not touch the data', async () => {
-    // The silent class, and the reason this check exists at all: a missing table breaks at the
-    // first query, while a missing TRIGGER does not fail — it never fires. This deployment ran
-    // for weeks with change notification inert for exactly that reason.
-    const db = await emptyDatabase('syncserver_schema_behind');
-    await ensureSchema(db, { log: () => undefined });
-    await db.query(`DROP TRIGGER journal_notify ON journal`);
+describe('a database from before migrations', () => {
+  /** What 0.7.10 left: the schema of that release, and no ledger. Migration 1 only adds the ledger. */
+  const beforeMigrations = async (name: string): Promise<Db> => {
+    const db = await emptyDatabase(name);
+    await ensureSchema(db, quiet);
+    await db.query('DROP TABLE schema_migrations');
+    return db;
+  };
 
-    const warned: string[] = [];
-    const out = await ensureSchema(db, { log: () => undefined, warn: (m) => warned.push(m) });
+  it('is brought forward by the first start, and says so', async () => {
+    const db = await beforeMigrations('syncserver_schema_adopt');
+    const said: string[] = [];
 
-    assert.equal(out.state, 'behind');
-    assert.deepEqual(out.missing, ['trigger journal_notify'], 'the KIND matters: the function of that name still exists');
-    assert.match(warned.join(' '), /BEHIND/);
-    assert.match(warned.join(' '), /never fires/, 'and why a missing trigger is the bad kind');
-
-    // Not repaired, deliberately: this is not a migration tool, and re-running the whole file
-    // over a live database is not what "bring it forward" means.
-    const still = await db.one<{ n: string }>(
-      `SELECT count(*)::text AS n FROM pg_trigger WHERE tgname = 'journal_notify'`,
-    );
-    assert.equal(still!.n, '0');
+    const out = await ensureSchema(db, { log: (m) => said.push(m) });
+    assert.equal(out.state, 'migrated');
+    assert.deepEqual(out.ran.slice(0, 1), [1], 'the ledger is migration 1');
+    assert.equal(await tableExists(db, 'schema_migrations'), true);
+    assert.match(said.join(' '), /migration 1 \(schema-migrations\) applied/);
     await db.close();
+  });
+
+  it('is refused when it is not level with the baseline, and nothing is applied', async () => {
+    // The silent class the old BEHIND check existed for: a missing trigger does not fail, it never
+    // fires. Migrating on top of such a database would build on something that is not there.
+    const db = await beforeMigrations('syncserver_schema_adopt_behind');
+    await db.query('DROP TRIGGER journal_notify ON journal');
+
+    await assert.rejects(ensureSchema(db, quiet), (e: Error) => {
+      assert.ok(e instanceof SchemaRefusal);
+      assert.match(e.message, /trigger journal_notify/);
+      return true;
+    });
+    assert.equal(await tableExists(db, 'schema_migrations'), false, 'refused before anything ran');
+    await db.close();
+  });
+});
+
+describe('bringing a database forward', () => {
+  it('applies a pending migration at start, in order, and records it', async () => {
+    const db = await emptyDatabase('syncserver_schema_pending');
+    await ensureSchema(db, quiet);
+    const dir = await migrationsWith({
+      '0002-probe.sql': 'CREATE TABLE migration_probe (x integer);\n',
+      '0003-probe-row.sql': 'INSERT INTO migration_probe VALUES (3);\n',
+    });
+
+    const out = await ensureSchema(db, { ...quiet, migrationsDir: dir });
+    assert.deepEqual(out, { state: 'migrated', ran: [2, 3], version: 3 });
+    assert.equal(await count(db, 'SELECT count(*)::text AS n FROM migration_probe'), 1, 'and 3 ran after 2');
+    assert.equal(await schemaVersion(db), 3);
+    assert.equal((await ensureSchema(db, { ...quiet, migrationsDir: dir })).state, 'level', 'once, not every start');
+    await db.close();
+  });
+
+  it('lets only one of two servers apply each migration', async () => {
+    const db = await emptyDatabase('syncserver_schema_pending_race');
+    await ensureSchema(db, quiet);
+    const dir = await migrationsWith({ '0002-probe.sql': 'CREATE TABLE migration_probe (x integer);\n' });
+
+    const [a, b] = await Promise.all([
+      ensureSchema(db, { ...quiet, migrationsDir: dir }),
+      ensureSchema(db, { ...quiet, migrationsDir: dir }),
+    ]);
+    assert.deepEqual([...a.ran, ...b.ran], [2], 'a second CREATE TABLE would have failed the other start');
+    await db.close();
+  });
+
+  it('refuses to start when a migration fails, and rolls that migration back whole', async () => {
+    const db = await emptyDatabase('syncserver_schema_failing');
+    await ensureSchema(db, quiet);
+    const dir = await migrationsWith({ '0002-broken.sql': 'CREATE TABLE half_done (x integer);\nSELECT 1 / 0;\n' });
+
+    await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: dir }), (e: Error) => {
+      assert.ok(e instanceof SchemaRefusal);
+      assert.match(e.message, /migration 2 \(broken\) failed and was rolled back: division by zero/);
+      return true;
+    });
+    assert.equal(await tableExists(db, 'half_done'), false, 'not half of it');
+    assert.equal(await count(db, 'SELECT count(*)::text AS n FROM schema_migrations WHERE id = 2'), 0, 'and not recorded');
+    await db.close();
+  });
+
+  it('refuses to start against a database a newer image brought forward', async () => {
+    const db = await emptyDatabase('syncserver_schema_ahead');
+    await ensureSchema(db, quiet);
+    // Brought forward by an image that has migration 2; this one does not.
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ '0002-probe.sql': 'SELECT 1;\n' }) });
+
+    await assert.rejects(ensureSchema(db, quiet), (e: Error) => {
+      assert.ok(e instanceof SchemaRefusal);
+      assert.match(e.message, /migration 2, which this image does not know/);
+      return true;
+    });
+    await db.close();
+  });
+
+  it('refuses to start when an applied migration has been edited', async () => {
+    const db = await emptyDatabase('syncserver_schema_edited');
+    await ensureSchema(db, quiet);
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ '0002-probe.sql': 'SELECT 1;\n' }) });
+    const edited = await migrationsWith({ '0002-probe.sql': 'SELECT 2;\n' });
+
+    await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: edited }), (e: Error) => {
+      assert.ok(e instanceof SchemaRefusal);
+      assert.match(e.message, /migration 2 \(probe\) differs/);
+      return true;
+    });
+    await db.close();
+  });
+});
+
+describe('reading the migrations', () => {
+  it('reads the real ones as numbered from 1, the first being the ledger', async () => {
+    const real = await readMigrations();
+    assert.equal(real[0]?.name, 'schema-migrations');
+    assert.match(real[0]!.sql, /CREATE TABLE schema_migrations/);
+  });
+
+  it('does not count a line ending as a change', async () => {
+    const lf = await readMigrations(await migrationsWith({ '0002-probe.sql': 'SELECT 1;\nSELECT 2;\n' }));
+    const crlf = await readMigrations(await migrationsWith({ '0002-probe.sql': 'SELECT 1;\r\nSELECT 2;\r\n' }));
+    assert.equal(lf[1]!.checksum, crlf[1]!.checksum);
+  });
+
+  it('refuses a gap, a misnamed file, and a migration that controls its own transaction', async () => {
+    await assert.rejects(readMigrations(await migrationsWith({ '0003-skipped.sql': 'SELECT 1;\n' })), /without gaps/);
+    await assert.rejects(readMigrations(await migrationsWith({ '2-short.sql': 'SELECT 1;\n' })), /not named NNNN-name\.sql/);
+    await assert.rejects(
+      readMigrations(await migrationsWith({ '0002-own-tx.sql': 'BEGIN;\nSELECT 1;\nCOMMIT;\n' })),
+      /controls its own transaction/,
+    );
   });
 });
 
 describe('reading the file', () => {
   it('finds every function and trigger it declares', async () => {
     const { readFile } = await import('node:fs/promises');
-    const sql = await readFile(SCHEMA_FILE, 'utf8');
-    const names = declaredNames(sql);
+    const names = declaredNames(await readFile(SCHEMA_FILE, 'utf8'));
 
     assert.ok(names.length > 50, `expected the schema's functions and triggers, got ${names.length}`);
-    // Three spellings appear, and the third is easy to miss: a CONSTRAINT TRIGGER is where
-    // half the interesting rules live.
     assert.ok(names.includes('function nodes_check_share_membership'), 'a function');
     // The pair that proves the kind is load-bearing: one name, two objects.
     assert.ok(names.includes('function journal_notify'), 'the function');
     assert.ok(names.includes('trigger journal_notify'), 'and the trigger named after it');
     assert.ok(names.includes('trigger nodes_share_membership_is_real'), 'a CONSTRAINT TRIGGER');
+  });
+
+  it('reads CREATE OR REPLACE, which is how a migration changes a function', () => {
+    assert.deepEqual(declaredNames('CREATE OR REPLACE FUNCTION f() RETURNS void AS $$ $$;'), ['function f']);
+  });
+
+  it('leaves out of the baseline what a migration declares', () => {
+    const schema = 'CREATE FUNCTION old() RETURNS void AS $$ $$;\nCREATE FUNCTION added() RETURNS void AS $$ $$;\n';
+    const later = [{ id: 2, name: 'added', sql: 'CREATE OR REPLACE FUNCTION added() RETURNS void AS $$ $$;\n', checksum: '' }];
+    assert.deepEqual(baselineNames(schema, later), ['function old']);
   });
 
   it('compares by name, and reports only what is absent', () => {

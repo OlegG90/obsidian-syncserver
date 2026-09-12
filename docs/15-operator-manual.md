@@ -216,22 +216,30 @@ containers. Users need nothing — BRAT offers them the matching plugin release.
 version number carries the compatibility promise in the **minor** while the major is `0` (D-111): `0.5.2`
 to `0.5.4` cannot break a client, `0.5.x` to `0.6.0` announces that it can.
 
-**There is no migration tool, deliberately.** The server applies the schema **once**, to a database that
-has none; a build whose schema gained something arrives at a database that has never seen the new part, and
-the failures are quiet — a missing table breaks at the first query, while a missing **trigger** simply
-never fires. That is how one deployment ran for weeks with change notifications inert.
-
-So the server compares, at every start, and says in its log what is missing:
+**The server brings the database forward itself.** A release whose schema changed carries the change as
+a migration, and the new server applies it at start, before it answers anything. There is no SQL to run by
+hand. After an upgrade the log shows each one:
 
 ```
-the database is BEHIND this build's schema. Missing: trigger journal_notify. These are functions and
-triggers, whose absence is silent — a missing trigger does not fail, it simply never fires.
+schema migration 2 (journal-index) applied
 ```
 
-A warning and not a refusal: everything that does not touch what is missing works, and a database is not
-something to refuse to serve on a suspicion. `docker compose logs server | grep BEHIND` after an upgrade
-is the whole of the check. Bringing an existing database forward is still a deliberate act by somebody who
-knows what changed.
+and `/health` reports the migration the database is at as `"schema"`.
+
+**If the server will not start**, its log says why, in one of three ways:
+
+- *a migration failed and was rolled back* — nothing is half-applied; the message carries PostgreSQL's
+  reason. Report it with that line;
+- *the database has a migration this image does not know* — a newer version already ran against this
+  database. Go back to that version or newer. **Downgrading after a newer release migrated the database
+  is not supported**; restoring a backup taken before the upgrade is the way back;
+- *a migration differs from the one this database applied* — a defect in the release, not in your
+  installation. Report it and stay on the previous version.
+
+**Upgrading from 0.7.10 or earlier.** The first start of a release with migrations adopts the database if
+it is level with 0.7.10. It checks that the functions and triggers are there and names any that are not;
+it cannot check their bodies, so if you skipped the database step in the 0.7.9 release notes, apply it
+first.
 
 ---
 

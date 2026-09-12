@@ -30,10 +30,11 @@ comments explain themselves; nothing else states a contract.
 | `docs/` | architecture, protocol, key model, roadmap — read before changing behaviour |
 | `shared/` | types both sides agree on. Nothing runtime-heavy belongs here |
 | `server/` | Fastify + `pg`. No ORM |
-| `server/db/schema.sql` | the whole schema: tables, constraints, triggers. There is no migration tool, deliberately |
+| `server/db/schema.sql` | the whole schema: tables, constraints, triggers. What a fresh installation gets |
+| `server/db/migrations/` | the same changes as steps for a database that already exists, applied by the server at start (D-132) |
 | `server/db/tests.sql` | negative tests for the schema, run inside a transaction that ends in `ROLLBACK` |
 | `plugin/` | the Obsidian plugin: one bundle for Electron and a Capacitor WebView |
-| `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a registration Obsidian keeps taking only constants, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI |
+| `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a registration Obsidian keeps taking only constants, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI — except `schema-equivalence.sh`, which needs a database and runs in CI's server job |
 | `tools/` | things a person picks up: database reset, packing a deployment archive, deploying, smoke-walking a server. Nothing in CI runs these |
 
 ## What is safe to delete
@@ -54,7 +55,7 @@ what it refused to touch. Five kinds of thing, not the two the tree suggests:
 
 | | Examples | What deleting costs |
 |---|---|---|
-| ships | `*/src`, `server/db/schema.sql`, `Dockerfile`, `docker-compose.yml` | everything |
+| ships | `*/src`, `server/db/schema.sql`, `server/db/migrations`, `Dockerfile`, `docker-compose.yml` | everything |
 | verifies | `*/test`, `checks/`, `server/db/tests.sql` | everything, and none of it ships |
 | operates | `tools/`, `deploy/` | `deploy/` is unrecoverable |
 | is produced | `*/dist`, `shared/types`, `dist/`, `var/tmp` | a rebuild |
@@ -197,9 +198,15 @@ must own their blob generate their content.
 5. **Nothing derived from guessable user data may be stored unkeyed** — not a key, not a nonce,
    not "just a hash for uniqueness". Ask "can the input be guessed?", not "is this a key?".
 
-There is no migration tool, deliberately: a change is an edit to `schema.sql` plus
-`npm run db:reset`. That flips on the first deployment holding data worth keeping, after which
-migrations become the source and `schema.sql` is generated from them — never both at once.
+A schema change is two edits and a reset: the change in `schema.sql`, the same change as the next
+`server/db/migrations/NNNN-name.sql`, then `npm run db:reset`. `schema.sql` also seeds one
+`schema_migrations` row per migration, since a database built from it already is every migration:
+add the new row beside the table — `server/test/schema.test.ts` fails with the checksum it expects
+until you do. The server applies pending
+migrations at start (D-132), and `checks/schema-equivalence.sh` fails CI when the two disagree —
+run it locally from WSL before pushing a schema change. An applied migration is never edited (a
+changed checksum stops the server), so a correction is another migration; and a migration carries
+no `BEGIN`/`COMMIT`, because the server wraps each in its own transaction.
 
 ## Security invariants — do not weaken without changing `docs/06` first
 

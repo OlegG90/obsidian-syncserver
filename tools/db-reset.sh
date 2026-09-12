@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Drop the development database, apply the schema, run the tests, report.
 #
-# There is no migration tool: schema.sql creates everything from nothing, so a schema
-# change is an edit plus this script (docs/README.md). Needs psql on the PATH — on
-# Windows, run it from WSL, where the development PostgreSQL lives.
+# schema.sql creates everything from nothing, so a schema change is an edit to it, the same
+# change as a migration (D-132), plus this script. Needs psql on the PATH — on Windows, run it
+# from WSL, where the development PostgreSQL lives.
 set -euo pipefail
 
 DB="${SYNCSERVER_DB:-syncserver_dev}"

@@ -1,6 +1,7 @@
 import fastifyJwt from '@fastify/jwt';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { HealthResponse } from '@syncserver/shared';
+import { schemaVersion } from './schema.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { inProcessAttemptLimiter, type AttemptLimiter } from './auth/attempts.js';
 import { registerBlobRoutes } from './blobs/routes.js';
@@ -77,6 +78,9 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
       status: 'ok',
       bootstrap_pending: !(await hasActiveAdministrator(db)),
       version: SERVER_VERSION,
+      // Which migration the database is at (#354): after an upgrade, the one number that says
+      // the start brought it forward.
+      schema: await schemaVersion(db),
     } satisfies HealthResponse;
   });
 

@@ -90,6 +90,21 @@ CREATE TABLE server_meta (
 
 INSERT INTO server_meta DEFAULT VALUES;
 
+-- Which migrations this database has had (#354). This file IS every migration already, so it
+-- records them all: a database built from it — by the server or by psql — must not be offered
+-- migration 1 again. server/db/migrations holds each change as a step for a database that
+-- exists; checks/schema-equivalence.sh keeps the two identical, and schema.test.ts fails until
+-- the rows below name exactly the migrations beside this file, with their checksums.
+CREATE TABLE schema_migrations (
+    id         integer     PRIMARY KEY CHECK (id > 0),
+    name       text        NOT NULL,
+    checksum   text        NOT NULL,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO schema_migrations (id, name, checksum) VALUES
+    (1, 'schema-migrations', 'b05c351eac8692c305e2c7f0c0c34265ba47d1e922fa60ab0e37db4a617b4112');
+
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
 -- vaults; the column differs, so the trigger picks it by table.
