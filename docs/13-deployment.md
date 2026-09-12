@@ -390,20 +390,22 @@ just `docker compose pull` again.
   the rate somebody takes them, and are removed one at a time from the console — which leaves the run
   in the history with no destination, so the log keeps saying a backup ran and the empty destination
   says its copy is gone. **The rhythm is the operator's, and this server does not pretend to keep it.**
-- **not upgradable in place.** The server applies `schema.sql` — which travels **inside its image**
-  — once, to a database that has none, and afterwards only compares and warns (`schema.ts`). There is no
-  migration tool yet, deliberately (see the repository README), so a schema change means
-  discarding the database and starting again. That is fine while nothing in it matters, and it is
-  exactly what stops being fine on the day something does.
+- **upgraded by pulling.** The server applies `schema.sql` — which travels **inside its image** — to
+  a database that has none, and brings an existing one forward with the migrations beside it
+  (`server/db/migrations/`, D-132): the pending ones run at start, one transaction each, under the
+  schema lock, before anything else touches a table. `/health` reports the migration the database
+  is at as `schema`.
 
-  **The deploy refuses to finish when the database is behind**, rather than leaving it to be
-  noticed. After the containers are up it compares the functions and triggers `schema.sql`
-  declares against the ones the database actually has, names any that are missing, and exits
-  non-zero — so a walk chained after a deploy does not run against a database the build does not
-  match. Functions and triggers rather than tables, because that is the silent class: a missing
-  column fails at the first query, while a missing trigger fails by not happening. This exists
-  because it happened — a build arrived whose schema had gained the change-notification trigger,
-  the database had never seen it, and push was inert with nothing anywhere saying so.
+  **It refuses to start rather than serve** when a migration fails (rolled back whole), when the
+  database has a migration the image does not know (a newer server ran against it), or when an
+  applied migration's file has changed. The comparison it replaces only warned `BEHIND`, and only
+  about names: it could not see a changed function body or a new index, which is why 0.7.9 shipped
+  SQL for the operator to apply by hand.
+
+  **A database from before migrations** (0.7.10 or earlier) is adopted at its first start when every
+  function and trigger of that baseline is present — names again, so it must already be level with
+  0.7.10, including 0.7.9's hand-applied SQL. The deploy script no longer compares anything itself:
+  a server whose migrations fail exits, and its wait for health fails with it.
 
 ## Two things that will look like bugs
 

@@ -180,6 +180,9 @@ jobs:
           pg_dump --version
       - run: npm ci
       - run: npm run db:reset
+      # schema.sql and the migrations describe one schema twice; this is what keeps them one (D-132).
+      - name: schema.sql is the baseline release plus every migration
+        run: bash checks/schema-equivalence.sh
       - run: npm test --workspace @syncserver/server
 
   plugin:

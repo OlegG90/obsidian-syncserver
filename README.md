@@ -160,14 +160,15 @@ the installation — there is nothing to copy afterwards. Use `npm run dev --wor
 
 ### Changing the schema
 
-**`server/db/schema.sql` is the only description of the schema, and it creates everything from
-nothing.** There is no migration tool, deliberately: a migration directory is a second
-description of the same thing, and two descriptions drift. Nothing is deployed with data worth
-keeping, so a change is an edit plus `npm run db:reset`.
+**`server/db/schema.sql` is the one readable description of the schema, and it creates everything
+from nothing.** A database that already exists is brought forward by `server/db/migrations/`, which
+the server applies at start (D-132). That is one schema described twice, and two descriptions
+drift unless something holds them together: `checks/schema-equivalence.sh` requires the baseline
+release's schema plus every migration to dump exactly like `schema.sql`, and CI runs it.
 
-**That flips on the day of the first deployment that holds real data.** From then on migrations
-are the source and `schema.sql` is generated from them — never the other way round, and never
-both at once.
+A schema change is therefore the edit to `schema.sql`, the same change as the next migration, and
+`npm run db:reset`. An applied migration is never edited — a server refuses to start on one whose
+file changed — so a correction is another migration.
 
 ## Status
 

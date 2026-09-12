@@ -46,9 +46,8 @@ services:
       # made an installation three files instead of two — and the third was the one people
       # left behind, producing an empty database and a server failing against tables that were
       # never created. The schema now travels inside the server image, which applies it when
-      # the database is empty and otherwise says in the log what is missing (`schema.ts`).
-      # There is still no migration tool (docs/README): bringing an existing database forward
-      # is a deliberate act, not something a start does to you.
+      # the database is empty and otherwise brings it forward with the migrations it carries
+      # (`schema.ts`, D-132) — refusing to start, with the reason in its log, when it cannot.
     healthcheck:
       # $$ escapes for compose, not for the shell.
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]

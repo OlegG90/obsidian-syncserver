@@ -331,6 +331,12 @@ export interface HealthResponse {
    * means "before 0.1.0", which is a version answer rather than a missing one.
    */
   version?: string;
+  /**
+   * The newest schema migration the database has had (#354); 0 before it has any.
+   *
+   * Optional for the same reason as `version`: servers before 0.7.11 do not send it.
+   */
+  schema?: number;
 }
 
 // ---- management console ---------------------------------------------------------

@@ -303,7 +303,8 @@ export const settleInterruptedRuns = async (db: Db): Promise<number> => {
  * is where the record of an act belongs.
  *
  * The filter also settles the rows an upgrade brings with it: an installation that removed copies under
- * the old rule has them already, and there is no migration tool to go and tidy them (docs/13).
+ * the old rule has them already, and filtering here settles them without a migration rewriting what an
+ * operator's history recorded (docs/13).
  */
 export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
   db.query<BackupRun>(
