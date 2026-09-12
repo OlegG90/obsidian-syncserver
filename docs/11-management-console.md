@@ -131,7 +131,7 @@ locking yourself out of your own server is otherwise a single keystroke.
 | Quotas | change a limit. Lowering it below current usage deletes nothing: the account simply freezes (SH-20), across every vault and share at once, with reads and deletions still available. The console says so, and says why |
 | Storage | total size, deduplication effect, blobs in quarantine, the last garbage-collection pass |
 | Backups | history, status, verification — see below |
-| Sync problems | the refusals the server gave to each device, counted: status and code, route template, account and device, how many times, first and last seen (D-134). Conflicts (`rev_mismatch`, `base_mismatch`), pairing waits (`not_approved`) and `rate_limited` are the ordinary course of syncing and are left out; a row not seen for 30 days is removed. An account whose devices met refusals in the last seven days carries a badge on its card |
+| Sync problems | the refusals the server gave to each device, counted: status and code, route template, account and device, how many times, first and last seen (D-134). Conflicts (`rev_mismatch`, `base_mismatch`), pairing waits (`not_approved`) and `rate_limited` are the ordinary course of syncing and are left out; a row not seen for 30 days is removed. The screen groups them by account and device; an account whose devices met refusals in the last seven days carries a badge counting the different problems, not how often each repeated |
 | Audit | who did what to whom and when |
 
 ### Audit log

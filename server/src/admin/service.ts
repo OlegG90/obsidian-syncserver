@@ -43,7 +43,7 @@ export const listAccounts = (db: Db): Promise<AccountRow[]> =>
                        WHERE ub.user_id = u.id), 0)::text AS "usedBytes",
             u.frozen_at AS "frozenAt",
             (SELECT max(d.last_seen_at) FROM devices d WHERE d.user_id = u.id) AS "lastSeenAt",
-            (SELECT coalesce(sum(p.count), 0) FROM sync_problems p
+            (SELECT count(*) FROM sync_problems p
               WHERE p.user_id = u.id AND p.last_at > now() - interval '7 days')::int AS "recentProblems",
             u.created_at AS "createdAt",
             u.invite_expires_at AS "inviteExpiresAt"

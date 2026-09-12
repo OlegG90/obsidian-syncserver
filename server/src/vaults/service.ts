@@ -201,7 +201,7 @@ export const deleteVault = async (
     // same call, and for the same reason: a person who has just deleted something to get back in wants
     // to know whether it worked, and the only surface that can say so at that moment is the one they
     // pressed. What it costs is a `204` becoming a `200`, which is why this waited for a minor.
-    return { thawed: (await settleFreeze(c, userId)).thawed !== undefined , revoked: revoked.rowCount ?? 0 };
+    return { thawed: (await settleFreeze(c, userId)).thawed !== undefined, revoked: revoked.rowCount ?? 0 };
   });
 
 /**

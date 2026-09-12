@@ -19,6 +19,7 @@
  * No keys and no cursors, on either screen. An administrator holds nothing that opens a vault (D-115), and
  * a device row is not where that would start.
  */
+import type { FastifyReply } from 'fastify';
 import type { Db } from './db.js';
 import type { DeviceRow } from '@syncserver/shared';
 
@@ -63,6 +64,17 @@ export const deviceNameProblem = (name: unknown): string | undefined => {
   if ([...name].length > DEVICE_NAME_MAX) return `a device name is at most ${DEVICE_NAME_MAX} characters`;
   if (/\p{Cc}/u.test(name)) return 'a device name has no control characters';
   return undefined;
+};
+
+/**
+ * Answer `400 invalid_device_name` for a name the schema would refuse, or nothing when it may go on.
+ *
+ * One place for the answer's shape, because five routes take a name — the three that register a device,
+ * and the owner's and the operator's rename — and a refusal spelled five times drifts.
+ */
+export const refusedDeviceName = (reply: FastifyReply, name: unknown): FastifyReply | undefined => {
+  const problem = deviceNameProblem(name);
+  return problem === undefined ? undefined : reply.code(400).send({ error: 'invalid_device_name', detail: problem });
 };
 
 /**

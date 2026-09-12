@@ -1,4 +1,5 @@
-import { deviceNameProblem, renameDevice } from '../devices.js';
+import { refusedDeviceName, renameDevice } from '../devices.js';
+import { isUuid } from '../uuid.js';
 import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
 import { fakeAccountSalt, hashToken, tokenMatches } from '../crypto.js';
@@ -159,8 +160,7 @@ export const registerAuthRoutes = (
     }
 
     // A name the schema would refuse, refused here with a reason instead of as a 500 (#356).
-    const nameProblem = b.device_name === undefined ? undefined : deviceNameProblem(b.device_name);
-    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+    if (b.device_name !== undefined && refusedDeviceName(reply, b.device_name)) return reply;
 
     const out = await redeemInvitation(db, {
       invitationToken: b.invitation_token,
@@ -328,11 +328,10 @@ export const registerAuthRoutes = (
     if (!b.login) return reply.code(400).send({ error: 'login_required' });
     // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
     // is a request that could ever succeed.
-    const nameProblem = b.device_name === undefined ? undefined : deviceNameProblem(b.device_name);
-    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
     if ((b.kek_verifier === undefined) === (b.recovery_code === undefined)) {
       return reply.code(400).send({ error: 'one_proof_required' });
     }
+    if (b.device_name !== undefined && refusedDeviceName(reply, b.device_name)) return reply;
 
     // Two keys, because either alone is bypassable: one login from a thousand addresses, or
     // a thousand logins from one.
@@ -382,8 +381,7 @@ export const registerAuthRoutes = (
   });
 
   app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
-    const nameProblem = deviceNameProblem(req.body?.name);
-    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+    if (refusedDeviceName(reply, req.body?.name)) return reply;
 
     const row = await db.one<{ id: string }>(
       `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, $3) RETURNING id`,
@@ -619,6 +617,8 @@ export const registerAuthRoutes = (
    * else's id would confirm it exists.
    */
   app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', { preHandler: requireAuth }, async (req, reply) => {
+    // Silent like the rest of this route, and never a 500 for a malformed id.
+    if (!isUuid(req.params.deviceId)) return reply.code(204).send();
 
     await db.query(
       `UPDATE devices SET revoked_at = now(), refresh_token_hash = NULL
@@ -640,8 +640,8 @@ export const registerAuthRoutes = (
     '/auth/devices/:deviceId',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const nameProblem = deviceNameProblem(req.body?.name);
-      if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+      if (refusedDeviceName(reply, req.body?.name)) return reply;
+      if (!isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });
       const out = await renameDevice(db, req.caller!.userId, req.params.deviceId, req.body!.name as string);
       if (!out) return reply.code(404).send({ error: 'not_found' });
       return reply.code(204).send();

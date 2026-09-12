@@ -5,6 +5,7 @@
  * Routes are exercised through `app.inject()` — no port, no network, real handlers.
  * Requires the development database: `npm run db:reset` first.
  */
+import { aVaultAccount } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1245,6 +1246,22 @@ describe('the devices of an account', () => {
 
     await db.query(`DELETE FROM devices WHERE id = ANY($1)`, [[gone, consoleRow]]);
   });
+
+  it('answers 404 for another account’s device, and renames nothing (#356)', async () => {
+    const access = await signIn((await aDeviceOf(VAULT_LOGIN))!.id);
+    const stranger = await aVaultAccount(db);
+    const theirs = (await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'theirs', 'android') RETURNING id`,
+      [stranger.id],
+    ))!.id;
+
+    assert.equal((await rename(access, theirs, 'mine now')).statusCode, 404);
+    const kept = await db.one<{ name: string }>(`SELECT name FROM devices WHERE id = $1`, [theirs]);
+    assert.equal(kept!.name, 'theirs', 'the same answer as a device that does not exist, and nothing changed');
+
+    // A mistyped id names nothing either; it used to reach PostgreSQL as a malformed uuid and come back a 500.
+    assert.equal((await rename(access, 'not-a-uuid', 'renamed')).statusCode, 404);
+  });
 });
 
 /**
@@ -1341,6 +1358,7 @@ describe('an operator looking at somebody’s devices', () => {
 
     assert.equal((await put(' padded')).statusCode, 400, 'the same rule as the owner’s route');
     assert.equal((await put('renamed', '00000000-0000-0000-0000-0000000000ff')).statusCode, 404, 'not silent: nothing was renamed');
+    assert.equal((await put('renamed', 'not-a-uuid')).statusCode, 404, 'and a malformed id is not a 500');
 
     await db.query(`DELETE FROM devices WHERE id = $1`, [phone]);
   });

@@ -363,7 +363,7 @@ export type AccountRow = {
   createdAt: string;
   /** For an unclaimed invitation: when it stops being redeemable. */
   inviteExpiresAt: string | null;
-  /** How many refusals this account's devices met in the last seven days (#355). 0 when none. */
+  /** How many different problems this account's devices met in the last seven days (#355), however often each repeated. */
   recentProblems: number;
 };
 

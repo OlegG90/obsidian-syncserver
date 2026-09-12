@@ -4,7 +4,11 @@
  * The server learns which vault a device syncs the first time the device opens one, never moves it
  * afterwards, and revokes the devices of a vault when the vault is removed. Needs the development
  * database: `npm run db:reset` first.
+ *
+ * **Claims the seeded administrator**, so the first-run guard does not answer every request the same way —
+ * which is why this file sorts after `auth.test.ts`, whose first-run tests would otherwise be gone (AGENTS.md).
  */
+import { aVaultAccount } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -22,17 +26,7 @@ let db: Db;
 let app: FastifyInstance;
 
 /** A vault account with no vault yet. */
-const anAccount = async (): Promise<string> => {
-  const id = randomUUID();
-  await db.query(
-    `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
-                        enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'user', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
-    [id, `vaults-${randomUUID().slice(0, 8)}`],
-  );
-  return id;
-};
+const anAccount = async (): Promise<string> => (await aVaultAccount(db)).id;
 
 /** A device of that account, and a token for it. */
 const aDevice = async (userId: string, name: string): Promise<{ id: string; auth: { authorization: string } }> => {

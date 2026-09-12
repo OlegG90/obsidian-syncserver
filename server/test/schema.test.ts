@@ -32,10 +32,10 @@ const dirs: string[] = [];
 const quiet = { log: () => undefined };
 
 /** How many real migrations there are; test migrations are numbered after them. */
-const REAL = (await readMigrations()).length;
+const realMigrationCount = (await readMigrations()).length;
 
 /** `NNNN-name.sql` for the k-th migration after the real ones. */
-const after_ = (k: number, name: string): string => `${String(REAL + k).padStart(4, '0')}-${name}.sql`;
+const afterReal = (k: number, name: string): string => `${String(realMigrationCount + k).padStart(4, '0')}-${name}.sql`;
 
 /** A fresh, empty database — the state a first start meets. Dropped again in `after`. */
 const emptyDatabase = async (name: string): Promise<Db> => {
@@ -48,7 +48,7 @@ const emptyDatabase = async (name: string): Promise<Db> => {
 };
 
 /** Some of the real migrations — all of them by default — plus extra files, in a directory of their own. */
-const migrationsWith = async (extra: Record<string, string>, keep: number = REAL): Promise<string> => {
+const migrationsWith = async (extra: Record<string, string>, keep: number = realMigrationCount): Promise<string> => {
   const dir = await mkdtemp(join(tmpdir(), 'syncserver-migrations-'));
   dirs.push(dir);
   const real = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort().slice(0, keep);
@@ -164,14 +164,14 @@ describe('bringing a database forward', () => {
     const db = await emptyDatabase('syncserver_schema_pending');
     await ensureSchema(db, quiet);
     const dir = await migrationsWith({
-      [after_(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n',
-      [after_(2, 'probe-row')]: 'INSERT INTO migration_probe VALUES (3);\n',
+      [afterReal(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n',
+      [afterReal(2, 'probe-row')]: 'INSERT INTO migration_probe VALUES (3);\n',
     });
 
     const out = await ensureSchema(db, { ...quiet, migrationsDir: dir });
-    assert.deepEqual(out, { state: 'migrated', ran: [REAL + 1, REAL + 2], version: REAL + 2 });
+    assert.deepEqual(out, { state: 'migrated', ran: [realMigrationCount + 1, realMigrationCount + 2], version: realMigrationCount + 2 });
     assert.equal(await count(db, 'SELECT count(*)::text AS n FROM migration_probe'), 1, 'and the second ran after the first');
-    assert.equal(await schemaVersion(db), REAL + 2);
+    assert.equal(await schemaVersion(db), realMigrationCount + 2);
     assert.equal((await ensureSchema(db, { ...quiet, migrationsDir: dir })).state, 'level', 'once, not every start');
     await db.close();
   });
@@ -179,29 +179,29 @@ describe('bringing a database forward', () => {
   it('lets only one of two servers apply each migration', async () => {
     const db = await emptyDatabase('syncserver_schema_pending_race');
     await ensureSchema(db, quiet);
-    const dir = await migrationsWith({ [after_(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n' });
+    const dir = await migrationsWith({ [afterReal(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n' });
 
     const [a, b] = await Promise.all([
       ensureSchema(db, { ...quiet, migrationsDir: dir }),
       ensureSchema(db, { ...quiet, migrationsDir: dir }),
     ]);
-    assert.deepEqual([...a.ran, ...b.ran], [REAL + 1], 'a second CREATE TABLE would have failed the other start');
+    assert.deepEqual([...a.ran, ...b.ran], [realMigrationCount + 1], 'a second CREATE TABLE would have failed the other start');
     await db.close();
   });
 
   it('refuses to start when a migration fails, and rolls that migration back whole', async () => {
     const db = await emptyDatabase('syncserver_schema_failing');
     await ensureSchema(db, quiet);
-    const dir = await migrationsWith({ [after_(1, 'broken')]: 'CREATE TABLE half_done (x integer);\nSELECT 1 / 0;\n' });
+    const dir = await migrationsWith({ [afterReal(1, 'broken')]: 'CREATE TABLE half_done (x integer);\nSELECT 1 / 0;\n' });
 
     await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: dir }), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, new RegExp(`migration ${REAL + 1} \\(broken\\) failed and was rolled back: division by zero`));
+      assert.match(e.message, new RegExp(`migration ${realMigrationCount + 1} \\(broken\\) failed and was rolled back: division by zero`));
       return true;
     });
     assert.equal(await tableExists(db, 'half_done'), false, 'not half of it');
     assert.equal(
-      await count(db, `SELECT count(*)::text AS n FROM schema_migrations WHERE id = ${REAL + 1}`),
+      await count(db, `SELECT count(*)::text AS n FROM schema_migrations WHERE id = ${realMigrationCount + 1}`),
       0,
       'and not recorded',
     );
@@ -212,11 +212,11 @@ describe('bringing a database forward', () => {
     const db = await emptyDatabase('syncserver_schema_ahead');
     await ensureSchema(db, quiet);
     // Brought forward by an image that has one more migration than this one.
-    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\n' }) });
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\n' }) });
 
     await assert.rejects(ensureSchema(db, quiet), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, new RegExp(`migration ${REAL + 1}, which this image does not know`));
+      assert.match(e.message, new RegExp(`migration ${realMigrationCount + 1}, which this image does not know`));
       return true;
     });
     await db.close();
@@ -225,12 +225,12 @@ describe('bringing a database forward', () => {
   it('refuses to start when an applied migration has been edited', async () => {
     const db = await emptyDatabase('syncserver_schema_edited');
     await ensureSchema(db, quiet);
-    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\n' }) });
-    const edited = await migrationsWith({ [after_(1, 'probe')]: 'SELECT 2;\n' });
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\n' }) });
+    const edited = await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 2;\n' });
 
     await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: edited }), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, new RegExp(`migration ${REAL + 1} \\(probe\\) differs`));
+      assert.match(e.message, new RegExp(`migration ${realMigrationCount + 1} \\(probe\\) differs`));
       return true;
     });
     await db.close();
@@ -245,16 +245,16 @@ describe('reading the migrations', () => {
   });
 
   it('does not count a line ending as a change', async () => {
-    const lf = await readMigrations(await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\nSELECT 2;\n' }));
-    const crlf = await readMigrations(await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\r\nSELECT 2;\r\n' }));
-    assert.equal(lf[REAL]!.checksum, crlf[REAL]!.checksum);
+    const lf = await readMigrations(await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\nSELECT 2;\n' }));
+    const crlf = await readMigrations(await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\r\nSELECT 2;\r\n' }));
+    assert.equal(lf[realMigrationCount]!.checksum, crlf[realMigrationCount]!.checksum);
   });
 
   it('refuses a gap, a misnamed file, and a migration that controls its own transaction', async () => {
-    await assert.rejects(readMigrations(await migrationsWith({ [after_(2, 'skipped')]: 'SELECT 1;\n' })), /without gaps/);
+    await assert.rejects(readMigrations(await migrationsWith({ [afterReal(2, 'skipped')]: 'SELECT 1;\n' })), /without gaps/);
     await assert.rejects(readMigrations(await migrationsWith({ '2-short.sql': 'SELECT 1;\n' })), /not named NNNN-name\.sql/);
     await assert.rejects(
-      readMigrations(await migrationsWith({ [after_(1, 'own-tx')]: 'BEGIN;\nSELECT 1;\nCOMMIT;\n' })),
+      readMigrations(await migrationsWith({ [afterReal(1, 'own-tx')]: 'BEGIN;\nSELECT 1;\nCOMMIT;\n' })),
       /controls its own transaction/,
     );
   });
