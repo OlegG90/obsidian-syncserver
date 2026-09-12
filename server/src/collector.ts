@@ -40,6 +40,7 @@ import { holdForCollector } from './interlock.js';
 import type { Db } from './db.js';
 import type { BlobStore } from './blobs/store.js';
 import { dropSpentClaims, markUnreferenced, REFERENCED, removeSpentTrash, thinVersions } from './retention.js';
+import { pruneProblems } from './sync-problems.js';
 
 export interface CollectorResult {
   /** Version rows the retention ladder no longer keeps. */
@@ -56,6 +57,8 @@ export interface CollectorResult {
   pendingCleared: number;
   blobsRemoved: number;
   journalPruned: number;
+  /** Sync problems that stopped recurring (#355). */
+  problemsPruned: number;
   /** True when another holder of the lock was collecting, or an operator was holding it off. */
   skipped: boolean;
 }
@@ -63,7 +66,7 @@ export interface CollectorResult {
 
 const EMPTY: CollectorResult = {
   versionsThinned: 0, trashRemoved: 0, claimsDropped: 0, blobsMarked: 0, blobsUnmarked: 0,
-  partsSwept: 0, unboundDropped: 0, pendingCleared: 0, blobsRemoved: 0, journalPruned: 0, skipped: false,
+  partsSwept: 0, unboundDropped: 0, pendingCleared: 0, blobsRemoved: 0, journalPruned: 0, problemsPruned: 0, skipped: false,
 };
 
 export const runCollector = async (
@@ -230,6 +233,7 @@ const sweep = async (db: Db, store: BlobStore, cfg: Config, log: (s: string) => 
     return r.rowCount ?? 0;
   });
   out.journalPruned = pruned;
+  out.problemsPruned = await pruneProblems(db);
 
   return out;
 };

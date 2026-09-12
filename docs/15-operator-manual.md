@@ -199,6 +199,31 @@ this server will not keep it for you, and will not pretend to.
 
 ---
 
+### Sync problems
+
+When a device's write is refused, the person at that device sees it in their sync report — and, since
+0.7.13, so do you. **Sync problems** in the console lists every refusal the server gave to a device,
+counted: what was refused (`400 invalid_write`), on which route, for which account and device, how many
+times, and when it was first and last seen. An account with refusals in the last seven days is badged on
+the Accounts screen.
+
+The same thing reaches the server's log, one line per refusal:
+
+```
+refused POST /vaults/:vaultId/nodes/:nodeId/move → 400 invalid_write (account …, device …)
+```
+
+so `docker compose logs server | grep refused` answers "is anything failing" on a box nobody has opened
+the console on.
+
+What is **not** listed is the ordinary course of syncing: conflicts being resolved, a device waiting for
+its pairing to be approved, and rate limiting. What is **not** kept is anything about the content — the
+route is a template and the refusal is a name, never a path, a file name or the request itself. A problem
+that stops happening leaves the list after 30 days.
+
+It covers what the server refused. A failure only a device can see — a file it could not write locally, a
+server it could not reach — is still only in that device's sync report.
+
 ## Upgrading
 
 In `.env`, change `SERVER_IMAGE` to the new version, then:

@@ -128,6 +128,10 @@ export const accountBadge = (a: AccountLine): { text: string; tone: 'active' | '
   return { text: a.state, tone: a.state === 'active' ? 'active' : 'neutral' };
 };
 
+/** The badge for an account whose devices were refused something in the last seven days (#355). */
+export const problemsBadge = (refusals: number): string =>
+  `${refusals} sync ${refusals === 1 ? 'problem' : 'problems'} this week`;
+
 /**
  * Whether storage is a question about this row at all.
  *

@@ -14,7 +14,7 @@
  */
 import {
   accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, renameDevice,
+  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, renameDevice, syncProblems,
   restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
@@ -22,7 +22,7 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
+  accountBadge, problemsBadge, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
   isOver, mib, mibOf, serverLine, usageFraction, usageMarker,
 } from './format.js';
 import { chooseScreen, sessionEnded } from './screen.js';
@@ -130,7 +130,7 @@ const submits = (button: HTMLButtonElement, card: HTMLElement, run: () => Promis
  * console holds; marking Accounts as current while showing a password form would be the
  * navigation telling a small lie about where the reader is.
  */
-type Where = 'accounts' | 'backups' | 'audit' | 'none';
+type Where = 'accounts' | 'backups' | 'problems' | 'audit' | 'none';
 
 /**
  * The frame every signed-in screen sits in: where you are, and who you are (#123).
@@ -169,6 +169,7 @@ const shell = (current: Where, ...content: Node[]): void => {
   const destinations: [Where, string, () => void][] = [
     ['accounts', 'Accounts', accountsScreen],
     ['backups', 'Backups', backupsScreen],
+    ['problems', 'Sync problems', problemsScreen],
     ['audit', 'Audit log', auditScreen],
   ];
   for (const [key, label, go] of destinations) {
@@ -353,6 +354,8 @@ const accountCard = (a: AccountRow, done: () => Promise<void>, report: Report): 
     el('span', { className: 'login', textContent: a.login }),
     el('span', { className: `badge is-${badge.tone}`, textContent: badge.text }),
   );
+  // Refusals this account's devices met lately (#355): a count to go and look at, not the detail itself.
+  if (a.recentProblems > 0) top.append(el('span', { className: 'badge is-frozen', textContent: problemsBadge(a.recentProblems) }));
   const acts = el('div', { className: 'acts' });
   top.append(acts);
   card.append(top);
@@ -883,6 +886,48 @@ const auditScreen = (): void => {
   };
 
   shell('audit', page, size, list);
+  loads(list, fill);
+};
+
+/**
+ * What went wrong for which device, as the server counted it while answering (#355, D-134).
+ *
+ * One line per device and kind of refusal, newest first. A count and two times rather than a stream of
+ * events: the question an operator brings is "is this still happening, and to whom", and a repeat
+ * answers it by moving its time rather than by adding a line. Nothing here names a file or a note —
+ * the server never had one to name.
+ */
+const problemsScreen = (): void => {
+  const page = el('div', {}, el('h1', { textContent: 'Sync problems' }));
+  const note = el('p', {
+    className: 'muted',
+    textContent:
+      'Refusals the server gave to a device, counted. Conflicts, pairing waits and rate limits are the ' +
+      'ordinary course of syncing and are not listed. A problem that stops recurring leaves after 30 days.',
+  });
+  const list = el('div', {}, pending());
+
+  const fill = async (): Promise<void> => {
+    const out = await syncProblems();
+    if (out.problems.length === 0) {
+      list.replaceChildren(el('p', { className: 'muted', textContent: 'No device has been refused anything lately.' }));
+      return;
+    }
+    const log = el('div', { className: 'log' });
+    for (const p of out.problems) {
+      const line = el('div', { className: 'entry' });
+      line.append(
+        el('strong', { textContent: `${p.status} ${p.code}` }),
+        el('span', { textContent: `${p.method} ${p.route}` }),
+        el('span', { className: 'muted', textContent: `${p.login} · ${p.deviceName} (${p.platform}) · ${p.count}×` }),
+        el('span', { className: 'when', textContent: `last ${when(p.lastAt)}, first ${when(p.firstAt)}` }),
+      );
+      log.append(line);
+    }
+    list.replaceChildren(log);
+  };
+
+  shell('problems', page, note, list);
   loads(list, fill);
 };
 

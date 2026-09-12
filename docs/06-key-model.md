@@ -608,6 +608,8 @@ An honest list, so it is not claimed where it does not hold:
   (`windows-desktop`, `android`) or whatever its person typed instead (D-133). Nothing is taken from the
   machine to build one, and a vault's name is never used for it, but a name somebody types is theirs to
   keep free of anything private;
+- **refusals, counted**: which device was refused on which route template with which code, how often and
+  when (D-134). The route is a template and the code a name, so nothing of a path or a body is kept;
 - **revocation is not cryptographic** (see above);
 - **encryption is not opt-in.** The server never sees content or names, for any account or vault (AC-08).
   What it does see is the structural metadata above, and hiding that is deliberately not a goal: it would

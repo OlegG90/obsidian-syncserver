@@ -9,6 +9,7 @@
  */
 import { renameAccountDevice } from './service.js';
 import { deviceNameProblem } from '../devices.js';
+import { listProblems } from '../sync-problems.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { OperatorRefusalCode } from '@syncserver/shared';
 import { copyAt } from '../backup-copy.js';
@@ -105,6 +106,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
       return { entries, size };
     },
   );
+
+  // What went wrong for which device, counted (#355). Newest first and bounded, like the audit log.
+  app.get('/admin/sync-problems', admin, async () => ({ problems: await listProblems(db) }));
 
   app.post<{ Body: { login: string; quota_bytes: string; ttl_seconds?: number } }>(
     '/admin/invitations',
