@@ -170,6 +170,10 @@ export const folderMoves = (
     if (!allMoved || newParent === undefined) continue;
 
     if (tree.has(newParent)) continue;
+    // A new folder inside the one its children left is not the folder moving: `V/a` into
+    // `V/N/a` would ask the server to put `V` under itself. The chain check below passes it,
+    // because the only ancestor `V/N` needs is `V`, and `V` is still there.
+    if (newParent.startsWith(`${parent}/`)) continue;
     if (newParent && !parentChainExists(newParent, tree)) continue;
     // Two folders cannot move to the same destination in one pass; the second is not a
     // move but a merge into something this pass is already creating.
