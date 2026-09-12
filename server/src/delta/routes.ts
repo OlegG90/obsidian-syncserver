@@ -1,3 +1,4 @@
+import { learnDeviceVault } from '../devices.js';
 import type { CursorFaultBody, CursorPayload, Scope } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
@@ -16,6 +17,9 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }
+    // Every operation opens its vault here first, so this is where the server learns which one a device
+    // syncs (#364, D-139) — after the ownership check, so it can only ever be the account's own.
+    await learnDeviceVault(db, req.caller!.deviceId, req.params.vaultId);
     const row = await db.one<{ rootNodeId: string; head: string; keyId: string }>(
       `SELECT root_node_id AS "rootNodeId", head_rev::text AS head, vault_key_id AS "keyId"
          FROM vaults WHERE id = $1`,

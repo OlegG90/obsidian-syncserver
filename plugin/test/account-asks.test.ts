@@ -25,7 +25,7 @@ const session = {
   vaults: async () => [{ id: 'v1', name: 'Notes', nodes: 3, bytes: 9, shared: false, current: true }],
   deleteVault: async (id: string) => {
     asked.push(`deleteVault:${id}`);
-    return { thawed: true };
+    return { thawed: true, revoked: 0 };
   },
   createRecoveryCode: async () => ({ code: 'aaaa-bbbb', replaced: false }),
   approvePairing: async (code: string) => void asked.push(`approvePairing:${code}`),

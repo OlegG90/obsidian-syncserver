@@ -137,13 +137,15 @@ export const renameVault = async (db: Db, userId: string, vaultId: string, nameE
  * What a share holds is other people's access, which is not this account's to tidy away (SH-27).
  *
  * **Not this device's own vault**, and that is refused where the connection lives — on the device
- * (`session.ts`). The server cannot know which vault a caller is syncing.
+ * (`session.ts`). **The devices that synced it are revoked** in the same transaction (#364, D-139): the
+ * server knows which vault each device syncs now, and a device whose vault is gone has nothing left to
+ * sync but a token that still opens the account's other vaults.
  */
 export const deleteVault = async (
   db: Db,
   userId: string,
   vaultId: string,
-): Promise<Refusal | { thawed: boolean }> =>
+): Promise<Refusal | { thawed: boolean; revoked: number }> =>
   db.tx(async (c) => {
     const found = await c.query(
       `SELECT 1 FROM vaults WHERE id = $1 AND user_id = $2 FOR UPDATE`,
@@ -167,6 +169,13 @@ export const deleteVault = async (
       [vaultId],
     );
     await removeNodesByDepth(c, doomed.rows);
+    // Its devices go with it (#364, D-139). They sync nothing that exists any more, and a device token still
+    // reaches every other vault of the account — so a device left behind would be access nobody meant.
+    const revoked = await c.query(
+      `UPDATE devices SET revoked_at = now(), refresh_token_hash = NULL
+        WHERE vault_id = $1 AND revoked_at IS NULL`,
+      [vaultId],
+    );
     await c.query(`DELETE FROM vaults WHERE id = $1`, [vaultId]);
     // The versions went with the nodes, so blobs this vault was the last to reference are now held by
     // nothing. Recomputed here rather than left to the sweep: an account that deleted a vault to make
@@ -192,7 +201,7 @@ export const deleteVault = async (
     // same call, and for the same reason: a person who has just deleted something to get back in wants
     // to know whether it worked, and the only surface that can say so at that moment is the one they
     // pressed. What it costs is a `204` becoming a `200`, which is why this waited for a minor.
-    return { thawed: (await settleFreeze(c, userId)).thawed !== undefined };
+    return { thawed: (await settleFreeze(c, userId)).thawed !== undefined , revoked: revoked.rowCount ?? 0 };
   });
 
 /**

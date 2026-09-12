@@ -35,7 +35,7 @@ const TITLES: Record<SectionName, string> = {
   trash: 'Trash and history',
   shares: 'Shared folders',
   vaults: 'Vaults',
-  devices: 'Devices',
+  devices: 'Add a device',
 };
 
 export class SyncServerView extends ItemView {

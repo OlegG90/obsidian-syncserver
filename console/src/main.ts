@@ -509,7 +509,17 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
       list.append(el('p', { className: 'muted', textContent: 'No devices reach this account.' }));
       return;
     }
-    for (const d of out.devices) {
+    // Grouped by the vault each device syncs (#364, D-139). A group is named by the vault's id: its name is
+    // encrypted under the account's key, which an administrator never holds (D-115).
+    const groupOf = (d: (typeof out.devices)[number]): string =>
+      d.vault_id ? `vault ${d.vault_id.slice(0, 8)}…` : d.platform === 'console' ? 'console' : 'vault not known yet';
+    const sorted = [...out.devices].sort((x, y) => groupOf(x).localeCompare(groupOf(y)));
+    let group = '';
+    for (const d of sorted) {
+      if (groupOf(d) !== group) {
+        group = groupOf(d);
+        list.append(el('h4', { textContent: group }));
+      }
       const row = el('div', { className: 'entry' });
       row.append(
         el('strong', { textContent: d.name }),
