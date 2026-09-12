@@ -202,6 +202,29 @@ describe('did a whole folder move', () => {
     assert.equal(plan[0]?.to, 'deep/N');
   });
 
+  it('refuses a destination inside the folder the children left', () => {
+    // `V/a` and `V/b` gathered into a new `V/N`: the folder did not move, its children did.
+    // Planned as a move, it asked the server to put `V` under itself and was refused.
+    const f = collapsed();
+    f.meta.clear();
+    f.meta.set('V/N/a.md', { plainHash: 'ha', size: BIG });
+    f.meta.set('V/N/b.md', { plainHash: 'hb', size: BIG });
+    f.here = new Set(['V/N/a.md', 'V/N/b.md']);
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), [], '`V` cannot move into `V/N`');
+  });
+
+  it('still accepts a sibling whose name only starts like the source', () => {
+    // `V2` is not inside `V`; the check is on the path segment, not the spelling.
+    const f = collapsed();
+    f.meta.clear();
+    f.meta.set('V2/a.md', { plainHash: 'ha', size: BIG });
+    f.meta.set('V2/b.md', { plainHash: 'hb', size: BIG });
+    f.here = new Set(['V2/a.md', 'V2/b.md']);
+
+    assert.equal(folderMoves(f.vanished, f.tree, f.meta, f.here)[0]?.to, 'V2');
+  });
+
   it('refuses to move a path the server holds as a file', () => {
     const f = collapsed();
     f.tree.set('V', file('id:V-is-a-file'));
