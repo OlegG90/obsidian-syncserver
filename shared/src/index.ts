@@ -363,6 +363,31 @@ export type AccountRow = {
   createdAt: string;
   /** For an unclaimed invitation: when it stops being redeemable. */
   inviteExpiresAt: string | null;
+  /** How many refusals this account's devices met in the last seven days (#355). 0 when none. */
+  recentProblems: number;
+};
+
+/**
+ * One row of `GET /admin/sync-problems` (#355, D-134): one device's refusals of one kind, counted.
+ *
+ * Aliased on its way out, so spelled the way its one reader reads it, like `AccountRow`. `count` is text
+ * because the column is a bigint and a JSON number would round it past 2^53 without saying so.
+ */
+export type SyncProblemRow = {
+  userId: string;
+  login: string;
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  method: string;
+  /** The route template the server matched, never the URL with its ids. */
+  route: string;
+  status: number;
+  /** The refusal's name (`invalid_write`), or `unknown` when the answer carried none. */
+  code: string;
+  count: string;
+  firstAt: string;
+  lastAt: string;
 };
 
 /**

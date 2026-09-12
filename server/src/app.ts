@@ -2,6 +2,7 @@ import fastifyJwt from '@fastify/jwt';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { HealthResponse } from '@syncserver/shared';
 import { schemaVersion } from './schema.js';
+import { registerProblemRecorder } from './sync-problems.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { inProcessAttemptLimiter, type AttemptLimiter } from './auth/attempts.js';
 import { registerBlobRoutes } from './blobs/routes.js';
@@ -84,6 +85,9 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     } satisfies HealthResponse;
   });
 
+  // Before every route, because a hook applies to the routes declared after it: each refusal to an
+  // authenticated device is counted and logged (#355).
+  registerProblemRecorder(app, db);
   registerBootstrapGuard(app, db);
   registerAuthRoutes(app, db, cfg, attempts ?? inProcessAttemptLimiter());
   registerPairingRoutes(app, db, cfg);

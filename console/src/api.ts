@@ -10,7 +10,9 @@
  * **No key material passes through here, ever.** A console account has none (D-115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals } from '@syncserver/shared';
+import type {
+  AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals, SyncProblemRow,
+} from '@syncserver/shared';
 import { operatorRefusal } from './format.js';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
@@ -265,6 +267,9 @@ export const storage = (): Promise<StorageTotals> => call('GET', '/admin/storage
 /** The administrative log, newest first (D-87, D-94). Append-only on the server; read-only here. */
 export const audit = (): Promise<{ entries: AuditRow[]; size: { rows: number; bytes: string } }> =>
   call('GET', '/admin/audit');
+
+/** What went wrong for which device, counted by the server as it answered (#355, D-134). Newest first. */
+export const syncProblems = (): Promise<{ problems: SyncProblemRow[] }> => call('GET', '/admin/sync-problems');
 
 /** Start a backup now. Refused with `backup_not_ready` when something is in the way of one. */
 export const runBackup = (): Promise<{ self_check?: string }> =>
