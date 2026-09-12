@@ -37,6 +37,7 @@ const handle = {
   client: {
     devices: async () => ({ devices: [{ deviceId: 'd1' }, { deviceId: 'd2' }] }),
     revokeDevice: async (id: string) => void asked.push(`revokeDevice:${id}`),
+    renameDevice: async (id: string, name: string) => void asked.push(`renameDevice:${id}=${name}`),
     recoveryCodeState: async () => ({ present: true }),
   },
 };
@@ -75,6 +76,7 @@ describe('the way in each ask takes', () => {
   const handled: [string, (a: AccountAsks) => Promise<unknown>][] = [
     ['devices', (a) => a.devices()],
     ['revokeDevice', (a) => a.revokeDevice('d1')],
+    ['renameDevice', (a) => a.renameDevice('d1', 'Laptop')],
     ['hasRecoveryCode', (a) => a.hasRecoveryCode()],
   ];
 

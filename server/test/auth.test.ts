@@ -1174,6 +1174,72 @@ describe('the devices of an account', () => {
   it('answers nobody who is not signed in', async () => {
     assert.equal((await app.inject({ method: 'GET', url: '/auth/devices' })).statusCode, 401);
   });
+
+  /** A device of the vault account, for a rename test to own and remove again. */
+  const extraDevice = async (name: string, platform: string): Promise<string> =>
+    (await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) SELECT id, $2, $3 FROM users WHERE login = $1 RETURNING id`,
+      [VAULT_LOGIN, name, platform],
+    ))!.id;
+
+  const rename = async (access: string, deviceId: string, name: unknown) =>
+    app.inject({
+      method: 'PUT',
+      url: `/auth/devices/${deviceId}`,
+      headers: { authorization: `Bearer ${access}` },
+      payload: { name },
+    });
+
+  it('renames any of the caller’s own devices, not only the one asking (#356)', async () => {
+    // The one a person needs to name is usually another: the phone in the drawer, seen from the laptop.
+    const access = await signIn((await aDeviceOf(VAULT_LOGIN))!.id);
+    const phone = await extraDevice('obsidian', 'android');
+
+    const out = await rename(access, phone, 'the phone in the drawer');
+    assert.equal(out.statusCode, 204, out.body);
+    const list = (await devicesOf(access)).json().devices as { id: string; name: string }[];
+    assert.equal(list.find((d) => d.id === phone)?.name, 'the phone in the drawer');
+
+    await db.query(`DELETE FROM devices WHERE id = $1`, [phone]);
+  });
+
+  it('refuses a name the schema would refuse, with the reason rather than a 500', async () => {
+    const access = await signIn((await aDeviceOf(VAULT_LOGIN))!.id);
+    const phone = await extraDevice('obsidian', 'android');
+
+    for (const bad of [' padded', '', 'x'.repeat(65), 'two\nlines', 42]) {
+      const out = await rename(access, phone, bad);
+      assert.equal(out.statusCode, 400, `${JSON.stringify(bad)}: ${out.body}`);
+      assert.equal(out.json().error, 'invalid_device_name');
+      assert.equal(typeof out.json().detail, 'string', 'and says what is wrong with it');
+    }
+    // The same rule where a device is born: a 500 there is the same defect.
+    const made = await app.inject({
+      method: 'POST',
+      url: '/auth/devices',
+      headers: { authorization: `Bearer ${access}` },
+      payload: { name: 'x'.repeat(65), platform: 'test' },
+    });
+    assert.equal(made.statusCode, 400, made.body);
+
+    await db.query(`DELETE FROM devices WHERE id = $1`, [phone]);
+  });
+
+  it('answers 404 for a device that is not there, revoked, or the console’s — one answer for all three', async () => {
+    const access = await signIn((await aDeviceOf(VAULT_LOGIN))!.id);
+    const gone = await extraDevice('obsidian', 'android');
+    await db.query(`UPDATE devices SET revoked_at = now() WHERE id = $1`, [gone]);
+    // The console writes its device's name at every sign-in, so a rename would last until the next one.
+    const consoleRow = await extraDevice('console', 'console');
+
+    for (const id of ['00000000-0000-0000-0000-0000000000ff', gone, consoleRow]) {
+      assert.equal((await rename(access, id, 'renamed')).statusCode, 404);
+    }
+    const names = await db.query<{ name: string }>(`SELECT name FROM devices WHERE id = ANY($1)`, [[gone, consoleRow]]);
+    assert.ok(names.every((r) => r.name !== 'renamed'), 'and nothing was renamed');
+
+    await db.query(`DELETE FROM devices WHERE id = ANY($1)`, [[gone, consoleRow]]);
+  });
 });
 
 /**
@@ -1242,6 +1308,36 @@ describe('an operator looking at somebody’s devices', () => {
     assert.equal(row!.target, VAULT_LOGIN);
     // The name and not the id: an operator reading this later is trying to remember which machine.
     assert.equal(row!.details.device, 'the lost phone');
+  });
+
+  it('renames one, and the audit row carries both names (#356)', async () => {
+    const access = await asAdmin();
+    const id = await userId();
+    const phone = (await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'obsidian', 'android') RETURNING id`,
+      [id],
+    ))!.id;
+    const put = (name: unknown, deviceId = phone) =>
+      app.inject({
+        method: 'PUT',
+        url: `/admin/accounts/${id}/devices/${deviceId}`,
+        headers: { authorization: `Bearer ${access}` },
+        payload: { name },
+      });
+
+    const out = await put('the phone in the drawer');
+    assert.equal(out.statusCode, 204, out.body);
+    const row = await db.one<{ details: { from: string; to: string }; target: string }>(
+      `SELECT details, target_login AS target FROM audit_log WHERE action = 'device.rename' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.equal(row!.target, VAULT_LOGIN);
+    // Both: the old name is the machine the operator remembers, the new one what it is called now.
+    assert.deepEqual(row!.details, { from: 'obsidian', to: 'the phone in the drawer' });
+
+    assert.equal((await put(' padded')).statusCode, 400, 'the same rule as the owner’s route');
+    assert.equal((await put('renamed', '00000000-0000-0000-0000-0000000000ff')).statusCode, 404, 'not silent: nothing was renamed');
+
+    await db.query(`DELETE FROM devices WHERE id = $1`, [phone]);
   });
 
   it('is silent about a device that is not that account’s', async () => {

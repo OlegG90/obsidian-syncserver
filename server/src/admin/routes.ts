@@ -7,6 +7,8 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
+import { renameAccountDevice } from './service.js';
+import { deviceNameProblem } from '../devices.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { OperatorRefusalCode } from '@syncserver/shared';
 import { copyAt } from '../backup-copy.js';
@@ -184,6 +186,19 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     admin,
     async (req, reply) => {
       const out = await revokeDevice(db, req.admin!, req.params.userId, req.params.deviceId);
+      if (out) return refuse(reply, out);
+      return reply.code(204).send();
+    },
+  );
+
+  // Renaming one, for the operator telling somebody's devices apart for them (#356). Audited like a revoke.
+  app.put<{ Params: { userId: string; deviceId: string }; Body: { name?: unknown } }>(
+    '/admin/accounts/:userId/devices/:deviceId',
+    admin,
+    async (req, reply) => {
+      const nameProblem = deviceNameProblem(req.body?.name);
+      if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+      const out = await renameAccountDevice(db, req.admin!, req.params.userId, req.params.deviceId, req.body!.name as string);
       if (out) return refuse(reply, out);
       return reply.code(204).send();
     },

@@ -39,6 +39,7 @@ Three prefixes appear across the corpus:
 | AC-14 | A reset acts on one vault, hard-destroys its prior server state, and bumps that vault's `reset_epoch` |
 | AC-Q2 | Quota is per account, summed across the account's vaults |
 | AC-Q4 | A share replica lands in the vault the invitation was **accepted in** — there is no separate "which vault?" question, because a plugin instance can only reach the vault it runs in |
+| D-133 | **A device is named by its person, and the name is readable** (#356). It starts as the platform label the plugin already had (`windows-desktop`, `android`) and is whatever the person types over it at connect, pair or recovery; it can be changed later from the plugin (any device of one's own account) and from the console (audited as `device.rename`, with both names). **Nothing is read from the machine to build it**: the plugin is one bundle for Electron and a WebView, so there is no host name, and a vault's name is encrypted everywhere else (AC-08), so it is not put where the server reads it. The name is server-readable metadata and docs/06 lists it as such. It is readable by rule — trimmed, 1–64 characters, no control characters — in the routes, with a reason, and in the schema (`device_name_is_readable`). **The console's own device is not renameable**: a console sign-in writes its name every time. Devices registered before names existed are all `obsidian`; each renames itself to its label at its next unlock, once, and a name somebody chose is never replaced |
 
 ## Sharing
 

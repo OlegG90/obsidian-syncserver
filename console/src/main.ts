@@ -14,7 +14,7 @@
  */
 import {
   accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
-  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup,
+  changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, renameDevice,
   restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
@@ -519,6 +519,24 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
           textContent: d.last_seen_at ? `last seen ${when(d.last_seen_at)}` : 'not seen since it was added',
         }),
       );
+      // Not the console's own row: a sign-in writes that name every time, and the server refuses it (#356).
+      if (d.platform !== 'console') {
+        const rename = el('button', { textContent: 'Rename' });
+        rename.onclick = () => {
+          const name = field('New name');
+          name.input.value = d.name;
+          const save = el('button', { textContent: 'Save' });
+          rename.replaceWith(name.row, save);
+          submits(save, row, async () => {
+            const next = name.input.value.trim();
+            await renameDevice(a.id, d.id, next);
+            // Reported outside the list, which `fill` is about to replace.
+            report(`${d.name} is now called ${next}.`);
+            await fill();
+          });
+        };
+        row.append(rename);
+      }
       const go = el('button', { className: 'danger', textContent: 'Revoke' });
       submits(go, list, async () => {
         await revokeDevice(a.id, d.id);

@@ -35,6 +35,19 @@ export const askFolderName = (app: App, suggestion: string): Promise<string | un
     ).open();
   });
 
+/** A new name for one of this account's devices, starting from the one it has (#356). */
+export const askDeviceName = (app: App, current: string): Promise<string | undefined> =>
+  new Promise((resolve) => {
+    new TextPromptModal(
+      app,
+      'Rename this device',
+      'How it appears in this account’s device lists and in the server console. The server can read it, ' +
+        'so it is not a place for anything private.',
+      current,
+      resolve,
+    ).open();
+  });
+
 /** A one-field modal, resolving to the passphrase or `undefined` if dismissed. */
 export const askPassphrase = (app: App): Promise<string | undefined> =>
   new Promise((resolve) => {

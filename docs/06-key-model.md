@@ -604,6 +604,10 @@ An honest list, so it is not claimed where it does not hold:
 - **content equality within a scope**: two nodes pointing at one blob are the same file. Across scopes this
   is invisible, because the dedup tags differ;
 - **the fact and time of access**: who synchronised when, and how much they wrote;
+- **device names**: what each device is called, in plain text — the platform label the plugin suggests
+  (`windows-desktop`, `android`) or whatever its person typed instead (D-133). Nothing is taken from the
+  machine to build one, and a vault's name is never used for it, but a name somebody types is theirs to
+  keep free of anything private;
 - **revocation is not cryptographic** (see above);
 - **encryption is not opt-in.** The server never sees content or names, for any account or vault (AC-08).
   What it does see is the structural metadata above, and hiding that is deliberately not a goal: it would

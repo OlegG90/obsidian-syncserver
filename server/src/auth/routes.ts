@@ -1,3 +1,4 @@
+import { deviceNameProblem, renameDevice } from '../devices.js';
 import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
 import { fakeAccountSalt, hashToken, tokenMatches } from '../crypto.js';
@@ -156,6 +157,10 @@ export const registerAuthRoutes = (
     if ((b.recovery_key === undefined) !== (b.recovery_code_hash === undefined)) {
       return reply.code(400).send({ error: 'recovery_pair_incomplete' });
     }
+
+    // A name the schema would refuse, refused here with a reason instead of as a 500 (#356).
+    const nameProblem = b.device_name === undefined ? undefined : deviceNameProblem(b.device_name);
+    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
 
     const out = await redeemInvitation(db, {
       invitationToken: b.invitation_token,
@@ -323,6 +328,8 @@ export const registerAuthRoutes = (
     if (!b.login) return reply.code(400).send({ error: 'login_required' });
     // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
     // is a request that could ever succeed.
+    const nameProblem = b.device_name === undefined ? undefined : deviceNameProblem(b.device_name);
+    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
     if ((b.kek_verifier === undefined) === (b.recovery_code === undefined)) {
       return reply.code(400).send({ error: 'one_proof_required' });
     }
@@ -375,6 +382,8 @@ export const registerAuthRoutes = (
   });
 
   app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
+    const nameProblem = deviceNameProblem(req.body?.name);
+    if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
 
     const row = await db.one<{ id: string }>(
       `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, $3) RETURNING id`,
@@ -618,4 +627,24 @@ export const registerAuthRoutes = (
     );
     return reply.code(204).send();
   });
+
+  /**
+   * Rename one of the caller's own devices (#356).
+   *
+   * Any of them, not only the one asking: the list this serves is where a person tells their devices
+   * apart, and the one they need to name is usually another. A 404 for one that is not the caller's,
+   * is revoked, or is the console's — one answer, because telling those apart would confirm that
+   * another account's device exists (D-20). Unlike revoking this is not silent: nothing was renamed.
+   */
+  app.put<{ Params: { deviceId: string }; Body: { name?: unknown } }>(
+    '/auth/devices/:deviceId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const nameProblem = deviceNameProblem(req.body?.name);
+      if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+      const out = await renameDevice(db, req.caller!.userId, req.params.deviceId, req.body!.name as string);
+      if (!out) return reply.code(404).send({ error: 'not_found' });
+      return reply.code(204).send();
+    },
+  );
 };

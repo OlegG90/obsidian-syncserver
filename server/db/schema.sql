@@ -103,7 +103,8 @@ CREATE TABLE schema_migrations (
 );
 
 INSERT INTO schema_migrations (id, name, checksum) VALUES
-    (1, 'schema-migrations', 'b05c351eac8692c305e2c7f0c0c34265ba47d1e922fa60ab0e37db4a617b4112');
+    (1, 'schema-migrations', 'b05c351eac8692c305e2c7f0c0c34265ba47d1e922fa60ab0e37db4a617b4112'),
+    (2, 'device-names', 'b457dc78fcd7b6e02162a1d9352f80ef36a864a9b2b5ca7965d88fcaf7a088f5');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -481,7 +482,10 @@ CREATE TABLE devices (
     last_cursor  text,
     last_seen_at timestamptz,
     refresh_token_hash text,                     -- one per device, so "sign out this device" works (D-90)
-    revoked_at   timestamptz
+    revoked_at   timestamptz,
+    -- Read by a person picking a device out of a list, so readable (#356, D-133).
+    CONSTRAINT device_name_is_readable
+        CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 64 AND name !~ '[[:cntrl:]]')
 );
 
 CREATE INDEX devices_user ON devices (user_id);

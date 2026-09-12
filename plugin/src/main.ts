@@ -23,6 +23,7 @@ import { SyncEngine, type PassOptions } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
+import { deviceName, nameIfUnnamed } from './device-name.js';
 import { PushListener } from './obsidian/push.js';
 import { newHumanCode } from './crypto/human-code.js';
 import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
@@ -116,8 +117,9 @@ const DEFAULT_DATA: PluginData = {};
  * `connect` said `desktop` on a phone too. Asked at call time, not load, like every other
  * reading of `Platform` here.
  */
-const thisDevice = (): { deviceName: string; devicePlatform: string } => ({
-  deviceName: 'obsidian',
+const thisDevice = (typed?: string): { deviceName: string; devicePlatform: string } => ({
+  // What the person typed, or the platform label — never the one word every device used to send (#356).
+  deviceName: deviceName(typed, deviceLabel()),
   devicePlatform: Platform.isMobile ? 'mobile' : 'desktop',
 });
 
@@ -627,7 +629,13 @@ export default class SyncServerPlugin extends Plugin {
    * what is useless without the passphrase. The session returns an open session — the caller
    * has just typed the passphrase; asking for it again would be theatre.
    */
-  async connect(serverUrl: string, login: string, invitationToken: string, passphrase: string): Promise<void> {
+  async connect(
+    serverUrl: string,
+    login: string,
+    invitationToken: string,
+    passphrase: string,
+    typedName?: string,
+  ): Promise<void> {
     const s = await session.connect(
       {
         serverUrl,
@@ -635,7 +643,7 @@ export default class SyncServerPlugin extends Plugin {
         invitationToken,
         passphrase,
         vaultName: this.app.vault.getName(),
-        ...thisDevice(),
+        ...thisDevice(typedName),
       },
       transport,
     );
@@ -666,12 +674,12 @@ export default class SyncServerPlugin extends Plugin {
    * ordinary adoption: the vault on the server materialises into whatever is on disk here,
    * which is the same branch a paired device takes.
    */
-  async recover(args: { serverUrl: string; login: string; passphrase: string }): Promise<void> {
+  async recover(args: { serverUrl: string; login: string; passphrase: string; deviceName?: string }): Promise<void> {
     await this.held.take(
       await session.recover(
         {
           ...args,
-          ...thisDevice(),
+          ...thisDevice(args.deviceName),
           // The same hazard as pairing, through the same branch: recovering into an Obsidian
           // vault other than the original merges the two. Issue #117 names pairing; the code path is
           // one, and asking here costs a caller nothing.
@@ -694,12 +702,13 @@ export default class SyncServerPlugin extends Plugin {
     login: string;
     code: string;
     passphrase: string;
+    deviceName?: string;
   }): Promise<void> {
     await this.held.take(
       await session.recoverWithCode(
         {
           ...args,
-          ...thisDevice(),
+          ...thisDevice(args.deviceName),
           askVault: (v) => this.askVault(v),
         },
         transport,
@@ -717,13 +726,13 @@ export default class SyncServerPlugin extends Plugin {
    * `waiting` is polled between attempts so they can give up.
    */
   async pair(
-    args: { serverUrl: string; login: string; passphrase: string; pairingCode: string },
+    args: { serverUrl: string; login: string; passphrase: string; pairingCode: string; deviceName?: string },
     waiting: () => Promise<boolean>,
   ): Promise<void> {
     const s = await session.pair(
       {
         ...args,
-        ...thisDevice(),
+        ...thisDevice(args.deviceName),
         askVault: (v) => this.askVault(v),
       },
       transport,
@@ -848,6 +857,10 @@ export default class SyncServerPlugin extends Plugin {
     if ((await this.sess!.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
     // The screen still said "locked", which stopped being true a line ago.
     this.setPhase({ kind: 'idle' });
+    // A device registered before names were asked for is called `obsidian`; it takes its platform label,
+    // once (#356). Not awaited and allowed to fail: a name is not worth delaying an unlock over, and the
+    // next unlock asks again.
+    void this.sess!.use((h) => nameIfUnnamed(h.client, deviceLabel())).catch(() => undefined);
     return this.sess!;
   }
 

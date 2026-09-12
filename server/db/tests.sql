@@ -383,6 +383,24 @@ SELECT expect_ok($$
     UPDATE device_pairings SET claimed_device_id = 'd1000000-0000-0000-0000-000000000001', claimed_at = now()
      WHERE id = 'd0000000-0000-0000-0000-000000000001'
 $$, 'an approved pairing is claimed once');
+
+-- A device's name is read by a person picking one out of a list (#356).
+SELECT expect_ok($$
+    UPDATE devices SET name = repeat('n', 64) WHERE id = 'd1000000-0000-0000-0000-000000000001';
+    UPDATE devices SET name = 'paired' WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, 'a device name of 64 characters');
+SELECT expect_fail($$
+    UPDATE devices SET name = repeat('n', 65) WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, '23514', 'device_name_is_readable', 'a device name of 65 characters');
+SELECT expect_fail($$
+    UPDATE devices SET name = '' WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, '23514', 'device_name_is_readable', 'an empty device name');
+SELECT expect_fail($$
+    UPDATE devices SET name = ' padded' WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, '23514', 'device_name_is_readable', 'a device name with a space at one end');
+SELECT expect_fail($$
+    UPDATE devices SET name = E'two\nlines' WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, '23514', 'device_name_is_readable', 'a device name with a control character');
 SELECT expect_fail($$
     UPDATE device_pairings SET device_pubkey = '\xcafe'::bytea
      WHERE id = 'd0000000-0000-0000-0000-000000000001'

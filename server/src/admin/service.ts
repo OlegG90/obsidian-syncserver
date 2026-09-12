@@ -17,6 +17,7 @@
  * and share at once, with reads and deletions still working — so the answer says how much
  * they are using, and the caller can say that out loud before doing it rather than after.
  */
+import { renameDevice } from '../devices.js';
 import type { AccountRow, AuditRow, DeviceRow, StorageTotals } from '@syncserver/shared';
 import { hashToken, newToken } from '../crypto.js';
 import { oneFrom, type Db } from '../db.js';
@@ -186,6 +187,37 @@ export const revokeDevice = async (
       // The name and not the id: an operator reading this later is trying to remember which machine
       // that was, and a uuid answers nothing.
       details: { device: done.rows[0]!.name },
+    });
+    return undefined;
+  });
+
+/**
+ * Rename one of somebody else's devices, and record it (#356).
+ *
+ * Not silent about a device that is not there, unlike a revoke: nothing was renamed, and a 204 would say
+ * something was. The 404 is one answer for no such device, not theirs, revoked, and the console's own,
+ * so it still says nothing about another account (D-20).
+ */
+export const renameAccountDevice = async (
+  db: Db,
+  actor: Actor,
+  userId: string,
+  deviceId: string,
+  name: string,
+): Promise<Refusal | undefined> =>
+  txGuarded(db, async (c) => {
+    const target = await c.query<{ login: string }>(`SELECT login FROM users WHERE id = $1`, [userId]);
+    if (target.rowCount === 0) return { kind: 'not_found' } as Refusal;
+
+    const done = await renameDevice(oneFrom(c), userId, deviceId, name);
+    if (!done) return { kind: 'not_found' } as Refusal;
+
+    await record(c, {
+      actor,
+      action: 'device.rename',
+      target: { id: userId, login: target.rows[0]!.login },
+      // Both names: the old one is the machine the operator remembers, the new one what it is called now.
+      details: { from: done.from, to: name },
     });
     return undefined;
   });

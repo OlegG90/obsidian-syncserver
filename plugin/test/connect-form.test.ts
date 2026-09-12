@@ -19,6 +19,8 @@ const draft = (over: Partial<ConnectDraft> = {}): ConnectDraft => ({
   again: 'correct horse battery staple',
   token: '7f3a-9c21-e04b-88d1',
   code: 'CODE-KEPT-IN-A-DRAWER',
+  // Optional to the person — an empty box means the platform label — so no route may require it.
+  deviceName: '',
   ...over,
 });
 

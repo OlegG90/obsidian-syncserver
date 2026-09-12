@@ -29,6 +29,8 @@ export interface ConnectDraft {
   token: string;
   /** The recovery code, on the one route that takes one. */
   code: string;
+  /** What this device is called in the account's device lists (#356). Empty means its platform label. */
+  deviceName: string;
 }
 
 /**

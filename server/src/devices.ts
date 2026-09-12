@@ -30,3 +30,46 @@ export const activeDevices = (db: Db, userId: string): Promise<DeviceRow[]> =>
       ORDER BY last_seen_at DESC NULLS LAST, name`,
     [userId],
   );
+
+/** The longest name a device may carry. The schema's `device_name_is_readable` says the same. */
+export const DEVICE_NAME_MAX = 64;
+
+/**
+ * What is wrong with a device name, or nothing (#356).
+ *
+ * The schema refuses the same names; this says so first, because a CHECK reached from a route that does
+ * not translate it is a 500 for a mistake the caller made. Nothing is trimmed here: a name is stored as
+ * sent, so one with spaces around it is refused rather than quietly turned into a different one.
+ */
+export const deviceNameProblem = (name: unknown): string | undefined => {
+  if (typeof name !== 'string') return 'a device name is text';
+  if (name !== name.trim()) return 'a device name has no spaces at either end';
+  if (name.length === 0) return 'a device name is not empty';
+  if ([...name].length > DEVICE_NAME_MAX) return `a device name is at most ${DEVICE_NAME_MAX} characters`;
+  if (/\p{Cc}/u.test(name)) return 'a device name has no control characters';
+  return undefined;
+};
+
+/**
+ * Rename one device of an account, answering the name it had — or nothing, when there was none to rename.
+ *
+ * Active devices only, and **never the console's**: a console sign-in writes its device's name every time
+ * (`consoleSignIn`), so a name given here would last until the next sign-in and read as a bug.
+ *
+ * Shared by the owner's route and the operator's, which differ in who may ask and in the audit row, and
+ * not in which rows a rename may touch.
+ */
+export const renameDevice = async (
+  db: Pick<Db, 'one'>,
+  userId: string,
+  deviceId: string,
+  name: string,
+): Promise<{ from: string } | undefined> =>
+  db.one<{ from: string }>(
+    `UPDATE devices d SET name = $3
+       FROM devices old
+      WHERE d.id = $1 AND d.user_id = $2 AND d.revoked_at IS NULL AND d.platform <> 'console'
+        AND old.id = d.id
+      RETURNING old.name AS "from"`,
+    [deviceId, userId, name],
+  );

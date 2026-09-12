@@ -227,6 +227,10 @@ export const devicesOf = (userId: string): Promise<{ devices: DeviceRow[] }> =>
 export const revokeDevice = (userId: string, deviceId: string): Promise<void> =>
   call('DELETE', `/admin/accounts/${userId}/devices/${deviceId}`);
 
+/** Rename one device of an account (#356) — recorded in the audit log with both names, like a revoke. */
+export const renameDevice = (userId: string, deviceId: string, name: string): Promise<void> =>
+  call('PUT', `/admin/accounts/${userId}/devices/${deviceId}`, { name });
+
 /**
  * Remove one backup's copy from disk, keeping the run in the history (#136).
  *
