@@ -923,13 +923,22 @@ const problemsScreen = (): void => {
       list.replaceChildren(el('p', { className: 'muted', textContent: 'No device has been refused anything lately.' }));
       return;
     }
+    // Grouped by account and device, which is the question an operator brings ("what is going wrong for
+    // whom"); within a group, the server's order — the most recent first. The sort is stable, so it keeps it.
+    const groupOf = (p: (typeof out.problems)[number]): string => `${p.login} · ${p.deviceName} (${p.platform})`;
+    const sorted = [...out.problems].sort((x, y) => groupOf(x).localeCompare(groupOf(y)));
     const log = el('div', { className: 'log' });
-    for (const p of out.problems) {
+    let group = '';
+    for (const p of sorted) {
+      if (groupOf(p) !== group) {
+        group = groupOf(p);
+        log.append(el('h4', { textContent: group }));
+      }
       const line = el('div', { className: 'entry' });
       line.append(
         el('strong', { textContent: `${p.status} ${p.code}` }),
         el('span', { textContent: `${p.method} ${p.route}` }),
-        el('span', { className: 'muted', textContent: `${p.login} · ${p.deviceName} (${p.platform}) · ${p.count}×` }),
+        el('span', { className: 'muted', textContent: `${p.count}×` }),
         el('span', { className: 'when', textContent: `last ${when(p.lastAt)}, first ${when(p.firstAt)}` }),
       );
       log.append(line);

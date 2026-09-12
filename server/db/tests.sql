@@ -411,6 +411,23 @@ SELECT expect_fail($$
     INSERT INTO devices (user_id, name, platform, vault_id)
     VALUES ('22222222-2222-2222-2222-222222222222', 'borrowed', 'test', 'aa000000-0000-0000-0000-000000000001')
 $$, '23503', 'devices_vault_is_the_accounts', 'a device syncing another account''s vault');
+
+-- A refusal counted against a device is an error status, counted at least once (#355).
+SELECT expect_ok($$
+    INSERT INTO sync_problems (user_id, device_id, method, route, status, code)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
+            'PUT', '/things/:id', 400, 'invalid_write')
+$$, 'a refusal counted against its device');
+SELECT expect_fail($$
+    INSERT INTO sync_problems (user_id, device_id, method, route, status, code)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
+            'GET', '/things/:id', 399, 'not_an_error')
+$$, '23514', 'sync_problems_status_check', 'a sync problem whose status is not an error');
+SELECT expect_fail($$
+    INSERT INTO sync_problems (user_id, device_id, method, route, status, code, count)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
+            'GET', '/other/:id', 404, 'not_found', 0)
+$$, '23514', 'sync_problems_count_check', 'a sync problem counted zero times');
 SELECT expect_fail($$
     UPDATE device_pairings SET device_pubkey = '\xcafe'::bytea
      WHERE id = 'd0000000-0000-0000-0000-000000000001'

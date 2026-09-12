@@ -9,6 +9,7 @@
  * Needs the development database: `npm run db:reset` first. Named to sort after `auth.test.ts`, whose
  * first-run tests this file would otherwise take away by claiming the seeded administrator.
  */
+import { aVaultAccount } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -36,6 +37,7 @@ describe('which answers the hook writes down', () => {
     };
     app.addHook('onRequest', async (req) => {
       if (req.headers['x-device'] !== 'none') req.caller = { userId: 'u1', deviceId: 'd1' } as never;
+      if (req.headers['x-admin']) req.admin = { id: 'u1', login: 'operator' };
     });
     registerProblemRecorder(app, db as never, (m) => logged.push(m));
     app.post<{ Params: { id: string } }>('/things/:id/move', async (req, reply) =>
@@ -72,6 +74,13 @@ describe('which answers the hook writes down', () => {
     // An expired token reaches here as exactly this, and refreshing is the client's normal answer to it.
     const { app, ask, written } = await bare();
     await ask({ 'x-device': 'none', 'x-status': '401', 'x-code': 'invalid_credentials' });
+    assert.deepEqual(written, []);
+    await app.close();
+  });
+
+  it('leaves out the console’s own refusals, which are nobody’s sync problem', async () => {
+    const { app, ask, written } = await bare();
+    await ask({ 'x-admin': 'yes', 'x-status': '409', 'x-code': 'backup_not_ready' });
     assert.deepEqual(written, []);
     await app.close();
   });
@@ -129,15 +138,7 @@ describe('what the server keeps', () => {
     );
     adminToken = app.jwt.sign({ sub: '00000000-0000-0000-0000-000000000001', device: adminDevice!.id });
 
-    const id = randomUUID();
-    const login = `problems-${process.pid}`;
-    await db.query(
-      `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
-                          enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-       VALUES ($1, $2, 'active', 'user', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-               '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
-      [id, login],
-    );
+    const { id, login } = await aVaultAccount(db, `problems-${process.pid}`);
     const device = await db.one<{ id: string }>(
       `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'a phone', 'mobile') RETURNING id`,
       [id],
@@ -160,10 +161,10 @@ describe('what the server keeps', () => {
   });
 
   it('writes nothing for an answer that succeeded', async () => {
-    const before_ = await rows();
+    const listedBefore = await rows();
     const ok = await app.inject({ method: 'GET', url: '/auth/devices', headers: { authorization: `Bearer ${user.token}` } });
     assert.equal(ok.statusCode, 200);
-    assert.deepEqual(await rows(), before_);
+    assert.deepEqual(await rows(), listedBefore);
   });
 
   it('shows the operator which account and device, and marks the account', async () => {
@@ -179,7 +180,7 @@ describe('what the server keeps', () => {
 
     const accounts = await app.inject({ method: 'GET', url: '/admin/accounts', headers: { authorization: `Bearer ${adminToken}` } });
     const row = (accounts.json().accounts as { login: string; recentProblems: number }[]).find((a) => a.login === user.login);
-    assert.equal(row?.recentProblems, 2, 'the badge counts the refusals of the last seven days');
+    assert.equal(row?.recentProblems, 1, 'the badge counts problems, not how often one repeated');
   });
 
   it('forgets a problem that stopped recurring, and keeps one that has not', async () => {
@@ -190,5 +191,26 @@ describe('what the server keeps', () => {
     );
     assert.ok((await pruneProblems(db)) >= 1);
     assert.deepEqual((await rows()).map((r) => r.route), ['/auth/devices/:deviceId'], 'the fresh one stays');
+  });
+
+  it('keeps nothing of the request but its template and its answer', async () => {
+    // A real refusal whose URL carries an id, read back from the table rather than from the hook's arguments.
+    const named = randomUUID();
+    const out = await app.inject({
+      method: 'PUT',
+      url: `/auth/devices/${named}`,
+      headers: { authorization: `Bearer ${user.token}` },
+      payload: { name: 'a name somebody typed' },
+    });
+    assert.equal(out.statusCode, 404);
+
+    const stored = await db.query<{ row: string }>(
+      `SELECT row_to_json(p)::text AS row FROM sync_problems p WHERE device_id = $1 AND code = 'not_found'`,
+      [user.deviceId],
+    );
+    assert.equal(stored.length, 1);
+    assert.match(stored[0]!.row, /"route":"\/auth\/devices\/:deviceId"/);
+    assert.doesNotMatch(stored[0]!.row, new RegExp(named), 'the id in the URL is not kept');
+    assert.doesNotMatch(stored[0]!.row, /somebody typed/, 'nor anything of the body');
   });
 });

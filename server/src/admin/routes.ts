@@ -7,8 +7,8 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
-import { renameAccountDevice } from './service.js';
-import { deviceNameProblem } from '../devices.js';
+import { refusedDeviceName } from '../devices.js';
+import { isUuid } from '../uuid.js';
 import { listProblems } from '../sync-problems.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { OperatorRefusalCode } from '@syncserver/shared';
@@ -29,6 +29,7 @@ import {
   setEnabled,
   setQuota,
   storage,
+  renameAccountDevice,
 } from './service.js';
 import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
 import { insideDestination } from '../backup-remove.js';
@@ -189,6 +190,8 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     '/admin/accounts/:userId/devices/:deviceId',
     admin,
     async (req, reply) => {
+      // Silent like a revoke of an id that names nothing, and never a 500 for a malformed one.
+      if (!isUuid(req.params.userId) || !isUuid(req.params.deviceId)) return reply.code(204).send();
       const out = await revokeDevice(db, req.admin!, req.params.userId, req.params.deviceId);
       if (out) return refuse(reply, out);
       return reply.code(204).send();
@@ -200,8 +203,8 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     '/admin/accounts/:userId/devices/:deviceId',
     admin,
     async (req, reply) => {
-      const nameProblem = deviceNameProblem(req.body?.name);
-      if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+      if (refusedDeviceName(reply, req.body?.name)) return reply;
+      if (!isUuid(req.params.userId) || !isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });
       const out = await renameAccountDevice(db, req.admin!, req.params.userId, req.params.deviceId, req.body!.name as string);
       if (out) return refuse(reply, out);
       return reply.code(204).send();

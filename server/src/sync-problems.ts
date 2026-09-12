@@ -25,12 +25,11 @@ import type { Db } from './db.js';
 /**
  * Answers that are the ordinary course of syncing rather than something going wrong.
  *
- * One list, here and in docs/11, because without it the view drowns: every conflict a pass resolves is a
- * `409 rev_mismatch`, every pairing poll a `409 not_approved`. An expired access token never reaches the
- * list at all — it has no authenticated device behind it, and refreshing is the client's normal answer.
+ * The list is D-134's; this is where it is enforced. Without it the view drowns: every conflict a pass
+ * resolves is a `409 rev_mismatch`, every pairing poll a `409 not_approved`. An expired access token needs
+ * no entry — it has no authenticated device behind it, so the hook has already let it go.
  */
 export const EXPECTED_CODES: ReadonlySet<string> = new Set([
-  'unauthenticated',
   'rev_mismatch',
   'base_mismatch',
   'not_approved',
@@ -81,11 +80,13 @@ export const recordProblem = async (db: Pick<Db, 'query'>, p: SeenProblem): Prom
  *
  * Registered before the routes, since a Fastify hook applies to the routes declared after it.
  */
-export const registerProblemRecorder = (app: FastifyInstance, db: Db, log: (m: string) => void = console.warn): void => {
+export const registerProblemRecorder = (app: FastifyInstance, db: Db, log: (m: string) => void = console.log): void => {
   app.addHook('onSend', async (req, reply, payload) => {
     const status = reply.statusCode;
     const route = req.routeOptions.url;
-    if (status < 400 || !req.caller || !route) return payload;
+    // A device's refusals only: the console signs in with a device too, and `backup_not_ready` is not a sync
+    // problem of anybody's.
+    if (status < 400 || !req.caller || req.admin || !route) return payload;
 
     const code = refusalCode(payload);
     if (EXPECTED_CODES.has(code)) return payload;
@@ -100,7 +101,7 @@ export const registerProblemRecorder = (app: FastifyInstance, db: Db, log: (m: s
 };
 
 /** Every recorded problem, newest first, with the account and device named. */
-export const listProblems = (db: Db, limit = 500): Promise<SyncProblemRow[]> =>
+export const listProblems = (db: Db): Promise<SyncProblemRow[]> =>
   db.query<SyncProblemRow>(
     `SELECT p.user_id::text AS "userId", u.login, p.device_id::text AS "deviceId", d.name AS "deviceName",
             d.platform, p.method, p.route, p.status, p.code, p.count::text AS count,
@@ -109,16 +110,13 @@ export const listProblems = (db: Db, limit = 500): Promise<SyncProblemRow[]> =>
        JOIN users u ON u.id = p.user_id
        JOIN devices d ON d.id = p.device_id
       ORDER BY p.last_at DESC
-      LIMIT $1`,
-    [limit],
+      LIMIT 500`,
   );
 
 /** Remove the problems that stopped recurring. Answers how many went. */
-export const pruneProblems = (db: Db): Promise<number> =>
-  db.tx(async (c) => {
-    const r = await c.query(
-      `DELETE FROM sync_problems WHERE last_at < now() - make_interval(days => $1)`,
-      [PROBLEM_TTL_DAYS],
-    );
-    return r.rowCount ?? 0;
-  });
+export const pruneProblems = async (db: Db): Promise<number> =>
+  (
+    await db.query(`DELETE FROM sync_problems WHERE last_at < now() - make_interval(days => $1) RETURNING 1 AS gone`, [
+      PROBLEM_TTL_DAYS,
+    ])
+  ).length;

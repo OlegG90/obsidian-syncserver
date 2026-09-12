@@ -8,7 +8,7 @@
  * Approval is the exception and is authenticated: only a device that already holds the seed
  * can seal it, so only such a device may approve.
  */
-import { deviceNameProblem } from '../devices.js';
+import { refusedDeviceName } from '../devices.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
@@ -107,8 +107,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
       if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
-      const nameProblem = req.body?.name === undefined ? undefined : deviceNameProblem(req.body.name);
-      if (nameProblem) return reply.code(400).send({ error: 'invalid_device_name', detail: nameProblem });
+      if (req.body?.name !== undefined && refusedDeviceName(reply, req.body.name)) return reply;
 
       const out = await claimPairing(db, {
         pairingId: req.params.id,
