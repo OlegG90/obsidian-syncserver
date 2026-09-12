@@ -202,7 +202,7 @@ export class SyncServerSettings extends PluginSettingTab {
         'cannot recover it — lose it and every vault goes with it.',
     });
 
-    const draft: ConnectDraft = { serverUrl: '', login: '', token: '', passphrase: '', again: '', code: '' };
+    const draft: ConnectDraft = { serverUrl: '', login: '', token: '', passphrase: '', again: '', code: '', deviceName: '' };
 
     new Setting(containerEl)
       .setName('Server URL')
@@ -210,6 +210,12 @@ export class SyncServerSettings extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Login')
       .addText((t) => t.setPlaceholder('your login on that server').onChange((v) => (draft.login = v.trim())));
+    // Every route registers a device, so the name is asked once, here, for all four (#356). The platform
+    // label is the placeholder and the default: an empty box means it was not chosen, not "call it nothing".
+    new Setting(containerEl)
+      .setName('Device name')
+      .setDesc('How this vault on this device appears in your list of devices. The server can read it.')
+      .addText((t) => t.setPlaceholder(deviceLabel()).onChange((v) => (draft.deviceName = v)));
     // Revealable, because a passphrase somebody is CHOOSING is one they have to proofread —
     // and on the claim route, what they type is what the account's keys are made from. Hidden
     // by default: the ordinary case is typing one they already know, next to somebody.
@@ -418,16 +424,22 @@ export class SyncServerSettings extends PluginSettingTab {
         serverUrl: draft.serverUrl,
         login: draft.login,
         passphrase: draft.passphrase,
+        deviceName: draft.deviceName,
       });
       return;
     }
 
     new Notice('SyncServer: deriving keys…');
     if (route === 'claim') {
-      await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase);
+      await this.plugin.connect(draft.serverUrl, draft.login, draft.token, draft.passphrase, draft.deviceName);
       new Notice('SyncServer: connected.');
     } else if (route === 'recover') {
-      await this.plugin.recover({ serverUrl: draft.serverUrl, login: draft.login, passphrase: draft.passphrase });
+      await this.plugin.recover({
+        serverUrl: draft.serverUrl,
+        login: draft.login,
+        passphrase: draft.passphrase,
+        deviceName: draft.deviceName,
+      });
       new Notice('Recovered. Sync to bring the vault down.', 8000);
     } else {
       await this.plugin.recoverWithCode({
@@ -435,6 +447,7 @@ export class SyncServerSettings extends PluginSettingTab {
         login: draft.login,
         code: draft.code,
         passphrase: draft.passphrase,
+        deviceName: draft.deviceName,
       });
       // Said here and nowhere else, because nothing later has a reason to mention it: the code
       // still opens this account. It was not spent, and it has now been out of wherever it was

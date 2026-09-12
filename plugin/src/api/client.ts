@@ -482,6 +482,15 @@ export class SyncClient {
   }
 
   /**
+   * Rename one of this account's devices (#356) — any of them, which is the point of the list it serves.
+   * A 404 when it is not this account's, is revoked, or is the console's; a 400 names what is wrong with
+   * the name.
+   */
+  renameDevice(deviceId: string, name: string): Promise<void> {
+    return this.json('PUT', `/auth/devices/${deviceId}`, { name }, { expect: [204] });
+  }
+
+  /**
    * Ask for the account back, holding nothing but a proof (D-112).
    *
    * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to

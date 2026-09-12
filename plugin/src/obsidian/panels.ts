@@ -15,6 +15,8 @@ import { newestFirst } from '../history-flow.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
 import { deviceLabel } from './device.js';
+import { askDeviceName } from './modals.js';
+import { deviceName } from '../device-name.js';
 import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
@@ -189,6 +191,26 @@ export class Panels {
           // As fresh as the access token's lifetime and no fresher (D-118): written on every refresh,
           // never per request. Labelled as such rather than made to sound more precise than it is.
           .setDesc(`${d.platform} — last seen ${when}`);
+
+        // On every row, this one included: a name is how a person tells the rows apart, and changing one
+        // changes nothing about what the device may do (#356).
+        row.addExtraButton((b) =>
+          b
+            .setIcon('pencil')
+            .setTooltip('Rename')
+            .onClick(async () => {
+              const typed = await askDeviceName(this.s.app, d.name);
+              if (typed === undefined) return;
+              const name = deviceName(typed, d.name);
+              if (name === d.name) return;
+              try {
+                await this.s.plugin.account.renameDevice(d.id, name);
+                this.s.refresh();
+              } catch (e) {
+                new Notice(`SyncServer: ${errorText(e)}`, 10000);
+              }
+            }),
+        );
 
         if (d.current) {
           row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));

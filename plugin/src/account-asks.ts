@@ -71,6 +71,8 @@ export interface AccountAsks {
   devices(): Promise<OwnDeviceRow[]>;
   /** Take one device away. */
   revokeDevice(deviceId: string): Promise<void>;
+  /** Give one device a name a person can pick it out by (#356). */
+  renameDevice(deviceId: string, name: string): Promise<void>;
   /** Whether a recovery code exists. A boolean is all there is to ask for. */
   hasRecoveryCode(): Promise<boolean>;
   /** Make one, and say whether it replaced an older one. */
@@ -98,6 +100,7 @@ export const openAccountAsks = (deps: AccountDeps): AccountAsks => {
     // response, and what a caller wants is the rows.
     devices: () => handled((h) => h.client.devices()).then((r) => r.devices),
     revokeDevice: (deviceId) => handled((h) => h.client.revokeDevice(deviceId)),
+    renameDevice: (deviceId, name) => handled((h) => h.client.renameDevice(deviceId, name)),
     hasRecoveryCode: () => handled((h) => h.client.recoveryCodeState()).then((r) => r.present),
 
     createRecoveryCode: () => seeded((s) => s.createRecoveryCode()),

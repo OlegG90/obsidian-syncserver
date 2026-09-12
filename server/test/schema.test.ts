@@ -4,7 +4,8 @@
  * Against **real databases** created for each case, because every interesting state is a
  * database: empty, from before migrations, one migration behind, ahead of the image, or holding a
  * migration whose file has since changed. Migrations beyond the real ones are written into a
- * temporary directory, so the runner is exercised without shipping a test migration.
+ * temporary directory, numbered after the last real one, so the runner is exercised without
+ * shipping a test migration — and without these tests breaking each time a real one is added.
  */
 import assert from 'node:assert/strict';
 import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -30,6 +31,12 @@ const made: string[] = [];
 const dirs: string[] = [];
 const quiet = { log: () => undefined };
 
+/** How many real migrations there are; test migrations are numbered after them. */
+const REAL = (await readMigrations()).length;
+
+/** `NNNN-name.sql` for the k-th migration after the real ones. */
+const after_ = (k: number, name: string): string => `${String(REAL + k).padStart(4, '0')}-${name}.sql`;
+
 /** A fresh, empty database — the state a first start meets. Dropped again in `after`. */
 const emptyDatabase = async (name: string): Promise<Db> => {
   await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
@@ -40,11 +47,12 @@ const emptyDatabase = async (name: string): Promise<Db> => {
   return connect(url.toString());
 };
 
-/** The real migrations, plus extra files, in a directory of their own. */
-const migrationsWith = async (extra: Record<string, string>): Promise<string> => {
+/** Some of the real migrations — all of them by default — plus extra files, in a directory of their own. */
+const migrationsWith = async (extra: Record<string, string>, keep: number = REAL): Promise<string> => {
   const dir = await mkdtemp(join(tmpdir(), 'syncserver-migrations-'));
   dirs.push(dir);
-  for (const f of await readdir(MIGRATIONS_DIR)) await copyFile(join(MIGRATIONS_DIR, f), join(dir, f));
+  const real = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort().slice(0, keep);
+  for (const f of real) await copyFile(join(MIGRATIONS_DIR, f), join(dir, f));
   for (const [name, sql] of Object.entries(extra)) await writeFile(join(dir, name), sql);
   return dir;
 };
@@ -112,21 +120,24 @@ describe('applying it to an empty database', () => {
 });
 
 describe('a database from before migrations', () => {
-  /** What 0.7.10 left: the schema of that release, and no ledger. Migration 1 only adds the ledger. */
-  const beforeMigrations = async (name: string): Promise<Db> => {
+  /**
+   * A database with no ledger, meeting a build whose only migration is the ledger — the shape of 0.7.10
+   * meeting 0.7.11. Built from today's file with the table dropped, so the image it meets carries
+   * migration 1 alone: any later one would find its own change already there.
+   */
+  const beforeMigrations = async (name: string): Promise<{ db: Db; image: string }> => {
     const db = await emptyDatabase(name);
     await ensureSchema(db, quiet);
     await db.query('DROP TABLE schema_migrations');
-    return db;
+    return { db, image: await migrationsWith({}, 1) };
   };
 
   it('is brought forward by the first start, and says so', async () => {
-    const db = await beforeMigrations('syncserver_schema_adopt');
+    const { db, image } = await beforeMigrations('syncserver_schema_adopt');
     const said: string[] = [];
 
-    const out = await ensureSchema(db, { log: (m) => said.push(m) });
-    assert.equal(out.state, 'migrated');
-    assert.deepEqual(out.ran.slice(0, 1), [1], 'the ledger is migration 1');
+    const out = await ensureSchema(db, { log: (m) => said.push(m), migrationsDir: image });
+    assert.deepEqual(out, { state: 'migrated', ran: [1], version: 1 }, 'the ledger is migration 1');
     assert.equal(await tableExists(db, 'schema_migrations'), true);
     assert.match(said.join(' '), /migration 1 \(schema-migrations\) applied/);
     await db.close();
@@ -135,10 +146,10 @@ describe('a database from before migrations', () => {
   it('is refused when it is not level with the baseline, and nothing is applied', async () => {
     // The silent class the old BEHIND check existed for: a missing trigger does not fail, it never
     // fires. Migrating on top of such a database would build on something that is not there.
-    const db = await beforeMigrations('syncserver_schema_adopt_behind');
+    const { db, image } = await beforeMigrations('syncserver_schema_adopt_behind');
     await db.query('DROP TRIGGER journal_notify ON journal');
 
-    await assert.rejects(ensureSchema(db, quiet), (e: Error) => {
+    await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: image }), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
       assert.match(e.message, /trigger journal_notify/);
       return true;
@@ -153,14 +164,14 @@ describe('bringing a database forward', () => {
     const db = await emptyDatabase('syncserver_schema_pending');
     await ensureSchema(db, quiet);
     const dir = await migrationsWith({
-      '0002-probe.sql': 'CREATE TABLE migration_probe (x integer);\n',
-      '0003-probe-row.sql': 'INSERT INTO migration_probe VALUES (3);\n',
+      [after_(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n',
+      [after_(2, 'probe-row')]: 'INSERT INTO migration_probe VALUES (3);\n',
     });
 
     const out = await ensureSchema(db, { ...quiet, migrationsDir: dir });
-    assert.deepEqual(out, { state: 'migrated', ran: [2, 3], version: 3 });
-    assert.equal(await count(db, 'SELECT count(*)::text AS n FROM migration_probe'), 1, 'and 3 ran after 2');
-    assert.equal(await schemaVersion(db), 3);
+    assert.deepEqual(out, { state: 'migrated', ran: [REAL + 1, REAL + 2], version: REAL + 2 });
+    assert.equal(await count(db, 'SELECT count(*)::text AS n FROM migration_probe'), 1, 'and the second ran after the first');
+    assert.equal(await schemaVersion(db), REAL + 2);
     assert.equal((await ensureSchema(db, { ...quiet, migrationsDir: dir })).state, 'level', 'once, not every start');
     await db.close();
   });
@@ -168,40 +179,44 @@ describe('bringing a database forward', () => {
   it('lets only one of two servers apply each migration', async () => {
     const db = await emptyDatabase('syncserver_schema_pending_race');
     await ensureSchema(db, quiet);
-    const dir = await migrationsWith({ '0002-probe.sql': 'CREATE TABLE migration_probe (x integer);\n' });
+    const dir = await migrationsWith({ [after_(1, 'probe')]: 'CREATE TABLE migration_probe (x integer);\n' });
 
     const [a, b] = await Promise.all([
       ensureSchema(db, { ...quiet, migrationsDir: dir }),
       ensureSchema(db, { ...quiet, migrationsDir: dir }),
     ]);
-    assert.deepEqual([...a.ran, ...b.ran], [2], 'a second CREATE TABLE would have failed the other start');
+    assert.deepEqual([...a.ran, ...b.ran], [REAL + 1], 'a second CREATE TABLE would have failed the other start');
     await db.close();
   });
 
   it('refuses to start when a migration fails, and rolls that migration back whole', async () => {
     const db = await emptyDatabase('syncserver_schema_failing');
     await ensureSchema(db, quiet);
-    const dir = await migrationsWith({ '0002-broken.sql': 'CREATE TABLE half_done (x integer);\nSELECT 1 / 0;\n' });
+    const dir = await migrationsWith({ [after_(1, 'broken')]: 'CREATE TABLE half_done (x integer);\nSELECT 1 / 0;\n' });
 
     await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: dir }), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, /migration 2 \(broken\) failed and was rolled back: division by zero/);
+      assert.match(e.message, new RegExp(`migration ${REAL + 1} \\(broken\\) failed and was rolled back: division by zero`));
       return true;
     });
     assert.equal(await tableExists(db, 'half_done'), false, 'not half of it');
-    assert.equal(await count(db, 'SELECT count(*)::text AS n FROM schema_migrations WHERE id = 2'), 0, 'and not recorded');
+    assert.equal(
+      await count(db, `SELECT count(*)::text AS n FROM schema_migrations WHERE id = ${REAL + 1}`),
+      0,
+      'and not recorded',
+    );
     await db.close();
   });
 
   it('refuses to start against a database a newer image brought forward', async () => {
     const db = await emptyDatabase('syncserver_schema_ahead');
     await ensureSchema(db, quiet);
-    // Brought forward by an image that has migration 2; this one does not.
-    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ '0002-probe.sql': 'SELECT 1;\n' }) });
+    // Brought forward by an image that has one more migration than this one.
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\n' }) });
 
     await assert.rejects(ensureSchema(db, quiet), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, /migration 2, which this image does not know/);
+      assert.match(e.message, new RegExp(`migration ${REAL + 1}, which this image does not know`));
       return true;
     });
     await db.close();
@@ -210,12 +225,12 @@ describe('bringing a database forward', () => {
   it('refuses to start when an applied migration has been edited', async () => {
     const db = await emptyDatabase('syncserver_schema_edited');
     await ensureSchema(db, quiet);
-    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ '0002-probe.sql': 'SELECT 1;\n' }) });
-    const edited = await migrationsWith({ '0002-probe.sql': 'SELECT 2;\n' });
+    await ensureSchema(db, { ...quiet, migrationsDir: await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\n' }) });
+    const edited = await migrationsWith({ [after_(1, 'probe')]: 'SELECT 2;\n' });
 
     await assert.rejects(ensureSchema(db, { ...quiet, migrationsDir: edited }), (e: Error) => {
       assert.ok(e instanceof SchemaRefusal);
-      assert.match(e.message, /migration 2 \(probe\) differs/);
+      assert.match(e.message, new RegExp(`migration ${REAL + 1} \\(probe\\) differs`));
       return true;
     });
     await db.close();
@@ -230,16 +245,16 @@ describe('reading the migrations', () => {
   });
 
   it('does not count a line ending as a change', async () => {
-    const lf = await readMigrations(await migrationsWith({ '0002-probe.sql': 'SELECT 1;\nSELECT 2;\n' }));
-    const crlf = await readMigrations(await migrationsWith({ '0002-probe.sql': 'SELECT 1;\r\nSELECT 2;\r\n' }));
-    assert.equal(lf[1]!.checksum, crlf[1]!.checksum);
+    const lf = await readMigrations(await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\nSELECT 2;\n' }));
+    const crlf = await readMigrations(await migrationsWith({ [after_(1, 'probe')]: 'SELECT 1;\r\nSELECT 2;\r\n' }));
+    assert.equal(lf[REAL]!.checksum, crlf[REAL]!.checksum);
   });
 
   it('refuses a gap, a misnamed file, and a migration that controls its own transaction', async () => {
-    await assert.rejects(readMigrations(await migrationsWith({ '0003-skipped.sql': 'SELECT 1;\n' })), /without gaps/);
+    await assert.rejects(readMigrations(await migrationsWith({ [after_(2, 'skipped')]: 'SELECT 1;\n' })), /without gaps/);
     await assert.rejects(readMigrations(await migrationsWith({ '2-short.sql': 'SELECT 1;\n' })), /not named NNNN-name\.sql/);
     await assert.rejects(
-      readMigrations(await migrationsWith({ '0002-own-tx.sql': 'BEGIN;\nSELECT 1;\nCOMMIT;\n' })),
+      readMigrations(await migrationsWith({ [after_(1, 'own-tx')]: 'BEGIN;\nSELECT 1;\nCOMMIT;\n' })),
       /controls its own transaction/,
     );
   });

@@ -100,6 +100,21 @@ different addresses — one vault can learn nothing about another, not even that
 **Your quota is per account, not per vault**: everything you store across all of them counts against
 one limit.
 
+### Naming this device
+
+Every way of connecting has a **Device name** field. Leave it empty and the device is called after its
+platform — `windows-desktop`, `macos-desktop`, `android`, `ios`. Type something instead when you have
+more than one of a kind, and remember that **each vault on a device is listed separately**, so a laptop
+with three vaults shows three rows: `Laptop — notes` beats three `windows-desktop`s when you need to
+revoke one.
+
+Rename any of your devices later in **Settings → SyncServer → Devices** with the pencil on its row. The
+name is not encrypted — the server and its administrator can read it — so keep it to something like
+"Laptop" or "Olena's phone".
+
+A device connected before names existed was called `obsidian`; it renames itself to its platform label
+the next time you unlock it, once, and never touches a name you chose.
+
 ### Recover this account — when no device is left
 
 When there is no working device left to approve a new one.
