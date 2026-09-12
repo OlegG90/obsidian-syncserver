@@ -414,6 +414,11 @@ export type DeviceRow = {
   name: string;
   platform: string;
   last_seen_at: string | null;
+  /**
+   * The vault this device syncs (#364, D-139). `null` for a console device, and for one that has not opened
+   * its vault since the server started asking — it is learned the first time it does.
+   */
+  vault_id: string | null;
 };
 
 /**

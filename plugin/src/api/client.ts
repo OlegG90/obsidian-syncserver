@@ -628,7 +628,7 @@ export class SyncClient {
    * meets a `200` and reports a removal that succeeded as a failure, which is the worst shape a break
    * can take: the destructive half has already happened.
    */
-  deleteVault(vaultId: string): Promise<{ thawed: boolean }> {
+  deleteVault(vaultId: string): Promise<{ thawed: boolean; revoked: number }> {
     return this.json('DELETE', `/vaults/${vaultId}`, undefined, { expect: [200] });
   }
 

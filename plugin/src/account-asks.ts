@@ -66,7 +66,7 @@ export interface AccountAsks {
   /** Every vault on this account, with what each is using. */
   vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]>;
   /** Remove one vault from the account; answers whether that lifted a freeze. */
-  deleteVault(vaultId: string): Promise<{ thawed: boolean }>;
+  deleteVault(vaultId: string): Promise<{ thawed: boolean; revoked: number }>;
   /** The devices of this account. */
   devices(): Promise<OwnDeviceRow[]>;
   /** Take one device away. */

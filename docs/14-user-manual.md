@@ -108,7 +108,7 @@ more than one of a kind, and remember that **each vault on a device is listed se
 with three vaults shows three rows: `Laptop — notes` beats three `windows-desktop`s when you need to
 revoke one.
 
-Rename any of your devices later in **Settings → SyncServer → Devices** with the pencil on its row. The
+Rename any of your devices later in **Settings → SyncServer → Vaults**, where each vault lists the devices syncing it, with the pencil on its row. The
 name is not encrypted — the server and its administrator can read it — so keep it to something like
 "Laptop" or "Olena's phone".
 

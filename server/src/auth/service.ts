@@ -322,9 +322,10 @@ export const redeemInvitation = async (db: Db, input: RedeemInput) => {
 
     const refresh = newToken();
     const device = await c.query<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform, refresh_token_hash)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [row.id, input.deviceName, input.devicePlatform, hashToken(refresh)],
+      // Bound to the vault it is born with (#364, D-139): the one registration that knows its vault up front.
+      `INSERT INTO devices (user_id, name, platform, refresh_token_hash, vault_id)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [row.id, input.deviceName, input.devicePlatform, hashToken(refresh), input.initialVaultId],
     );
 
     // Through the one statement, like every other record: this is an account acting on

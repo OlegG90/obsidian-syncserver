@@ -151,7 +151,7 @@ plugin — which is the only place that has them:
 | Section | Contents |
 |---|---|
 | Vaults | list; rename or delete an empty one; usage split into current content and history. **Creating** one mints a vault key from the seed (D-86, AC-11), so it could never have been done from a browser. A share replica counts as ordinary content of the vault it lives in ([03](03-data-model.md)) |
-| Devices | list, last seen, **rename any of them**, **sign out this device**, sign out everywhere. The operator's view of an account's devices can rename one too, recorded as `device.rename` with both names (D-133); the console's own device is not renameable, since each sign-in names it |
+| Devices | shown under the vault each one syncs (D-139), with last seen, **rename any of them**, **sign out this device**, sign out everywhere. The operator's view of an account's devices groups them by vault id — the console cannot read vault names (D-115) — and can rename one too, recorded as `device.rename` with both names (D-133); the console's own device is not renameable, since each sign-in names it |
 | Shares | what I have shared and to whom; what I have accepted; revoke, leave |
 | Security | change passphrase, and regenerate the recovery code once [M7](10-roadmap.md) builds one |
 | History | retention — `users.history_days`, the outer bound of the ladder in [03](03-data-model.md). The rungs are fixed; how far back they reach is the user's own trade against quota |

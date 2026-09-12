@@ -401,6 +401,16 @@ $$, '23514', 'device_name_is_readable', 'a device name with a space at one end')
 SELECT expect_fail($$
     UPDATE devices SET name = E'two\nlines' WHERE id = 'd1000000-0000-0000-0000-000000000001'
 $$, '23514', 'device_name_is_readable', 'a device name with a control character');
+
+-- The vault a device syncs is one of its own account's (#364).
+SELECT expect_ok($$
+    UPDATE devices SET vault_id = 'aa000000-0000-0000-0000-000000000001'
+     WHERE id = 'd1000000-0000-0000-0000-000000000001'
+$$, 'a device syncs a vault of its own account');
+SELECT expect_fail($$
+    INSERT INTO devices (user_id, name, platform, vault_id)
+    VALUES ('22222222-2222-2222-2222-222222222222', 'borrowed', 'test', 'aa000000-0000-0000-0000-000000000001')
+$$, '23503', 'devices_vault_is_the_accounts', 'a device syncing another account''s vault');
 SELECT expect_fail($$
     UPDATE device_pairings SET device_pubkey = '\xcafe'::bytea
      WHERE id = 'd0000000-0000-0000-0000-000000000001'

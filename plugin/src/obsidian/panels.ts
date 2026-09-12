@@ -22,6 +22,7 @@ import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
 import { errorText } from '../error-text.js';
+import type { OwnDeviceRow } from '@syncserver/shared';
 
 /**
  * A list the server has to answer before it can be drawn (#182).
@@ -56,6 +57,12 @@ const asked = <T>(
   return list;
 };
 
+/** One vault as the account asks list it. */
+type VaultEntry = { id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean };
+
+/** A vault and the devices syncing it — or, with no vault, the devices whose vault is not known yet (#364). */
+type VaultGroup = { vault: VaultEntry | undefined; devices: OwnDeviceRow[] };
+
 export class Panels {
   constructor(private readonly s: Surface) {}
 
@@ -69,8 +76,9 @@ export class Panels {
     // Summarised by the count now that there is one to count (#156). It was summarised by the ACT —
     // "add another device" — because nothing asked the server for the account's devices and a row
     // promising "mbp-14, iphone" would have been inventing them. The list is what changed, not the taste.
-    const containerEl = section(host, 'Devices', 'what can reach this account, and adding another');
-    this.deviceList(containerEl);
+    // The devices themselves are listed under the vault each one syncs (#364); what is left here is the
+    // one device act that belongs to the account rather than to a vault — letting another one in.
+    const containerEl = section(host, 'Add a device', 'approving another device into this account');
     containerEl.createEl('p', {
       text:
         'On the other device, choose “Join an existing account” and read the code it shows. ' +
@@ -112,132 +120,148 @@ export class Panels {
    * the honest use of this screen narrow and real — the empty vault somebody made by accident.
    */
   vaultSection(host: HTMLElement): void {
-    const containerEl = section(host, 'Vaults', 'what this account holds, beyond this one');
+    const containerEl = section(host, 'Vaults', 'what this account holds, and the devices syncing each');
     asked(
       containerEl,
       'vault list',
-      () => this.s.plugin.account.vaults(),
-      (v, list) => {
-        // What it is USING, not only how many rows it has (#178) — which is the number somebody reads
-        // when they are deciding which vault to remove to make room.
-        const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
-        const row = new Setting(list)
-          .setName(v.current ? `${v.name} — this device` : v.name)
-          .setDesc(`${held} · ${v.id.slice(0, 8)}…`);
-
-        if (v.current) return;
-        if (v.shared) {
-          // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share` once
-          // somebody had already read a confirmation promising that nothing would be lost — and what a
-          // share holds is other people's access, which is not this account's to tidy away.
-          row.setDesc(`${held} · ${v.id.slice(0, 8)}… — a share names this vault, so it stays`);
-          return;
+      async (): Promise<VaultGroup[]> => {
+        // Both lists, with each device put under the vault it syncs (#364, D-139). A device the server has
+        // not yet seen open its vault — not opened since the server started asking — is grouped on its own
+        // rather than guessed at.
+        const [vaults, devices] = await Promise.all([this.s.plugin.account.vaults(), this.s.plugin.account.devices()]);
+        const known = new Set(vaults.map((v) => v.id));
+        const groups: VaultGroup[] = vaults.map((v) => ({ vault: v, devices: devices.filter((d) => d.vault_id === v.id) }));
+        const unplaced = devices.filter((d) => !d.vault_id || !known.has(d.vault_id));
+        if (unplaced.length > 0) groups.push({ vault: undefined, devices: unplaced });
+        return groups;
+      },
+      (group, list) => {
+        if (group.vault) this.vaultRow(group.vault, list);
+        else {
+          new Setting(list)
+            .setName('Vault not known yet')
+            .setDesc('Devices that have not opened their vault since the server started keeping track. Each finds its place the next time it syncs.')
+            .setHeading();
         }
-        row.addButton((b) =>
-          this.s
-            .waits(b)
-            .setButtonText('Remove')
-            .setWarning()
-            .onClick(() => {
-              new ConfirmModal(
-                this.s.app,
-                `Remove ${v.name}?`,
-                removalWarning(v.nodes),
-                async () => {
-                  try {
-                    const { thawed } = await this.s.plugin.account.deleteVault(v.id);
-                    // The sentence somebody who removed a vault to make room is waiting for (#247).
-                    // Said only when it is true: an account that was never frozen has nothing to hear,
-                    // and "and you are not over your limit" would be noise on every ordinary removal.
-                    new Notice(
-                      thawed
-                        ? `SyncServer: ${v.name} was removed — that freed enough, and the account is accepting writes again.`
-                        : `SyncServer: ${v.name} was removed.`,
-                      thawed ? 10000 : undefined,
-                    );
-                    this.s.refresh();
-                  } catch (e) {
-                    new Notice(`SyncServer: ${errorText(e)}`, 10000);
-                  }
-                },
-                'Remove',
-              ).open();
-            }),
-        );
+        for (const d of group.devices) this.deviceRow(d, list);
       },
     );
   }
 
+  /** One vault: what it holds, and removing it when it is not this device's own (#157, #178). */
+  private vaultRow(v: VaultEntry, list: HTMLElement): void {
+    // What it is USING, not only how many rows it has (#178) — which is the number somebody reads
+    // when they are deciding which vault to remove to make room.
+    const held = v.nodes === 0 ? 'empty' : `${v.nodes} item${v.nodes === 1 ? '' : 's'}, ${mib(v.bytes)}`;
+    const row = new Setting(list)
+      .setName(v.current ? `${v.name} — this device` : v.name)
+      .setDesc(`${held} · ${v.id.slice(0, 8)}…`)
+      .setHeading();
+
+    if (v.current) return;
+    if (v.shared) {
+      // Before the act, not after it (#176). This refusal used to arrive as `named_by_a_share` once
+      // somebody had already read a confirmation promising that nothing would be lost — and what a
+      // share holds is other people's access, which is not this account's to tidy away.
+      row.setDesc(`${held} · ${v.id.slice(0, 8)}… — a share names this vault, so it stays`);
+      return;
+    }
+    row.addButton((b) =>
+      this.s
+        .waits(b)
+        .setButtonText('Remove')
+        .setWarning()
+        .onClick(() => {
+          new ConfirmModal(
+            this.s.app,
+            `Remove ${v.name}?`,
+            removalWarning(v.nodes),
+            async () => {
+              try {
+                const { thawed, revoked } = await this.s.plugin.account.deleteVault(v.id);
+                // The sentence somebody who removed a vault to make room is waiting for (#247).
+                // Said only when it is true: an account that was never frozen has nothing to hear,
+                // and "and you are not over your limit" would be noise on every ordinary removal.
+                const gone = revoked > 0 ? ` ${revoked} device${revoked === 1 ? '' : 's'} syncing it can no longer reach this account.` : '';
+                new Notice(
+                  thawed
+                    ? `SyncServer: ${v.name} was removed — that freed enough, and the account is accepting writes again.${gone}`
+                    : `SyncServer: ${v.name} was removed.${gone}`,
+                  thawed || revoked > 0 ? 10000 : undefined,
+                );
+                this.s.refresh();
+              } catch (e) {
+                new Notice(`SyncServer: ${errorText(e)}`, 10000);
+              }
+            },
+            'Remove',
+          ).open();
+        }),
+    );
+  }
+
   /**
-   * What can reach this account, and taking one away (#156).
+   * One device, under the vault it syncs: renaming it, and taking it away (#156, #356, #364).
    *
-   * The gap this closes is not cosmetic: `POST /auth/devices` and `DELETE /auth/devices/:id` both
-   * existed, and **nothing listed them** — so the only device anybody could revoke was the one they were
-   * sitting at, whose id its own `data.json` carries. A phone left in a taxi stayed authorised for ever.
+   * The gap #156 closed is not cosmetic: `POST /auth/devices` and `DELETE /auth/devices/:id` both existed,
+   * and **nothing listed them** — so the only device anybody could revoke was the one they were sitting at.
+   * A phone left in a taxi stayed authorised for ever.
    *
    * **This device is marked and cannot be revoked from here.** Revoking it would kill the refresh token
    * under a plugin that still believes it is connected, and the failure would arrive at the next unlock
    * as something unrelated. Disconnect is the act that means "this one", and it says what it keeps.
    */
-  deviceList(containerEl: HTMLElement): void {
-    asked(
-      containerEl,
-      'device list',
-      () => this.s.plugin.account.devices(),
-      (d, list) => {
-        const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
-        const row = new Setting(list)
-          .setName(d.current ? `${d.name} — this device` : d.name)
-          // As fresh as the access token's lifetime and no fresher (D-118): written on every refresh,
-          // never per request. Labelled as such rather than made to sound more precise than it is.
-          .setDesc(`${d.platform} — last seen ${when}`);
+  private deviceRow(d: OwnDeviceRow, list: HTMLElement): void {
+    const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
+    const row = new Setting(list)
+      .setName(d.current ? `↳ ${d.name} — this device` : `↳ ${d.name}`)
+      // As fresh as the access token's lifetime and no fresher (D-118): written on every refresh,
+      // never per request. Labelled as such rather than made to sound more precise than it is.
+      .setDesc(`${d.platform} — last seen ${when}`);
 
-        // On every row, this one included: a name is how a person tells the rows apart, and changing one
-        // changes nothing about what the device may do (#356).
-        row.addExtraButton((b) =>
-          b
-            .setIcon('pencil')
-            .setTooltip('Rename')
-            .onClick(async () => {
-              const typed = await askDeviceName(this.s.app, d.name);
-              if (typed === undefined) return;
-              const name = deviceName(typed, d.name);
-              if (name === d.name) return;
-              try {
-                await this.s.plugin.account.renameDevice(d.id, name);
-                this.s.refresh();
-              } catch (e) {
-                new Notice(`SyncServer: ${errorText(e)}`, 10000);
-              }
-            }),
-        );
+    // On every row, this one included: a name is how a person tells the rows apart, and changing one
+    // changes nothing about what the device may do (#356).
+    row.addExtraButton((b) =>
+      b
+        .setIcon('pencil')
+        .setTooltip('Rename')
+        .onClick(async () => {
+          const typed = await askDeviceName(this.s.app, d.name);
+          if (typed === undefined) return;
+          const name = deviceName(typed, d.name);
+          if (name === d.name) return;
+          try {
+            await this.s.plugin.account.renameDevice(d.id, name);
+            this.s.refresh();
+          } catch (e) {
+            new Notice(`SyncServer: ${errorText(e)}`, 10000);
+          }
+        }),
+    );
 
-        if (d.current) {
-          row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));
-          return;
-        }
-        row.addButton((b) =>
-          this.s
-            .waits(b)
-            .setButtonText('Revoke')
-            .setWarning()
-            .onClick(() => {
-              new ConfirmModal(
-                this.s.app,
-                `Revoke ${d.name}?`,
-                'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
-                  'already holds stay where they are, and this account simply stops answering it.',
-                async () => {
-                  await this.s.plugin.account.revokeDevice(d.id);
-                  new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
-                  this.s.refresh();
-                },
-                'Revoke',
-              ).open();
-            }),
-        );
-      },
-      'No devices — which should be impossible from one.',
+    if (d.current) {
+      row.addExtraButton((b) => b.setIcon('check').setTooltip('Disconnect removes this one').setDisabled(true));
+      return;
+    }
+    row.addButton((b) =>
+      this.s
+        .waits(b)
+        .setButtonText('Revoke')
+        .setWarning()
+        .onClick(() => {
+          new ConfirmModal(
+            this.s.app,
+            `Revoke ${d.name}?`,
+            'It stops syncing at once and cannot sign in again. Nothing on it is deleted — the files it ' +
+              'already holds stay where they are, and this account simply stops answering it.',
+            async () => {
+              await this.s.plugin.account.revokeDevice(d.id);
+              new Notice(`SyncServer: ${d.name} can no longer reach this account.`, 8000);
+              this.s.refresh();
+            },
+            'Revoke',
+          ).open();
+        }),
     );
   }
 

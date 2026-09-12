@@ -105,7 +105,8 @@ CREATE TABLE schema_migrations (
 INSERT INTO schema_migrations (id, name, checksum) VALUES
     (1, 'schema-migrations', 'b05c351eac8692c305e2c7f0c0c34265ba47d1e922fa60ab0e37db4a617b4112'),
     (2, 'device-names', 'b457dc78fcd7b6e02162a1d9352f80ef36a864a9b2b5ca7965d88fcaf7a088f5'),
-    (3, 'sync-problems', '49ab0b7ceddbe0684af50da5e40cdafb82c93dcf300e1322ed3ea67b5cb605e0');
+    (3, 'sync-problems', '49ab0b7ceddbe0684af50da5e40cdafb82c93dcf300e1322ed3ea67b5cb605e0'),
+    (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -484,12 +485,19 @@ CREATE TABLE devices (
     last_seen_at timestamptz,
     refresh_token_hash text,                     -- one per device, so "sign out this device" works (D-90)
     revoked_at   timestamptz,
+    -- The vault this device syncs (#364, D-139): learned when it first opens one, cleared when that
+    -- vault is removed. NULL for a console device, and for one that has not opened its vault yet.
+    vault_id     uuid,
     -- Read by a person picking a device out of a list, so readable (#356, D-133).
     CONSTRAINT device_name_is_readable
-        CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 64 AND name !~ '[[:cntrl:]]')
+        CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 64 AND name !~ '[[:cntrl:]]'),
+    -- A device syncs a vault of its own account, and removing the vault clears only the link.
+    CONSTRAINT devices_vault_is_the_accounts
+        FOREIGN KEY (user_id, vault_id) REFERENCES vaults (user_id, id) ON DELETE SET NULL (vault_id)
 );
 
 CREATE INDEX devices_user ON devices (user_id);
+CREATE INDEX devices_vault ON devices (vault_id);
 
 -- What went wrong for which device, counted rather than listed (#355, D-134). One row per device,
 -- method, route template, status and refusal code; a repeat moves `count` and `last_at`. No paths,

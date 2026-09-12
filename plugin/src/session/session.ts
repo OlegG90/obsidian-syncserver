@@ -611,7 +611,7 @@ export class Session {
    * that is not this account's. So the way to remove a vault with notes in it is to empty it first,
    * which is what a reset does (#158).
    */
-  async deleteVault(vaultId: string): Promise<{ thawed: boolean }> {
+  async deleteVault(vaultId: string): Promise<{ thawed: boolean; revoked: number }> {
     if (vaultId === this.conn.vaultId) {
       // Refused here rather than by the server, which has no way to know: the connection lives on this
       // device. Removing the vault this window syncs would leave a plugin writing into something that

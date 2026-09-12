@@ -24,12 +24,27 @@ import type { DeviceRow } from '@syncserver/shared';
 
 export const activeDevices = (db: Db, userId: string): Promise<DeviceRow[]> =>
   db.query<DeviceRow>(
-    `SELECT id::text AS id, name, platform, last_seen_at
+    `SELECT id::text AS id, name, platform, last_seen_at, vault_id::text AS vault_id
        FROM devices
       WHERE user_id = $1 AND revoked_at IS NULL
       ORDER BY last_seen_at DESC NULLS LAST, name`,
     [userId],
   );
+
+/**
+ * Learn which vault a device syncs, the first time it opens one (#364, D-139).
+ *
+ * Only while the link is empty: the plugin opens the vault it syncs and no other, so the first vault a
+ * device opens IS its vault, and nothing afterwards may quietly move it. That covers every way a device
+ * arrives — pairing and recovery choose the vault on the client after registering — and every device
+ * registered before the server asked. Called after ownership is checked, so the vault is the account's.
+ */
+export const learnDeviceVault = async (db: Pick<Db, 'query'>, deviceId: string, vaultId: string): Promise<void> => {
+  await db.query(
+    `UPDATE devices SET vault_id = $2 WHERE id = $1 AND vault_id IS NULL AND revoked_at IS NULL`,
+    [deviceId, vaultId],
+  );
+};
 
 /** The longest name a device may carry. The schema's `device_name_is_readable` says the same. */
 export const DEVICE_NAME_MAX = 64;

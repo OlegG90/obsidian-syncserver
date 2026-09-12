@@ -353,6 +353,11 @@ describe('first run', () => {
     assert.equal(first.statusCode, 200, first.body);
     const body = first.json();
     assert.ok(body.access && body.refresh && body.device_id && body.vault_id && body.root_node_id);
+    // The first device syncs the vault the account is born with, and the server knows it from the start (#364).
+    const linked = await db.one<{ vault: string | null }>(`SELECT vault_id::text AS vault FROM devices WHERE id = $1`, [
+      body.device_id,
+    ]);
+    assert.equal(linked!.vault, body.vault_id);
 
     // Single use by construction: this is what makes a default credential acceptable.
     const again = await app.inject({
