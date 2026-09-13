@@ -63,6 +63,19 @@ export interface Migration {
 const FILE_NAME = /^(\d{4})-([a-z0-9]+(?:-[a-z0-9]+)*)\.sql$/;
 
 /**
+ * Whether a migration opens or ends a transaction of its own.
+ *
+ * Read **outside dollar-quoted bodies**, and only as whole statements. A plpgsql function opens its body
+ * with `BEGIN` on a line of its own — schema.sql writes every function that way — and the first version of
+ * this check, which looked for any line starting with the word, refused exactly the migration this runner
+ * exists for: a changed function body, which 0.7.9 had to ship as SQL applied by hand.
+ */
+export const controlsTransaction = (sql: string): boolean => {
+  const outside = sql.replace(/\$([A-Za-z_]*)\$[\s\S]*?\$\1\$/g, '');
+  return /^\s*(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK)(\s+(WORK|TRANSACTION))?\s*;/im.test(outside);
+};
+
+/**
  * The migrations in a directory, in order, or a refusal naming what is wrong with them.
  *
  * Strict, because every mistake here is cheapest now: a misnamed file would silently never run,
@@ -76,7 +89,7 @@ export const readMigrations = async (dir: string = MIGRATIONS_DIR): Promise<Migr
     const m = FILE_NAME.exec(file);
     if (!m) throw new SchemaRefusal(`migration file ${file} is not named NNNN-name.sql`);
     const sql = (await readFile(join(dir, file), 'utf8')).replace(/\r\n/g, '\n');
-    if (/^\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION)\b/im.test(sql)) {
+    if (controlsTransaction(sql)) {
       throw new SchemaRefusal(`migration ${file} controls its own transaction; the server wraps each one`);
     }
     out.push({ id: Number(m[1]), name: m[2]!, sql, checksum: createHash('sha256').update(sql).digest('hex') });

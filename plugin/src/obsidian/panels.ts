@@ -136,6 +136,9 @@ export class Panels {
         return groups;
       },
       (group, list) => {
+        // A line above every vault but the first: without it one vault's devices run straight into the next
+        // vault's heading, and the whole section reads as a single list.
+        if (list.childElementCount > 0) list.createEl('hr');
         if (group.vault) this.vaultRow(group.vault, list);
         else {
           new Setting(list)

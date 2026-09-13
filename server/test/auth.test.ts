@@ -1375,6 +1375,17 @@ describe('an operator looking at somebody’s devices', () => {
     assert.equal(out.statusCode, 204);
   });
 
+  it('refuses a console sign-in whose device name the schema would refuse, with a 400 rather than a 500', async () => {
+    // The one route that takes a device name and did not check it (#356): the CHECK caught it instead.
+    const out = await app.inject({
+      method: 'POST',
+      url: '/auth/console',
+      payload: { login: 'anyone', password: 'anything', device_name: ' padded' },
+    });
+    assert.equal(out.statusCode, 400, out.body);
+    assert.equal(out.json().error, 'invalid_device_name');
+  });
+
   it('takes nothing from a caller who is not an administrator', async () => {
     const out = await app.inject({ method: 'GET', url: `/admin/accounts/${await userId()}/devices` });
     assert.equal(out.statusCode, 401);

@@ -10,7 +10,7 @@ import { openEventsHub } from './events.js';
 import { clearRestoreRequest, readRestoreRequest } from './restore-request.js';
 import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
-import { ensureSchema } from './schema.js';
+import { ensureSchema, SchemaRefusal } from './schema.js';
 import { assertWritable } from './writable.js';
 import { dirname } from 'node:path';
 
@@ -56,9 +56,17 @@ if (asked) {
 
 // **First, before anything queries a table.** On a fresh installation there is nothing to query
 // until this has run: the schema travels inside this image now, not as a file the operator has
-// to mount beside the compose file (docs/13). On an existing database it only compares, and
-// says in the log what is missing.
-await ensureSchema(db);
+// to mount beside the compose file (docs/13). An existing database is brought forward by the migrations
+// the image carries; when it cannot be (D-132), the reason is one line in the log and the process exits,
+// rather than a stack trace an operator has to read the message out of.
+try {
+  await ensureSchema(db);
+} catch (e) {
+  if (!(e instanceof SchemaRefusal)) throw e;
+  console.error(`refusing to start: ${e.message}`);
+  await db.close();
+  process.exit(1);
+}
 const events = openEventsHub(db);
 const app = await buildApp(db, cfg, events);
 
