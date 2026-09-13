@@ -428,6 +428,11 @@ SELECT expect_fail($$
     VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
             'GET', '/other/:id', 404, 'not_found', 0)
 $$, '23514', 'sync_problems_count_check', 'a sync problem counted zero times');
+
+-- Migrations are numbered from 1 (#354).
+SELECT expect_fail($$
+    INSERT INTO schema_migrations (id, name, checksum) VALUES (0, 'zero', 'x')
+$$, '23514', 'schema_migrations_id_check', 'a migration numbered zero');
 SELECT expect_fail($$
     UPDATE device_pairings SET device_pubkey = '\xcafe'::bytea
      WHERE id = 'd0000000-0000-0000-0000-000000000001'

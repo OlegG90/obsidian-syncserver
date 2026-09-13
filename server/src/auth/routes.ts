@@ -233,6 +233,7 @@ export const registerAuthRoutes = (
           .send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
       }
 
+      if (req.body.device_name !== undefined && refusedDeviceName(reply, req.body.device_name)) return reply;
       const out = await consoleSignIn(db, login, password, req.body.device_name ?? 'console');
       if (!out) {
         attempts.fail(login);

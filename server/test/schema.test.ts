@@ -16,6 +16,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import {
   baselineNames,
+  controlsTransaction,
   declaredNames,
   ensureSchema,
   MIGRATIONS_DIR,
@@ -189,6 +190,22 @@ describe('bringing a database forward', () => {
     await db.close();
   });
 
+  it('applies a migration that changes a function body, written the way schema.sql writes functions', async () => {
+    // The case migrations exist for — 0.7.9 hand-applied exactly this — and the one a check for a
+    // transaction's `BEGIN` used to refuse: a plpgsql body opens with `BEGIN` on a line of its own.
+    const db = await emptyDatabase('syncserver_schema_function');
+    await ensureSchema(db, quiet);
+    const fn = (n: number): string =>
+      `CREATE OR REPLACE FUNCTION migration_probe() RETURNS integer\nLANGUAGE plpgsql AS $$\nBEGIN\n    RETURN ${n};\nEND;\n$$;\n`;
+    const dir = await migrationsWith({ [afterReal(1, 'probe-fn')]: fn(1), [afterReal(2, 'probe-fn-body')]: fn(2) });
+
+    const out = await ensureSchema(db, { ...quiet, migrationsDir: dir });
+    assert.deepEqual(out.ran, [realMigrationCount + 1, realMigrationCount + 2]);
+    const got = await db.one<{ v: number }>('SELECT migration_probe() AS v');
+    assert.equal(got!.v, 2, 'the changed body is the one in the database');
+    await db.close();
+  });
+
   it('refuses to start when a migration fails, and rolls that migration back whole', async () => {
     const db = await emptyDatabase('syncserver_schema_failing');
     await ensureSchema(db, quiet);
@@ -248,6 +265,15 @@ describe('reading the migrations', () => {
     const lf = await readMigrations(await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\nSELECT 2;\n' }));
     const crlf = await readMigrations(await migrationsWith({ [afterReal(1, 'probe')]: 'SELECT 1;\r\nSELECT 2;\r\n' }));
     assert.equal(lf[realMigrationCount]!.checksum, crlf[realMigrationCount]!.checksum);
+  });
+
+  it('tells a transaction apart from the BEGIN that opens a function body', () => {
+    assert.equal(controlsTransaction('CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  RETURN;\nEND;\n$$;\n'), false);
+    assert.equal(controlsTransaction('CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $body$\nBEGIN\nEND;\n$body$;\n'), false);
+    assert.equal(controlsTransaction('-- BEGIN; is only mentioned here\nSELECT 1;\n'), false);
+    assert.equal(controlsTransaction('BEGIN;\nSELECT 1;\n'), true);
+    assert.equal(controlsTransaction('SELECT 1;\nCOMMIT;\n'), true);
+    assert.equal(controlsTransaction('START TRANSACTION;\nSELECT 1;\n'), true);
   });
 
   it('refuses a gap, a misnamed file, and a migration that controls its own transaction', async () => {
