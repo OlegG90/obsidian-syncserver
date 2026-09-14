@@ -119,6 +119,8 @@ export interface FolderMove {
  * - **every** child must reappear, not most: one child edited mid-move means the folder is
  *   not the same folder, and the per-file walk handles it correctly;
  * - all of them under the **same** new parent, or it is a scatter, not a move;
+ * - **nothing stays behind** in `V`: moving a folder moves everything in it, so a folder that
+ *   still holds anything locally did not move — only its vanished children did (#370);
  * - `N` must not already exist on the server, or this is a merge — which is a different
  *   operation with a different meaning for anybody else syncing;
  * - `N`'s own parent chain must already exist, so no folder is invented in the middle of a
@@ -170,10 +172,11 @@ export const folderMoves = (
     if (!allMoved || newParent === undefined) continue;
 
     if (tree.has(newParent)) continue;
-    // A new folder inside the one its children left is not the folder moving: `V/a` into
-    // `V/N/a` would ask the server to put `V` under itself. The chain check below passes it,
-    // because the only ancestor `V/N` needs is `V`, and `V` is still there.
-    if (newParent.startsWith(`${parent}/`)) continue;
+    // Nothing may still live in the folder. Moving it moves everything under it, and the plan only
+    // proves where the VANISHED children went: moving one note out of a folder into a new one used
+    // to carry the whole folder along, and every note that stayed came back as a copy. It covers a
+    // destination inside the source too (#351) — `V/N/a` still lives under `V`.
+    if ([...here].some((p) => p.startsWith(`${parent}/`))) continue;
     if (newParent && !parentChainExists(newParent, tree)) continue;
     // Two folders cannot move to the same destination in one pass; the second is not a
     // move but a merge into something this pass is already creating.

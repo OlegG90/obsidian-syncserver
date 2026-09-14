@@ -202,6 +202,23 @@ describe('did a whole folder move', () => {
     assert.equal(plan[0]?.to, 'deep/N');
   });
 
+  it('refuses when something else still lives in the folder', () => {
+    // One note moved out of a folder into a new one: every VANISHED child reappeared together, but
+    // the folder did not move — it still holds everything else. Planned as a move, the whole folder
+    // went to the server's new place and every note that stayed was uploaded again as a copy.
+    const f = collapsed();
+    f.here.add('V/stays.md');
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
+  });
+
+  it('refuses when something still lives in a subfolder of it', () => {
+    const f = collapsed();
+    f.here.add('V/sub/stays.md');
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
+  });
+
   it('refuses a destination inside the folder the children left', () => {
     // `V/a` and `V/b` gathered into a new `V/N`: the folder did not move, its children did.
     // Planned as a move, it asked the server to put `V` under itself and was refused.
