@@ -7,7 +7,7 @@
  * say it is over its limit. Those are the parts worth a test, and they are pure.
  */
 
-import type { AccountRow, AuditRow, OperatorRefusalCode } from '@syncserver/shared';
+import type { AccountRow, AuditRow, ConsoleAuthRefusalCode, OperatorRefusalCode } from '@syncserver/shared';
 
 /**
  * An account as the admin API reports it — the fields this file reads (D-89).
@@ -320,7 +320,20 @@ export const operatorRefusal = (code: string): string =>
  *
  * Written as what to do next wherever there is something to do. "Refused" is not information.
  */
-const SENTENCES: Record<OperatorRefusalCode, string> = {
+const SENTENCES: Record<OperatorRefusalCode | ConsoleAuthRefusalCode, string> = {
+  // The way in (#375): the first-run screen, the sign-in, and changing this account's password.
+  login_invalid: 'that login will not do — letters, digits, dots, dashes and underscores, and not too long.',
+  login_taken: 'that login is already in use on this server. Choose another.',
+  password_too_short: 'that password is too short for the only account that administers this server.',
+  already_bootstrapped:
+    'this server already has an administrator, so there is no first password left to set. Sign in instead; if nobody can, the password is reset from the server itself.',
+  login_and_password_required: 'both a login and a password are needed to sign in.',
+  invalid_credentials: 'that login and password do not match an administrator of this server.',
+  too_many_attempts: 'too many attempts. Wait a little and try again — the limit is what keeps guessing expensive.',
+  current_password_required: 'the current password is needed to set a new one.',
+  no_password_to_change:
+    'this account has no password to change — it was never given one, or it is not a console account.',
+
   not_found: 'that is no longer there — the page may be showing something the server has since removed.',
   already_gone: 'that copy has been removed from disk; there is nothing left to restore from.',
   newest_copy:

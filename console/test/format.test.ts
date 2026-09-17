@@ -12,6 +12,7 @@ import {
   accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver, quotaProblem,
   holdsStorage, mib, serverLine, usageFraction, usageMarker, type AccountLine,
 } from '../src/format.js';
+import type { ConsoleAuthRefusalCode } from '@syncserver/shared';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (D-89) and the server always sends them. Leaving them out built a shape no response has —
@@ -94,6 +95,34 @@ describe('what a row of the accounts table says', () => {
     // A backup run that failed before either leg ran has no bytes; "0.0 MiB" would be a
     // true statement that reads as a broken one.
     assert.equal(mib(null), '—');
+  });
+});
+
+describe('the refusals of the way in', () => {
+  // The first screen anybody meets is the one that creates the administrator, and it used to print
+  // `login_taken` and `already_bootstrapped` at them as identifiers (#375).
+  const WAY_IN: ConsoleAuthRefusalCode[] = [
+    'login_invalid',
+    'login_taken',
+    'password_too_short',
+    'already_bootstrapped',
+    'login_and_password_required',
+    'invalid_credentials',
+    'too_many_attempts',
+    'current_password_required',
+    'no_password_to_change',
+  ];
+
+  it('has words for every one of them', () => {
+    for (const code of WAY_IN) {
+      const said = operatorRefusal(code);
+      assert.notEqual(said, code, `${code} still reads as an identifier`);
+      assert.ok(said.length > 20, `${code} is answered by something too short to be a sentence`);
+    }
+  });
+
+  it('still falls back to the code from a newer server', () => {
+    assert.equal(operatorRefusal('something_this_build_never_heard_of'), 'something_this_build_never_heard_of');
   });
 });
 
