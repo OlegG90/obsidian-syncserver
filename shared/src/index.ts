@@ -111,6 +111,29 @@ export type OperatorRefusalCode =
   | 'enabled_required';
 
 /**
+ * What the console's own way in refuses (#375): creating the first administrator, signing in, and
+ * changing that password.
+ *
+ * A separate union from the operator's, because these are the answers of `/auth/*` rather than of
+ * `/admin/*` — but the console renders both, so its map covers both and a code without words for it
+ * fails to compile either way. It used to cover only the operator's, and the first screen anybody
+ * meets — the one that creates the administrator — printed `login_taken` and `already_bootstrapped`
+ * as identifiers.
+ */
+export type ConsoleAuthRefusalCode =
+  // Creating the first administrator.
+  | 'login_invalid'
+  | 'login_taken'
+  | 'password_too_short'
+  | 'already_bootstrapped'
+  // Signing in, and changing the password of the account signed in.
+  | 'login_and_password_required'
+  | 'invalid_credentials'
+  | 'too_many_attempts'
+  | 'current_password_required'
+  | 'no_password_to_change';
+
+/**
  * One item of preparation's work list: a node that is not ready to be shared, and why.
  *
  * Here rather than in the server because the client reads it — the whole reason the server
