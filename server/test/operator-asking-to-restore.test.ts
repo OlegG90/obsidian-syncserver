@@ -58,7 +58,13 @@ before(async () => {
       WHERE id = $1 AND state = 'provisioned'`,
     [ADMIN],
   );
-  token = app.jwt.sign({ sub: ADMIN, device: ADMIN, role: 'console' });
+  // A real device row, because the guard now reads one (#373): a token naming a device the server does
+  // not have is a token nobody can sign out, which is what the check exists to refuse.
+  const device = await db.one<{ id: string }>(
+    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'console') RETURNING id`,
+    [ADMIN],
+  );
+  token = app.jwt.sign({ sub: ADMIN, device: device!.id, role: 'console' });
 });
 
 after(async () => {

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver,
+  accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver, quotaProblem,
   holdsStorage, mib, serverLine, usageFraction, usageMarker, type AccountLine,
 } from '../src/format.js';
 
@@ -94,6 +94,34 @@ describe('what a row of the accounts table says', () => {
     // A backup run that failed before either leg ran has no bytes; "0.0 MiB" would be a
     // true statement that reads as a broken one.
     assert.equal(mib(null), '—');
+  });
+});
+
+describe('what is wrong with a typed quota', () => {
+  it('accepts a whole number of MiB', () => {
+    assert.equal(quotaProblem('100'), undefined);
+    assert.equal(quotaProblem(' 100 '), undefined, 'a person may type spaces around it');
+  });
+
+  it('refuses what is not a number, which used to throw at the operator', () => {
+    // `bytesFromMib('abc')` answers the string "NaN", and the freeze warning beside it then asks
+    // `BigInt("NaN")` — a SyntaxError on the screen of somebody who typed a letter.
+    for (const typed of ['abc', '10 MiB', '1e3', '-5', '1.5']) {
+      assert.ok(quotaProblem(typed), `${typed} is not a limit`);
+    }
+  });
+
+  it('refuses an empty field rather than reading it as zero', () => {
+    assert.ok(quotaProblem(''));
+    assert.ok(quotaProblem('   '));
+  });
+
+  it('names the act that means "store nothing" instead of accepting zero', () => {
+    assert.match(quotaProblem('0')!, /[Dd]isable/);
+  });
+
+  it('refuses a number no disk here could hold', () => {
+    assert.ok(quotaProblem(String(17 * 1024 * 1024)));
   });
 });
 

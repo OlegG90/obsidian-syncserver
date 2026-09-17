@@ -1262,6 +1262,28 @@ describe('the devices of an account', () => {
     // A mistyped id names nothing either; it used to reach PostgreSQL as a malformed uuid and come back a 500.
     assert.equal((await rename(access, 'not-a-uuid', 'renamed')).statusCode, 404);
   });
+
+  it('stops answering a revoked device at once, on every route and not only on blobs (#373)', async () => {
+    // Revoking stops a device minting new tokens; the one it holds used to go on working for the rest of
+    // its fifteen minutes, so a phone somebody had just revoked kept reading their notes.
+    const doomed = await extraDevice('obsidian', 'android');
+    const access = await signIn(doomed);
+    assert.equal((await devicesOf(access)).statusCode, 200, 'it works while the device is live');
+
+    await db.query(`UPDATE devices SET revoked_at = now() WHERE id = $1`, [doomed]);
+
+    const after = await devicesOf(access);
+    assert.equal(after.statusCode, 401);
+    assert.equal(after.json().error, 'device_revoked');
+    const vault = await app.inject({
+      method: 'GET',
+      url: '/vaults',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(vault.statusCode, 401, 'the same answer away from /auth, where the gap was');
+
+    await db.query(`DELETE FROM devices WHERE id = $1`, [doomed]);
+  });
 });
 
 /**
@@ -1384,6 +1406,29 @@ describe('an operator looking at somebody’s devices', () => {
     });
     assert.equal(out.statusCode, 400, out.body);
     assert.equal(out.json().error, 'invalid_device_name');
+  });
+
+  it('stops answering an administrator whose console session was signed out (#373)', async () => {
+    // Signing the console out revokes its device row. The token it was holding used to keep
+    // administering until it aged out.
+    const access = await asAdmin();
+    assert.equal(
+      (await app.inject({ method: 'GET', url: '/admin/accounts', headers: { authorization: `Bearer ${access}` } }))
+        .statusCode,
+      200,
+    );
+
+    await db.query(`UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND platform = 'console'`, [
+      '00000000-0000-0000-0000-000000000001',
+    ]);
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/admin/accounts',
+      headers: { authorization: `Bearer ${access}` },
+    });
+    assert.equal(after.statusCode, 401);
+    assert.equal(after.json().error, 'device_revoked');
   });
 
   it('takes nothing from a caller who is not an administrator', async () => {

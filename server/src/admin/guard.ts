@@ -35,10 +35,18 @@ export const requireAdmin = (db: Db) => async (req: FastifyRequest, reply: Fasti
     return;
   }
 
-  const row = await db.one<{ login: string; role: string; state: string }>(
-    `SELECT login, role::text AS role, state::text AS state FROM users WHERE id = $1`,
-    [caller.userId],
+  // The device comes with the account, for the reason `requireAuth` gives (#373): signing the console
+  // out revokes its device row, and a token minted before that would otherwise keep administering.
+  const row = await db.one<{ login: string; role: string; state: string; revoked: boolean }>(
+    `SELECT u.login, u.role::text AS role, u.state::text AS state, d.revoked_at IS NOT NULL AS revoked
+       FROM users u JOIN devices d ON d.user_id = u.id AND d.id = $2
+      WHERE u.id = $1`,
+    [caller.userId, caller.deviceId],
   );
+  if (row?.revoked) {
+    await reply.code(401).send({ error: 'device_revoked' });
+    return;
+  }
   if (!row || row.state !== 'active') {
     await reply.code(403).send({ error: 'forbidden', detail: 'this account is not active' });
     return;

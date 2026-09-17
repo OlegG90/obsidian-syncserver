@@ -35,6 +35,30 @@ export const mib = (bytes: string | null): string =>
 /** What an operator typed in the quota field, in MiB, as the bytes the server takes. */
 export const bytesFromMib = (typed: string): string => String(Math.round(Number(typed) * 1024 * 1024));
 
+/** More than any disk this server will meet, and small enough that a slip of the hand is still caught. */
+const QUOTA_CEILING_MIB = 16 * 1024 * 1024;
+
+/**
+ * What is wrong with a typed quota, or nothing (#374).
+ *
+ * The field used to go straight into `bytesFromMib`, which answers the string `"NaN"` for anything that
+ * is not a number — and the freeze warning beside it then asked `BigInt("NaN")` and threw a
+ * `SyntaxError` at an operator who had typed a letter. An empty field was quieter and worse: it read as
+ * zero, so Save asked the server for a quota of nothing and came back with a refusal about a parameter.
+ *
+ * Whole MiB, because that is the unit the field is labelled in and a fraction of a MiB is not a decision
+ * anybody makes. Zero is refused with the act that means it: an account that may store nothing is one to
+ * disable.
+ */
+export const quotaProblem = (typed: string): string | undefined => {
+  const t = typed.trim();
+  if (!t) return 'type a limit, in MiB.';
+  if (!/^\d+$/.test(t)) return 'a limit is a whole number of MiB — digits only.';
+  if (Number(t) === 0) return 'a limit of zero would let this account store nothing. Disable it instead.';
+  if (Number(t) > QUOTA_CEILING_MIB) return `${t} MiB is more than any disk here — check the number.`;
+  return undefined;
+};
+
 /** The other direction, for putting a quota back in the field: whole MiB, the unit it is typed in. */
 export const mibOf = (bytes: string): string => String(Math.round(Number(bytes) / (1024 * 1024)));
 
