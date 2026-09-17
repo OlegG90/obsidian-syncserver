@@ -55,6 +55,11 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined, stop: undefined } : deps;
   const app = Fastify({ logger: false });
 
+  // The database, where a guard can reach it. `requireAuth` has to ask whether the caller's device is
+  // still allowed (#373), and it is bound to routes by name in fifty-odd places — so it takes the
+  // connection from the instance rather than from a signature every one of those would have to change.
+  app.decorate('db', db);
+
   await app.register(fastifyJwt, { secret: cfg.serverSecret });
   await app.register(import('@fastify/websocket'));
 

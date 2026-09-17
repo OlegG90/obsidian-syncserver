@@ -22,7 +22,7 @@ import {
   type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
-  accountBadge, problemsBadge, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
+  accountBadge, problemsBadge, quotaProblem, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
   isOver, mib, mibOf, serverLine, usageFraction, usageMarker,
 } from './format.js';
 import { chooseScreen, sessionEnded } from './screen.js';
@@ -778,6 +778,11 @@ const quotaControl = (
   box.append(cancel);
 
   submits(save, box, async () => {
+    // Before anything reads it as a number (#374): what is typed here is the one input on this screen
+    // that a person composes rather than picks, and `BigInt("NaN")` throws where a sentence belongs.
+    const problem = quotaProblem(quota.input.value);
+    if (problem) return report(`That limit will not do — ${problem}`, true);
+
     const bytes = bytesFromMib(quota.input.value);
     const warning = freezeWarning(bytes, a.usedBytes);
     if (!warning) return apply(bytes);
