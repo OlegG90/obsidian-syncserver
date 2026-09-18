@@ -319,3 +319,40 @@ describe('who to seal a share key to', () => {
     assert.equal(r.statusCode, 404);
   });
 });
+
+/**
+ * Deduplication inside a share (#376).
+ *
+ * A file in a share is tagged under `KS`, and the lookup used to search the asking vault's own `KV` scope
+ * only — so no file in a shared folder could ever be found, and every one was uploaded again. The lookup
+ * now covers the share scopes this vault has joined. A tag is an HMAC under the scope key, so only a
+ * holder of `KS` could have asked with one; answering it is no new oracle.
+ */
+describe('deduplication inside a share', () => {
+  const ask = (vaultId: string, token: string, tag: string) =>
+    w.app.inject({ method: 'GET', url: `/vaults/${vaultId}/dedup?tags=${tag}`, headers: { authorization: `Bearer ${token}` } });
+
+  it('finds a tag stored under the share key, from either side of the share', async () => {
+    const { inside, ks } = await sharedWith('dedup');
+    const file = await createFile(inside, `dedup-${randomUUID()}.md`, `shared bytes ${randomUUID()}`, ks);
+    const tag = sha(Buffer.from(`tag:${file.sha256}`));
+
+    const mine = await ask(w.vaultId, w.access, tag);
+    assert.equal(mine.statusCode, 200, mine.body);
+    assert.deepEqual(mine.json().matches, [{ content_tag: tag, sha256: file.sha256 }], 'the initiator');
+
+    const theirs = await ask(w.strangerVaultId, w.strangerAccess, tag);
+    assert.equal(theirs.statusCode, 200, theirs.body);
+    assert.deepEqual(theirs.json().matches, [{ content_tag: tag, sha256: file.sha256 }], 'and the member who joined');
+  });
+
+  it('answers nothing from a share the vault has not joined', async () => {
+    const { inside, ks } = await invitedShare('dedup-invited');
+    const file = await createFile(inside, `dedup-${randomUUID()}.md`, `invited bytes ${randomUUID()}`, ks);
+    const tag = sha(Buffer.from(`tag:${file.sha256}`));
+
+    const out = await ask(w.strangerVaultId, w.strangerAccess, tag);
+    assert.equal(out.statusCode, 200, out.body);
+    assert.deepEqual(out.json().matches, [], 'an invitation is not membership');
+  });
+});

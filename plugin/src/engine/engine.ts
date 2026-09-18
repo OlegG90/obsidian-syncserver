@@ -276,6 +276,22 @@ export class SyncEngine {
     );
   }
 
+  /**
+   * The dedup tag for bytes that will live in this scope (#376).
+   *
+   * **The key is the scope's, not the vault's**, and `content.ts` says why: a tag is `HMAC(scope key,
+   * plaintext hash)`, so a file inside a share is tagged under `KS` when it is written. Asking under `KV`
+   * produced a tag nothing had ever stored, so every file in a shared folder missed and was sealed and
+   * uploaded again — and adopting a folder somebody shared paid it once per file.
+   *
+   * `keyIfOpenable`, because a share whose key has not arrived is a state and not a fault: such a
+   * subtree is outside the walk anyway, and a tag under the vault key is an honest "this will match
+   * nothing" rather than a throw in the middle of a pass.
+   */
+  private tagFor(scopeId: string, plainHash: string): string {
+    return dedupTagFromHash(this.scopes.keyIfOpenable(scopeId) ?? this.scopes.vaultKey, plainHash);
+  }
+
   /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
   private contentScopeId(ctx: PassContext, path: string): string {
     const parent = parentPath(path);
@@ -347,19 +363,26 @@ export class SyncEngine {
     // say: the epochs it is turned off for are read out of `POLICY` rather than listed again, so "is
     // the server's word trustworthy here" has one answer in this file instead of two that can drift.
     const trustHints = !opts.rescan && !POLICY[epoch].preferLocal;
+
+    /** Which scope a file's bytes are sealed under, read off the walked tree (`scopes.ts`). */
+    const scopeOf = (path: string): string => {
+      const parent = parentPath(path);
+      return contentScopeFor(parent ? tree.get(parent) : undefined, shareScopes, vaultScopeId);
+    };
+
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
       const known = state.nodes[f.path];
       if (trustHints && known?.mtime === f.mtime && known?.size === f.size) {
         meta.set(f.path, {
           plainHash: known.plainHash,
-          tag: dedupTagFromHash(this.scopes.vaultKey, known.plainHash),
+          tag: this.tagFor(scopeOf(f.path), known.plainHash),
           mtime: f.mtime,
           size: f.size,
         });
         continue;
       }
-      meta.set(f.path, await this.hashAndTag(f));
+      meta.set(f.path, await this.hashAndTag(f, scopeOf(f.path)));
     }
     /**
      * **Only for the files whose reconciliation could consult it** (issue #250).
@@ -615,7 +638,7 @@ export class SyncEngine {
    */
   private async reconcileLocal(file: VaultFile, ctx: PassContext): Promise<void> {
     // A conflict file born during this same pass has no pre-pass entry; compute it now.
-    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file));
+    const m = ctx.meta.get(file.path) ?? (await this.hashAndTag(file, this.contentScopeId(ctx, file.path)));
 
     const decision = decide({
       meta: m,
@@ -718,14 +741,14 @@ export class SyncEngine {
    * the number `list()` will report on the next pass — and not `Date.now()`, which nothing will ever
    * report again (#237). A hint that cannot match is worse than no hint: it says a file was checked.
    */
-  private async hashAndTag(file: VaultFile): Promise<LocalMeta> {
+  private async hashAndTag(file: VaultFile, scopeId: string): Promise<LocalMeta> {
     const bytes = await this.vault.read(file.path);
     // Hashed once: the tag is keyed over that same hash, so it is derived from it rather than
     // hashing the bytes a second time.
     const plainHash = toHex(sha256(bytes));
     return {
       plainHash,
-      tag: dedupTagFromHash(this.scopes.vaultKey, plainHash),
+      tag: this.tagFor(scopeId, plainHash),
       mtime: file.mtime,
       size: bytes.length,
     };
