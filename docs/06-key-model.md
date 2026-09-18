@@ -181,7 +181,7 @@ KEK          = Argon2id(passphrase, account_salt, m, t, p)   ← key-encryption 
 seed         = 32 random bytes                                ← the account master secret, generated once
 wrapped_seed = AEAD(KEK, seed)                                ← stored on the server; recovery_key wraps it again
 auth_secret  = HKDF(seed, info = "auth")                      ← this is what goes to the server
-kek_verifier = HKDF(KEK,  info = "recovery" ‖ login ‖ salt)   ← proves the phrase without the seed
+kek_verifier = HKDF(KEK,  info = "recovery" ‖ canon(login) ‖ salt)   ← proves the phrase without the seed
 KV_vault     = HKDF(seed, info = vault_id)                    ← one per vault, derived on demand
 ```
 
@@ -343,6 +343,12 @@ check and fails the only moment it exists for.
 answer `/auth/kdf` with a salt of its choosing and collect a verifier under it. Binding the verifier to the
 login and the salt keeps it from being replayed against another account, and `Argon2id` at 64 MiB keeps each
 candidate expensive — but the exposure is real and belongs on this list.
+
+**The login is bound in its canonical form**, `canon(login)` = trimmed, NFC, lower case (#377). The server
+finds an account by `lower(login)`, so a verifier bound to the spelling as typed made `Alice` and `alice` two
+proofs for one account, and recovering under the other spelling failed with the one answer every recovery
+failure gets. A verifier filed before this rule, under a non-canonical spelling, cannot be recomputed by the
+server from its hash; a device holding such a login files the canonical one again at unlock.
 
 #### The attempt limit is part of the protocol
 

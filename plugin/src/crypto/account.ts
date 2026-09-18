@@ -157,6 +157,17 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
 };
 
 /**
+ * A login in the one form a derivation binds to: trimmed, NFC, lower case (#377).
+ *
+ * The server finds an account by `lower(login)`, so `Alice` and `alice` reach the same row — but a
+ * verifier bound to the login **as typed** was a different verifier for each spelling. An account
+ * claimed as `Alice` and recovered as `alice` reached the right account with a proof that fitted
+ * nothing, and was refused with the one answer every recovery failure gets (D-73). NFC because two
+ * logins can look identical and differ in how an accented letter was typed.
+ */
+export const canonicalLogin = (login: string): string => login.trim().normalize('NFC').toLowerCase();
+
+/**
  * Proof that whoever holds it can open `wrapped_seed` — without holding the seed (D-112).
  *
  * This is what lets a device with nothing at all recover the account: the server compares it
@@ -169,7 +180,7 @@ export const createAccount = (passphrase: string, params: KdfParams = DEFAULT_KD
  * nothing.
  */
 export const kekVerifier = (kek: Uint8Array, login: string, accountSalt: Uint8Array): string => {
-  const info = new Uint8Array([...utf8('recovery'), ...utf8(login), ...accountSalt]);
+  const info = new Uint8Array([...utf8('recovery'), ...utf8(canonicalLogin(login)), ...accountSalt]);
   return toBase64(hkdf(sha256, kek, undefined, info, KEY_BYTES));
 };
 
