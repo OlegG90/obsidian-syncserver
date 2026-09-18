@@ -39,6 +39,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import {
   authSecret,
   deriveKek,
+  canonicalLogin,
   kekVerifier,
   humanCodeHash,
   unwrapIdentity,
@@ -247,7 +248,13 @@ const loginAndHold = async (client: SyncClient, who: LoginIdentity) => {
   client.setAccessToken(session.access);
   client.setRefreshToken(session.refresh);
 
-  if (session.needs_kek_verifier) {
+  // Filed again, too, when this device holds its login in a form that is not canonical (#377). Such an
+  // account had its verifier bound to that spelling, and a recovery — which binds the canonical form of
+  // whatever is typed — could never match it. The server cannot recompute a verifier from its hash, so
+  // the device with the KEK in hand is the only place it can be put right; once it is, any spelling
+  // recovers. It repeats on each unlock for as long as the stored login keeps its old form, which costs
+  // one small idempotent request.
+  if (session.needs_kek_verifier || who.login !== canonicalLogin(who.login)) {
     try {
       await client.setKekVerifier(kekVerifier(who.kek, who.login, who.accountSalt));
     } catch {

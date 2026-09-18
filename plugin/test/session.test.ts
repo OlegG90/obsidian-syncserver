@@ -291,6 +291,32 @@ describe('an account that predates recovery repairs itself on login', () => {
   });
 });
 
+describe('the login a recovery verifier is bound to (#377)', () => {
+  it('is the same whatever case, spacing or Unicode form the login is typed in', () => {
+    // The server finds the account by `lower(login)`; a verifier bound to the spelling as typed made
+    // `Alice` and `alice` two different proofs for one account.
+    const expected = kekVerifier(KNOWN_KEK, 'alice', KNOWN_SALT);
+    for (const typed of ['Alice', 'ALICE', ' alice ', 'alice']) {
+      assert.equal(kekVerifier(KNOWN_KEK, typed, KNOWN_SALT), expected, JSON.stringify(typed));
+    }
+    // One accented letter, typed precomposed and decomposed: identical on screen, different bytes.
+    assert.equal(kekVerifier(KNOWN_KEK, 'rémy', KNOWN_SALT), kekVerifier(KNOWN_KEK, 'rémy', KNOWN_SALT));
+  });
+
+  it('is filed again, canonical, by a device that holds the login in another form', async () => {
+    // Such an account's verifier was bound to `Alice`; recovery binds the canonical form of whatever is
+    // typed. Only a device with the KEK in hand can put that right, and unlocking is when it has it.
+    const transport = fakeTransport({ ...okAnswers(), 'PUT /auth/kek-verifier': { status: 204, body: {} } });
+    const { create } = forTests({ derivation: fakeDerivation(), transport });
+
+    assert.equal(await create({ ...conn(), login: 'Alice' }).open('correct horse battery staple'), 'open');
+
+    const call = transport.calls.find((c) => c.url.includes('/auth/kek-verifier'));
+    assert.ok(call, 'the verifier was filed again');
+    assert.equal(JSON.parse(call.body as string).kek_verifier, kekVerifier(KNOWN_KEK, 'alice', KNOWN_SALT));
+  });
+});
+
 describe('Session.use and lock — the busy guard', () => {
   it('lock() returns busy while a use() is in flight', async () => {
     const derivation = fakeDerivation();
