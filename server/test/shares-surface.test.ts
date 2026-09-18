@@ -356,3 +356,43 @@ describe('deduplication inside a share', () => {
     assert.deepEqual(out.json().matches, [], 'an invitation is not membership');
   });
 });
+
+/**
+ * A device reaches only the shares of the vault it syncs (D-140).
+ *
+ * The share is named three ways — in the path, in a body's `vault_id`, and in the list — and each is
+ * checked: a device of a second vault of the same account sees none of the first vault's shares.
+ */
+describe('a device reaches only the shares of its own vault', () => {
+  it('is refused a share of another vault of the same account', async () => {
+    const { shareId } = await sharedWith('scope');
+
+    // A second vault of the initiator's account, synced by a device of its own.
+    const secondVault = randomUUID();
+    const made = await w.app.inject({
+      method: 'POST', url: '/vaults', headers: auth(), payload: { id: secondVault, name_enc: b64('second') },
+    });
+    assert.equal(made.statusCode, 201, made.body);
+    const device = await w.db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'second vault', 'desktop') RETURNING id`,
+      [w.userId],
+    );
+    const other = { authorization: `Bearer ${w.app.jwt.sign({ sub: w.userId, device: device!.id })}` };
+    const opened = await w.app.inject({ method: 'GET', url: `/vaults/${secondVault}`, headers: other });
+    assert.equal(opened.statusCode, 200, 'that vault is now this device’s');
+
+    const members = await w.app.inject({ method: 'GET', url: `/shares/${shareId}/members`, headers: other });
+    assert.equal(members.statusCode, 404, 'not reachable by its id');
+
+    const listed = await w.app.inject({ method: 'GET', url: '/shares', headers: other });
+    assert.ok(!(listed.json().joined as { share_id: string }[]).some((s) => s.share_id === shareId), 'nor listed');
+
+    // Only the vault named, nothing else: the route itself would answer that with a 400 for the missing
+    // fields, so a 404 here is the guard's, before the route ever reads the body.
+    const named = await w.app.inject({ method: 'POST', url: '/shares', headers: other, payload: { vault_id: w.vaultId } });
+    assert.equal(named.statusCode, 404, 'nor by naming the other vault in a body');
+
+    const own = await w.app.inject({ method: 'GET', url: `/shares/${shareId}/members`, headers: auth() });
+    assert.equal(own.statusCode, 200, 'while the device of the share’s own vault still reaches it');
+  });
+});

@@ -628,8 +628,10 @@ export class SyncClient {
    * meets a `200` and reports a removal that succeeded as a failure, which is the worst shape a break
    * can take: the destructive half has already happened.
    */
-  deleteVault(vaultId: string): Promise<{ thawed: boolean; revoked: number }> {
-    return this.json('DELETE', `/vaults/${vaultId}`, undefined, { expect: [200] });
+  deleteVault(vaultId: string, authSecret: string): Promise<{ thawed: boolean; revoked: number }> {
+    // The proof rides with the token (D-140): removing a vault is the one act a device may do to a vault
+    // other than its own, so the server asks for what only an unlocked device holds.
+    return this.json('DELETE', `/vaults/${vaultId}`, { auth_secret: authSecret }, { expect: [200] });
   }
 
   /**

@@ -1,9 +1,15 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Db } from '../db.js';
+import { isUuid } from '../uuid.js';
 
 export interface Caller {
   userId: string;
   deviceId: string;
+  /**
+   * The vault this device syncs, or `null` while the server has not learned it yet (D-139). Filled in by
+   * `requireAuth`; a caller built from a token alone — the WebSocket handshake — leaves it out.
+   */
+  vaultId?: string | null;
 }
 
 declare module 'fastify' {
@@ -13,6 +19,13 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** Decorated by `buildApp`, so a guard can ask the database what a token cannot say (#373). */
     db: Db;
+  }
+  interface FastifyContextConfig {
+    /**
+     * This route may reach any vault of the account, not only the caller's own (D-140). One route has it —
+     * removing a vault from the list — and it asks for a proof the token cannot carry instead.
+     */
+    anyVaultOfTheAccount?: boolean;
   }
 }
 
@@ -55,19 +68,65 @@ export const requireAuth = async (req: FastifyRequest, reply: FastifyReply): Pro
     await reply.code(401).send({ error: 'unauthenticated' });
     return;
   }
-  if (!(await stillAllowed(req.server.db, caller))) {
+  const device = await liveDevice(req.server.db, caller);
+  if (!device) {
     await reply.code(401).send({ error: 'device_revoked' });
     return;
   }
-  req.caller = caller;
+  req.caller = { ...caller, vaultId: device.vaultId };
+  if (!(await withinItsVault(req, req.caller))) {
+    // The answer another account's vault gets (D-20): which vaults this account holds is not this
+    // device's business either (D-140).
+    await reply.code(404).send({ error: 'not_found' });
+    return;
+  }
 };
 
-/** Whether this device may still act for this account: not revoked, and the account still active. */
-export const stillAllowed = async (db: Db, caller: Caller): Promise<boolean> =>
-  Boolean(
-    await db.one<{ ok: boolean }>(
-      `SELECT true AS ok FROM devices d JOIN users u ON u.id = d.user_id
-        WHERE d.id = $1 AND d.user_id = $2 AND d.revoked_at IS NULL AND u.state = 'active'`,
-      [caller.deviceId, caller.userId],
-    ),
+/**
+ * This device's row, if it may still act for this account: not revoked, and the account still active.
+ * Its vault comes with it, which is what `withinItsVault` checks against.
+ */
+export const liveDevice = (db: Db, caller: Caller): Promise<{ vaultId: string | null } | undefined> =>
+  db.one<{ vaultId: string | null }>(
+    `SELECT d.vault_id::text AS "vaultId" FROM devices d JOIN users u ON u.id = d.user_id
+      WHERE d.id = $1 AND d.user_id = $2 AND d.revoked_at IS NULL AND u.state = 'active'`,
+    [caller.deviceId, caller.userId],
   );
+
+/**
+ * Whether this request stays inside the vault its device syncs (D-140).
+ *
+ * A device is a vault connected on a machine (D-139), and its token used to reach every vault of the
+ * account. End-to-end encryption already keeps a stolen token from reading anything; what this closes is
+ * the rest — listing another vault's tree, writing into it, resetting it, emptying its trash.
+ *
+ * Checked here rather than in each route, because the vault is named in three ways and a new route would
+ * have to remember all three: the `:vaultId` of the path, a `vault_id` in the body (creating a share,
+ * joining one), and a share the path names, whose vault is this one's only if this vault takes part.
+ *
+ * **A device whose vault is not known yet passes.** A device that has just paired has not chosen one,
+ * and the first vault it opens becomes its vault (D-139). The console's device never has one, and holds
+ * no vault to reach.
+ */
+const withinItsVault = async (req: FastifyRequest, caller: Caller): Promise<boolean> => {
+  const own = caller.vaultId;
+  if (!own || req.routeOptions.config.anyVaultOfTheAccount) return true;
+
+  const params = req.params as { vaultId?: string; shareId?: string };
+  if (params.vaultId !== undefined && params.vaultId !== own) return false;
+
+  const named = (req.body as { vault_id?: unknown } | undefined)?.vault_id;
+  if (typeof named === 'string' && named !== own) return false;
+
+  // A share is this vault's when this account's membership in it lives here — or is still an invitation,
+  // which has no vault until it is accepted, and accepting it names this one in the body above.
+  if (params.shareId !== undefined && isUuid(params.shareId)) {
+    const member = await req.server.db.one<{ ok: boolean }>(
+      `SELECT true AS ok FROM share_members
+        WHERE share_id = $1 AND user_id = $2 AND (vault_id = $3 OR vault_id IS NULL)`,
+      [params.shareId, caller.userId, own],
+    );
+    if (!member) return false;
+  }
+  return true;
+};

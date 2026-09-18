@@ -4,6 +4,7 @@
  *
  * Needs the development database: `npm run db:reset` first.
  */
+import { TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -91,7 +92,7 @@ before(async () => {
   await db.query(
     `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
                         enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+     VALUES ($1, $2, 'active', '${TEST_AUTH_SECRET_HASH}', decode('00112233445566778899aabbccddeeff','hex'),
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
     [userId, `reset-${process.pid}`],
   );
@@ -188,7 +189,7 @@ describe('reset', () => {
     await addNode(v, 'heavy.md', v.rootId);
 
     const before_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
-    const gone = await app.inject({ method: 'DELETE', url: `/vaults/${v.vaultId}`, headers: auth() });
+    const gone = await app.inject({ method: 'DELETE', url: `/vaults/${v.vaultId}`, headers: auth(), payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(gone.statusCode, 200, gone.body);
     const after_ = (await app.inject({ method: 'GET', url: '/usage', headers: auth() })).json().used;
 
@@ -200,7 +201,7 @@ describe('reset', () => {
     await db.query(
       `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
                           enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+       VALUES ($1, $2, 'active', '${TEST_AUTH_SECRET_HASH}', decode('00112233445566778899aabbccddeeff','hex'),
                '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
       [stranger, `reset-stranger-${process.pid}`]);
     const scope = await db.one<{ id: string }>(`INSERT INTO key_scopes (kind) VALUES ('vault') RETURNING id`);

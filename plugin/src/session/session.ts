@@ -625,7 +625,10 @@ export class Session {
       // no longer exists, and the failure would arrive as a 404 on the next pass.
       throw new Error('that is the vault this device syncs. Disconnect first, or remove a different one.');
     }
-    return this.use((h) => h.client.deleteVault(vaultId));
+    if (!this.seed) throw new Error('session is locked');
+    // `auth_secret`, derived here and never kept: the server removes a vault only with it (D-140).
+    const proof = authSecret(this.seed);
+    return this.use((h) => h.client.deleteVault(vaultId, proof));
   }
 
   /**
