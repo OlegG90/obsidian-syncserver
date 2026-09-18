@@ -22,8 +22,15 @@ import { journalEntry, nextRev } from '../revision.js';
 import { rewriteSubtreeAncestry } from '../ancestry.js';
 
 /**
- * Which of these content tags the vault's own key scope already knows, and what address
+ * Which of these content tags the scopes this vault can read already know, and what address
  * each currently maps to.
+ *
+ * **Its own `KV`, and the `KS` of every share it has joined** (#376). A file inside a shared folder
+ * is tagged under the share's key, so a lookup confined to `KV` could never find one: every file
+ * in a share missed and was uploaded again. Widening it is no new oracle, for the reason below —
+ * a tag is an HMAC under the scope key, so only a holder of `KS` could have asked with one. The
+ * initiator holds a member row like everybody else, so one join covers both sides; an invitation
+ * that has not been accepted does not count.
  *
  * This is what makes adoption "nearly free" (docs/07): before sealing and uploading a file —
  * or before accepting the server's copy of one that collides with it on a path — the client
@@ -47,12 +54,18 @@ export const dedupLookup = async (
   tags: Buffer[],
 ): Promise<{ contentTag: string; sha256: string }[]> =>
   db.query<{ contentTag: string; sha256: string }>(
-    `SELECT encode(d.content_tag, 'hex') AS "contentTag",
+    `WITH readable AS (
+        SELECT v.vault_key_id AS scope_id FROM vaults v WHERE v.id = $2 AND v.user_id = $1
+         UNION
+        SELECT s.subtree_key_id FROM shares s
+          JOIN share_members m ON m.share_id = s.id AND m.vault_id = $2 AND m.user_id = $1
+         WHERE m.joined_at IS NOT NULL AND m.left_at IS NULL AND s.subtree_key_id IS NOT NULL
+     )
+     SELECT encode(d.content_tag, 'hex') AS "contentTag",
             encode(d.sha256, 'hex')      AS sha256
        FROM dedup_index d
-       JOIN vaults v ON v.id = $2 AND v.user_id = $1
-      WHERE d.scope_id = v.vault_key_id
-        AND d.content_tag = ANY($3::bytea[])`,
+       JOIN readable r ON r.scope_id = d.scope_id
+      WHERE d.content_tag = ANY($3::bytea[])`,
     [userId, vaultId, tags],
   );
 
