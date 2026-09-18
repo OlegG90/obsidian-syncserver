@@ -326,8 +326,11 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.get('/shares', { preHandler: requireAuth }, async (req) => {
     const { joined, invitations } = await listShares(db, req.caller!.userId);
+    // This device's vault's shares, once the server knows which vault that is (D-140). Invitations stay:
+    // they belong to no vault until one accepts them.
+    const own = req.caller!.vaultId;
     return {
-      joined: joined.map((s) => ({
+      joined: joined.filter((s) => !own || s.vaultId === own).map((s) => ({
         share_id: s.shareId,
         vault_id: s.vaultId,
         is_initiator: s.isInitiator,

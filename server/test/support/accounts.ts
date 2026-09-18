@@ -8,6 +8,17 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../../src/db.js';
 
+/**
+ * The `auth_secret` every vault account here is made with, and its hash is what the fixtures store.
+ *
+ * Needed since removing a vault asks for it (D-140). The fixtures used to store `'h'`, the hash of nothing,
+ * which was fine while no route ever compared it.
+ */
+export const TEST_AUTH_SECRET = 'a test auth secret';
+
+/** Its hash, for a suite that writes its own `users` row. */
+export const TEST_AUTH_SECRET_HASH = '3e8db92a13a09e5a54a22c439aaf033842dffbad80af58297b9cefb451f9d3a3';
+
 export const aVaultAccount = async (
   db: Db,
   login = `account-${randomUUID().slice(0, 8)}`,
@@ -16,7 +27,7 @@ export const aVaultAccount = async (
   await db.query(
     `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
                         enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'user', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+     VALUES ($1, $2, 'active', 'user', '3e8db92a13a09e5a54a22c439aaf033842dffbad80af58297b9cefb451f9d3a3', decode('00112233445566778899aabbccddeeff','hex'),
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
     [id, login],
   );

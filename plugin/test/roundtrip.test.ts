@@ -99,6 +99,31 @@ let vaultId: string;
 /** The session the first describe block lives on — connect → open → lock → open. */
 let sess: Session;
 
+/**
+ * Point the shared client at a device of its own, for a describe that works in another vault (D-140).
+ *
+ * A device reaches the vault it syncs and no other, and the client here holds the first describe's device,
+ * which synced `testVault`. A second vault is a second vault-on-a-machine — exactly what the plugin makes —
+ * so it gets its own device row, and the tokens it replaced are put back afterwards for whoever runs next.
+ */
+const onAnotherDevice = async (seed: Uint8Array, name: string): Promise<() => void> => {
+  const was = { access: client.getAccessToken(), refresh: (client as unknown as { refresh?: string }).refresh };
+  const made = await fetch(`${base}/auth/devices`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${was.access}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name, platform: 'linux' }),
+  });
+  assert.equal(made.status, 201, await made.clone().text());
+  const { device_id } = (await made.json()) as { device_id: string };
+  const signed = await client.login({ login: 'roundtrip-user', auth_secret: authSecret(seed), device_id });
+  client.setAccessToken(signed.access);
+  client.setRefreshToken(signed.refresh);
+  return () => {
+    client.setAccessToken(was.access);
+    client.setRefreshToken(was.refresh);
+  };
+};
+
 /** Everything the child said, kept so a failed start can explain itself. */
 let serverOutput = '';
 
@@ -635,6 +660,13 @@ describe('the engine, device A pushes and device B pulls', () => {
 
   let ownVaultId: string;
   let kv2: Uint8Array;
+
+  // A second vault of the account, so a device of its own (D-140).
+  let putBack: (() => void) | undefined;
+  before(async () => {
+    putBack = await onAnotherDevice(account.seed, 'engine vault');
+  });
+  after(() => putBack?.());
 
   /**
    * The engine as its caller now builds it: the vault is opened here and handed over.
@@ -1209,6 +1241,8 @@ describe('a shared folder whose key this device cannot open, live', () => {
   let seed: Uint8Array;
   let shareId: string;
   let goodEnvelope: string;
+  let putBack: (() => void) | undefined;
+  after(() => putBack?.());
 
   /** One statement against the test database — the only way to reach a state no client can make. */
   const sql = async (statement: string): Promise<void> => {
@@ -1237,6 +1271,8 @@ describe('a shared folder whose key this device cannot open, live', () => {
       sess.connection.wrappedSeed,
     );
     seed = account.seed;
+    // Another vault of the account, so a device of its own (D-140).
+    putBack = await onAnotherDevice(seed, 'share vault');
     shareVaultId = randomUuid();
     kvS = vaultKey(seed, shareVaultId);
     await client.createVault(shareVaultId, encryptName(kvS, 'shareVault'));

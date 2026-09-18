@@ -3,6 +3,7 @@
  *
  * Needs the development database: `npm run db:reset` first.
  */
+import { TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -37,7 +38,7 @@ before(async () => {
   await db.query(
     `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
                         enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+     VALUES ($1, $2, 'active', '${TEST_AUTH_SECRET_HASH}', decode('00112233445566778899aabbccddeeff','hex'),
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [userId, `vaults-${process.pid}`],
   );
@@ -116,7 +117,7 @@ describe('deleting a vault', () => {
   it('deletes an empty one', async () => {
     const id = randomUUID();
     await createVault(id, 'empty');
-    const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth() });
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth(), payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(r.statusCode, 200, r.body);
 
     const gone = await db.one(`SELECT 1 AS x FROM vaults WHERE id = $1`, [id]);
@@ -143,7 +144,7 @@ describe('deleting a vault', () => {
     const two = await add(one, [rootId, one]);
     await add(two, [rootId, one, two]);
 
-    const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth() });
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${id}`, headers: auth(), payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(r.statusCode, 200, r.body);
 
     const left = await db.query(`SELECT 1 FROM nodes WHERE vault_id = $1`, [id]);
@@ -157,7 +158,7 @@ describe('deleting a vault', () => {
     await db.query(
       `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
                           enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+       VALUES ($1, $2, 'active', '${TEST_AUTH_SECRET_HASH}', decode('00112233445566778899aabbccddeeff','hex'),
                '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
       [other, `stranger-${process.pid}`],
     );
@@ -172,7 +173,7 @@ describe('deleting a vault', () => {
                      VALUES ($1, $2, NULL, 'folder', now(), 0)`, [theirVault, theirRoot]);
     });
 
-    const r = await app.inject({ method: 'DELETE', url: `/vaults/${theirVault}`, headers: auth() });
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${theirVault}`, headers: auth(), payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(r.statusCode, 404, 'not 403 — whose vault it is is not the caller\'s business');
   });
 });
@@ -195,7 +196,7 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
     await db.query(
       `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params, pubkey,
                           enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-       VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
+       VALUES ($1, $2, 'active', '${TEST_AUTH_SECRET_HASH}', decode('00112233445566778899aabbccddeeff','hex'),
                '{"v":19,"m":65536,"t":3,"p":1}', '\x01', '\x02', 'kv', '\x03', 'rh', '\x04', 1048576)`,
       [id, `frozen-${randomUUID()}`],
     );
@@ -246,7 +247,7 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
     await db.query(`UPDATE users SET quota_bytes = 1000, frozen_at = now() WHERE id = $1`, [acc.id]);
     assert.notEqual(await frozenAt(acc.id), null, 'frozen before the removal, or this proves nothing');
 
-    const r = await app.inject({ method: 'DELETE', url: `/vaults/${vaultId}`, headers: { authorization: `Bearer ${acc.token}` } });
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${vaultId}`, headers: { authorization: `Bearer ${acc.token}` }, payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(r.statusCode, 200, r.body);
     // Said, not merely done (issue #247): the person who deleted something to get back in is told that
     // it worked, at the moment they pressed, by the surface they pressed.
@@ -264,7 +265,7 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
     await vaultHoldingAFile(acc.token, randomBytes(4096));
     await db.query(`UPDATE users SET quota_bytes = 1000, frozen_at = now() WHERE id = $1`, [acc.id]);
 
-    const r = await app.inject({ method: 'DELETE', url: `/vaults/${one}`, headers: { authorization: `Bearer ${acc.token}` } });
+    const r = await app.inject({ method: 'DELETE', url: `/vaults/${one}`, headers: { authorization: `Bearer ${acc.token}` }, payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(r.statusCode, 200, r.body);
     assert.equal(r.json().thawed, false, 'and it says so, rather than letting a person infer it');
 

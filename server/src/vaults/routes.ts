@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
+import { tokenMatches } from '../crypto.js';
 import type { Db } from '../db.js';
 import { refuse } from '../refuse-http.js';
 import { resetVault } from './reset.js';
@@ -34,15 +35,35 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
     },
   );
 
-  app.delete<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preHandler: requireAuth }, async (req, reply) => {
-    // **`200` with a body, not `204`** (issue #247). Removing a vault is one of the three deletions
-    // that can lift a freeze (D-121's neighbours, docs/03), and it was the one that did it silently:
-    // the person did what they were told, watched the usage fall, and had to guess whether they were
-    // back in. The trash purge has answered `thawed` since it gained the same call.
-    const out = await deleteVault(db, req.caller!.userId, req.params.vaultId);
-    if ('kind' in out) return refuse(reply, out);
-    return out;
-  });
+  // **Any vault of the account, and a proof the token cannot carry** (D-140). This is the one route a
+  // device uses on a vault other than its own — the plugin removes an old vault from the list of the
+  // account's — and it is the most destructive one there is. So the token opens it, and the account's
+  // `auth_secret` has to come with it: derived from the seed, held only by an unlocked device, and
+  // never inside an access token. A token lifted off the wire can list the vaults and delete none.
+  app.delete<{ Params: { vaultId: string }; Body: { auth_secret?: unknown } }>(
+    '/vaults/:vaultId',
+    { preHandler: requireAuth, config: { anyVaultOfTheAccount: true } },
+    async (req, reply) => {
+      const proof = req.body?.auth_secret;
+      const held = await db.one<{ hash: string | null }>(`SELECT auth_secret_hash AS hash FROM users WHERE id = $1`, [
+        req.caller!.userId,
+      ]);
+      if (typeof proof !== 'string' || !held?.hash || !tokenMatches(proof, held.hash)) {
+        return reply.code(403).send({
+          error: 'proof_required',
+          detail: 'removing a vault needs the account unlocked on this device, not only signed in',
+        });
+      }
+
+      // **`200` with a body, not `204`** (issue #247). Removing a vault is one of the three deletions
+      // that can lift a freeze (D-121's neighbours, docs/03), and it was the one that did it silently:
+      // the person did what they were told, watched the usage fall, and had to guess whether they were
+      // back in. The trash purge has answered `thawed` since it gained the same call.
+      const out = await deleteVault(db, req.caller!.userId, req.params.vaultId);
+      if ('kind' in out) return refuse(reply, out);
+      return out;
+    },
+  );
 
   app.post<{ Params: { vaultId: string } }>(
     '/vaults/:vaultId/reset',

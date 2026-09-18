@@ -8,7 +8,7 @@
  * **Claims the seeded administrator**, so the first-run guard does not answer every request the same way —
  * which is why this file sorts after `auth.test.ts`, whose first-run tests would otherwise be gone (AGENTS.md).
  */
-import { aVaultAccount } from './support/accounts.js';
+import { aVaultAccount, TEST_AUTH_SECRET } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -108,7 +108,7 @@ describe('removing a vault', () => {
     await app.inject({ method: 'GET', url: `/vaults/${kept}`, headers: laptop.auth });
     await app.inject({ method: 'GET', url: `/vaults/${doomed}`, headers: phone.auth });
 
-    const out = await app.inject({ method: 'DELETE', url: `/vaults/${doomed}`, headers: laptop.auth });
+    const out = await app.inject({ method: 'DELETE', url: `/vaults/${doomed}`, headers: laptop.auth, payload: { auth_secret: TEST_AUTH_SECRET } });
     assert.equal(out.statusCode, 200, out.body);
     assert.equal(out.json().revoked, 1);
 
@@ -119,5 +119,55 @@ describe('removing a vault', () => {
     const byId = new Map(rows.map((r) => [r.id, r]));
     assert.deepEqual(byId.get(phone.id), { id: phone.id, revoked: true, vault: null }, 'revoked, and its link cleared');
     assert.deepEqual(byId.get(laptop.id), { id: laptop.id, revoked: false, vault: kept }, 'a device of another vault is untouched');
+  });
+});
+
+/**
+ * A device reaches only the vault it syncs (D-140).
+ *
+ * Encryption already keeps a stolen token from reading anything; what this pins is the rest — another
+ * vault of the same account can no longer be listed, written, reset or emptied with it.
+ */
+describe('a device reaches only its own vault', () => {
+  it('is refused another vault of its own account once it has one', async () => {
+    const user = await anAccount();
+    const laptop = await aDevice(user, 'laptop');
+    const notes = await aVault(laptop.auth);
+    const other = await aVault(laptop.auth);
+    await app.inject({ method: 'GET', url: `/vaults/${notes}`, headers: laptop.auth });
+
+    for (const url of [`/vaults/${other}`, `/vaults/${other}/list`, `/vaults/${other}/trash`]) {
+      const out = await app.inject({ method: 'GET', url, headers: laptop.auth });
+      assert.equal(out.statusCode, 404, `${url}: ${out.body}`);
+    }
+    const own = await app.inject({ method: 'GET', url: `/vaults/${notes}/list`, headers: laptop.auth });
+    assert.equal(own.statusCode, 200, 'and its own vault is untouched');
+  });
+
+  it('still lists and creates the account’s vaults, which choosing one needs', async () => {
+    const user = await anAccount();
+    const laptop = await aDevice(user, 'laptop');
+    const notes = await aVault(laptop.auth);
+    await app.inject({ method: 'GET', url: `/vaults/${notes}`, headers: laptop.auth });
+
+    assert.equal((await app.inject({ method: 'GET', url: '/vaults', headers: laptop.auth })).statusCode, 200);
+    await aVault(laptop.auth);
+  });
+
+  it('removes another vault only with the proof an unlocked device holds', async () => {
+    const user = await anAccount();
+    const laptop = await aDevice(user, 'laptop');
+    const notes = await aVault(laptop.auth);
+    const other = await aVault(laptop.auth);
+    await app.inject({ method: 'GET', url: `/vaults/${notes}`, headers: laptop.auth });
+
+    const remove = (payload?: object) =>
+      app.inject({ method: 'DELETE', url: `/vaults/${other}`, headers: laptop.auth, ...(payload ? { payload } : {}) });
+
+    const bare = await remove();
+    assert.equal(bare.statusCode, 403, 'a token alone removes nothing');
+    assert.equal(bare.json().error, 'proof_required');
+    assert.equal((await remove({ auth_secret: 'not the secret' })).statusCode, 403);
+    assert.equal((await remove({ auth_secret: TEST_AUTH_SECRET })).statusCode, 200, 'the account’s own proof does');
   });
 });
