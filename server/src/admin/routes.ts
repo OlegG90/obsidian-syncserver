@@ -37,6 +37,8 @@ import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
+import { readSchedule, saveSchedule, scheduleProblem, tidyDays, type BackupSchedule } from '../backup-schedule.js';
+import { scheduleView } from '../backup-scheduler.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
 
@@ -259,7 +261,56 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
     };
   });
 
-  app.get('/admin/backups', admin, async () => ({ backups: await listBackups(db) }));
+  /**
+    * The list and the schedule in one answer.
+    *
+    * They are one screen, and two calls for one screen is two states that can disagree in
+    * front of the operator — a banner saying the schedule is overdue beside a list that
+    * already holds the run which answered it.
+    */
+  app.get('/admin/backups', admin, async () => ({
+    backups: await listBackups(db),
+    schedule: await scheduleView(db),
+  }));
+
+  /**
+    * Store the schedule, switch and all (#357, D-141).
+    *
+    * **One route for the whole thing, not a switch beside the fields.** "On, at 02:00, keep
+    * seven" is one intention; split into two calls it has a state in the middle — on, with
+    * yesterday's time — that would fire a backup nobody asked for, and it would take two
+    * audit rows to describe one act.
+    *
+    * The refusals are the schedule's own (`scheduleProblem`), and the audit row carries what
+    * it was and what it became: a schedule is the rare setting whose *previous* value is the
+    * thing somebody will want six months later, when the copies stopped appearing.
+    */
+  app.put<{ Body: Partial<BackupSchedule> }>('/admin/backups/schedule', admin, async (req, reply) => {
+    const body = req.body ?? {};
+    const wanted: BackupSchedule = {
+      enabled: body.enabled === true,
+      time: typeof body.time === 'string' ? body.time.trim() : '',
+      days: Array.isArray(body.days) ? tidyDays(body.days) : [],
+      zone: typeof body.zone === 'string' ? body.zone.trim() : '',
+      keep: typeof body.keep === 'number' ? body.keep : Number.NaN,
+    };
+    const problem = scheduleProblem(wanted);
+    if (problem) return refuseWith(reply, 400, problem);
+
+    const before = await readSchedule(db);
+    await saveSchedule(db, wanted);
+    await db.tx((c) =>
+      record(c, {
+        actor: req.admin!,
+        action: 'backup.schedule',
+        details: {
+          from: { enabled: before.enabled, time: before.time, days: before.days, zone: before.zone, keep: before.keep },
+          to: wanted,
+        },
+      }),
+    );
+    return scheduleView(db);
+  });
 
   /**
    * Remove one backup's copy from disk, keeping the run in the history (#136).

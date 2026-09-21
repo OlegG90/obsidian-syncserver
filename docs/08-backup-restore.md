@@ -178,7 +178,7 @@ progress is refused, and a copy already gone is not an error.
 
 ## Procedure
 
-**Backup — when somebody presses the button** (D-121):
+**Backup — when somebody presses the button, or when the schedule says so** (D-121, D-141):
 
 1. open the window: new writes are refused, record `window_opened_at`;
 2. `pg_dump`;

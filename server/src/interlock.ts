@@ -51,6 +51,20 @@ export const inRefusalWindow = (): boolean => windowOpen;
  *   rather than swallowing, because a schedule that silently skips has stopped being one.
  */
 export const holdForBackup = async (lock: PoolClient, waitMs: number): Promise<Release | undefined> => {
+  // **Zero means "do not wait", and `lock_timeout = 0` means the opposite of that** — it turns
+  // the timeout OFF, so the statement blocks for ever. A scheduled run asks for exactly this
+  // case (D-141): the moment it arrives on a busy server is a moment to let go of. So zero
+  // takes the try-form, the same statement the collector uses, and only a positive wait gets
+  // a timeout at all.
+  if (waitMs <= 0) {
+    const got = await lock.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [INTERLOCK_ID]);
+    if (!got.rows[0]?.ok) return undefined;
+    windowOpen = true;
+    return async () => {
+      windowOpen = false;
+      await lock.query('SELECT pg_advisory_unlock($1)', [INTERLOCK_ID]);
+    };
+  }
   await lock.query(`SET lock_timeout = ${waitMs}`);
   try {
     await lock.query('SELECT pg_advisory_lock($1)', [INTERLOCK_ID]);

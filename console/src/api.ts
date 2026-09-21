@@ -11,13 +11,14 @@
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
 import type {
-  AccountRow, AuditRow, BackupRun, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus, StorageTotals, SyncProblemRow,
+  AccountRow, AuditRow, BackupRun, BackupScheduleView, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus,
+  StorageTotals, SyncProblemRow,
 } from '@syncserver/shared';
 import { operatorRefusal } from './format.js';
 
 // The console's screens read these by name; the wire shape lives in shared so the server
 // and this browser agree about a column before it reaches the table as `undefined`.
-export type { AccountRow, AuditRow, BackupRun, DeletionProgress, StorageTotals };
+export type { AccountRow, AuditRow, BackupRun, BackupScheduleView, DeletionProgress, StorageTotals };
 
 export class ApiError extends Error {
   constructor(
@@ -276,7 +277,22 @@ export const runBackup = (): Promise<{ self_check?: string }> =>
   call('POST', '/admin/backups');
 
 /** The previous runs, newest first. */
-export const backups = (): Promise<{ backups: BackupRun[] }> => call('GET', '/admin/backups');
+export const backups = (): Promise<{ backups: BackupRun[]; schedule: BackupScheduleView }> =>
+  call('GET', '/admin/backups');
+
+/**
+ * Store the schedule — switch, time, days, zone and retention in one call (#357).
+ *
+ * One call because it is one intention: sending the switch apart from the fields would leave a
+ * moment in which the server is on with the previous time, and that moment takes backups.
+ */
+export const saveSchedule = (schedule: {
+  enabled: boolean;
+  time: string;
+  days: number[];
+  zone: string;
+  keep: number;
+}): Promise<BackupScheduleView> => call('PUT', '/admin/backups/schedule', schedule);
 
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>

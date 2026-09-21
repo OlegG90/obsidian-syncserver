@@ -13,17 +13,17 @@
  * have.
  */
 import {
-  accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress,
+  accounts, audit, backups, beginDeletion, bootstrap, confirmRestore, currentLogin, deletionProgress, saveSchedule,
   changePassword, devicesOf, forgetSession, health, invite, reissue, removeBackup, renameDevice, syncProblems,
   restoreFromCopy, restoreStatus, revokeDevice, revokeInvitation, runBackup,
   setEnabled,
   setQuota,
   signedIn, signIn, storage, verify,
-  type AccountRow, type AuditRow, type BackupRun, type DeletionProgress, type StorageTotals,
+  type AccountRow, type AuditRow, type BackupRun, type BackupScheduleView, type DeletionProgress, type StorageTotals,
 } from './api.js';
 import {
   accountBadge, problemsBadge, quotaProblem, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
-  isOver, mib, mibOf, serverLine, usageFraction, usageMarker,
+  isOver, mib, mibOf, scheduleAlarm, scheduleLine, serverLine, usageFraction, usageMarker, WEEKDAYS, windowHeld,
 } from './format.js';
 import { chooseScreen, sessionEnded } from './screen.js';
 import { whatIsWrong } from './password-form.js';
@@ -989,13 +989,21 @@ const backupRow = (b: BackupRun): HTMLElement => {
   const card = el('div', { className: 'card' });
   card.append(
     el('strong', { textContent: `${b.status} — ${when(b.startedAt)}` }),
-    el('div', { className: 'muted', textContent: `${human(b.bytes)}, ${b.blobCount ?? '—'} blobs` }),
+    // Which of the two asked for it, on every row: a history in which a nightly copy and a
+    // copy somebody took before an upgrade look identical is one nobody can read afterwards.
+    el('div', { className: 'muted', textContent: b.source === 'schedule' ? 'on a schedule' : 'by hand' }),
   );
+  // A skipped run copied nothing, so sizes and a destination would be three dashes in a row.
+  if (b.status !== 'skipped') {
+    card.append(el('div', { className: 'muted', textContent: `${human(b.bytes)}, ${b.blobCount ?? '—'} blobs` }));
+  }
+  const held = windowHeld(b.windowOpenedAt, b.windowClosedAt);
+  if (held) card.append(el('div', { className: 'muted', textContent: held }));
   if (b.error) card.append(el('p', { className: 'bad', textContent: b.error }));
   if (b.verifiedAt) card.append(el('div', { className: 'muted', textContent: `verified ${when(b.verifiedAt)}` }));
   if (b.status === 'ok') card.append(verifyButton(b));
 
-  // A run whose copy is gone is no longer listed at all, so every row here has something to act on.
+  // A run whose copy is gone is no longer listed, except a skip, which never had one.
   if (b.destination !== null && b.status !== 'running') {
     card.append(whereItIs(b.destination));
     if (b.status === 'ok') card.append(restoreButton(b));
@@ -1130,6 +1138,71 @@ const verifyButton = (run: BackupRun): HTMLElement => {
   return el('div', {}, button, where);
 };
 
+/**
+ * The schedule, as the operator sets it (#357, D-141).
+ *
+ * **Everything in one card and one Save.** The switch is a field beside the others rather than
+ * its own control, because "on, Tuesdays at 02:00, keep seven" is a single intention — and a
+ * switch that took effect on its own would arm yesterday's time while the operator was still
+ * reading the row.
+ *
+ * The **zone** carries the choice this console exists to make easy: the server runs in UTC,
+ * the operator does not, and the browser already knows which zone they are thinking in. It is
+ * offered first, and the whole list is behind it for a server administered from elsewhere.
+ */
+const scheduleCard = (view: BackupScheduleView, reload: () => Promise<void>): HTMLElement => {
+  const card = el('div', { className: 'card' }, el('h1', { textContent: 'On a schedule' }));
+
+  const on = el('input', { type: 'checkbox', checked: view.enabled });
+  const time = el('input', { type: 'time', value: view.time });
+  const keep = el('input', { type: 'number', min: '1', max: '30', value: String(view.keep) });
+  const boxes = WEEKDAYS.map((name, day) => {
+    const box = el('input', { type: 'checkbox', checked: view.days.includes(day) });
+    return { day, box, row: el('label', {}, box, name) };
+  });
+
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const known = Intl.supportedValuesOf?.('timeZone') ?? [view.zone];
+  const zone = el('select');
+  for (const name of [...new Set([here, view.zone, ...known])]) {
+    zone.append(el('option', { value: name, textContent: name === here ? `${name} (this browser)` : name }));
+  }
+  zone.value = view.zone;
+
+  const alarm = scheduleAlarm(view);
+  if (alarm) card.append(say(alarm, true));
+  card.append(
+    el('p', { className: 'muted', textContent: scheduleLine(view) }),
+    el('div', {}, el('label', {}, on, 'Take a backup on a schedule')),
+    el('div', {}, el('label', { textContent: 'At' }), time),
+    el('div', {}, ...boxes.map((b) => b.row)),
+    el('div', {}, el('label', { textContent: 'Time zone' }), zone),
+    el('div', {}, el('label', { textContent: 'Scheduled copies to keep' }), keep),
+    el('p', {
+      className: 'muted',
+      textContent:
+        'Only copies this schedule took are removed once there are more than that; a backup ' +
+        'you took by hand is never swept. A run that arrives while the server is busy is ' +
+        'skipped rather than queued, and one missed by more than six hours is not caught up.',
+    }),
+  );
+
+  const save = el('button', { textContent: 'Save the schedule' });
+  card.append(save);
+  submits(save, card, async () => {
+    await saveSchedule({
+      enabled: on.checked,
+      time: time.value,
+      days: boxes.filter((b) => b.box.checked).map((b) => b.day),
+      zone: zone.value,
+      keep: Number(keep.value),
+    });
+    card.append(say('Schedule saved.'));
+    await reload();
+  });
+  return card;
+};
+
 const backupsScreen = (): void => {
   const page = el('div', {}, el('h1', { textContent: 'Backups' }));
   const list = el('div', {}, pending());
@@ -1162,7 +1235,10 @@ const backupsScreen = (): void => {
 
   const fill = async (): Promise<void> => {
     const out = await backups();
-    list.replaceChildren(...out.backups.map(backupRow));
+    // The card is rebuilt from the answer rather than patched: the next run, the banner and
+    // the fields are one description of one row, and a card half-updated would show a time
+    // the server is not keeping.
+    list.replaceChildren(scheduleCard(out.schedule, fill), ...out.backups.map(backupRow));
   };
 
   shell('backups', page, list, runCard);

@@ -187,10 +187,23 @@ and the compose file makes the mount whether or not you ever press the button �
 nothing, and the alternative is a copy written into the container's writable layer, where the next
 `docker compose pull` takes it.
 
-**Nothing about backups happens on a schedule.** Taking one, verifying one and restoring from one are
-acts you ask for. There is no retention setting either: copies pile up at the rate you take them, and you
-remove the ones you no longer want, per row. **Whatever rhythm your data deserves is yours to keep** —
-this server will not keep it for you, and will not pretend to.
+**A new server takes no backups on its own.** Until you say otherwise, taking one, verifying one and
+restoring from one are acts you ask for, and copies pile up at the rate you take them.
+
+**Console → Backups → On a schedule** changes the first of those three (D-141). Turn it on, give it a
+time, the days of the week, your own time zone and how many copies to keep, and the server takes one
+without you. What it does *not* do is verify them — that stays yours, on whatever rhythm your data
+deserves.
+
+Four things worth knowing before you turn it on:
+
+- a backup **refuses new writes while it runs**, so pick an hour your devices are idle; each run says how
+  long it held them, so the hour you picked can be judged rather than guessed;
+- **retention only sweeps what the schedule took.** A copy you took by hand stays until you remove it;
+- a run that arrives while a backup, a restore or a collector pass is busy is **skipped**, not queued, and
+  says so in the history;
+- a moment missed by more than six hours — the server was off — is **recorded as missed** rather than
+  taken late, and the console shows a banner if nothing answered the last moment it was due.
 
 ### Audit log
 

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver, quotaProblem,
-  holdsStorage, mib, serverLine, usageFraction, usageMarker, type AccountLine,
+  holdsStorage, mib, scheduleAlarm, scheduleLine, serverLine, usageFraction, usageMarker, windowHeld, type AccountLine,
 } from '../src/format.js';
 import type { ConsoleAuthRefusalCode } from '@syncserver/shared';
 
@@ -312,5 +312,38 @@ describe('the second press names what it is about to do', () => {
     // The failure this guards is a label that shrinks to "Are you sure?" under a later edit — at which
     // point the two presses are one press with a pause in it.
     assert.ok(confirmLabel('remove', 'x').length > 'Yes, '.length + 1);
+  });
+});
+
+describe('the backup schedule, as the card says it (#357)', () => {
+  const on = { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], time: '02:00', zone: 'Europe/Kyiv', nextRun: null };
+
+  it('says what a schedule that is off means, without jargon', () => {
+    assert.match(scheduleLine({ ...on, enabled: false }), /^Off — this server takes a backup only when/);
+  });
+
+  it('names the days when it does not run on all of them', () => {
+    assert.match(scheduleLine({ ...on, days: [1, 4] }), /Mon, Thu at 02:00 \(Europe\/Kyiv\)/);
+    assert.match(scheduleLine(on), /every day at 02:00/);
+  });
+
+  it('says there is no run ahead when the schedule names no day', () => {
+    assert.match(scheduleLine({ ...on, days: [] }), /No run ahead of it\./);
+  });
+
+  it('reports the window a run held, which is what it cost everybody else', () => {
+    assert.equal(windowHeld('2026-03-10T02:00:00Z', '2026-03-10T02:00:42Z'), 'held writes for 42s');
+    assert.equal(windowHeld('2026-03-10T02:00:00Z', '2026-03-10T02:01:42Z'), 'held writes for 1m 42s');
+  });
+
+  it('says nothing about a window that never opened or never closed', () => {
+    assert.equal(windowHeld(null, '2026-03-10T02:00:42Z'), undefined);
+    assert.equal(windowHeld('2026-03-10T02:00:00Z', null), undefined);
+  });
+
+  it('raises the missed moment above the failed run, because they need different answers', () => {
+    assert.match(scheduleAlarm({ lastFailed: true, overdue: true })!, /did not happen/);
+    assert.match(scheduleAlarm({ lastFailed: true, overdue: false })!, /failed/);
+    assert.equal(scheduleAlarm({ lastFailed: false, overdue: false }), undefined);
   });
 });

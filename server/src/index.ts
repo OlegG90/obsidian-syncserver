@@ -1,7 +1,9 @@
 import { buildApp } from './app.js';
 import { settleInterruptedRuns } from './backup.js';
-import { assertPgDumpMatches, pgDumpVersion, serverVersionLine } from './backup-legs.js';
+import { assertPgDumpMatches, legsFor, pgDumpVersion, serverVersionLine } from './backup-legs.js';
 import { hasActiveAdministrator } from './bootstrap.js';
+import { startBackupSchedule } from './backup-scheduler.js';
+import { copyAt } from './backup-copy.js';
 import { startCollector } from './collector.js';
 import { openStore } from './blobs/store.js';
 import { loadConfig } from './config.js';
@@ -106,6 +108,18 @@ try {
   console.warn(`backup disabled: ${e instanceof Error ? e.message : String(e)}`);
 }
 
+// The schedule (#357, D-141). Off until somebody turns it on in the console, so a server
+// nobody configures behaves exactly as it did before this loop existed — the tick reads one
+// row, finds `enabled = false`, and does nothing. It lives beside the collector rather than
+// inside the app because it is work the server does on its own, not an answer to a request.
+const stopSchedule = startBackupSchedule(db, {
+  destination: cfg.backup.destination,
+  makeLegs: legsFor(cfg, versionLine),
+  // The same self-check the button takes: a scheduled copy nobody looks at is exactly the
+  // copy whose missing blobs must be on its row rather than discovered at restore time.
+  openCopy: (dest) => openStore(copyAt(dest).blobs),
+});
+
 if (cfg.serverSecretIsDefault) {
   console.warn(
     'SERVER_SECRET is unset and the development default is in use. It signs access tokens, ' +
@@ -157,6 +171,7 @@ console.log(`syncserver listening on ${host}:${port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopCollector();
+    stopSchedule();
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));
   });
 }

@@ -18,7 +18,7 @@ import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes, CONSOLE_PATHS } from './console.js';
 import { backupInProgress } from './backup.js';
-import { backupLegs, serverVersionLine } from './backup-legs.js';
+import { legsFor, serverVersionLine } from './backup-legs.js';
 import { checkRestoreState, restoreHalted } from './restore.js';
 import { registerEventsRoutes } from './events-route.js';
 import type { EventsHub } from './events.js';
@@ -117,8 +117,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     // row and the window, so a dump whose major disagrees is refused with none of them taken
     // (docs/10, D-73). The blobs come from the live store, which the configuration names once
     // (issue #219) rather than twice.
-    makeLegs: (runDir: string) =>
-      backupLegs(cfg.backup.destination, cfg.backup.dumpCommand, cfg.blobStorePath, runDir, versionLine),
+    makeLegs: legsFor(cfg, versionLine),
   });
   await registerConsoleRoutes(app);
 

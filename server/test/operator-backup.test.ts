@@ -79,3 +79,69 @@ describe('the backup surface', () => {
     assert.equal(r.json().error, 'not_found');
   });
 });
+
+describe('the schedule, over HTTP (#357)', () => {
+  const put = (payload: unknown) =>
+    app.inject({
+      method: 'PUT', url: '/admin/backups/schedule',
+      headers: { authorization: `Bearer ${adminToken}` }, payload: payload as object,
+    });
+
+  const good = { enabled: true, time: '02:30', days: [1, 3], zone: 'Europe/Kyiv', keep: 5 };
+
+  after(async () => {
+    await db.query(`UPDATE backup_schedule SET enabled = false, last_scheduled_for = NULL WHERE only_row`);
+  });
+
+  it('is read beside the history, on one call', async () => {
+    const r = await app.inject({
+      method: 'GET', url: '/admin/backups', headers: { authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(r.statusCode, 200);
+    const body = r.json() as { schedule?: { enabled: boolean } };
+    assert.ok(body.schedule, 'the screen gets its schedule without a second request');
+  });
+
+  it('stores one, and answers with what it will do next', async () => {
+    const r = await put(good);
+    assert.equal(r.statusCode, 200);
+    const view = r.json() as { enabled: boolean; days: number[]; zone: string; nextRun: string | null };
+    assert.equal(view.enabled, true);
+    assert.deepEqual(view.days, [1, 3]);
+    assert.equal(view.zone, 'Europe/Kyiv');
+    assert.ok(view.nextRun, 'a live schedule says when it fires');
+  });
+
+  it('records the change in the audit log, with what it was', async () => {
+    await put({ ...good, keep: 9 });
+    const row = await db.one<{ details: { to?: { keep?: number }; from?: { keep?: number } } }>(
+      `SELECT details FROM audit_log WHERE action = 'backup.schedule' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.equal(row?.details.to?.keep, 9);
+    assert.equal(row?.details.from?.keep, 5, 'the previous schedule is the thing somebody will want');
+  });
+
+  it('refuses what it cannot keep, by name', async () => {
+    for (const [payload, code] of [
+      [{ ...good, time: 'midnight' }, 'bad_time'],
+      [{ ...good, days: [] }, 'no_days'],
+      [{ ...good, zone: 'Middle/Earth' }, 'bad_zone'],
+      [{ ...good, keep: 99 }, 'bad_keep'],
+    ] as const) {
+      const r = await put(payload);
+      assert.equal(r.statusCode, 400, code);
+      assert.equal((r.json() as { error: string }).error, code);
+    }
+  });
+
+  it('lets a schedule that is off name no day', async () => {
+    const r = await put({ ...good, enabled: false, days: [] });
+    assert.equal(r.statusCode, 200);
+    assert.equal((r.json() as { nextRun: string | null }).nextRun, null);
+  });
+
+  it('is behind the administrator guard, like the rest of the surface', async () => {
+    const r = await app.inject({ method: 'PUT', url: '/admin/backups/schedule', payload: good });
+    assert.equal(r.statusCode, 401);
+  });
+});
