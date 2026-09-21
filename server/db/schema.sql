@@ -476,7 +476,12 @@ CREATE TABLE backup_runs (
     CONSTRAINT failure_is_explained CHECK (status <> 'failed' OR error IS NOT NULL),
     -- A skip is a decision, not a fault, and one nobody can read without its reason: the
     -- window was busy, or the server was not running when the moment came.
-    CONSTRAINT skip_is_explained CHECK (status <> 'skipped' OR error IS NOT NULL)
+    --
+    -- `status::text`, matching migration 0005 exactly. The migration has no choice — PostgreSQL
+    -- refuses to USE an enum value in the transaction that added it — and this file has to be
+    -- the same constraint, because `schema-equivalence.sh` diffs a dump of this against a dump
+    -- of the baseline plus every migration, and the two spellings dump differently.
+    CONSTRAINT skip_is_explained CHECK (status::text <> 'skipped' OR error IS NOT NULL)
 );
 
 CREATE INDEX backup_runs_at ON backup_runs (started_at DESC);
