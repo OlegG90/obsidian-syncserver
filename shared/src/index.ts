@@ -108,7 +108,12 @@ export type OperatorRefusalCode =
   // A malformed administrative request — the field that was missing.
   | 'login_required'
   | 'quota_bytes_required'
-  | 'enabled_required';
+  | 'enabled_required'
+  // A backup schedule the server will not store (#357, D-141).
+  | ScheduleRefusalCode;
+
+/** Why a backup schedule could not be stored — the console has a sentence for each (#357). */
+export type ScheduleRefusalCode = 'bad_time' | 'no_days' | 'bad_zone' | 'bad_keep';
 
 /**
  * What the console's own way in refuses (#375): creating the first administrator, signing in, and
@@ -539,7 +544,34 @@ export type BackupRun = {
   error: string | null;
   /** Where this run's copy lives — how a verification or a restore reopens it. */
   destination: string | null;
+  /** `manual` or `schedule` — who asked for this run (D-141). */
+  source: string;
+  /**
+   * The refusal window this run held. Shown as a duration, because it is the cost a
+   * scheduled backup imposes on every device: the interval in which no new write started.
+   */
+  windowOpenedAt: string | null;
+  windowClosedAt: string | null;
 };
+
+/** The backup schedule as the console reads and writes it (#357, D-141). */
+export interface BackupScheduleView {
+  enabled: boolean;
+  /** `HH:MM`, in `zone`. */
+  time: string;
+  /** Weekdays it runs on, 0 = Sunday. */
+  days: number[];
+  /** An IANA zone name — the one the operator picked, never the container's. */
+  zone: string;
+  /** How many scheduled copies survive; manual ones are never swept. */
+  keep: number;
+  /** When it next fires, or null when it is off. */
+  nextRun: string | null;
+  /** The last scheduled run failed. */
+  lastFailed: boolean;
+  /** A moment passed over an hour ago and nothing answered it. */
+  overdue: boolean;
+}
 
 /**
  * Whether a restore is pending, and the two epochs that decide it — `/admin/restore`.

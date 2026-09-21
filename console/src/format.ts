@@ -349,4 +349,48 @@ const SENTENCES: Record<OperatorRefusalCode | ConsoleAuthRefusalCode, string> = 
   login_required: 'that needs a login.',
   quota_bytes_required: 'that needs a quota, as a positive number of bytes.',
   enabled_required: 'that needs to say whether the account is enabled.',
+  bad_time: 'the time has to read as HH:MM on a 24-hour clock, like 02:00 or 22:30.',
+  no_days: 'a schedule that is on has to run on at least one day of the week.',
+  bad_zone: 'that is not a time zone this server knows — pick one from the list.',
+  bad_keep: 'the number of copies to keep has to be a whole number between 1 and 30.',
+};
+
+/** Sunday first, as the schema counts weekdays and as the checkboxes are drawn. */
+export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * How long a run held the refusal window, said as a person reads it.
+ *
+ * **The one number that states what a backup costs everybody else** (D-121's fourth reason).
+ * A scheduled copy is taken while nobody is watching, so the interval in which no new write
+ * started is the thing an operator needs in order to judge the hour they chose — not the
+ * promise that it is short.
+ */
+export const windowHeld = (openedAt: string | null, closedAt: string | null): string | undefined => {
+  if (!openedAt || !closedAt) return undefined;
+  const ms = new Date(closedAt).getTime() - new Date(openedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `held writes for ${s}s` : `held writes for ${Math.floor(s / 60)}m ${s % 60}s`;
+};
+
+/** What the schedule card says it will do next. */
+export const scheduleLine = (s: { enabled: boolean; days: number[]; time: string; zone: string; nextRun: string | null }): string => {
+  if (!s.enabled) return 'Off — this server takes a backup only when somebody presses the button.';
+  const days = s.days.length === 7 ? 'every day' : s.days.map((d) => WEEKDAYS[d]).join(', ');
+  const next = s.nextRun ? `Next run ${new Date(s.nextRun).toLocaleString()}.` : 'No run ahead of it.';
+  return `On — ${days} at ${s.time} (${s.zone}). ${next}`;
+};
+
+/**
+ * The banner, or nothing when the schedule is keeping its rhythm.
+ *
+ * Two different alarms, because they need two different answers: a run that failed is a
+ * backup to look at, and a moment nothing answered is a server that has quietly stopped
+ * taking them — which is the failure D-121 refused to risk, said out loud instead.
+ */
+export const scheduleAlarm = (s: { lastFailed: boolean; overdue: boolean }): string | undefined => {
+  if (s.overdue) return 'A scheduled backup did not happen. Nothing answered the last moment it was due.';
+  if (s.lastFailed) return 'The last scheduled backup failed. Its reason is on the run below.';
+  return undefined;
 };

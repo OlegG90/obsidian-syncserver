@@ -115,6 +115,12 @@ export const runBackup = async (
   destination: string,
   opts: {
     triggeredBy?: string;
+    /**
+     * Who asked: a person at the console, or the schedule (D-141). It is what retention
+     * reads, and the reason it cannot read `triggeredBy` is that a scheduled run has no
+     * administrator to name — and neither does a manual one whose administrator was deleted.
+     */
+    source?: 'manual' | 'schedule';
     lockWaitMs?: number;
     /**
      * Where this run says what it is doing. **Defaulted to the console rather than to
@@ -166,7 +172,7 @@ export const runBackup = async (
   }
 
   const run = await db.session(async (lock) => {
-    const { triggeredBy, lockWaitMs = LOCK_WAIT_MS } = opts;
+    const { triggeredBy, source = 'manual', lockWaitMs = LOCK_WAIT_MS } = opts;
     // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
     // for a collector pass already running, so the window is clean from the moment the lock
     // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
@@ -186,9 +192,9 @@ export const runBackup = async (
       return { status: 'skipped' as const, error };
     }
     const started = await db.one<{ id: string }>(
-      `INSERT INTO backup_runs (window_opened_at, destination, triggered_by)
-       VALUES (now(), $1, $2) RETURNING id::text AS id`,
-      [destination, triggeredBy ?? null],
+      `INSERT INTO backup_runs (window_opened_at, destination, triggered_by, source)
+       VALUES (now(), $1, $2, $3) RETURNING id::text AS id`,
+      [destination, triggeredBy ?? null, source],
     );
     const id = started!.id;
     // Said as the window opens rather than after it closes: a run that never reaches its
@@ -310,9 +316,10 @@ export const listBackups = async (db: Db, limit = 50): Promise<BackupRun[]> =>
   db.query<BackupRun>(
     `SELECT id::text AS id, started_at AS "startedAt", finished_at AS "finishedAt",
             status::text AS status, bytes::text AS bytes, blob_count::text AS "blobCount",
-            verified_at AS "verifiedAt", error, destination
+            verified_at AS "verifiedAt", error, destination, source::text AS source,
+            window_opened_at AS "windowOpenedAt", window_closed_at AS "windowClosedAt"
        FROM backup_runs
-      WHERE destination IS NOT NULL OR status = 'running'
+      WHERE destination IS NOT NULL OR status IN ('running', 'skipped')
       ORDER BY started_at DESC
       LIMIT $1`,
     [limit],

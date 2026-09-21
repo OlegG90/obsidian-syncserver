@@ -158,6 +158,20 @@ export const backupLegs = (
 });
 
 /**
+ * How THIS deployment builds a run's legs, in one place.
+ *
+ * Two composition sites need it — the console's button, through the admin routes, and the
+ * schedule's loop — and the five arguments are five chances for them to disagree about where
+ * a copy lands or which PostgreSQL its dump must match. `versionLine` is read once, at boot,
+ * through the reader that owns the fact (D-89).
+ */
+export const legsFor = (
+  cfg: { backup: { destination: string; dumpCommand: string[] }; blobStorePath: string },
+  versionLine: string,
+): ((runDir: string) => Legs) =>
+  (runDir) => backupLegs(cfg.backup.destination, cfg.backup.dumpCommand, cfg.blobStorePath, runDir, versionLine);
+
+/**
  * A per-run directory, named so an operator can tell one from another.
  *
  * The stamp is a timestamp rendered filesystem-safe (no `:` or `.`). This is the one rule

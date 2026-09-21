@@ -203,9 +203,17 @@ getting it from there is an OS question.
 
 **Backups require no configuration** (issue #219). A copy lands where compose mounts one, `pg_dump` is
 in the image at the database's own major, and the blobs are copied from the store the server already
-names — so the button works on any deployment this file describes. There is no switch to turn them on,
-and none to turn them off: one existed while backups ran nightly and decided whether the *schedule*
-should run, and since D-121 a backup happens when somebody presses the button.
+names — so the button works on any deployment this file describes. The button needs no switch: one existed while
+backups ran nightly and decided whether the *schedule* should run, and since D-121 a backup happens
+when somebody presses it.
+
+**The schedule is the console's, and starts off** (#357, D-141). Console → Backups carries a card with a
+switch, a time, the weekdays, a time zone and how many scheduled copies to keep; it says when the next
+run falls, and it raises a banner when the last scheduled run failed or when a moment passed with nothing
+answering it. Retention applies only to runs the schedule took — a copy somebody took by hand is never
+swept — and changing the schedule is recorded in the audit log as `backup.schedule`, with what it was
+beside what it became. None of it reaches `.env`: the schedule is a row, which is what lets it be set on
+the day it matters rather than on the day the server was installed (D-122).
 
 ### Restore: the console cannot perform it
 

@@ -43,7 +43,10 @@ CREATE TYPE user_role     AS ENUM ('user', 'admin');
 -- carries no key material, nobody can log into it, it owns nothing, and it is neither
 -- deleted nor changed once it exists. Exactly one row may hold it.
 CREATE TYPE user_state    AS ENUM ('provisioned', 'active', 'disabled', 'deleting', 'tombstone');
-CREATE TYPE backup_status AS ENUM ('running', 'ok', 'failed');
+CREATE TYPE backup_status AS ENUM ('running', 'ok', 'failed', 'skipped');
+-- Who asked for a backup: a person, or the schedule (D-141). Separate from `triggered_by`,
+-- which names the administrator and is already NULL for one whose account is gone.
+CREATE TYPE backup_source AS ENUM ('manual', 'schedule');
 
 -- ============================================================ KDF parameters
 
@@ -106,7 +109,8 @@ INSERT INTO schema_migrations (id, name, checksum) VALUES
     (1, 'schema-migrations', 'b05c351eac8692c305e2c7f0c0c34265ba47d1e922fa60ab0e37db4a617b4112'),
     (2, 'device-names', 'b457dc78fcd7b6e02162a1d9352f80ef36a864a9b2b5ca7965d88fcaf7a088f5'),
     (3, 'sync-problems', '49ab0b7ceddbe0684af50da5e40cdafb82c93dcf300e1322ed3ea67b5cb605e0'),
-    (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60');
+    (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60'),
+    (5, 'backup-schedule', 'cb2b4c2ba9c651dd0ba3649067fff5829db0ee81850491d52607cdd6b2ec7068');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -445,6 +449,7 @@ CREATE TABLE backup_runs (
     error        text,
     verified_at  timestamptz,
     triggered_by uuid REFERENCES users ON DELETE SET NULL,
+    source       backup_source NOT NULL DEFAULT 'manual',
 
     CONSTRAINT finished_has_status CHECK (
         finished_at IS NULL OR status <> 'running'),
@@ -468,10 +473,46 @@ CREATE TABLE backup_runs (
     CONSTRAINT database_leg_first CHECK (
         blobs_done_at IS NULL
         OR (db_done_at IS NOT NULL AND db_done_at <= blobs_done_at)),
-    CONSTRAINT failure_is_explained CHECK (status <> 'failed' OR error IS NOT NULL)
+    CONSTRAINT failure_is_explained CHECK (status <> 'failed' OR error IS NOT NULL),
+    -- A skip is a decision, not a fault, and one nobody can read without its reason: the
+    -- window was busy, or the server was not running when the moment came.
+    --
+    -- `status::text`, matching migration 0005 exactly. The migration has no choice — PostgreSQL
+    -- refuses to USE an enum value in the transaction that added it — and this file has to be
+    -- the same constraint, because `schema-equivalence.sh` diffs a dump of this against a dump
+    -- of the baseline plus every migration, and the two spellings dump differently.
+    CONSTRAINT skip_is_explained CHECK (status::text <> 'skipped' OR error IS NOT NULL)
 );
 
 CREATE INDEX backup_runs_at ON backup_runs (started_at DESC);
+
+-- The backup schedule (#357, D-141). One row, off by default, and edited from the console
+-- rather than named in `.env`: D-122 removed those variables because an installation had to
+-- answer on setup day a question that only matters later, and a schedule in the database is
+-- the same answer given on the day it matters. Kept apart from `server_meta`, which is the
+-- server's identity and travels inside the delta cursor.
+CREATE TABLE backup_schedule (
+    only_row   boolean PRIMARY KEY DEFAULT true CHECK (only_row),
+    enabled    boolean NOT NULL DEFAULT false,
+    at_time    time    NOT NULL DEFAULT '02:00',
+    -- 0 = Sunday, as `EXTRACT(dow)` and `Date#getDay` both count.
+    days       smallint[] NOT NULL DEFAULT '{0,1,2,3,4,5,6}',
+    -- An IANA zone, because "22:00" alone is a time in no place at all. Checked against the
+    -- runtime's own list before it is stored; the schema only insists it says something.
+    zone       text    NOT NULL DEFAULT 'UTC' CHECK (zone <> ''),
+    -- How many SCHEDULED copies survive. Manual ones are never swept.
+    keep       smallint NOT NULL DEFAULT 7 CHECK (keep BETWEEN 1 AND 30),
+    -- The scheduled moment already dealt with — the mark that stops a second tick, or a
+    -- second server, firing the same one twice.
+    last_scheduled_for timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT days_are_weekdays CHECK (days <@ ARRAY[0,1,2,3,4,5,6]::smallint[]),
+    -- A schedule that is on and names no day looks like a schedule and takes no backups.
+    CONSTRAINT a_live_schedule_has_days CHECK (NOT enabled OR cardinality(days) > 0)
+);
+
+INSERT INTO backup_schedule DEFAULT VALUES;
 
 -- A device belongs to the ACCOUNT, not a vault (AC-13): it may reach any of the
 -- account's vaults, and which it syncs is a client choice — there is no device x vault
