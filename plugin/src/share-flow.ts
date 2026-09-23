@@ -126,6 +126,24 @@ const message = (e: unknown): string => {
 };
 
 export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
+  /**
+   * A read: its failure is reported rather than thrown at the UI, and it takes **no gate**.
+   *
+   * The gate exists so two *changes* never overlap — a departure must not begin mid-pass.
+   * A read changes nothing, and putting one behind the write mutex cost the screen its
+   * content: the panel asks for each share's members at once, so with two shared folders the
+   * first read took the gate and every later one was refused and drew an empty list (#387).
+   * The same refusal emptied the whole panel whenever it was opened during a sync.
+   */
+  const reads = async <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await fn();
+    } catch (e) {
+      deps.notify(`SyncServer: ${what} failed — ${message(e)}`, 10000);
+      return undefined;
+    }
+  };
+
   /** One operation at a time, with its failure reported rather than thrown at the UI. */
   const once = async <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
     // The shared gate, taken synchronously before any await, for the reason `sync.ts`
@@ -136,17 +154,14 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       return undefined;
     }
     try {
-      return await fn();
-    } catch (e) {
-      deps.notify(`SyncServer: ${what} failed — ${message(e)}`, 10000);
-      return undefined;
+      return await reads(what, fn);
     } finally {
       deps.gate.end();
     }
   };
 
   return {
-    list: () => once('reading the share list', () => deps.list()),
+    list: () => reads('reading the share list', () => deps.list()),
 
     // Not through `once`: nothing leaves this device, so taking the gate for it would make a
     // dropdown refuse while a sync ran, and there is nothing here for a sync to disturb.
@@ -240,7 +255,7 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       deps.done();
     },
 
-    members: (shareId) => once('reading the members', () => deps.members(shareId)),
+    members: (shareId) => reads('reading the members', () => deps.members(shareId)),
 
     async remove(shareId, userId, login) {
       const out = await once('removing', () => deps.remove(shareId, userId));

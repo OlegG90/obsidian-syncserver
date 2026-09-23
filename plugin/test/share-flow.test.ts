@@ -43,7 +43,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     ...over,
   };
 
-  return { flow: openShareFlow(deps), notices, shared, invited, rebuilt: () => rebuilt };
+  return { flow: openShareFlow(deps), gate: deps.gate, notices, shared, invited, rebuilt: () => rebuilt };
 };
 
 describe('sharing a folder', () => {
@@ -390,5 +390,51 @@ describe('reading a refusal by the code that decides what it holds', () => {
 
     assert.equal(refused.carries('share_not_prepared')?.gaps.length, 1);
     assert.equal(refused.carries('invalid_write'), undefined);
+  });
+});
+
+describe('reading is not an operation (#387)', () => {
+  it('answers for every share at once, rather than only the first', async () => {
+    // The panel asks for each shared folder's members in the same tick. Behind the write
+    // gate the first took it and the rest were refused, so every folder but one drew an
+    // empty list — which reads as "nobody is in it".
+    const h = harness({ members: async () => [{ user_id: 'u', login: 'keti', is_initiator: false, invited_at: 'now', joined_at: null, finalizing: false }] });
+
+    const [first, second, third] = await Promise.all([
+      h.flow.members('share-1'),
+      h.flow.members('share-2'),
+      h.flow.members('share-3'),
+    ]);
+
+    for (const [i, out] of [first, second, third].entries()) {
+      assert.equal(out?.length, 1, `share ${i + 1} was answered`);
+    }
+    assert.deepEqual(h.notices, [], 'and nobody was told the plugin was busy');
+  });
+
+  it('still reads the list and the members while a sync holds the gate', async () => {
+    const h = harness();
+    assert.ok(h.gate.tryBegin('syncing'), 'the test needs the gate a pass would hold');
+
+    assert.ok(await h.flow.list(), 'the panel opens during a pass');
+    assert.ok(await h.flow.members('share-1'), 'and says who is in each folder');
+    assert.deepEqual(h.notices, []);
+    h.gate.end();
+  });
+
+  it('reports a read that fails instead of answering with nothing', async () => {
+    const h = harness({ members: async () => { throw new Error('the network is down'); } });
+    assert.equal(await h.flow.members('share-1'), undefined);
+    assert.match(h.notices[0]!, /reading the members failed — the network is down/);
+  });
+
+  it('keeps the gate on the acts that change something', async () => {
+    // The gate is why a departure cannot begin mid-pass. Reads left it; writes did not.
+    const h = harness();
+    assert.ok(h.gate.tryBegin('syncing'));
+
+    await h.flow.leave('share-1');
+    assert.match(h.notices[0]!, /busy|syncing/i, 'leaving during a pass is refused, as it was');
+    h.gate.end();
   });
 });

@@ -91,9 +91,21 @@ export const openSharedFolderMarks = (deps: SharedFolderMarksDeps): SharedFolder
     const storedPaths = Object.values(map);
     const vanished = deps.existing(storedPaths).length < storedPaths.length;
     if (key !== lastKey || vanished) {
-      map = Object.fromEntries(await deps.resolve(joined));
+      // **A resolve that failed is not a fact** (#388). It used to replace the map wholesale,
+      // so one tree read taken a moment too early — before the delta carrying a new root
+      // arrived, or with the vault locked, which throws — erased what `remember` had written
+      // down first-hand when this device shared or joined that folder. The badge and the
+      // panel's name went with it, and the loss was saved to disk.
+      const resolved = await deps.resolve(joined).catch(() => undefined);
+      // Resolved paths win; a share this pass could not place keeps the path it had. Only a
+      // share that has left the list goes — which is what `forget` and `clear` are for.
+      const live = new Set(joined.map((s) => s.share_id));
+      const merged = { ...map, ...Object.fromEntries(resolved ?? []) };
+      map = Object.fromEntries(Object.entries(merged).filter(([shareId]) => live.has(shareId)));
       await deps.save(map);
-      lastKey = key;
+      // Only a pass that actually resolved counts as having answered for this list: a failed
+      // one must be tried again on the next reconcile rather than skipped as already done.
+      if (resolved) lastKey = key;
     }
     applyMarks();
     return joined.map((s) => {
