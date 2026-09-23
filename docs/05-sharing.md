@@ -112,6 +112,11 @@ prove rollback when any replica write fails. Frozen replicas catch up separately
 A `move` cannot enter or leave a shared folder: it returns `409 share_boundary`. The client copy/puts the
 item with destination-scope envelopes and tags, then deletes the source; the put is atomic with its metadata.
 
+The boundary is between a node's old parent and its new one. A **share root** therefore crosses nothing
+when its holder renames it or moves it among their own folders: its name is theirs alone, under their vault
+key (SH-01), and the move stays in their vault. Moving a root *into* another shared folder is refused —
+shares do not nest (#401).
+
 The 8-participant ceiling exists to keep that honest. A share that needs thirty people is a different
 product and is refused rather than degraded.
 

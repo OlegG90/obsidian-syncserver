@@ -890,3 +890,70 @@ describe('a restore inside a shared folder reaches every copy (#336)', () => {
     assert.equal(theirs.sha256, file.sha256);
   });
 });
+
+describe('a share root is named by whoever holds it (#401)', () => {
+  /**
+   * A move by either participant, in their own vault. A root's name is under its holder's
+   * VAULT key (SH-01), which is what the client names it under — its parent's scope.
+   */
+  const move = async (as: 'initiator' | 'joiner', nodeId: string, parentId: string, keyId: string) => {
+    const vaultId = as === 'initiator' ? w.vaultId : w.strangerVaultId;
+    const token = as === 'initiator' ? w.access : w.strangerAccess;
+    const rev = (await w.db.one<{ rev: string }>(`SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, nodeId]))!.rev;
+    const name = `renamed-${randomUUID()}`;
+    return w.app.inject({
+      method: 'POST',
+      url: `/vaults/${vaultId}/nodes/${nodeId}/move`,
+      headers: { authorization: `Bearer ${token}`, 'if-match': rev },
+      payload: { parent_id: parentId, name_enc: b64(name), name_hmac: sha(Buffer.from(name)), name_key_id: keyId },
+    });
+  };
+
+  const nameOf = async (vaultId: string, nodeId: string) =>
+    (await w.db.one<{ name: string }>(`SELECT encode(name_enc, 'base64') AS name FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, nodeId]))!.name;
+
+  it('lets the joiner rename their copy, and nobody else sees the name', async () => {
+    const { folder, replicaRoot } = await sharedWith('root-rename-joiner');
+    const theirs = await nameOf(w.vaultId, folder);
+
+    const r = await move('joiner', replicaRoot, await strangerRoot(), await strangerVaultKey());
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(await nameOf(w.vaultId, folder), theirs, 'the initiator’s folder keeps the initiator’s name');
+  });
+
+  it('lets the initiator rename the folder they shared, and nobody else sees the name', async () => {
+    const { folder, replicaRoot } = await sharedWith('root-rename-initiator');
+    const theirs = await nameOf(w.strangerVaultId, replicaRoot);
+
+    const r = await move('initiator', folder, w.rootId, w.vaultKeyId);
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(await nameOf(w.strangerVaultId, replicaRoot), theirs, 'the joiner’s copy keeps the joiner’s name');
+  });
+
+  it('lets a root move into another private folder, which crosses no boundary either', async () => {
+    const { folder } = await sharedWith('root-move-private');
+    const elsewhere = await createNode('folder', `elsewhere-${randomUUID()}`);
+    const r = await move('initiator', folder, elsewhere, w.vaultKeyId);
+    assert.equal(r.statusCode, 200, r.body);
+  });
+
+  it('refuses a root moved inside another shared folder, because shares do not nest', async () => {
+    const { folder } = await sharedWith('root-into-share');
+    const other = await sharedWith('root-host');
+    const r = await move('initiator', folder, other.inside, other.ks);
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'share_boundary');
+  });
+
+  it('still refuses an interior node leaving the share, and a private one entering it', async () => {
+    const { inside, ks } = await sharedWith('interior-boundary');
+    const out = await move('initiator', inside, w.rootId, w.vaultKeyId);
+    assert.equal(out.statusCode, 409, out.body);
+    assert.equal(out.json().error, 'share_boundary');
+
+    const loose = await createNode('folder', `loose-${randomUUID()}`);
+    const into = await move('initiator', loose, inside, ks);
+    assert.equal(into.statusCode, 409, into.body);
+    assert.equal(into.json().error, 'share_boundary');
+  });
+});
