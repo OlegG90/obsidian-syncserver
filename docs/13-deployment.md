@@ -365,6 +365,22 @@ The plugin release is created **after** the image, deliberately: a release is an
 and announcing a version whose server could not be built would send somebody to install half of
 one.
 
+**And it is read back, the way a client reads it** (#391). `gh release create` exiting `0` is not
+the same claim as "a release somebody can install": 0.8.2 published with every job green, its two
+assets downloadable throughout, and GitHub's own listings reporting the release as having none —
+BRAT reads a listing, so it refused. It repeated on 0.8.3. So the job asks two questions after
+publishing, and answers them differently:
+
+- it fetches `releases/download/<tag>/manifest.json` **unauthenticated**, as BRAT does, and
+  checks the version inside equals the tag. A failure here is a broken release and **fails the
+  job** — publishing is the one act with no second chance, since the tag is public the moment it
+  is pushed;
+- it then gives the listings three minutes to agree that the assets are there. They usually do.
+  When they do not, the job **warns** rather than failing: the release is installable by every
+  other route, the cause is not this repository's, and a red build would not make the files any
+  more listed. The warning names what each read returned, because the next person to meet it will
+  meet it as "BRAT cannot install this".
+
 To run the source instead of the release — development, or a change not yet tagged — compose
 merges the local-build override over the deployment file:
 

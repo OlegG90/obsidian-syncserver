@@ -150,3 +150,60 @@ jobs:
             exit 1
           fi
           gh release create "$tag" --title "$tag" --generate-notes             dist/plugin/main.js dist/plugin/manifest.json
+
+      # **What `gh release create` returns is not what a client sees** (#391).
+      #
+      # 0.8.2 published with every job green and BRAT refused to install it: the two assets were
+      # on the release and downloadable throughout, while GitHub's own listings reported the
+      # release as having none. It repeated on 0.8.3, with no edit racing the create, so it is
+      # not something this workflow does. BRAT reads a listing, so it saw a release with no
+      # manifest and said so.
+      #
+      # Two questions, answered differently on purpose:
+      #
+      # - **Can a client fetch the manifest at all**, unauthenticated, at the URL it uses, and
+      #   does it carry the version the tag promises? A no is a broken release and fails the job
+      #   — publishing is the one act with no second chance, and the tag is already public.
+      # - **Do the listings agree the assets are there?** A no is GitHub disagreeing with itself
+      #   about a release that is otherwise fine. Failing on that would turn their inconsistency
+      #   into our red build without making the release any more installable, so it warns — by
+      #   name, with what each read returned, because somebody will meet this as "BRAT cannot
+      #   install it" and the run is where the answer should already be waiting.
+      - name: the release, as a client reads it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/manifest.json"
+          published=2   # main.js and manifest.json — what the release above uploaded
+
+          # Unauthenticated, exactly as BRAT fetches it: this job's token may be allowed things
+          # the public is not, and what matters here is what somebody installing sees. The
+          # retries cover the seconds a fresh asset takes to become fetchable, not the listing
+          # problem below — that one outlives any wait worth putting in a build.
+          if ! curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/manifest.json "$url"; then
+            echo "::error::$url did not answer — $tag carries no manifest a client can fetch"
+            exit 1
+          fi
+          shipped="$(node -p 'require("/tmp/manifest.json").version')"
+          if [ "$tag" != "$shipped" ]; then
+            echo "::error::$url serves version $shipped, not $tag — BRAT would install a version nobody released"
+            exit 1
+          fi
+          echo "manifest.json fetched anonymously, version $shipped" >> "$GITHUB_STEP_SUMMARY"
+
+          # The listings, given three minutes to agree with the download.
+          by_tag=0
+          listed=0
+          for _ in $(seq 1 12); do
+            by_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets | length' || echo 0)"
+            listed="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=1" --jq '.[0].assets | length' || echo 0)"
+            if [ "$by_tag" = "$published" ] && [ "$listed" = "$published" ]; then
+              echo "every read lists its $published assets" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+
+          echo "::warning::$tag is published and its files download, but GitHub lists $by_tag assets by tag and $listed in the release list, of $published. BRAT reads a listing, so it may refuse to install $tag until that settles (#391)."
+          echo "⚠ assets not listed yet — by tag $by_tag, in the list $listed, of $published. BRAT may refuse $tag for now; the files themselves are fine." >> "$GITHUB_STEP_SUMMARY"
