@@ -188,6 +188,28 @@ progress is refused, and a copy already gone is not an error.
 5. settle the row: status, each leg's size, and the blob count;
 6. **then**, with the window shut, walk the copy and record what the walk found.
 
+**On a schedule** (D-141) the steps are the same; what differs is who starts them, and what happens when
+starting them would be wrong:
+
+- **One row holds the schedule** — on or off, a time, the weekdays, an IANA zone, and how many scheduled
+  copies to keep — edited from Console → Backups. It is off until an operator turns it on; nothing is
+  configured at install time.
+- **A tick every minute** asks whether a moment is due and claims it with a conditional `UPDATE` on that
+  row, so two ticks, or two server instances, take one backup and not two.
+- **A busy server skips rather than queues.** If a backup, a restore or a collector pass holds the lock,
+  the run waits zero milliseconds and is recorded as `skipped`, with the reason; the next moment is
+  already on the schedule.
+- **A late server does not catch up by day.** A moment missed by more than six hours — the server was not
+  running — is recorded as missed rather than taken at a time nobody chose, because the window refuses
+  every device's writes.
+- **Retention is the schedule's.** After a scheduled run succeeds, scheduled copies beyond the number
+  kept are removed, oldest first, through the same removal the console's button uses: the rows stay,
+  without a destination. A copy somebody took by hand is never swept. The card shows what the copies
+  cost on disk, and what a new number would remove, before it is saved.
+- **Nothing fails silently.** Every skip and miss is a row and a server log line; the console raises a
+  banner when the last scheduled run failed, or when a moment passed over an hour ago with nothing
+  answering it.
+
 Steps 2 and 3 are **not** interchangeable, for the reason above (D-114): a window that only refuses new
 writes leaves the ones already running, and blobs-first is what turns one of those into a file that
 restores and cannot be opened. Steps 1 and 4 are not optional, and a run that records neither is not a

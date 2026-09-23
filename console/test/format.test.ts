@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver, quotaProblem,
-  holdsStorage, mib, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker, windowHeld,
+  holdsStorage, keptLine, mib, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker, windowHeld,
   type AccountLine,
 } from '../src/format.js';
-import type { ConsoleAuthRefusalCode } from '@syncserver/shared';
+import type { BackupRun, ConsoleAuthRefusalCode } from '@syncserver/shared';
 
 // Both nullable fields are spelled, because `AccountLine` is picked from the shared row now
 // (D-89) and the server always sends them. Leaving them out built a shape no response has —
@@ -313,6 +313,36 @@ describe('the second press names what it is about to do', () => {
     // The failure this guards is a label that shrinks to "Are you sure?" under a later edit — at which
     // point the two presses are one press with a pause in it.
     assert.ok(confirmLabel('remove', 'x').length > 'Yes, '.length + 1);
+  });
+});
+
+describe('what keeping N scheduled copies costs, before it is saved (#357, #405)', () => {
+  const MB = 1024 * 1024;
+  const run = (day: number, over: Partial<BackupRun> = {}): BackupRun => ({
+    id: `r${day}`, startedAt: `2026-09-${String(day).padStart(2, '0')}T02:00:00Z`, finishedAt: null,
+    status: 'ok', bytes: String(100 * MB), blobCount: null, verifiedAt: null, error: null,
+    destination: `/backups/r${day}`, source: 'schedule', windowOpenedAt: null, windowClosedAt: null,
+    ...over,
+  });
+  const three = [run(1), run(2), run(3)];
+
+  it('says how many there are and what they take', () => {
+    assert.equal(keptLine(three, 7), '3 scheduled copies on disk, 300.0 MiB. Keeping 7 removes none of them.');
+  });
+
+  it('says what the next run will sweep: the new copy stays, so keeping 2 removes the oldest 2', () => {
+    assert.equal(keptLine(three, 2), '3 scheduled copies on disk, 300.0 MiB. After the next scheduled run, keeping 2 removes the oldest 2, 200.0 MiB.');
+    assert.equal(keptLine(three, 3), '3 scheduled copies on disk, 300.0 MiB. After the next scheduled run, keeping 3 removes the oldest 1, 100.0 MiB.');
+    assert.equal(keptLine(three, 4), '3 scheduled copies on disk, 300.0 MiB. Keeping 4 removes none of them.');
+  });
+
+  it('counts only what the sweep would touch: not copies taken by hand, not removed or failed ones', () => {
+    const others = [run(4, { source: 'manual' }), run(5, { destination: null }), run(6, { status: 'failed' })];
+    assert.equal(keptLine(others, 1), 'No copy this schedule took is on disk yet.');
+  });
+
+  it('says only what is there while the number is not one', () => {
+    assert.equal(keptLine(three, Number('')), '3 scheduled copies on disk, 300.0 MiB.');
   });
 });
 

@@ -7,7 +7,7 @@
  * say it is over its limit. Those are the parts worth a test, and they are pure.
  */
 
-import type { AccountRow, AuditRow, ConsoleAuthRefusalCode, OperatorRefusalCode } from '@syncserver/shared';
+import type { AccountRow, AuditRow, BackupRun, ConsoleAuthRefusalCode, OperatorRefusalCode } from '@syncserver/shared';
 
 /**
  * An account as the admin API reports it — the fields this file reads (D-89).
@@ -353,7 +353,31 @@ const SENTENCES: Record<OperatorRefusalCode | ConsoleAuthRefusalCode, string> = 
   bad_days: 'the days have to be weekdays, numbered 0 for Sunday to 6 for Saturday.',
   no_days: 'a schedule that is on has to run on at least one day of the week.',
   bad_zone: 'that is not a time zone this server knows — pick one from the list.',
-  bad_keep: 'the number of copies to keep has to be a whole number between 1 and 30.',
+  bad_keep: 'the number of copies to keep has to be a whole number, from 1 up to the limit beside the field.',
+};
+
+/**
+ * What the copies this schedule took cost now, and what keeping `keep` of them will remove (#357).
+ *
+ * Asked for before saving: "keep seven" is a number of copies to an operator and a number of
+ * gigabytes to the disk, and only the second is what runs out. The selection is the sweep's own
+ * (`sweepScheduledCopies`): finished scheduled runs whose copy is still on disk, newest first.
+ * The sweep runs after a scheduled backup, so it keeps the new copy and `keep - 1` of these.
+ */
+export const keptLine = (runs: BackupRun[], keep: number): string => {
+  const copies = runs
+    .filter((r) => r.source === 'schedule' && r.status === 'ok' && r.destination !== null)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  if (copies.length === 0) return 'No copy this schedule took is on disk yet.';
+
+  const sum = (rs: BackupRun[]): string => String(rs.reduce((n, r) => n + BigInt(r.bytes ?? '0'), 0n));
+  const had = `${copies.length} scheduled ${copies.length === 1 ? 'copy' : 'copies'} on disk, ${human(sum(copies))}.`;
+  if (!Number.isInteger(keep) || keep < 1) return had;
+
+  const gone = copies.slice(Math.max(0, keep - 1));
+  return gone.length === 0
+    ? `${had} Keeping ${keep} removes none of them.`
+    : `${had} After the next scheduled run, keeping ${keep} removes the oldest ${gone.length}, ${human(sum(gone))}.`;
 };
 
 /** Sunday first, as the schema counts weekdays and as the checkboxes are drawn. */

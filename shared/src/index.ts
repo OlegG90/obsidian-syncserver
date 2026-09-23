@@ -521,6 +521,9 @@ export type AuditRow = {
   details: Record<string, unknown>;
 };
 
+/** Who asked for a backup: a person, or the schedule — `backup_source` in the schema (D-141). */
+export type BackupSource = 'manual' | 'schedule';
+
 /**
  * One row of `/admin/backups` — the shape the server builds and the console renders.
  *
@@ -544,8 +547,8 @@ export type BackupRun = {
   error: string | null;
   /** Where this run's copy lives — how a verification or a restore reopens it. */
   destination: string | null;
-  /** `manual` or `schedule` — who asked for this run (D-141). */
-  source: string;
+  /** Who asked for this run (D-141). */
+  source: BackupSource;
   /**
    * The refusal window this run held. Shown as a duration, because it is the cost a
    * scheduled backup imposes on every device: the interval in which no new write started.
@@ -555,16 +558,34 @@ export type BackupRun = {
 };
 
 /** The backup schedule as the console reads and writes it (#357, D-141). */
-export interface BackupScheduleView {
+export interface BackupSchedule {
   enabled: boolean;
   /** `HH:MM`, in `zone`. */
   time: string;
-  /** Weekdays it runs on, 0 = Sunday. */
+  /** Weekdays it runs on, 0 = Sunday, ascending and without repeats. */
   days: number[];
   /** An IANA zone name — the one the operator picked, never the container's. */
   zone: string;
   /** How many scheduled copies survive; manual ones are never swept. */
   keep: number;
+}
+
+/**
+ * The schedule as the console reads it: what is stored, and what the server makes of it.
+ *
+ * The two limits travel with it because the console has to say them and `shared` holds no
+ * values (#405): the card's field and its sentences take them from here rather than from a
+ * number typed into the console a second time.
+ */
+export interface BackupScheduleView extends BackupSchedule {
+  /** The moment most recently dealt with — taken, skipped or missed. */
+  lastScheduledFor: string | null;
+  /** Since when this schedule is the one in force. */
+  updatedAt: string;
+  /** The most scheduled copies `keep` may ask for. */
+  keepMax: number;
+  /** How late a missed moment may still be taken; later than this it is recorded as missed. */
+  catchUpHours: number;
   /** When it next fires, or null when it is off. */
   nextRun: string | null;
   /** The last scheduled run failed. */
