@@ -364,6 +364,14 @@ describe('when a device was last seen (#386)', () => {
     assert.equal(seenLine(ago(4), 5 * 60, now), 'seen in the last 5 minutes');
   });
 
+  it('says minutes just past the bound, rather than an hour a busy device was never quiet for (#405)', () => {
+    // A device renews a little after its session lapses; sixteen minutes is one that is syncing.
+    assert.equal(seenLine(ago(16), TTL, now), 'seen about 20 minutes ago');
+    assert.equal(seenLine(ago(40), TTL, now), 'seen about 40 minutes ago');
+    assert.equal(seenLine(ago(56), TTL, now), 'seen about an hour ago', 'sixty minutes is an hour');
+    assert.equal(seenLine(ago(75), TTL, now), 'seen about an hour ago');
+  });
+
   it('reads a device that has genuinely gone quiet as hours and days', () => {
     assert.equal(seenLine(ago(90), TTL, now), 'seen about 2 hours ago');
     assert.equal(seenLine(ago(60 * 5), TTL, now), 'seen about 5 hours ago');

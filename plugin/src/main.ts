@@ -985,7 +985,7 @@ export default class SyncServerPlugin extends Plugin {
   sharing(done: () => void): ShareFlow {
     return openShareFlow({
       gate: this.gate,
-      syncSoon: () => void this.sync?.runIfIdle(),
+      syncSoon: () => this.sync?.soon() ?? false,
       list: () =>
         this.withSession(async (h) => {
           const out = await h.client.shares();

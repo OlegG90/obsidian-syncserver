@@ -56,7 +56,18 @@ export interface SyncCoordinator {
    * folder only a pass brings down (`share-flow.ts`, #398).
    */
   runIfIdle(): Promise<void>;
+  /**
+   * An unattended pass, started now if one can be — and whether a pass is now running.
+   *
+   * For a caller that has to SAY something about it (#405): accepting an invitation used to promise a
+   * sync that `runIfIdle` then declined to start. True when this started one, or when one is already
+   * under way; false when the session is not open or another operation holds the gate.
+   */
+  soon(): boolean;
 }
+
+/** What a pass calls itself while it holds the gate — and how `soon` recognises one in flight. */
+const A_SYNC = 'a sync';
 
 export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator => {
   /**
@@ -73,7 +84,7 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     // push hint — cannot slip past while the first waits on the passphrase or the pass. It
     // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
     // finds it held and yields instead of meeting interior names with no key.
-    if (!deps.gate.tryBegin('a sync')) {
+    if (!deps.gate.tryBegin(A_SYNC)) {
       if (attended) deps.notify(busyNotice(deps.gate), 8000);
       return;
     }
@@ -159,5 +170,12 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     // Never a rescan: an unattended pass is the cheap path, and reading every file because something
     // arrived — or because somebody saved a note — is the opposite of what makes it cheap.
     runIfIdle: () => pass(false),
+    soon: () => {
+      if (deps.sessionState() !== 'open') return false;
+      const holding = deps.gate.holding();
+      // `pass` takes the gate before its first await, so this call has started one by the time it returns.
+      if (holding === undefined) void pass(false);
+      return holding === undefined || holding === A_SYNC;
+    },
   };
 };

@@ -42,8 +42,14 @@ export const seenLine = (lastSeenAt: string | null, withinSeconds: number, now =
   const ageMinutes = (now - at) / 60_000;
   if (ageMinutes <= Math.max(1, withinSeconds / 60)) return `seen in the last ${aboutSpan(withinSeconds)}`;
 
+  // Minutes, not "an hour", until it really is one (#405). A device renews a little after its
+  // session lapses, not on the stroke of it, so a busy one is often a few minutes past the bound
+  // — and rounding those minutes to the hour told the operator it had been quiet for sixty.
+  // Rounded UP to the next five, so the sentence never reads fresher than the bucket above.
+  const minutes = Math.ceil(ageMinutes / 5) * 5;
+  if (minutes < 60) return `seen about ${minutes} minutes ago`;
+  if (ageMinutes < 90) return 'seen about an hour ago';
   const hours = Math.round(ageMinutes / 60);
-  if (hours < 2) return 'seen about an hour ago';
   if (hours < 24) return `seen about ${hours} hours ago`;
   const days = Math.round(hours / 24);
   return days === 1 ? 'seen about a day ago' : `seen ${days} days ago`;

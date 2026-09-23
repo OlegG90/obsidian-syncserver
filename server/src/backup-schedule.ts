@@ -56,7 +56,8 @@ export const scheduleProblem = (s: BackupSchedule): ScheduleProblem | undefined 
   if (typeof s.time !== 'string' || !TIME.test(s.time)) return 'bad_time';
   if (!Number.isInteger(s.keep) || s.keep < 1 || s.keep > 30) return 'bad_keep';
   if (typeof s.zone !== 'string' || !knownZone(s.zone)) return 'bad_zone';
-  if (!Array.isArray(s.days) || s.days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) return 'no_days';
+  // Its own code (#405): `no_days` says "pick at least one", which is the wrong advice for a day 7.
+  if (!Array.isArray(s.days) || s.days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) return 'bad_days';
   if (s.enabled && s.days.length === 0) return 'no_days';
   return undefined;
 };

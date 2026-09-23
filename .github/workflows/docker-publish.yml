@@ -175,7 +175,7 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/manifest.json"
-          published=2   # main.js and manifest.json — what the release above uploaded
+          want="main.js,manifest.json"   # what the release above uploaded, sorted as the reads sort
 
           # Unauthenticated, exactly as BRAT fetches it: this job's token may be allowed things
           # the public is not, and what matters here is what somebody installing sees. The
@@ -192,18 +192,33 @@ jobs:
           fi
           echo "manifest.json fetched anonymously, version $shipped" >> "$GITHUB_STEP_SUMMARY"
 
-          # The listings, given three minutes to agree with the download.
-          by_tag=0
-          listed=0
+          # The four reads a client might make, given three minutes to agree with the download.
+          # By NAME, not by count (#405): two assets that are not these two would pass a count.
+          # All four are printed if they disagree, because WHICH of them disagree is the signal —
+          # on 0.8.2 and 0.8.3 `/releases/latest` was right while the other three were empty.
+          names='[.assets[].name] | sort | join(",")'
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
           for _ in $(seq 1 12); do
-            by_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets | length' || echo 0)"
-            listed="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=1" --jq '.[0].assets | length' || echo 0)"
-            if [ "$by_tag" = "$published" ] && [ "$listed" = "$published" ]; then
-              echo "every read lists its $published assets" >> "$GITHUB_STEP_SUMMARY"
+            by_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq "$names" || echo '(read failed)')"
+            listed="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=10" --jq ".[] | select(.tag_name == \"$tag\") | $names" || echo '(read failed)')"
+            latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name || echo '(read failed)')"
+            if [ "$latest_tag" = "$tag" ]; then
+              latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq "$names" || echo '(read failed)')"
+            else
+              latest="(latest is $latest_tag)"
+            fi
+            graphql="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$tag:String!){repository(owner:$owner,name:$repo){release(tagName:$tag){releaseAssets(first:20){nodes{name}}}}}' \
+              -f owner="$owner" -f repo="$repo" -f tag="$tag" \
+              --jq '[.data.repository.release.releaseAssets.nodes[].name] | sort | join(",")' || echo '(read failed)')"
+            if [ "$by_tag" = "$want" ] && [ "$listed" = "$want" ] && [ "$latest" = "$want" ] && [ "$graphql" = "$want" ]; then
+              echo "every read names $want" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             sleep 15
           done
 
-          echo "::warning::$tag is published and its files download, but GitHub lists $by_tag assets by tag and $listed in the release list, of $published. BRAT reads a listing, so it may refuse to install $tag until that settles (#391)."
-          echo "⚠ assets not listed yet — by tag $by_tag, in the list $listed, of $published. BRAT may refuse $tag for now; the files themselves are fine." >> "$GITHUB_STEP_SUMMARY"
+          reads="by tag [$by_tag], in the list [$listed], latest [$latest], GraphQL [$graphql]"
+          echo "::warning::$tag is published and its files download, but not every read names $want — $reads. BRAT reads a listing, so it may refuse to install $tag until that settles (#391)."
+          echo "⚠ not every read names $want yet — $reads. BRAT may refuse $tag for now; the files themselves are fine." >> "$GITHUB_STEP_SUMMARY"

@@ -1442,6 +1442,19 @@ describe('an operator looking at somebody’s devices', () => {
     assert.equal(after.json().error, 'device_revoked');
   });
 
+  it('names the device, not the account, when the token’s device is not the account’s (#405)', async () => {
+    const access = await asAdmin();
+    // The console's device handed to another account: what the token names no longer belongs here.
+    await db.query(
+      `UPDATE devices SET user_id = (SELECT id FROM users WHERE id <> $1 AND state = 'active' ORDER BY created_at LIMIT 1)
+        WHERE user_id = $1 AND platform = 'console' AND revoked_at IS NULL`,
+      ['00000000-0000-0000-0000-000000000001'],
+    );
+    const out = await app.inject({ method: 'GET', url: '/admin/accounts', headers: { authorization: `Bearer ${access}` } });
+    assert.equal(out.statusCode, 401, out.body);
+    assert.equal(out.json().error, 'device_revoked');
+  });
+
   it('takes nothing from a caller who is not an administrator', async () => {
     const out = await app.inject({ method: 'GET', url: `/admin/accounts/${await userId()}/devices` });
     assert.equal(out.statusCode, 401);
