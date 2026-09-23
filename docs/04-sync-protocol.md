@@ -805,8 +805,9 @@ move to every participant's corresponding node.
 `move` is valid only when the node's old parent and its destination are on the same side of a shared-folder
 boundary — so a share root, whose parent is its holder's own folder, may be renamed or moved among their
 folders (#401). A move into or out of a shared folder returns `409 {reason: "share_boundary"}`; the client
-must copy/put the item with the required destination-scope material, then delete the source. This keeps scope conversion atomic at
-the write level without making a tree move silently create partial cryptographic metadata.
+must copy/put the item with the required destination-scope material, then delete the source. This keeps
+scope conversion atomic at the write level without making a tree move silently create partial
+cryptographic metadata.
 
 The client does not wait for that refusal: it knows which side each parent is on, so a file carried
 across the edge goes straight to a create under the destination's key and a delete of the source. A
