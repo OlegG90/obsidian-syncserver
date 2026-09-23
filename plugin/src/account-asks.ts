@@ -67,8 +67,15 @@ export interface AccountAsks {
   vaults(): Promise<{ id: string; name: string; nodes: number; bytes: number; shared: boolean; current: boolean }[]>;
   /** Remove one vault from the account; answers whether that lifted a freeze. */
   deleteVault(vaultId: string): Promise<{ thawed: boolean; revoked: number }>;
-  /** The devices of this account. */
-  devices(): Promise<OwnDeviceRow[]>;
+  /**
+   * This account's devices, **and how stale the last-seen column can be** (#386).
+   *
+   * The envelope is passed through here rather than unwrapped, unlike every other ask on this
+   * port: it stopped being an envelope when it gained a second fact. The bound belongs to the
+   * list, not to a device — the server writes `last_seen_at` on a refresh (D-118), so it is
+   * one number about every row, and the screen needs it to word what it prints.
+   */
+  devices(): Promise<{ devices: OwnDeviceRow[]; seenWithinSeconds: number }>;
   /** Take one device away. */
   revokeDevice(deviceId: string): Promise<void>;
   /** Give one device a name a person can pick it out by (#356). */
@@ -98,7 +105,11 @@ export const openAccountAsks = (deps: AccountDeps): AccountAsks => {
 
     // The envelope is unwrapped here rather than by the screen: `{ devices: [...] }` is the shape of a
     // response, and what a caller wants is the rows.
-    devices: () => handled((h) => h.client.devices()).then((r) => r.devices),
+    devices: () =>
+      handled((h) => h.client.devices()).then((r) => ({
+        devices: r.devices,
+        seenWithinSeconds: r.seen_within_seconds,
+      })),
     revokeDevice: (deviceId) => handled((h) => h.client.revokeDevice(deviceId)),
     renameDevice: (deviceId, name) => handled((h) => h.client.renameDevice(deviceId, name)),
     hasRecoveryCode: () => handled((h) => h.client.recoveryCodeState()).then((r) => r.present),

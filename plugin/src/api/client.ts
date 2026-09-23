@@ -541,6 +541,8 @@ export class SyncClient {
    */
   devices(): Promise<{
     devices: OwnDeviceRow[];
+    /** How stale `last_seen_at` can be: the server writes it on a refresh (D-118, #386). */
+    seen_within_seconds: number;
   }> {
     return this.json('GET', '/auth/devices');
   }

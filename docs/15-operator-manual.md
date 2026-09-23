@@ -162,9 +162,14 @@ this repository, which offers each release. [14](14-user-manual.md) is the page 
 cursors, because an administrator holds nothing that opens a vault and a device row is not where that
 would start.
 
-`last seen` is as fresh as the access token's lifetime, fifteen minutes by default: it moves every time a
-device renews its session, not on every sync and not only when it signed in. A device that has not been
-seen in weeks has not been used in weeks.
+`last seen` is an **interval, not a moment** — "seen in the last 15 minutes", "seen about 3 hours ago",
+"seen 9 days ago" — and the exact timestamp is on hover, for anybody who wants it. The reading moves every
+time a device renews its session, not on every sync and not only when it signed in (D-118), so it is the
+access token's lifetime stale at worst and the interval is stated in those units: a deployment that
+changes `ACCESS_TOKEN_TTL_SECONDS` changes the sentence with it. **A device that is syncing right now can
+read as seen a few minutes ago**, and the line under the list says so — printed to the second, it read as
+a device that had stopped talking, which is how one diagnosis went wrong here (#386). A device not seen in
+weeks has not been used in weeks.
 
 **Revoke** kills that device's refresh token. Its next renewal fails and it can do nothing further; the
 files already on it stay on it, because nothing here reaches a disk somebody else owns.

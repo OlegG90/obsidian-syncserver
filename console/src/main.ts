@@ -23,7 +23,8 @@ import {
 } from './api.js';
 import {
   accountBadge, problemsBadge, quotaProblem, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
-  isOver, mib, mibOf, scheduleAlarm, scheduleLine, serverLine, usageFraction, usageMarker, WEEKDAYS, windowHeld,
+  isOver, mib, mibOf, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker,
+  WEEKDAYS, windowHeld,
 } from './format.js';
 import { chooseScreen, sessionEnded } from './screen.js';
 import { whatIsWrong } from './password-form.js';
@@ -509,6 +510,7 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
       list.append(el('p', { className: 'muted', textContent: 'No devices reach this account.' }));
       return;
     }
+    list.append(el('p', { className: 'muted', textContent: seenNote(out.seen_within_seconds) }));
     // Grouped by the vault each device syncs (#364, D-139). A group is named by the vault's id: its name is
     // encrypted under the account's key, which an administrator never holds (D-115).
     const groupOf = (d: (typeof out.devices)[number]): string =>
@@ -527,9 +529,13 @@ const deviceList = (a: AccountRow, report: Report): HTMLElement => {
         // "Last seen" and not "signed in": D-118 made the column move on every refresh, so the old
         // label claimed LESS than it holds. The plugin's copy of this row was corrected then and this
         // one was not — two screens, one column, and only one of them told the truth about it.
+        // **An interval, and the instant behind it on hover** (#386). The column moves on a
+        // refresh rather than on a sync (D-118), so a timestamp to the second was an exactness
+        // it does not have — and a device syncing right now read as one that had gone quiet.
         el('span', {
           className: 'when',
-          textContent: d.last_seen_at ? `last seen ${when(d.last_seen_at)}` : 'not seen since it was added',
+          textContent: seenLine(d.last_seen_at, out.seen_within_seconds),
+          title: d.last_seen_at ? when(d.last_seen_at) : '',
         }),
       );
       // Not the console's own row: a sign-in writes that name every time, and the server refuses it (#356).

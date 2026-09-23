@@ -35,7 +35,7 @@ const session = {
 
 const handle = {
   client: {
-    devices: async () => ({ devices: [{ deviceId: 'd1' }, { deviceId: 'd2' }] }),
+    devices: async () => ({ devices: [{ deviceId: 'd1' }, { deviceId: 'd2' }], seen_within_seconds: 900 }),
     revokeDevice: async (id: string) => void asked.push(`revokeDevice:${id}`),
     renameDevice: async (id: string, name: string) => void asked.push(`renameDevice:${id}=${name}`),
     recoveryCodeState: async () => ({ present: true }),
@@ -122,10 +122,13 @@ describe('what reaches the session', () => {
 });
 
 describe('what comes back', () => {
-  it('answers devices with the rows, not the envelope around them', async () => {
-    const rows = await open().devices();
-    assert.ok(Array.isArray(rows), 'a response object was returned where its contents were meant');
-    assert.equal(rows.length, 2);
+  it('answers devices with the rows AND how stale their last-seen reading is (#386)', async () => {
+    // The envelope used to hold nothing but the rows, so it was unwrapped here. It now carries a
+    // second fact — the bound the screen words its sentence from — and a port that dropped it
+    // would leave the panel inventing fifteen minutes of its own.
+    const out = await open().devices();
+    assert.equal(out.devices.length, 2);
+    assert.equal(out.seenWithinSeconds, 900, 'spelled the way this side spells things, read from the wire');
   });
 
   it('answers hasRecoveryCode with the boolean', async () => {

@@ -85,7 +85,13 @@ const refuseWith = (
   detail?: string,
 ): unknown => reply.code(status).send(detail === undefined ? { error } : { error, detail });
 
-export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: BackupDeps): void => {
+export const registerAdminRoutes = (
+  app: FastifyInstance,
+  db: Db,
+  backup: BackupDeps,
+  /** Only what this surface needs of the configuration: how fresh a device's `last_seen_at` is (#386). */
+  limits: { accessTokenTtlSeconds: number },
+): void => {
   const admin = { preHandler: requireAdmin(db) };
 
   app.get('/admin/accounts', admin, async () => ({ accounts: await listAccounts(db) }));
@@ -185,7 +191,9 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Db, backup: Backup
   app.get<{ Params: { userId: string } }>('/admin/accounts/:userId/devices', admin, async (req, reply) => {
     const out = await listDevices(db, req.params.userId);
     if ('kind' in out) return refuse(reply, out);
-    return { devices: out };
+    // The same bound the plugin's own list is given (#386): the column is written on a refresh,
+    // so it is this stale at worst, and the console says so instead of printing a bare instant.
+    return { devices: out, seen_within_seconds: limits.accessTokenTtlSeconds };
   });
 
   app.delete<{ Params: { userId: string; deviceId: string } }>(

@@ -224,7 +224,7 @@ export const revokeInvitation = (userId: string): Promise<void> =>
  * operator can revoke it. Revoking here is recorded in the audit log, because it is done TO somebody
  * rather than by them.
  */
-export const devicesOf = (userId: string): Promise<{ devices: DeviceRow[] }> =>
+export const devicesOf = (userId: string): Promise<{ devices: DeviceRow[]; seen_within_seconds: number }> =>
   call('GET', `/admin/accounts/${userId}/devices`);
 
 export const revokeDevice = (userId: string, deviceId: string): Promise<void> =>
