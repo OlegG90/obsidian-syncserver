@@ -77,8 +77,10 @@ export interface ShareFlowDeps {
   /**
    * Ask for a sync pass, the kind nobody pressed for: it runs if nothing else is in flight and
    * prompts for nothing. Called with the gate already released — taken, the pass would refuse.
+   *
+   * @returns whether a pass is now running, which is what decides what the person is told.
    */
-  syncSoon(): void;
+  syncSoon(): boolean;
 }
 
 export interface ShareFlow {
@@ -234,9 +236,15 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       // hint to come back to the device that caused the change — a round trip to learn about
       // its own act, and when the hint did not arrive the folder stayed missing until Obsidian
       // restarted (#398). This device knows it just joined, so it asks for the pass itself.
-      deps.notify('SyncServer: joined. Syncing the folder into this vault now.');
+      //
+      // Said only when it is true (#405): with the session locked, or another operation holding the
+      // gate, nothing runs now — and a notice that promised it would send somebody looking.
       deps.done();
-      deps.syncSoon();
+      deps.notify(
+        deps.syncSoon()
+          ? 'SyncServer: joined. Syncing the folder into this vault now.'
+          : 'SyncServer: joined. The folder arrives with the next sync.',
+      );
     },
 
     async decline(shareId) {

@@ -402,10 +402,12 @@ just `docker compose pull` again.
   working answer already: `pg_dump` is in the image at the database's own major, `/backups` is a mount
   this file always makes, and the blobs come from the store `BLOB_STORE_PATH` names. What an
   installation chooses is `BACKUP_DIR`, the host side of that mount. The collector is held off during the window, which is what its advisory lock is for.
-  **Nothing is scheduled**: no nightly run, no retention, no automatic verification. Copies pile up at
-  the rate somebody takes them, and are removed one at a time from the console — which leaves the run
-  in the history with no destination, so the log keeps saying a backup ran and the empty destination
-  says its copy is gone. **The rhythm is the operator's, and this server does not pretend to keep it.**
+  **One thing can be scheduled — taking a backup** (D-141), and it is off until an operator turns it on
+  in the console with a time, the weekdays, a time zone and how many of its own copies to keep. Nothing
+  verifies or restores on its own. Copies taken by hand pile up at the rate somebody takes them, and
+  are removed one at a time from the console — which leaves the run in the history with no
+  destination, so the log keeps saying a backup ran and the empty destination says its copy is gone. A
+  scheduled copy beyond the number kept is removed the same way, by the schedule.
 - **upgraded by pulling.** The server applies `schema.sql` — which travels **inside its image** — to
   a database that has none, and brings an existing one forward with the migrations beside it
   (`server/db/migrations/`, D-132): the pending ones run at start, one transaction each, under the

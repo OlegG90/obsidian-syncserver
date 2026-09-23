@@ -84,7 +84,7 @@ describe('a schedule the server will not store', () => {
     assert.equal(scheduleProblem({ ...EVERY_DAY, keep: 31 }), 'bad_keep');
     assert.equal(scheduleProblem({ ...EVERY_DAY, keep: 2.5 }), 'bad_keep');
     assert.equal(scheduleProblem({ ...EVERY_DAY, zone: 'Middle/Earth' }), 'bad_zone');
-    assert.equal(scheduleProblem({ ...EVERY_DAY, days: [7] }), 'no_days');
+    assert.equal(scheduleProblem({ ...EVERY_DAY, days: [7] }), 'bad_days', 'a day that is not one, told apart from no day (#405)');
   });
 
   it('refuses one that is on and runs on no day, and allows the same one off', () => {

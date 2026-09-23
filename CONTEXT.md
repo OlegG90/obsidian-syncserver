@@ -194,7 +194,8 @@ both are tails of an act somebody asked for: the console's **Verify** button, an
 pass over the copy it just wrote — taken **after** the row settles and the window shuts, because a walk
 over a copy that can no longer change has no reason to keep writes refused (#225).
 
-**Nothing about a backup happens on a schedule.** Taking one, verifying one and restoring from one are
-all acts somebody asks for. A server that took backups nightly, verified them nightly and loaded them
-weekly was doing three things nobody had asked it to do that day, and the settings for all three were
+**Only taking a backup can happen on a schedule** (D-141), and only once an operator has turned the
+schedule on in the console: a time, the weekdays, a time zone, and how many of its own copies to keep.
+Verifying one and restoring from one stay acts somebody asks for. A server that verified nightly and
+loaded weekly was doing things nobody had asked it to do that day, and the settings for both were
 questions an operator had to answer before they had a reason to.

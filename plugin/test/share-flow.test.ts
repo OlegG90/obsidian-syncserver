@@ -45,6 +45,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
       // What a real pass would do first: take the gate. Recorded as whether it could.
       passes.push(deps.gate.tryBegin('syncing'));
       if (passes.at(-1)) deps.gate.end();
+      return true;
     },
     ...over,
   };
@@ -178,6 +179,13 @@ describe('answering an invitation', () => {
     assert.deepEqual(h.passes, [true], 'one pass asked for, and it could take the gate');
     assert.match(h.notices[0]!, /Syncing the folder/);
     assert.equal(h.rebuilt(), 1);
+  });
+
+  it('does not promise a sync that is not going to run (#405)', async () => {
+    const h = harness({ syncSoon: () => false });
+    await h.flow.accept({ shareId: 'share-1', initiatorLogin: 'alice' });
+    assert.match(h.notices[0]!, /arrives with the next sync/);
+    assert.doesNotMatch(h.notices[0]!, /Syncing/);
   });
 
   it('asks for no pass when the join was refused', async () => {

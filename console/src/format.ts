@@ -350,6 +350,7 @@ const SENTENCES: Record<OperatorRefusalCode | ConsoleAuthRefusalCode, string> = 
   quota_bytes_required: 'that needs a quota, as a positive number of bytes.',
   enabled_required: 'that needs to say whether the account is enabled.',
   bad_time: 'the time has to read as HH:MM on a 24-hour clock, like 02:00 or 22:30.',
+  bad_days: 'the days have to be weekdays, numbered 0 for Sunday to 6 for Saturday.',
   no_days: 'a schedule that is on has to run on at least one day of the week.',
   bad_zone: 'that is not a time zone this server knows — pick one from the list.',
   bad_keep: 'the number of copies to keep has to be a whole number between 1 and 30.',
@@ -438,8 +439,14 @@ export const seenLine = (lastSeenAt: string | null, withinSeconds: number, now =
   const ageMinutes = (now - at) / 60_000;
   if (ageMinutes <= Math.max(1, withinSeconds / 60)) return `seen in the last ${aboutSpan(withinSeconds)}`;
 
+  // Minutes, not "an hour", until it really is one (#405). A device renews a little after its
+  // session lapses, not on the stroke of it, so a busy one is often a few minutes past the bound
+  // — and rounding those minutes to the hour told the operator it had been quiet for sixty.
+  // Rounded UP to the next five, so the sentence never reads fresher than the bucket above.
+  const minutes = Math.ceil(ageMinutes / 5) * 5;
+  if (minutes < 60) return `seen about ${minutes} minutes ago`;
+  if (ageMinutes < 90) return 'seen about an hour ago';
   const hours = Math.round(ageMinutes / 60);
-  if (hours < 2) return 'seen about an hour ago';
   if (hours < 24) return `seen about ${hours} hours ago`;
   const days = Math.round(hours / 24);
   return days === 1 ? 'seen about a day ago' : `seen ${days} days ago`;

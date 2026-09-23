@@ -367,8 +367,8 @@ found incomplete, and a check that stopped for ever after one failed run.
       Written once — `verifyBackup` in `backup.ts`. What it was willing to claim had to stop first:
       `verified_at` was stamped unconditionally, so a copy the check had just found incomplete was
       listed as verified.
-- [x] **Nothing presses the button but a person** (D-121). Taking a backup, verifying one and restoring
-      from one are all asked for. The schedules that once did them are gone.
+- [x] **Verifying and restoring are asked for** (D-121). Taking a backup can also run on a schedule an
+      operator sets in the console (D-141); nothing verifies or restores on its own.
 
 ### The image is pulled, not built on the server
 

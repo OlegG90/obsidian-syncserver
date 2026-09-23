@@ -113,7 +113,7 @@ export type OperatorRefusalCode =
   | ScheduleRefusalCode;
 
 /** Why a backup schedule could not be stored — the console has a sentence for each (#357). */
-export type ScheduleRefusalCode = 'bad_time' | 'no_days' | 'bad_zone' | 'bad_keep';
+export type ScheduleRefusalCode = 'bad_time' | 'bad_days' | 'no_days' | 'bad_zone' | 'bad_keep';
 
 /**
  * What the console's own way in refuses (#375): creating the first administrator, signing in, and

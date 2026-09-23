@@ -43,11 +43,13 @@ export const requireAdmin = (db: Db) => async (req: FastifyRequest, reply: Fasti
       WHERE u.id = $1`,
     [caller.userId, caller.deviceId],
   );
-  if (row?.revoked) {
+  // No row is a device this account does not hold — the same answer `liveDevice` gives a revoked one
+  // (#405). It used to fall through to "this account is not active", which named the wrong thing.
+  if (!row || row.revoked) {
     await reply.code(401).send({ error: 'device_revoked' });
     return;
   }
-  if (!row || row.state !== 'active') {
+  if (row.state !== 'active') {
     await reply.code(403).send({ error: 'forbidden', detail: 'this account is not active' });
     return;
   }

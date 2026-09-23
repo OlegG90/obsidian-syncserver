@@ -68,6 +68,39 @@ const rig = (over: Partial<SyncCoordinatorDeps> = {}) => {
   };
 };
 
+describe('a pass asked for by somebody who has to say so (#405)', () => {
+  it('starts one when the session is open and nothing holds the gate', async () => {
+    const r = rig();
+    const sync = openSyncCoordinator(r.deps);
+    assert.equal(sync.soon(), true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(r.calls.pass, 1);
+  });
+
+  it('counts a pass already under way, which started after whatever asked', () => {
+    const r = rig();
+    const sync = openSyncCoordinator(r.deps);
+    assert.ok(r.deps.gate.tryBegin('a sync'));
+    assert.equal(sync.soon(), true);
+    r.deps.gate.end();
+  });
+
+  it('says no when the session is locked, and asks for no passphrase', () => {
+    const r = rig();
+    r.setState('locked');
+    assert.equal(openSyncCoordinator(r.deps).soon(), false);
+    assert.equal(r.calls.ask, 0);
+  });
+
+  it('says no when another operation holds the gate', () => {
+    const r = rig();
+    assert.ok(r.deps.gate.tryBegin('sharing the folder'));
+    assert.equal(openSyncCoordinator(r.deps).soon(), false);
+    assert.equal(r.calls.pass, 0);
+    r.deps.gate.end();
+  });
+});
+
 describe('the sync coordinator', () => {
   it('runs unlock → one pass → render in order', async () => {
     const r = rig();
@@ -192,7 +225,7 @@ describe('the sync coordinator', () => {
       folders: () => ['Team'],
       notify: (m) => shareNotices.push(m),
       done: () => undefined,
-      syncSoon: () => void sync.runIfIdle(),
+      syncSoon: () => sync.soon(),
     });
 
     // Hold the gate with a slow share operation, then try to sync.
