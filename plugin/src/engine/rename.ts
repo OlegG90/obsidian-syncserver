@@ -109,27 +109,37 @@ export interface FolderMove {
  * Folders that moved as a whole, rather than as one rename per child.
  *
  * The per-file heuristic would move each child correctly and still leave the empty source
- * folder behind on the server, because nothing ever told it the folder itself had moved.
- * This looks for the shape that proves it did: every child of `V` reappearing under one
- * new parent `N`, at the same relative path, with the same bytes.
+ * folder behind on the server, because nothing ever told it the folder itself had moved. This
+ * looks for the shape that proves it did: every file that vanished from under `V` reappearing
+ * under one new folder `N`, at the same path relative to it.
  *
- * **Deliberately strict, and every condition earns its place:**
+ * **At any depth, shallowest first** (#409). A renamed folder with subfolders vanishes as files
+ * two levels down, and grouping by each file's own parent saw only `V/sub` — whose new parent
+ * `N` the server did not have yet — so no folder move was ever planned for it. The folder that
+ * moved is the shallowest one the evidence fits; its subfolders ride along with it.
+ *
+ * **Content may differ** (#409). A file edited in the same moment as the rename is still the same
+ * file in the same folder: once the folder has moved, the edit goes up against its node like any
+ * other. Demanding identical bytes sent a renamed share root down the per-file walk, which read
+ * each file as leaving the share, and took them out of it for everybody. What still proves a
+ * rename is the rest, and every condition earns its place:
  *
  * - `V` must be a folder the server actually has — a path prefix is not a node;
- * - **every** child must reappear, not most: one child edited mid-move means the folder is
- *   not the same folder, and the per-file walk handles it correctly;
- * - all of them under the **same** new parent, or it is a scatter, not a move;
- * - **nothing stays behind** in `V`: moving a folder moves everything in it, so a folder that
- *   still holds anything locally did not move — only its vanished children did (#370);
- * - `N` must not already exist on the server, or this is a merge — which is a different
- *   operation with a different meaning for anybody else syncing;
- * - `N`'s own parent chain must already exist, so no folder is invented in the middle of a
- *   walk that has not reached it.
+ * - **every** file that vanished from under `V` reappears at `N/<same relative path>`: one
+ *   missing, or one somewhere else, is a scatter or a delete, not a move;
+ * - **nothing stays behind** under `V`: moving a folder moves everything in it, so a folder that
+ *   still holds anything locally did not move — only its vanished files did (#370);
+ * - `N` is not already on the server, or this is a merge — a different operation with a
+ *   different meaning for anybody else syncing — and it is not inside `V` (#351);
+ * - `N`'s own parent chain already exists, so no folder is invented mid-walk;
+ * - exactly one `N` fits, and no two folders are planned into it.
  *
- * Anything failing falls through to the per-file walk, which is conservative by
- * construction.
+ * Anything failing falls through to the per-file walk, which is conservative by construction —
+ * except for a share root, which the engine refuses to take apart (`holdShareRoots`).
  *
  * @param here the local paths that exist now, so a reappearance can be found.
+ * @param meta what each local file hashes to: a tie between two possible destinations goes to
+ *   the one where more bytes match, and a true tie is refused.
  */
 export const folderMoves = (
   vanished: ReadonlyMap<string, Vanished[]>,
@@ -137,70 +147,74 @@ export const folderMoves = (
   meta: ReadonlyMap<string, FileMeta>,
   here: ReadonlySet<string>,
 ): FolderMove[] => {
-  // Group the vanished by the folder they were in: a "folder" here is a path prefix every
-  // child shares.
-  const byParent = new Map<string, { rel: string; v: Vanished; hash: string }[]>();
-  for (const [hash, list] of vanished) {
-    for (const v of list) {
-      const parent = parentPath(v.path);
-      const arr = byParent.get(parent) ?? [];
-      arr.push({ rel: basePath(v.path), v, hash });
-      byParent.set(parent, arr);
-    }
+  const gone: { v: Vanished; hash: string }[] = [];
+  for (const [hash, list] of vanished) for (const v of list) gone.push({ v, hash });
+
+  // Every folder a vanished file lived under, at any depth.
+  const folders = new Set<string>();
+  for (const { v } of gone) {
+    for (let p = parentPath(v.path); p; p = parentPath(p)) folders.add(p);
   }
 
   const plan: FolderMove[] = [];
   const claimed = new Set<string>();
+  const within = (dir: string) => (p: string) => p.startsWith(`${dir}/`);
 
-  for (const [parent, children] of byParent) {
-    const source = tree.get(parent);
-    // The vault root is not a movable node, and neither is a path the server holds as a file.
-    if (!source || source.isFile || children.length === 0) continue;
+  for (const from of [...folders].sort((a, b) => a.split('/').length - b.split('/').length)) {
+    // Already carried by a shallower folder this plan moves.
+    if (plan.some((m) => from === m.from || within(m.from)(from))) continue;
+    const source = tree.get(from);
+    if (!source || source.isFile) continue;
+    if ([...here].some(within(from))) continue;
 
-    let newParent: string | undefined;
-    const moved: { hash: string; to: string }[] = [];
+    const children = gone
+      .filter(({ v }) => within(from)(v.path))
+      .map(({ v, hash }) => ({ hash, rel: v.path.slice(from.length + 1) }));
+    const to = destinationOf(children, here, tree, meta);
+    if (to === undefined || to === from || within(from)(to)) continue;
+    if (tree.has(to) || !parentChainExists(to, tree) || claimed.has(to)) continue;
+    claimed.add(to);
 
-    const allMoved = children.every(({ rel, v, hash }) => {
-      const appeared = appearedUnder(rel, hash, here, meta);
-      if (!appeared || appeared === v.path) return false;
-      const np = parentPath(appeared);
-      if (newParent !== undefined && np !== newParent) return false;
-      newParent = np;
-      moved.push({ hash, to: appeared });
-      return true;
+    plan.push({
+      from,
+      to,
+      nodeId: source.nodeId,
+      rev: source.rev,
+      children: children.map(({ hash, rel }) => ({ hash, to: `${to}/${rel}` })),
     });
-    if (!allMoved || newParent === undefined) continue;
-
-    if (tree.has(newParent)) continue;
-    // Nothing may still live in the folder. Moving it moves everything under it, and the plan only
-    // proves where the VANISHED children went: moving one note out of a folder into a new one used
-    // to carry the whole folder along, and every note that stayed came back as a copy. It covers a
-    // destination inside the source too (#351) — `V/N/a` still lives under `V`.
-    if ([...here].some((p) => p.startsWith(`${parent}/`))) continue;
-    if (newParent && !parentChainExists(newParent, tree)) continue;
-    // Two folders cannot move to the same destination in one pass; the second is not a
-    // move but a merge into something this pass is already creating.
-    if (claimed.has(newParent)) continue;
-    claimed.add(newParent);
-
-    plan.push({ from: parent, to: newParent, nodeId: source.nodeId, rev: source.rev, children: moved });
   }
 
   return plan;
 };
 
-/** A local path ending in `rel` whose content hash matches, or nothing. */
-const appearedUnder = (
-  rel: string,
-  plainHash: string,
+/**
+ * The one folder every child reappears under at its relative path, or nothing.
+ *
+ * Candidates come from where the first child turned up; each must hold all of them. More than
+ * one survivor is decided by how many bytes match, and a tie is no answer at all.
+ */
+const destinationOf = (
+  children: readonly { hash: string; rel: string }[],
   here: ReadonlySet<string>,
+  tree: ReadonlyMap<string, TreeNode>,
   meta: ReadonlyMap<string, FileMeta>,
 ): string | undefined => {
+  const first = children[0];
+  if (!first) return undefined;
+
+  const fits: { to: string; matching: number }[] = [];
   for (const path of here) {
-    if (!path.endsWith(`/${rel}`)) continue;
-    if (meta.get(path)?.plainHash === plainHash) return path;
+    if (!path.endsWith(`/${first.rel}`) || tree.has(path)) continue;
+    const to = path.slice(0, path.length - first.rel.length - 1);
+    const at = children.map((c) => `${to}/${c.rel}`);
+    // A path the server already holds is somebody's file, not one this folder brought.
+    if (!at.every((p) => here.has(p) && !tree.has(p))) continue;
+    const matching = children.filter((c, i) => meta.get(at[i]!)?.plainHash === c.hash).length;
+    fits.push({ to, matching });
   }
-  return undefined;
+  fits.sort((a, b) => b.matching - a.matching);
+  if (fits.length === 0 || (fits.length > 1 && fits[0]!.matching === fits[1]!.matching)) return undefined;
+  return fits[0]!.to;
 };
 
 /** Every ancestor ABOVE this path already exists on the server as a folder. */

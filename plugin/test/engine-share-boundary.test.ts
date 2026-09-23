@@ -183,8 +183,17 @@ class Server implements VaultWire {
     return { node_id: id, rev: this.rev };
   }
 
-  async putContent(): Promise<{ rev: number } | PutConflict> {
-    throw new Error('nothing here edits content');
+  /** Every node whose content was replaced, in order — an edit that followed its node. */
+  readonly edited: string[] = [];
+
+  async putContent(_v: string, nodeId: string, body: Parameters<VaultWire['putContent']>[2]): Promise<{ rev: number } | PutConflict> {
+    const r = this.rows.get(nodeId)!;
+    const want = r.shareId ? Object.values(SHARES).find((s) => s.id === r.shareId)!.scope : KV_SCOPE;
+    assert.ok(body.blob_envelopes?.some((e) => e.sha256 === body.sha256 && e.scope_id === want), 'an edit is sealed under its node’s scope');
+    this.material(body);
+    Object.assign(r, { sha256: body.sha256, size: body.size, rev: ++this.rev });
+    this.edited.push(nodeId);
+    return { rev: this.rev };
   }
 
   async moveNode(_v: string, nodeId: string, ifMatchRev: number, body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string }): Promise<{ rev: number }> {
@@ -354,5 +363,64 @@ describe('a move the server refuses (#402)', () => {
     assert.ok(refused.errors.length >= 1);
     assert.deepEqual(vault.paths(), ['Elsewhere/own.md', 'Team/plan.md'], 'no second copy of the folder');
     assert.equal(server.tree().get('Elsewhere'), undefined, 'and no new folder on the server');
+  });
+});
+
+describe('a shared folder renamed with something else going on inside it (#409)', () => {
+  /** What the server holds outside the vault's own scope — a share's content that left it shows up here. */
+  const privateFiles = (): string[] =>
+    [...server.tree()].filter(([p, r]) => r.shareId === null && r.sha256 !== null && !p.startsWith('Mine/')).map(([p]) => p);
+
+  it('moves the root once when a file inside was edited in the same moment — the case that emptied a share', async () => {
+    server.seed(team, 'notes.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('notes') });
+    await engine.sync();
+    const notes = server.tree().get('Team/notes.md')!.id;
+
+    moveLocal(vault, 'Team/plan.md', 'Ours/plan.md');
+    vault.seed('Ours/notes.md', body('notes, edited while the folder was renamed'));
+    await vault.delete('Team/notes.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(server.refused, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Ours')?.id, team, 'the root itself was renamed');
+    assert.equal(tree.get('Ours/notes.md')?.id, notes, 'the edited file is the same node');
+    assert.equal(tree.get('Ours/notes.md')?.shareId, SHARES.team.id, 'and still in the share');
+    assert.deepEqual(server.edited, [notes], 'the edit went up against it');
+    assert.deepEqual(privateFiles(), [], 'nothing was re-created outside the share');
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'and nothing was deleted from it');
+  });
+
+  it('moves the root once when it has a subfolder — which was never recognised as a folder move', async () => {
+    const sub = server.seed(team, 'sub', { scopeId: SHARES.team.scope, shareId: SHARES.team.id });
+    server.seed(sub, 'deep.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('deep') });
+    await engine.sync();
+    const deep = server.tree().get('Team/sub/deep.md')!.id;
+
+    moveLocal(vault, 'Team/plan.md', 'Ours/plan.md');
+    moveLocal(vault, 'Team/sub/deep.md', 'Ours/sub/deep.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Ours')?.id, team);
+    assert.equal(tree.get('Ours/sub/deep.md')?.id, deep, 'the subfolder rode along');
+    assert.deepEqual(privateFiles(), []);
+  });
+
+  it('touches nothing when a shared folder’s files scatter into folders the server has never seen', async () => {
+    server.seed(team, 'notes.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('notes') });
+    await engine.sync();
+    const before = [...server.tree().keys()].sort();
+
+    moveLocal(vault, 'Team/plan.md', 'One/plan.md');
+    moveLocal(vault, 'Team/notes.md', 'Two/notes.md');
+    const report = await engine.sync();
+
+    assert.match(report.errors.map((e) => e.message).join(' '), /this shared folder is gone from here/);
+    assert.deepEqual([...server.tree().keys()].sort(), before, 'the server is exactly as it was');
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing left the share');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'One/plan.md', 'Two/notes.md'], 'and nothing was pulled back beside them');
   });
 });

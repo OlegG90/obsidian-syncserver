@@ -143,13 +143,56 @@ describe('did a whole folder move', () => {
     assert.equal(plan[0]!.children.length, 2, 'and it accounts for both children');
   });
 
-  it('refuses when one child was edited during the move', () => {
-    // The case that cost the most to find: rename plus edit. One child's bytes differ, so
-    // this is not the same folder arriving elsewhere, and the per-file walk handles it.
+  it('still sees the move when one child was edited during it (#409)', () => {
+    // It used to refuse: one child's bytes differ, so "not the same folder". But the per-file
+    // walk it fell to read a renamed SHARE ROOT's files as leaving the share, and took them out
+    // for everybody. The folder is the same folder; the edit follows the node once it has moved.
     const f = collapsed();
     f.meta.set('N/b.md', { plainHash: 'DIFFERENT', size: BIG });
 
-    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
+    const plan = folderMoves(f.vanished, f.tree, f.meta, f.here);
+    assert.deepEqual(plan.map((m) => [m.from, m.to]), [['V', 'N']]);
+    assert.equal(plan[0]!.children.length, 2, 'the edited child is accounted for too');
+  });
+
+  it('moves the shallowest folder, with its subfolders riding along (#409)', () => {
+    // A renamed folder with a subfolder vanishes as files two levels down. Grouped by each
+    // file's own parent, only `V/sub` was ever considered — and its new parent `N` was not on
+    // the server — so no folder move was planned at all.
+    const f = collapsed();
+    f.vanished.set('hc', [gone('V/sub/c.md')]);
+    f.tree.set('V/sub', folder('id:sub'));
+    f.tree.set('V/sub/c.md', file('id:c'));
+    f.meta.set('N/sub/c.md', { plainHash: 'hc', size: BIG });
+    f.here.add('N/sub/c.md');
+
+    const plan = folderMoves(f.vanished, f.tree, f.meta, f.here);
+    assert.deepEqual(plan.map((m) => [m.from, m.to]), [['V', 'N']], 'one move, of V; V/sub goes with it');
+    assert.equal(plan[0]!.children.length, 3);
+  });
+
+  it('moves only the subfolder when its parent stays', () => {
+    const f = collapsed();
+    f.vanished = vanished([['hc', [gone('V/sub/c.md')]]]);
+    f.tree.set('V/sub', folder('id:sub'));
+    f.tree.set('V/sub/c.md', file('id:c'));
+    f.meta = meta([['V/other/c.md', { plainHash: 'hc', size: BIG }]]);
+    f.here = new Set(['V/a.md', 'V/b.md', 'V/other/c.md']);
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here).map((m) => [m.from, m.to]), [['V/sub', 'V/other']]);
+  });
+
+  it('refuses when two destinations fit equally well', () => {
+    const f = collapsed();
+    f.meta = meta([
+      ['N/a.md', { plainHash: 'x', size: BIG }],
+      ['N/b.md', { plainHash: 'y', size: BIG }],
+      ['M/a.md', { plainHash: 'x', size: BIG }],
+      ['M/b.md', { plainHash: 'y', size: BIG }],
+    ]);
+    f.here = new Set(['N/a.md', 'N/b.md', 'M/a.md', 'M/b.md']);
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), [], 'a coin toss is no answer');
   });
 
   it('refuses when the children scattered to different places', () => {

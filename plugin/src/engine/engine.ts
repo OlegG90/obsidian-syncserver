@@ -776,7 +776,9 @@ export class SyncEngine {
     // Every condition that decides whether this IS a folder move lives in `rename.ts`.
     // What is left here is what only this class can do: name the folder under the right
     // scope, call the server, and repair the walk's own view of the tree afterwards.
-    for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
+    const plan = folderMoves(ctx.vanished, ctx.tree, ctx.meta, here);
+    this.holdShareRoots(plan, here, ctx);
+    for (const move of plan) {
       if (this.crossesShare(ctx, move.from, move.to)) {
         if (isShareRoot(ctx.tree.get(move.from)!, ctx.shareScopes)) {
           // A share ROOT going into another share. Shares do not nest, and the per-file way
@@ -821,6 +823,52 @@ export class SyncEngine {
         this.holdBack(move, ctx);
         ctx.report.errors.push({ path: move.from, message: errorText(e) });
       }
+    }
+  }
+
+  /**
+   * A share root this device emptied, with no move that explains where it went: touch nothing.
+   *
+   * Left to the per-file walk, every file of it would read as leaving the share — re-created in
+   * whatever folder it turned up in, and deleted from the share for everybody in it (#409). That
+   * is what a rename looked like when `folderMoves` could not recognise it, and it is the one
+   * outcome a missed rename must never have: a duplicate is recoverable at a glance, a share
+   * emptied for somebody else is not. So the root's vanished files stay claimed and undeleted,
+   * the files that could be them stay out of the walk, and the pass says so. The state still
+   * names the old paths, so the next pass asks again — after the folder is moved back, or
+   * renamed on its own.
+   */
+  private holdShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): void {
+    for (const [path, node] of ctx.tree) {
+      if (node.isFile || !isShareRoot(node, ctx.shareScopes)) continue;
+      const within = (p: string): boolean => p.startsWith(`${path}/`);
+      if ([...here].some(within)) continue;
+      if (plan.some((m) => m.from === path || within(m.from) || path.startsWith(`${m.from}/`))) continue;
+
+      // Its vanished files, by path relative to it, and what could be them somewhere else: new
+      // here, and at one of those relative paths.
+      const rels = new Set<string>();
+      for (const list of ctx.vanished.values()) for (const v of list) if (within(v.path)) rels.add(v.path.slice(path.length + 1));
+      const couldBe = (f: VaultFile): boolean =>
+        !ctx.state.nodes[f.path] && [...rels].some((rel) => f.path === rel || f.path.endsWith(`/${rel}`));
+      // **Only the shape of a rename is held.** Files dropped into folders the server already has
+      // were moved out on purpose, and the walk carries them out of the share (#402). Files that
+      // turned up in a folder the server has never seen are a folder that went somewhere this
+      // pass could not prove — the case that emptied a share for everybody.
+      if (!ctx.queue.some((f) => couldBe(f) && !ctx.tree.has(parentPath(f.path)))) continue;
+
+      for (const [hash, list] of [...ctx.vanished]) {
+        const rest = list.filter((v) => !within(v.path));
+        for (const v of list) if (within(v.path)) ctx.handled.add(v.path);
+        if (rest.length) ctx.vanished.set(hash, rest);
+        else ctx.vanished.delete(hash);
+      }
+      for (const f of ctx.queue) if (couldBe(f)) ctx.handled.add(f.path);
+      ctx.queue = ctx.queue.filter((f) => !couldBe(f));
+      ctx.report.errors.push({
+        path,
+        message: 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
+      });
     }
   }
 
