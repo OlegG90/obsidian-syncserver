@@ -322,7 +322,19 @@ export class Panels {
               ? 'Shared by you.'
               : 'Shared with you.'
             : 'This share is over — finish leaving to return the folder to your own key.';
-        const row = new Setting(list).setName(label).setDesc(state);
+        // **The folder's name in an element of ours, not in `Setting`'s name.**
+        //
+        // `Setting` lays its text and its controls out in one row, sized for the settings tab.
+        // This panel is a sidebar leaf: a text field and two buttons take the whole 336px, and
+        // the text block is squeezed to a column ZERO pixels wide and 148 tall — the folder's
+        // name, wrapped one letter per line, occupying a blank gap on screen. Measured on a
+        // vault with two shared folders, where the panel showed two nameless rows.
+        //
+        // The member rows below keep using `Setting`: one button leaves room for a name.
+        const head = list.createEl('div');
+        head.createEl('div', { cls: 'setting-item-name', text: label });
+        head.createEl('div', { cls: 'setting-item-description', text: state });
+        const row = new Setting(list);
 
         if (share.isInitiator) {
           let login = '';
