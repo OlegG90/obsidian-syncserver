@@ -204,6 +204,12 @@ interface PassContext {
    * opened, which is the only place it exists as one fact.
    */
   shareScopes: Map<string, string>;
+  /**
+   * Folders whose files crossed a share boundary one by one this pass (#402). The server
+   * cannot move the folder itself across, so its files are re-created on the other side and
+   * the emptied folder is removed once the walk is done with them.
+   */
+  crossed: string[];
   state: VaultState;
   report: SyncReport;
 }
@@ -421,7 +427,7 @@ export class SyncEngine {
       tree, byNodeId, meta, dedup,
       state, report, rootNodeId, vaultScopeId,
       shareScopes,
-      vanished: new Map(), handled: new Set(), queue: [],
+      vanished: new Map(), handled: new Set(), queue: [], crossed: [],
     };
 
     if (epoch === 'reset') {
@@ -487,6 +493,7 @@ export class SyncEngine {
         await this.pushDelete(v, ctx);
       }
     }
+    await this.removeCrossedFolders(ctx);
 
     // What is left: server files no local copy ever stood in for. Ordinary pull.
     const serverOnly = [...ctx.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !ctx.handled.has(n.path));
@@ -774,6 +781,22 @@ export class SyncEngine {
     // What is left here is what only this class can do: name the folder under the right
     // scope, call the server, and repair the walk's own view of the tree afterwards.
     for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
+      if (this.crossesShare(ctx, move.from, move.to)) {
+        const source = ctx.tree.get(move.from)!;
+        if (source.shareId && source.nameKeyId !== ctx.shareScopes.get(source.shareId)) {
+          // A share ROOT going into another share. Shares do not nest, and the per-file way
+          // round would empty the share for everybody in it to fill the other one: refused,
+          // and nothing is touched until the folder is moved back.
+          this.holdBack(move, ctx);
+          ctx.report.errors.push({ path: move.to, message: 'a shared folder cannot be moved into another shared folder — move it back' });
+          continue;
+        }
+        // The server refuses a folder moved across the boundary (docs/04). Each file crosses on
+        // its own in the walk — re-created under the destination's key, the source deleted —
+        // and the emptied folder goes afterwards.
+        ctx.crossed.push(move.from);
+        continue;
+      }
       const name = basePath(move.to);
       const destParent = move.to ? parentPath(move.to) : '';
       const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
@@ -797,9 +820,62 @@ export class SyncEngine {
         }
         ctx.report.renamed.push({ from: move.from, to: move.to });
       } catch (e) {
-        // A refused move is not a failure we can resolve here — the per-file fallback ran
-        // nothing for these, so report and let the next pass retry.
+        // A refused move is not a failure we can resolve here: report it, touch nothing, and
+        // let the next pass retry. Left to the walk, the children would fall through to a move
+        // each, and whatever that refused came back from the server as a second copy (#402).
+        this.holdBack(move, ctx);
         ctx.report.errors.push({ path: move.from, message: errorText(e) });
+      }
+    }
+  }
+
+  /**
+   * Leave a folder move exactly as it was: nothing uploaded, nothing deleted, nothing pulled.
+   *
+   * The state still records the old paths, so the next pass sees the same move and tries again.
+   * Without this the pass would do the worst of both — the source, no longer on disk and not
+   * deleted, is pulled back down as a server-only file, and the destination is uploaded as a
+   * new one: two folders where there was one (#402).
+   */
+  private holdBack(move: { from: string; to: string; children: { hash: string }[] }, ctx: PassContext): void {
+    for (const child of move.children) {
+      for (const v of ctx.vanished.get(child.hash) ?? []) {
+        if (v.path.startsWith(`${move.from}/`)) ctx.handled.add(v.path);
+      }
+      const rest = (ctx.vanished.get(child.hash) ?? []).filter((v) => !v.path.startsWith(`${move.from}/`));
+      if (rest.length) ctx.vanished.set(child.hash, rest);
+      else ctx.vanished.delete(child.hash);
+    }
+    // Out of the walk, not merely marked: the walk decides every file it is handed, and a file
+    // at a path the server has never seen is decided as new.
+    const inside = (f: VaultFile): boolean => f.path.startsWith(`${move.to}/`);
+    for (const f of ctx.queue) if (inside(f)) ctx.handled.add(f.path);
+    ctx.queue = ctx.queue.filter((f) => !inside(f));
+  }
+
+  /**
+   * Whether moving a node from `from` to `to` crosses a share boundary — the one move the server
+   * refuses (docs/04). The boundary lies between the two PARENTS, which is what the scope a name
+   * lives under reads: a share root renamed among its holder's own folders crosses nothing (#401).
+   */
+  private crossesShare(ctx: PassContext, from: string, to: string): boolean {
+    return this.contentScopeId(ctx, from) !== this.contentScopeId(ctx, to);
+  }
+
+  /** The folders a crossing emptied, removed once nothing of theirs is left on the server (#402). */
+  private async removeCrossedFolders(ctx: PassContext): Promise<void> {
+    // Deepest first, and only a folder the walk really emptied: one with anything still under it
+    // — a file whose crossing failed, a subfolder — stays, because deleting a folder deletes
+    // what is in it.
+    for (const path of [...ctx.crossed].sort((a, b) => depth(b) - depth(a))) {
+      const folder = ctx.tree.get(path);
+      if (!folder || [...ctx.tree.keys()].some((p) => p.startsWith(`${path}/`))) continue;
+      try {
+        await this.client.deleteNode(this.vaultId, folder.nodeId, folder.rev);
+        ctx.tree.delete(path);
+        ctx.byNodeId.delete(folder.nodeId);
+      } catch (e) {
+        ctx.report.errors.push({ path, message: errorText(e) });
       }
     }
   }
@@ -817,15 +893,36 @@ export class SyncEngine {
    */
   private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished, ctx: PassContext): Promise<void> {
     const parentId = await this.ensureFolders(file.path, ctx);
+
+    // Across a share boundary a move is not a move: the server refuses it, because the two
+    // sides are different keys (docs/04). What the protocol asks instead is a copy under the
+    // destination's key and a delete of the source — the file leaves the share for everybody
+    // in it, or joins it, which is what moving it there means (#402).
+    if (this.crossesShare(ctx, source.path, file.path)) {
+      await this.pushNew(file, m, ctx);
+      await this.pushDelete(source, ctx);
+      return;
+    }
+
     const name = basePath(file.path);
     // The moved node's new name is named under the scope of its destination folder.
     const nameScopeId = this.contentScopeId(ctx, file.path);
     const nameKey = this.scopeKeyFor(nameScopeId);
 
-    const out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
-      parent_id: parentId,
-      ...nameUnder(nameKey, nameScopeId, name),
-    });
+    let out: { rev: number };
+    try {
+      out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
+        parent_id: parentId,
+        ...nameUnder(nameKey, nameScopeId, name),
+      });
+    } catch (e) {
+      // The source is no longer a candidate for deletion (the caller took it), and it is not
+      // on disk: left alone, the pull at the end of this pass would bring it back as a
+      // server-only file, and the next pass would upload the destination as an unrelated copy
+      // (#402). Claimed instead, with the state untouched, so the next pass sees the same move.
+      ctx.handled.add(source.path);
+      throw e;
+    }
 
     delete ctx.state.nodes[source.path];
     ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, ...SyncEngine.hintFrom(m) };
