@@ -74,6 +74,11 @@ export interface ShareFlowDeps {
   notify(message: string, durationMs?: number): void;
   /** The screen showing this is now out of date. */
   done(): void;
+  /**
+   * Ask for a sync pass, the kind nobody pressed for: it runs if nothing else is in flight and
+   * prompts for nothing. Called with the gate already released — taken, the pass would refuse.
+   */
+  syncSoon(): void;
 }
 
 export interface ShareFlow {
@@ -224,8 +229,14 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       });
       if (!done) return;
 
-      deps.notify('SyncServer: joined. The folder arrives on the next sync.');
+      // Joining makes the replica on the server; the files still have to come down, and a pass
+      // is what brings them. Waiting for "the next sync" meant waiting for the server's change
+      // hint to come back to the device that caused the change — a round trip to learn about
+      // its own act, and when the hint did not arrive the folder stayed missing until Obsidian
+      // restarted (#398). This device knows it just joined, so it asks for the pass itself.
+      deps.notify('SyncServer: joined. Syncing the folder into this vault now.');
       deps.done();
+      deps.syncSoon();
     },
 
     async decline(shareId) {

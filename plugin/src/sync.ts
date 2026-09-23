@@ -51,8 +51,9 @@ export interface SyncCoordinator {
    * A pass nobody asked for: runs only with an open session and nothing else in flight, prompts for
    * nothing, and says nothing unless something moved or needs a person.
    *
-   * Two callers, and they are the same kind of caller: the change-notification socket (`push.ts`) and
-   * the vault settling after a local edit (`local-changes.ts`).
+   * Three callers, and they are the same kind of caller: the change-notification socket (`push.ts`),
+   * the vault settling after a local edit (`local-changes.ts`), and accepting an invitation, whose
+   * folder only a pass brings down (`share-flow.ts`, #398).
    */
   runIfIdle(): Promise<void>;
 }

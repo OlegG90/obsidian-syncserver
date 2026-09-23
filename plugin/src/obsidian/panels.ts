@@ -323,7 +323,7 @@ export class Panels {
       for (const inv of out.invitations) {
         const row = new Setting(list)
           .setName(`Invitation from ${inv.initiatorLogin}`)
-          .setDesc('Accepting materialises a copy in this vault; it arrives on the next sync.');
+          .setDesc('Accepting materialises a copy in this vault and syncs it down straight away.');
         row.addButton((b) =>
           this.s.waits(b)
             .setButtonText('Accept')
