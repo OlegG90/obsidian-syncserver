@@ -807,6 +807,13 @@ into or out of a shared folder returns `409 {reason: "share_boundary"}`; the cli
 with the required destination-scope material, then delete the source. This keeps scope conversion atomic at
 the write level without making a tree move silently create partial cryptographic metadata.
 
+The client does not wait for that refusal: it knows which side each parent is on, so a file carried
+across the edge goes straight to a create under the destination's key and a delete of the source. A
+folder carried across goes file by file, and the emptied source folder is deleted afterwards. A share
+root carried into another share is refused on the client — shares do not nest — and nothing is sent.
+A move the server refuses for any reason leaves the pass as it found it: the source is not pulled
+back, the destination is not uploaded as a new file, and the next pass tries the same move (#402).
+
 ## Blob transfer
 
 `PUT` carries only a hash, never content: upload the blob first (deduplicated via `HEAD`), then the

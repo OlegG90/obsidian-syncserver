@@ -1,0 +1,358 @@
+/**
+ * Moving things across a share's edge, against a server that keeps state (#401, #402).
+ *
+ * The server refuses a `move` whose old and new parents are on different sides of a shared
+ * folder — the two sides are different keys (docs/04). What the client does instead is the
+ * protocol's other half: re-create the item under the destination's key and delete the source.
+ * That half was never written, and the refusal it met instead turned a rename into two folders.
+ *
+ * **Why a fake with state, when the other engine tests answer from fixed lists.** Everything
+ * asserted here is about what is LEFT — on the server and on disk — after a pass that moved,
+ * created and deleted in some order. A fake that answers a fixed walk cannot say what is left;
+ * this one holds the tree, applies each write, and refuses exactly what the server refuses.
+ */
+import assert from 'node:assert/strict';
+import type { Change, Delta, OpenedVault } from '@syncserver/shared';
+import { beforeEach, describe, it } from 'node:test';
+
+import { ApiError, type CursorRejected, type CursorUnverifiable, type Envelope, type PutConflict } from '../src/api/client.js';
+import { vaultKey } from '../src/crypto/account.js';
+import { sealBlob } from '../src/crypto/blob.js';
+import { randomBytes, utf8 } from '../src/crypto/bytes.js';
+import { decryptName, encryptName, nameHmac, wrapContentKey } from '../src/crypto/scope.js';
+import { wrapShareKey } from '../src/crypto/share.js';
+import { SyncEngine } from '../src/engine/engine.js';
+import { MemoryStateStore } from '../src/engine/state.js';
+import type { VaultWire } from '../src/engine/wire.js';
+import { VaultScopes } from '../src/share-keys.js';
+import { FakeVault } from './fake-vault.js';
+
+const vaultId = '11111111-1111-4111-8111-111111111111';
+const ROOT = 'root';
+const KV_SCOPE = 'scope-vault';
+const kv = vaultKey(randomBytes(32), vaultId);
+
+/** Two shares, so a share root can be carried into the other one. */
+const SHARES = {
+  team: { id: '33333333-3333-4333-8333-333333333333', scope: 'scope-team', key: randomBytes(32) },
+  other: { id: '44444444-4444-4444-8444-444444444444', scope: 'scope-other', key: randomBytes(32) },
+};
+
+const opened: OpenedVault = { root_node_id: ROOT, head_rev: 1, scopes: [{ scope: 'vault', key_id: KV_SCOPE }] };
+
+const scopes = (): VaultScopes =>
+  VaultScopes.open(
+    {
+      ...opened,
+      scopes: [
+        ...opened.scopes,
+        ...Object.values(SHARES).map((s) => ({
+          scope: 'share' as const, key_id: s.scope, share_id: s.id,
+          wrapped_key: wrapShareKey(kv, s.key), wrapping: 'vault' as const,
+        })),
+      ],
+    },
+    { vaultKey: kv, openIdentity: () => randomBytes(32), userId: 'user' },
+  );
+
+const keyOf = (scopeId: string): Uint8Array =>
+  scopeId === KV_SCOPE ? kv : Object.values(SHARES).find((s) => s.scope === scopeId)!.key;
+
+/** Long enough to count as a rename candidate: below 512 bytes a hash match means nothing (docs/04). */
+const body = (label: string): string => `${label}\n${'x'.repeat(600)}`;
+
+interface ServerRow {
+  id: string;
+  parentId: string | null;
+  nameEnc: string | null;
+  nameHmac: string | null;
+  nameKeyId: string | null;
+  shareId: string | null;
+  sha256: string | null;
+  size: number | null;
+  rev: number;
+  deleted: boolean;
+}
+
+/** A vault as the server holds it: writes apply, and a move across a share's edge is refused. */
+class Server implements VaultWire {
+  readonly rows = new Map<string, ServerRow>();
+  readonly blobs = new Map<string, Uint8Array>();
+  readonly envelopes = new Map<string, Envelope[]>();
+  readonly tags = new Map<string, string>();
+  /** Every refusal, by code — a pass that crosses correctly never meets one. */
+  readonly refused: string[] = [];
+  /** A server that says no to every move, for a reason that is not the boundary. */
+  refuseMoves = false;
+  private rev = 1;
+  private ids = 0;
+
+  constructor() {
+    this.rows.set(ROOT, { id: ROOT, parentId: null, nameEnc: null, nameHmac: null, nameKeyId: null, shareId: null, sha256: null, size: null, rev: 1, deleted: false });
+  }
+
+  /** A node placed directly, as another device or an earlier session left it. */
+  seed(parentId: string, name: string, opts: { scopeId: string; shareId?: string; text?: string }): string {
+    const id = `n${++this.ids}`;
+    let sha256: string | null = null;
+    let size: number | null = null;
+    if (opts.text !== undefined) {
+      const sealed = sealBlob(utf8(opts.text));
+      this.blobs.set(sealed.sha256, sealed.bytes);
+      this.envelopes.set(sealed.sha256, [{ scopeId: opts.scopeId, wrappedKey: wrapContentKey(keyOf(opts.scopeId), sealed.contentKey) }]);
+      sha256 = sealed.sha256;
+      size = sealed.bytes.length;
+    }
+    const key = keyOf(opts.scopeId);
+    this.rows.set(id, {
+      id, parentId, nameEnc: encryptName(key, name), nameHmac: nameHmac(key, name), nameKeyId: opts.scopeId,
+      shareId: opts.shareId ?? null, sha256, size, rev: ++this.rev, deleted: false,
+    });
+    return id;
+  }
+
+  /** The live nodes by path, with the facts a test asserts on. */
+  tree(): Map<string, ServerRow> {
+    const out = new Map<string, ServerRow>();
+    const pathOf = (r: ServerRow): string => {
+      if (r.parentId === null) return '';
+      const parent = pathOf(this.rows.get(r.parentId)!);
+      const name = decryptLabel(r);
+      return parent ? `${parent}/${name}` : name;
+    };
+    for (const r of this.rows.values()) if (!r.deleted && r.parentId !== null) out.set(pathOf(r), r);
+    return out;
+  }
+
+  async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
+    const nodes = [...this.rows.values()].filter((r) => !r.deleted).map((r): Change => ({
+      node_id: r.id, parent_id: r.parentId, name_enc: r.nameEnc, name_hmac: r.nameHmac, name_key_id: r.nameKeyId,
+      op: 'put', rev: r.rev, sha256: r.sha256, size: r.size, mtime: new Date(0).toISOString(), share_id: r.shareId, author_id: null,
+    }));
+    return { nodes, snapshot: `c${this.rev}` };
+  }
+
+  async delta(): Promise<Delta | CursorRejected | CursorUnverifiable> {
+    return { changes: [], events: [], next_cursor: `c${this.rev}`, has_more: false };
+  }
+
+  async dedupLookup(_v: string, tags: string[]): Promise<Map<string, string>> {
+    return new Map(tags.filter((t) => this.tags.has(t)).map((t) => [t, this.tags.get(t)!]));
+  }
+
+  async putBlob(sealed: { sha256: string; bytes: Uint8Array }): Promise<{ sha256: string; size: number }> {
+    this.blobs.set(sealed.sha256, sealed.bytes);
+    return { sha256: sealed.sha256, size: sealed.bytes.length };
+  }
+
+  async getBlob(sha256: string): Promise<Uint8Array | undefined> {
+    return this.blobs.get(sha256);
+  }
+
+  async blobKeys(_v: string, addresses: string[]): Promise<Map<string, Envelope[]>> {
+    return new Map(addresses.filter((a) => this.envelopes.has(a)).map((a) => [a, this.envelopes.get(a)!]));
+  }
+
+  /** The share a node's CHILDREN belong to: a root's own mark, or its parent's. */
+  private shareInside(id: string): string | null {
+    return this.rows.get(id)!.shareId;
+  }
+
+  private material(body: { blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[]; dedup_tags?: { sha256: string; content_tag: string }[] }): void {
+    for (const e of body.blob_envelopes ?? []) {
+      this.envelopes.set(e.sha256, [...(this.envelopes.get(e.sha256) ?? []), { scopeId: e.scope_id, wrappedKey: e.wrapped_key }]);
+    }
+    for (const t of body.dedup_tags ?? []) this.tags.set(t.content_tag, t.sha256);
+  }
+
+  async createNode(_v: string, body: Parameters<VaultWire['createNode']>[1]): Promise<{ node_id: string; rev: number }> {
+    const shareId = this.shareInside(body.parent_id);
+    // What the schema insists on (SH-26, SH-28): inside a share, the name and the content are
+    // under the share's key. A client that forgot would be refused, not quietly accepted.
+    const want = shareId ? Object.values(SHARES).find((s) => s.id === shareId)!.scope : KV_SCOPE;
+    assert.equal(body.name_key_id, want, 'a new node is named under its destination’s scope');
+    if (body.sha256) {
+      assert.ok(body.blob_envelopes?.some((e) => e.sha256 === body.sha256 && e.scope_id === want), 'and its content enveloped under it');
+    }
+    this.material(body);
+    const id = `n${++this.ids}`;
+    this.rows.set(id, {
+      id, parentId: body.parent_id, nameEnc: body.name_enc, nameHmac: body.name_hmac, nameKeyId: body.name_key_id,
+      shareId, sha256: body.sha256 ?? null, size: body.size ?? null, rev: ++this.rev, deleted: false,
+    });
+    return { node_id: id, rev: this.rev };
+  }
+
+  async putContent(): Promise<{ rev: number } | PutConflict> {
+    throw new Error('nothing here edits content');
+  }
+
+  async moveNode(_v: string, nodeId: string, ifMatchRev: number, body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string }): Promise<{ rev: number }> {
+    const r = this.rows.get(nodeId)!;
+    if (this.refuseMoves) return this.refuse(409, 'rev_mismatch');
+    if (r.rev !== ifMatchRev) return this.refuse(409, 'rev_mismatch');
+    // The server's rule since #401: the boundary lies between the old parent and the new one.
+    if (this.shareInside(r.parentId!) !== this.shareInside(body.parent_id)) return this.refuse(409, 'share_boundary');
+    Object.assign(r, { parentId: body.parent_id, nameEnc: body.name_enc, nameHmac: body.name_hmac, nameKeyId: body.name_key_id, rev: ++this.rev });
+    return { rev: this.rev };
+  }
+
+  async deleteNode(_v: string, nodeId: string, ifMatchRev: number): Promise<{ rev: number }> {
+    const r = this.rows.get(nodeId)!;
+    if (r.rev !== ifMatchRev) return this.refuse(409, 'rev_mismatch');
+    const gone = (id: string): void => {
+      this.rows.get(id)!.deleted = true;
+      for (const c of this.rows.values()) if (c.parentId === id && !c.deleted) gone(c.id);
+    };
+    gone(nodeId);
+    return { rev: ++this.rev };
+  }
+
+  private refuse(status: number, code: string): never {
+    this.refused.push(code);
+    throw new ApiError(status, code, JSON.stringify({ error: code }));
+  }
+}
+
+/** Test-side only: names are sealed, and a test asserting on paths needs them back. */
+const decryptLabel = (r: ServerRow): string => decryptName(keyOf(r.nameKeyId!), r.nameEnc!);
+
+/** Move a file on disk the way Obsidian does: the bytes appear at the new path, the old one is gone. */
+const moveLocal = (vault: FakeVault, from: string, to: string): void => {
+  vault.seed(to, vault.contents(from)!);
+  void vault.delete(from);
+};
+
+let server: Server;
+let vault: FakeVault;
+let engine: SyncEngine;
+let team: string;
+let mine: string;
+
+beforeEach(async () => {
+  server = new Server();
+  // A folder shared with somebody: its root named under KV (SH-01), its interior under KS.
+  team = server.seed(ROOT, 'Team', { scopeId: KV_SCOPE, shareId: SHARES.team.id });
+  server.seed(team, 'plan.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('plan') });
+  mine = server.seed(ROOT, 'Mine', { scopeId: KV_SCOPE });
+  server.seed(mine, 'own.md', { scopeId: KV_SCOPE, text: body('own') });
+
+  vault = new FakeVault();
+  engine = new SyncEngine(server, vaultId, scopes(), vault, new MemoryStateStore());
+  const first = await engine.sync();
+  assert.deepEqual(first.errors, []);
+  assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/plan.md'], 'the fixture arrives before anything moves');
+});
+
+describe('a file carried across a share’s edge (#402)', () => {
+  it('leaves the share: re-created under the vault key, deleted from the share, one copy on disk', async () => {
+    moveLocal(vault, 'Team/plan.md', 'Mine/plan.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(server.refused, [], 'no move was attempted that the server had to refuse');
+    const tree = server.tree();
+    assert.equal(tree.get('Team/plan.md'), undefined, 'gone from the share');
+    assert.equal(tree.get('Mine/plan.md')?.shareId, null, 'and private where it landed');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Mine/plan.md'], 'and nothing came back');
+  });
+
+  it('joins the share: re-created under the share key, the private one deleted', async () => {
+    moveLocal(vault, 'Mine/own.md', 'Team/own.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(server.refused, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Mine/own.md'), undefined);
+    assert.equal(tree.get('Team/own.md')?.shareId, SHARES.team.id);
+    assert.deepEqual(vault.paths(), ['Team/own.md', 'Team/plan.md']);
+  });
+
+  it('is still an ordinary move on one side of the edge — the node, and its history, travel', async () => {
+    const before = server.tree().get('Team/plan.md')!.id;
+    moveLocal(vault, 'Team/plan.md', 'Team/renamed.md');
+    await engine.sync();
+    assert.equal(server.tree().get('Team/renamed.md')?.id, before, 'the same node, not a copy');
+  });
+});
+
+describe('a folder carried across a share’s edge (#402)', () => {
+  it('crosses file by file and leaves no empty folder behind', async () => {
+    const proj = server.seed(ROOT, 'Proj', { scopeId: KV_SCOPE });
+    server.seed(proj, 'a.md', { scopeId: KV_SCOPE, text: body('a') });
+    server.seed(proj, 'b.md', { scopeId: KV_SCOPE, text: body('b') });
+    await engine.sync();
+
+    moveLocal(vault, 'Proj/a.md', 'Team/Proj/a.md');
+    moveLocal(vault, 'Proj/b.md', 'Team/Proj/b.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(server.refused, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Proj'), undefined, 'the emptied source folder is gone');
+    assert.equal(tree.get('Team/Proj/a.md')?.shareId, SHARES.team.id);
+    assert.equal(tree.get('Team/Proj/b.md')?.shareId, SHARES.team.id);
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/Proj/a.md', 'Team/Proj/b.md', 'Team/plan.md']);
+  });
+
+  it('renames a share root in place, because its name is its holder’s alone (#401)', async () => {
+    moveLocal(vault, 'Team/plan.md', 'Ours/plan.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Ours')?.id, team, 'the root itself was renamed, not copied');
+    assert.equal(tree.get('Ours/plan.md')?.shareId, SHARES.team.id, 'and its content never left the share');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Ours/plan.md']);
+  });
+
+  it('will not carry a share root into another share, and touches nothing', async () => {
+    const other = server.seed(ROOT, 'Other', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    server.seed(other, 'x.md', { scopeId: SHARES.other.scope, shareId: SHARES.other.id, text: body('x') });
+    await engine.sync();
+    const before = [...server.tree().keys()].sort();
+
+    moveLocal(vault, 'Team/plan.md', 'Other/Team/plan.md');
+    const report = await engine.sync();
+
+    assert.match(report.errors[0]?.message ?? '', /cannot be moved into another shared folder/);
+    assert.deepEqual([...server.tree().keys()].sort(), before, 'the server is exactly as it was');
+    assert.equal(vault.contents('Team/plan.md'), undefined, 'and the source was not pulled back beside it');
+  });
+});
+
+describe('a move the server refuses (#402)', () => {
+  it('brings nothing back and uploads nothing new, and the next pass tries the same move', async () => {
+    const before = server.tree().get('Mine/own.md')!.id;
+    server.refuseMoves = true;
+    moveLocal(vault, 'Mine/own.md', 'Mine/renamed.md');
+
+    const refused = await engine.sync();
+    assert.equal(refused.errors.length, 1, 'the refusal is reported');
+    assert.deepEqual(vault.paths(), ['Mine/renamed.md', 'Team/plan.md'], 'the source was not pulled back');
+    assert.equal(server.tree().get('Mine/renamed.md'), undefined, 'and the destination was not uploaded as a copy');
+
+    // The pass after it: the state still says where the file was, so it is the same move again.
+    const again = await engine.sync();
+    assert.equal(again.errors.length, 1);
+    assert.deepEqual(vault.paths(), ['Mine/renamed.md', 'Team/plan.md']);
+
+    server.refuseMoves = false;
+    const moved = await engine.sync();
+    assert.deepEqual(moved.errors, []);
+    assert.equal(server.tree().get('Mine/renamed.md')?.id, before, 'moved at last, as the same node');
+    assert.deepEqual(vault.paths(), ['Mine/renamed.md', 'Team/plan.md']);
+  });
+
+  it('holds a whole folder back the same way', async () => {
+    server.refuseMoves = true;
+    moveLocal(vault, 'Mine/own.md', 'Elsewhere/own.md');
+
+    const refused = await engine.sync();
+    assert.ok(refused.errors.length >= 1);
+    assert.deepEqual(vault.paths(), ['Elsewhere/own.md', 'Team/plan.md'], 'no second copy of the folder');
+    assert.equal(server.tree().get('Elsewhere'), undefined, 'and no new folder on the server');
+  });
+});
