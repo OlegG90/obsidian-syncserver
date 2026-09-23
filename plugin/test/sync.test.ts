@@ -192,6 +192,7 @@ describe('the sync coordinator', () => {
       folders: () => ['Team'],
       notify: (m) => shareNotices.push(m),
       done: () => undefined,
+      syncSoon: () => void sync.runIfIdle(),
     });
 
     // Hold the gate with a slow share operation, then try to sync.

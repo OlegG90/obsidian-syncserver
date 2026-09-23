@@ -233,7 +233,7 @@ keep even if the share later ends.
 so participants can read them; the folder's own name is not, so it stays private to you.
 
 **Invite** someone by login. They see the invitation in their own settings and can **Accept** or
-**Decline**. Accepting materialises a copy in their vault, which arrives on their next sync.
+**Decline**. Accepting materialises a copy in their vault and syncs it down straight away.
 
 **Withdraw** an invitation nobody answered; **Revoke** somebody who joined. Either way **their copy
 stays** — that is what replication means. What stops is propagation: nothing further reaches them.
