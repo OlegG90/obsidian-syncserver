@@ -793,6 +793,75 @@ describe('accepting an invitation', () => {
     }
   });
 
+  it('brings a folder edited BEFORE it was shared, history and all (#397)', async () => {
+    // The case nothing covered, and the first one that met a live server. The versions behind
+    // each head were written under KV, and preparation can give them KS envelopes — which is
+    // what makes history openable — but never KS dedup tags: a tag is an HMAC over the
+    // plaintext, and a superseded version's plaintext is not on disk to compute it from. The
+    // join copies that history, and a rule demanding a tag for every copied version refused
+    // every such join with `invalid_write`.
+    const folder = await createNode('folder', `edited-first-${randomUUID()}`);
+    const inside = await createNode('folder', `interior-${randomUUID()}`, folder);
+    const body = randomUUID();
+    const file = await createFile(inside, `note-${randomUUID()}`, `${body}-1`, w.vaultKeyId);
+    const history = [file.sha256];
+    await putFile(file, `${body}-2`);
+    history.push(file.sha256);
+    await putFile(file, `${body}-3`);
+
+    const shareId = (await openShare(folder)).json().share_id;
+    const ks = await shareKeyOf(shareId);
+    const envelope = (hex: string) => ({ sha256: hex, scope_id: ks, wrapped_key: Buffer.alloc(48, 9).toString('base64') });
+    const named = (id: string) => ({
+      node_id: id,
+      name_enc: b64(`ks-${id}`),
+      name_hmac: sha(Buffer.from(`ks-${id}`)),
+      name_key_id: ks,
+    });
+    // Exactly what a client can honestly send: the head with both, its history with envelopes.
+    const head = materialFor(file.sha256, ks);
+    const prepared = await prepare(shareId, [
+      named(inside),
+      { ...named(file.nodeId), ...head, blob_envelopes: [...head.blob_envelopes, ...history.map(envelope)] },
+    ]);
+    assert.equal(prepared.statusCode, 204, prepared.body);
+    const activated = await w.app.inject({ method: 'POST', url: `/shares/${shareId}/activate`, headers: auth() });
+    assert.equal(activated.statusCode, 200, activated.body);
+    assert.equal((await inviteTo(shareId, w.strangerId)).statusCode, 204);
+
+    const joined = await join(shareId);
+    assert.equal(joined.statusCode, 201, joined.body);
+
+    const theirs = await theirCopyOf(file.nodeId);
+    const arrived = await w.db.query<{ sha256: string }>(
+      `SELECT encode(sha256, 'hex') AS sha256 FROM versions WHERE vault_id = $1 AND node_id = $2 ORDER BY rev`,
+      [w.strangerVaultId, theirs],
+    );
+    assert.deepEqual(
+      arrived.map((r) => r.sha256),
+      [...history, file.sha256],
+      'the history arrives with the folder, oldest first, head last',
+    );
+  });
+
+  it('still refuses a version nobody gave a share envelope, which is the rule that matters (#397)', async () => {
+    // What the fix must not loosen. A participant holding history they cannot open is the
+    // failure the envelope check exists for, and it now stands alone on `versions`.
+    const shareId = await activeShare('no-envelope');
+    const ks = await shareKeyOf(shareId);
+    const folder = (await w.db.one<{ id: string }>(`SELECT subtree_node_id AS id FROM shares WHERE id = $1`, [shareId]))!.id;
+    const file = await createFile(folder, `note-${randomUUID()}`, `${randomUUID()}`, ks);
+    const stray = await putBlob(Buffer.from(`stray-${randomUUID()}`), w.vaultKeyId);
+    await assert.rejects(
+      w.db.query(
+        `INSERT INTO versions (vault_id, node_id, rev, sha256, size, author_id, at)
+         VALUES ($1, $2, (SELECT max(rev) + 1 FROM versions WHERE vault_id = $1), decode($3, 'hex'), 1, $4, now())`,
+        [w.vaultId, file.nodeId, stray, w.userId],
+      ),
+      /needs its share envelope/,
+    );
+  });
+
   it('is redeemed once: a second acceptance finds nothing outstanding', async () => {
     const { shareId } = await invitedShare('once');
     assert.equal((await join(shareId)).statusCode, 201);

@@ -110,7 +110,8 @@ INSERT INTO schema_migrations (id, name, checksum) VALUES
     (2, 'device-names', 'b457dc78fcd7b6e02162a1d9352f80ef36a864a9b2b5ca7965d88fcaf7a088f5'),
     (3, 'sync-problems', '49ab0b7ceddbe0684af50da5e40cdafb82c93dcf300e1322ed3ea67b5cb605e0'),
     (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60'),
-    (5, 'backup-schedule', 'cb2b4c2ba9c651dd0ba3649067fff5829db0ee81850491d52607cdd6b2ec7068');
+    (5, 'backup-schedule', 'cb2b4c2ba9c651dd0ba3649067fff5829db0ee81850491d52607cdd6b2ec7068'),
+    (6, 'share-history-needs-no-tag', '141b83bd48a03d3e4a5e589278e57f652b9235b9de2d72b15544dee86b446bbe');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -1862,6 +1863,13 @@ CREATE TRIGGER nodes_private_writes_have_key_material
     BEFORE INSERT OR UPDATE OF sha256, share_id ON nodes
     FOR EACH ROW EXECUTE FUNCTION nodes_check_private_material();
 
+-- A version inside an active share owes its KS ENVELOPE and nothing more (#397). The envelope
+-- is what lets a participant open history, and re-wrapping a content key needs no plaintext,
+-- so preparation can give one to every version. The TAG it cannot: an HMAC over plaintext that
+-- is on disk only for the live head — the split activation and unmarking already make. The
+-- head's tag is `nodes_active_share_writes_have_key_material`'s to demand, on the node, where
+-- the head lives. Asking it of every version refused every join of a folder edited before it
+-- was shared, because the join copies that history.
 CREATE FUNCTION versions_check_active_share_material() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -1874,9 +1882,8 @@ BEGIN
     END IF;
     SELECT * INTO s FROM shares WHERE id = n.share_id;
     IF s.state = 'active' AND n.share_item_id <> s.root_item_id
-       AND (NOT EXISTS (SELECT 1 FROM blob_keys WHERE sha256 = NEW.sha256 AND scope_id = s.subtree_key_id)
-         OR NOT EXISTS (SELECT 1 FROM dedup_index WHERE sha256 = NEW.sha256 AND scope_id = s.subtree_key_id)) THEN
-        RAISE EXCEPTION 'active shared version needs its share envelope and dedup tag'
+       AND NOT EXISTS (SELECT 1 FROM blob_keys WHERE sha256 = NEW.sha256 AND scope_id = s.subtree_key_id) THEN
+        RAISE EXCEPTION 'active shared version needs its share envelope'
             USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
