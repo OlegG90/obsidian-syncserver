@@ -1291,7 +1291,41 @@ describe('the devices of an account', () => {
     });
     assert.equal(vault.statusCode, 401, 'the same answer away from /auth, where the gap was');
 
+    // Nodes, deltas, shares and history — the four the gap was reported on (#405). The vault
+    // named does not matter: the device is refused before any route looks at it.
+    const somewhere = randomUUID();
+    for (const url of [
+      `/vaults/${somewhere}/list`,
+      `/vaults/${somewhere}/delta`,
+      '/shares',
+      `/vaults/${somewhere}/versions/${randomUUID()}`,
+    ]) {
+      const out = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${access}` } });
+      assert.equal(out.statusCode, 401, url);
+      assert.equal(out.json().error, 'device_revoked', url);
+    }
+
     await db.query(`DELETE FROM devices WHERE id = $1`, [doomed]);
+  });
+
+  it('stops answering every device of an account that has been disabled (#373, #405)', async () => {
+    const device = await extraDevice('obsidian', 'android');
+    const access = await signIn(device);
+    const owner = (await db.one<{ id: string }>(`SELECT user_id AS id FROM devices WHERE id = $1`, [device]))!.id;
+    assert.equal((await devicesOf(access)).statusCode, 200);
+
+    await db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [owner]);
+    try {
+      for (const url of ['/auth/devices', '/vaults', '/shares']) {
+        const out = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${access}` } });
+        assert.equal(out.statusCode, 401, url);
+        assert.equal(out.json().error, 'device_revoked', url);
+      }
+    } finally {
+      // The account is shared with every test after this one.
+      await db.query(`UPDATE users SET state = 'active' WHERE id = $1`, [owner]);
+      await db.query(`DELETE FROM devices WHERE id = $1`, [device]);
+    }
   });
 });
 

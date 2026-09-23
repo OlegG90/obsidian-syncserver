@@ -14,7 +14,8 @@
 import { runBackup, type CopyReader, type Legs } from './backup.js';
 import { backupRunDir, runDirOf } from './backup-legs.js';
 import { removeBackupCopy } from './backup-remove.js';
-import { claimDue, lastDue, nextRun, readSchedule, type StoredSchedule } from './backup-schedule.js';
+import type { BackupScheduleView } from '@syncserver/shared';
+import { CATCH_UP_MS, claimDue, KEEP_MAX, lastDue, nextRun, readSchedule, type StoredSchedule } from './backup-schedule.js';
 import type { Db } from './db.js';
 
 export interface ScheduleDeps {
@@ -129,15 +130,11 @@ export const takeScheduledBackup = async (
   return 'ok';
 };
 
-/** What the console shows beside the schedule: when it next runs, and whether it is in trouble. */
-export interface ScheduleView extends StoredSchedule {
-  /** The next moment it fires, or nothing when it is off or names no day. */
-  nextRun: string | null;
-  /** The last scheduled run failed. */
-  lastFailed: boolean;
-  /** A moment passed more than an hour ago and no scheduled run covered it. */
-  overdue: boolean;
-}
+/**
+ * What the console shows beside the schedule — `shared`'s view, with the two instants still
+ * `Date`s until they cross the wire. One declaration of the fields, not a second one here.
+ */
+export type ScheduleView = Omit<BackupScheduleView, 'lastScheduledFor' | 'updatedAt'> & StoredSchedule;
 
 export const scheduleView = async (db: Db, now = new Date()): Promise<ScheduleView> => {
   const s = await readSchedule(db);
@@ -157,6 +154,8 @@ export const scheduleView = async (db: Db, now = new Date()): Promise<ScheduleVi
   return {
     ...s,
     nextRun: s.enabled ? (nextRun(s, now)?.toISOString() ?? null) : null,
+    keepMax: KEEP_MAX,
+    catchUpHours: CATCH_UP_MS / 3_600_000,
     lastFailed: last?.status === 'failed',
     overdue: owed && !answered && now.getTime() - due!.getTime() > OVERDUE_MS,
   };

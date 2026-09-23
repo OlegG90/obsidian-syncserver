@@ -37,7 +37,7 @@ import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
-import { readSchedule, saveSchedule, scheduleProblem, tidyDays, type BackupSchedule } from '../backup-schedule.js';
+import { readSchedule, saveSchedule, scheduleProblem, settingsOf, tidyDays, type BackupSchedule } from '../backup-schedule.js';
 import { scheduleView } from '../backup-scheduler.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
@@ -312,7 +312,7 @@ export const registerAdminRoutes = (
         actor: req.admin!,
         action: 'backup.schedule',
         details: {
-          from: { enabled: before.enabled, time: before.time, days: before.days, zone: before.zone, keep: before.keep },
+          from: settingsOf(before),
           to: wanted,
         },
       }),

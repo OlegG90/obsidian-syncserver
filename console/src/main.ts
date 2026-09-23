@@ -23,7 +23,7 @@ import {
 } from './api.js';
 import {
   accountBadge, problemsBadge, quotaProblem, accountState, accountUsage, auditAction, bytesFromMib, confirmLabel, freezeWarning, holdsStorage, human,
-  isOver, mib, mibOf, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker,
+  isOver, keptLine, mib, mibOf, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker,
   WEEKDAYS, windowHeld,
 } from './format.js';
 import { chooseScreen, sessionEnded } from './screen.js';
@@ -1156,12 +1156,17 @@ const verifyButton = (run: BackupRun): HTMLElement => {
  * the operator does not, and the browser already knows which zone they are thinking in. It is
  * offered first, and the whole list is behind it for a server administered from elsewhere.
  */
-const scheduleCard = (view: BackupScheduleView, reload: () => Promise<void>): HTMLElement => {
+const scheduleCard = (view: BackupScheduleView, runs: BackupRun[], reload: () => Promise<void>): HTMLElement => {
   const card = el('div', { className: 'card' }, el('h1', { textContent: 'On a schedule' }));
 
   const on = el('input', { type: 'checkbox', checked: view.enabled });
   const time = el('input', { type: 'time', value: view.time });
-  const keep = el('input', { type: 'number', min: '1', max: '30', value: String(view.keep) });
+  const keep = el('input', { type: 'number', min: '1', max: String(view.keepMax), value: String(view.keep) });
+  // Redrawn as the number changes, so what keeping it costs is read before it is saved (#357).
+  const kept = el('p', { className: 'muted', textContent: keptLine(runs, view.keep) });
+  keep.addEventListener('input', () => {
+    kept.textContent = keptLine(runs, Number(keep.value));
+  });
   const boxes = WEEKDAYS.map((name, day) => {
     const box = el('input', { type: 'checkbox', checked: view.days.includes(day) });
     return { day, box, row: el('label', {}, box, name) };
@@ -1183,13 +1188,14 @@ const scheduleCard = (view: BackupScheduleView, reload: () => Promise<void>): HT
     el('div', {}, el('label', { textContent: 'At' }), time),
     el('div', {}, ...boxes.map((b) => b.row)),
     el('div', {}, el('label', { textContent: 'Time zone' }), zone),
-    el('div', {}, el('label', { textContent: 'Scheduled copies to keep' }), keep),
+    el('div', {}, el('label', { textContent: `Scheduled copies to keep (1–${view.keepMax})` }), keep),
+    kept,
     el('p', {
       className: 'muted',
       textContent:
         'Only copies this schedule took are removed once there are more than that; a backup ' +
         'you took by hand is never swept. A run that arrives while the server is busy is ' +
-        'skipped rather than queued, and one missed by more than six hours is not caught up.',
+        `skipped rather than queued, and one missed by more than ${view.catchUpHours} hours is not caught up.`,
     }),
   );
 
@@ -1244,7 +1250,7 @@ const backupsScreen = (): void => {
     // The card is rebuilt from the answer rather than patched: the next run, the banner and
     // the fields are one description of one row, and a card half-updated would show a time
     // the server is not keeping.
-    list.replaceChildren(scheduleCard(out.schedule, fill), ...out.backups.map(backupRow));
+    list.replaceChildren(scheduleCard(out.schedule, out.backups, fill), ...out.backups.map(backupRow));
   };
 
   shell('backups', page, list, runCard);

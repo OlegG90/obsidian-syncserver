@@ -11,7 +11,7 @@
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
 import type {
-  AccountRow, AuditRow, BackupRun, BackupScheduleView, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus,
+  AccountRow, AuditRow, BackupRun, BackupSchedule, BackupScheduleView, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus,
   StorageTotals, SyncProblemRow,
 } from '@syncserver/shared';
 import { operatorRefusal } from './format.js';
@@ -286,13 +286,8 @@ export const backups = (): Promise<{ backups: BackupRun[]; schedule: BackupSched
  * One call because it is one intention: sending the switch apart from the fields would leave a
  * moment in which the server is on with the previous time, and that moment takes backups.
  */
-export const saveSchedule = (schedule: {
-  enabled: boolean;
-  time: string;
-  days: number[];
-  zone: string;
-  keep: number;
-}): Promise<BackupScheduleView> => call('PUT', '/admin/backups/schedule', schedule);
+export const saveSchedule = (schedule: BackupSchedule): Promise<BackupScheduleView> =>
+  call('PUT', '/admin/backups/schedule', schedule);
 
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>

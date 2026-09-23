@@ -204,7 +204,9 @@ Four things worth knowing before you turn it on:
 
 - a backup **refuses new writes while it runs**, so pick an hour your devices are idle; each run says how
   long it held them, so the hour you picked can be judged rather than guessed;
-- **retention only sweeps what the schedule took.** A copy you took by hand stays until you remove it;
+- **retention only sweeps what the schedule took.** A copy you took by hand stays until you remove it.
+  Beside the number, the card says how many scheduled copies are on disk, what they take, and what the
+  number you have typed would remove after the next run — read it before saving a smaller one;
 - a run that arrives while a backup, a restore or a collector pass is busy is **skipped**, not queued, and
   says so in the history;
 - a moment missed by more than six hours — the server was off — is **recorded as missed** rather than

@@ -55,7 +55,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { decide, type LocalMeta, type SyncPolicy } from './reconcile.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
-import { basePath, folderMoves, parentPath, type Vanished } from './rename.js';
+import { basePath, folderMoves, parentPath, type FolderMove, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
 import { errorText } from '../error-text.js';
 import { VaultScopes } from '../share-keys.js';
@@ -300,8 +300,7 @@ export class SyncEngine {
 
   /** The scope a node at `path` must be named under — the rule itself is `scopes.ts`. */
   private contentScopeId(ctx: PassContext, path: string): string {
-    const parent = parentPath(path);
-    return contentScopeFor(parent ? ctx.tree.get(parent) : undefined, ctx.shareScopes, ctx.vaultScopeId);
+    return scopeAt(ctx.tree, ctx.shareScopes, ctx.vaultScopeId, path);
   }
 
   async sync(opts: PassOptions = {}): Promise<SyncReport> {
@@ -371,10 +370,7 @@ export class SyncEngine {
     const trustHints = !opts.rescan && !POLICY[epoch].preferLocal;
 
     /** Which scope a file's bytes are sealed under, read off the walked tree (`scopes.ts`). */
-    const scopeOf = (path: string): string => {
-      const parent = parentPath(path);
-      return contentScopeFor(parent ? tree.get(parent) : undefined, shareScopes, vaultScopeId);
-    };
+    const scopeOf = (path: string): string => scopeAt(tree, shareScopes, vaultScopeId, path);
 
     const meta = new Map<string, LocalMeta>();
     for (const f of local) {
@@ -782,8 +778,7 @@ export class SyncEngine {
     // scope, call the server, and repair the walk's own view of the tree afterwards.
     for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
       if (this.crossesShare(ctx, move.from, move.to)) {
-        const source = ctx.tree.get(move.from)!;
-        if (source.shareId && source.nameKeyId !== ctx.shareScopes.get(source.shareId)) {
+        if (isShareRoot(ctx.tree.get(move.from)!, ctx.shareScopes)) {
           // A share ROOT going into another share. Shares do not nest, and the per-file way
           // round would empty the share for everybody in it to fill the other one: refused,
           // and nothing is touched until the folder is moved back.
@@ -837,12 +832,13 @@ export class SyncEngine {
    * deleted, is pulled back down as a server-only file, and the destination is uploaded as a
    * new one: two folders where there was one (#402).
    */
-  private holdBack(move: { from: string; to: string; children: { hash: string }[] }, ctx: PassContext): void {
+  private holdBack(move: Pick<FolderMove, 'from' | 'to' | 'children'>, ctx: PassContext): void {
     for (const child of move.children) {
+      const rest: Vanished[] = [];
       for (const v of ctx.vanished.get(child.hash) ?? []) {
         if (v.path.startsWith(`${move.from}/`)) ctx.handled.add(v.path);
+        else rest.push(v);
       }
-      const rest = (ctx.vanished.get(child.hash) ?? []).filter((v) => !v.path.startsWith(`${move.from}/`));
       if (rest.length) ctx.vanished.set(child.hash, rest);
       else ctx.vanished.delete(child.hash);
     }
@@ -1264,6 +1260,19 @@ export class SyncEngine {
 }
 
 const depth = (path: string): number => path.split('/').length;
+
+/** The scope a node at `path` is named under, read off a tree — the rule itself is `scopes.ts`. */
+const scopeAt = (tree: ReadonlyMap<string, ServerNode>, shareScopes: ReadonlyMap<string, string>, vaultScopeId: string, path: string): string => {
+  const parent = parentPath(path);
+  return contentScopeFor(parent ? tree.get(parent) : undefined, shareScopes, vaultScopeId);
+};
+
+/**
+ * Whether a node is the ROOT of a share: in the share, yet named under its holder's vault key
+ * rather than the share's (SH-01). The one folder that must never be carried into another share.
+ */
+const isShareRoot = (node: ServerNode, shareScopes: ReadonlyMap<string, string>): boolean =>
+  Boolean(node.shareId) && node.nameKeyId !== shareScopes.get(node.shareId!);
 
 /**
  * `Note (conflict 2026-08-01 laptop).md` — the exact form docs/04 specifies for a content

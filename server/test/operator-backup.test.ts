@@ -110,6 +110,8 @@ describe('the schedule, over HTTP (#357)', () => {
     assert.deepEqual(view.days, [1, 3]);
     assert.equal(view.zone, 'Europe/Kyiv');
     assert.ok(view.nextRun, 'a live schedule says when it fires');
+    const limits = r.json() as { keepMax: number; catchUpHours: number };
+    assert.deepEqual([limits.keepMax, limits.catchUpHours], [30, 6], 'the limits the card says, from the one place that enforces them (#405)');
   });
 
   it('records the change in the audit log, with what it was', async () => {

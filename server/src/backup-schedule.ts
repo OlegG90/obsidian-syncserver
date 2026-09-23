@@ -11,23 +11,18 @@
  * lives there: an operator who types 22:00 means 22:00 where they are, and D-122 forbids
  * asking them for a `TZ` on the day they install the server.
  */
-import type { ScheduleRefusalCode } from '@syncserver/shared';
+import type { BackupSchedule, ScheduleRefusalCode } from '@syncserver/shared';
 import type { Db } from './db.js';
 
-export interface BackupSchedule {
-  enabled: boolean;
-  /** `HH:MM`, in `zone`. */
-  time: string;
-  /** Weekdays this runs on, 0 = Sunday, ascending and without repeats. */
-  days: number[];
-  /** An IANA zone name, e.g. `Europe/Kyiv`. */
-  zone: string;
-  /** How many scheduled copies survive the sweep. */
-  keep: number;
-}
+export type { BackupSchedule };
 
-/** What a caller sent that cannot be stored — the console's word for it is shared's. */
-export type ScheduleProblem = ScheduleRefusalCode;
+/** The most scheduled copies a schedule may keep. The console reads it from the view. */
+export const KEEP_MAX = 30;
+
+/** Only the settings of a schedule — what an operator set, without what the server derived. */
+export const settingsOf = (s: BackupSchedule): BackupSchedule => ({
+  enabled: s.enabled, time: s.time, days: s.days, zone: s.zone, keep: s.keep,
+});
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -52,9 +47,9 @@ export const tidyDays = (days: number[]): number[] => [...new Set(days)].sort((a
  * backups, which is the silent failure D-121 refused to build. A schedule that is *off* may
  * hold anything storable — an operator sets the shape first and flips the switch after.
  */
-export const scheduleProblem = (s: BackupSchedule): ScheduleProblem | undefined => {
+export const scheduleProblem = (s: BackupSchedule): ScheduleRefusalCode | undefined => {
   if (typeof s.time !== 'string' || !TIME.test(s.time)) return 'bad_time';
-  if (!Number.isInteger(s.keep) || s.keep < 1 || s.keep > 30) return 'bad_keep';
+  if (!Number.isInteger(s.keep) || s.keep < 1 || s.keep > KEEP_MAX) return 'bad_keep';
   if (typeof s.zone !== 'string' || !knownZone(s.zone)) return 'bad_zone';
   // Its own code (#405): `no_days` says "pick at least one", which is the wrong advice for a day 7.
   if (!Array.isArray(s.days) || s.days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) return 'bad_days';
@@ -143,37 +138,31 @@ const shift = (l: Local, offset: number): { y: number; m: number; d: number } =>
 };
 
 /**
- * The first moment this schedule fires after `after`, or nothing when it fires on no day.
+ * The first firing, walking local days from `from` in one direction, that `fits`.
  *
  * Walks nine local days rather than solving for one: a week, plus the slack a clock change
  * and a schedule that runs on a single weekday need between them.
  */
-export const nextRun = (s: BackupSchedule, after: Date): Date | undefined => {
+const firstFiring = (s: BackupSchedule, from: Date, step: 1 | -1, fits: (at: Date) => boolean): Date | undefined => {
   const days = tidyDays(s.days);
   if (days.length === 0) return undefined;
-  const here = localAt(s.zone, after);
+  const here = localAt(s.zone, from);
   for (let i = 0; i <= 8; i++) {
-    const { y, m, d } = shift(here, i);
+    const { y, m, d } = shift(here, i * step);
     if (!days.includes(weekday(y, m, d))) continue;
     const at = atOn(s, y, m, d);
-    if (at.getTime() > after.getTime()) return at;
+    if (fits(at)) return at;
   }
   return undefined;
 };
 
+/** The first moment this schedule fires after `after`, or nothing when it fires on no day. */
+export const nextRun = (s: BackupSchedule, after: Date): Date | undefined =>
+  firstFiring(s, after, 1, (at) => at.getTime() > after.getTime());
+
 /** The most recent moment this schedule fired at or before `at`, or nothing. */
-export const lastDue = (s: BackupSchedule, at: Date): Date | undefined => {
-  const days = tidyDays(s.days);
-  if (days.length === 0) return undefined;
-  const here = localAt(s.zone, at);
-  for (let i = 0; i >= -8; i--) {
-    const { y, m, d } = shift(here, i);
-    if (!days.includes(weekday(y, m, d))) continue;
-    const due = atOn(s, y, m, d);
-    if (due.getTime() <= at.getTime()) return due;
-  }
-  return undefined;
-};
+export const lastDue = (s: BackupSchedule, at: Date): Date | undefined =>
+  firstFiring(s, at, -1, (due) => due.getTime() <= at.getTime());
 
 /**
  * How late a missed moment may be and still be taken.
