@@ -798,6 +798,18 @@ The heuristic must be conservative: for small identical files (empty notes, repe
 Restrict it to a unique candidate above a few hundred bytes; otherwise fall back to `del` + `put`, which
 costs nothing extra because the blob is deduplicated anyway.
 
+**A folder** is recognised as a whole, not file by file: the shallowest folder whose vanished files all
+reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
+not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
+a file edited as the folder was renamed is still the same file, and once the folder has moved its edit
+goes up against its node (#409). A tie between two possible destinations is refused.
+
+**A share root is never taken apart.** When one is emptied here and no folder move explains where it went,
+while its files turned up in folders the server has never seen — the shape of a rename that could not be
+proved — the pass sends nothing about it, keeps the old paths, and says so. Left to the per-file walk,
+each file would read as leaving the share and be deleted from it for everybody (#409). Files dropped into
+folders the server already has were moved out on purpose, and leave the share as below.
+
 History survives a rename on its own, being keyed by `node_id`. What a `move` *does* require is recomputing
 `ancestry` for the whole subtree in the same transaction — and, inside a shared folder, applying the same
 move to every participant's corresponding node.
