@@ -348,7 +348,13 @@ export class Panels {
         const people = list.createEl('div');
         people.style.margin = '0 0 1em 1em';
         void flow.members(share.shareId).then((members) => {
-          if (!members) return;
+          // Said, not left blank. An empty list under a shared folder reads as "nobody is in
+          // it", which is a worse claim than an error — and it is the claim this drew for
+          // every share but the first, back when the read took the sync gate (#387).
+          if (!members) {
+            people.createEl('p', { text: 'Who is in this folder could not be read.' });
+            return;
+          }
           for (const m of members) {
             // Three states, and they are not decoration: an invitation has been sent and not
             // answered, a member holds a copy, and somebody finalizing is on their way out

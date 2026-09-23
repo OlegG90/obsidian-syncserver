@@ -180,3 +180,93 @@ describe('shared folder marks', () => {
     assert.equal(resolves, 2, 'and the reset guard does not trust the pre-disconnect map');
   });
 });
+
+describe('a resolve that failed is not a fact (#388)', () => {
+  it('keeps the folder a share was remembered with when this pass cannot place it', async () => {
+    // The device shared this folder itself, so it knows which one it is first-hand. A tree
+    // read taken before the delta carrying the new root arrived knows less than that.
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    await marks.remember('s1', 'Hub/Laptop');
+
+    deps.resolve = async () => new Map();
+    const rows = await marks.reconcile([share('s1', 'root-1')]);
+
+    assert.equal(rows[0]?.folder, 'Hub/Laptop', 'the panel still names the folder');
+    assert.match(deps.rendered.at(-1)!, /Hub\/Laptop/, 'and the badge stays on it');
+  });
+
+  it('survives a resolve that throws, which a locked vault does', async () => {
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    await marks.remember('s1', 'Hub/Laptop');
+
+    deps.resolve = async () => {
+      throw new Error('the vault is locked');
+    };
+    const rows = await marks.reconcile([share('s1', 'root-1')]);
+    assert.equal(rows[0]?.folder, 'Hub/Laptop');
+  });
+
+  it('tries again next time rather than counting a failed pass as answered', async () => {
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    const joined = [share('s1', 'root-1')];
+
+    deps.resolve = async () => {
+      throw new Error('the vault is locked');
+    };
+    await marks.reconcile(joined);
+
+    let asked = 0;
+    deps.resolve = async () => {
+      asked++;
+      return new Map([['s1', 'Hub/Laptop']]);
+    };
+    const rows = await marks.reconcile(joined);
+    assert.equal(asked, 1, 'the same list is resolved again after a failure');
+    assert.equal(rows[0]?.folder, 'Hub/Laptop');
+  });
+
+  it('takes the newly resolved path when a folder was renamed', async () => {
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    await marks.remember('s1', 'Hub/Old name');
+
+    deps.existing = (paths) => paths.filter((p) => p !== 'Hub/Old name');
+    deps.resolve = async () => new Map([['s1', 'Hub/New name']]);
+    const rows = await marks.reconcile([share('s1', 'root-1')]);
+
+    assert.equal(rows[0]?.folder, 'Hub/New name');
+  });
+
+  it('drops a share that has left the list', async () => {
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    await marks.remember('s1', 'Hub/Laptop');
+    await marks.remember('s2', 'Hub/Visa');
+
+    deps.resolve = async () => new Map([['s2', 'Hub/Visa']]);
+    const rows = await marks.reconcile([share('s2', 'root-2')]);
+
+    assert.equal(rows.length, 1);
+    assert.equal(deps.saved.at(-1)!['s1'], undefined, 'the share that is over is forgotten');
+    assert.ok(!deps.rendered.at(-1)!.includes('Hub/Laptop'), 'and loses its badge');
+  });
+
+  it('sharing a second folder leaves the first one badged', async () => {
+    const deps = emptyDeps();
+    const marks = openSharedFolderMarks(deps);
+    await marks.remember('s1', 'Hub/Laptop');
+    await marks.remember('s2', 'Hub/Visa');
+
+    // The second share's root has not reached this device's tree yet — the case that used
+    // to erase the first folder's badge along with it.
+    deps.resolve = async () => new Map([['s1', 'Hub/Laptop']]);
+    const rows = await marks.reconcile([share('s1', 'root-1'), share('s2', 'root-2')]);
+
+    assert.deepEqual(rows.map((r) => r.folder), ['Hub/Laptop', 'Hub/Visa']);
+    const css = deps.rendered.at(-1)!;
+    assert.ok(css.includes('Hub/Laptop') && css.includes('Hub/Visa'), 'both folders are marked');
+  });
+});
