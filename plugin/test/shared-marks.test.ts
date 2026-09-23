@@ -29,6 +29,24 @@ describe('marking a shared folder in the file tree', () => {
     assert.ok(css.includes("content: 'shared'"), 'and says what it is, rather than only colouring it');
   });
 
+  it('gives EVERY shared folder the badge, not only the last one', () => {
+    // `a, b .x::after` binds the descendant part to `b` alone, so a list built by writing the
+    // suffix after the joined selectors badged whichever folder came last and styled the rest
+    // on a rule that does nothing. Invisible with one shared folder; measured with two, where
+    // the first folder's row reported `content: none` against a stylesheet naming it.
+    const css = sharedFolderCss(['Notes', 'Work/Team']);
+    const badges = css.match(/\.nav-folder-title-content::after/g) ?? [];
+    assert.equal(badges.length, 2, `one badge selector per folder:
+${css}`);
+    for (const path of ['Notes', 'Work/Team']) {
+      assert.ok(
+        css.includes(`.nav-folder-title[data-path="${path}"] .nav-folder-title-content::after`),
+        `${path} carries the badge itself:
+${css}`,
+      );
+    }
+  });
+
   it('produces nothing at all when nothing is shared', () => {
     // Distinguished from "an empty rule set" so the caller can treat no shares and no
     // stylesheet as the same thing, and remove the element instead of leaving a dead one.

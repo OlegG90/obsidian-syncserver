@@ -34,11 +34,22 @@ export const sharedFolderCss = (paths: readonly string[]): string => {
   const rows = [...new Set(paths)].filter((p) => p.length > 0);
   if (rows.length === 0) return '';
 
-  const selector = rows.map((p) => `.nav-folder-title[data-path="${cssString(p)}"]`).join(',\n');
-  return `${selector} {
+  /**
+   * **Every selector carries the whole of what follows it.**
+   *
+   * A comma-separated list with a descendant part written after it — `a, b .x::after` — binds
+   * that part to the LAST selector alone. So the badge reached whichever folder happened to be
+   * last, and every other shared folder got the declarations on the row itself, where `content`
+   * does nothing. With one shared folder the two spellings are identical, which is why this
+   * worked until a second folder existed. Built per path, the shape cannot drift apart again.
+   */
+  const listOf = (suffix: string): string =>
+    rows.map((p) => `.nav-folder-title[data-path="${cssString(p)}"]${suffix}`).join(',\n');
+
+  return `${listOf('')} {
   --syncserver-shared: 1;
 }
-${selector} .nav-folder-title-content::after {
+${listOf(' .nav-folder-title-content::after')} {
   content: '${LABEL}';
   margin-inline-start: 0.5em;
   padding: 0 0.4em;
