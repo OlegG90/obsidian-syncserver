@@ -298,10 +298,12 @@ export const moveNode = async (
 
     const cur = await c.query<{
       rev: string; parentId: string | null; ancestry: string[]; shareId: string | null; shareItemId: string | null;
+      parentShareId: string | null;
     }>(
-      `SELECT rev::text AS rev, parent_id AS "parentId", ancestry, share_id AS "shareId",
-              share_item_id AS "shareItemId"
-         FROM nodes WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`,
+      `SELECT n.rev::text AS rev, n.parent_id AS "parentId", n.ancestry, n.share_id AS "shareId",
+              n.share_item_id AS "shareItemId", p.share_id AS "parentShareId"
+         FROM nodes n LEFT JOIN nodes p ON p.vault_id = n.vault_id AND p.id = n.parent_id
+        WHERE n.vault_id = $1 AND n.id = $2 AND n.deleted_at IS NULL FOR UPDATE OF n`,
       [input.vaultId, input.nodeId],
     );
     const row = cur.rows[0];
@@ -318,7 +320,14 @@ export const moveNode = async (
     // A move may not enter or leave a shared folder: the two sides are different key
     // scopes, and a tree move must not quietly create half the cryptographic metadata.
     // The client copies into the destination scope and deletes the source instead.
-    if ((row.shareId ?? null) !== (dest.rows[0]!.shareId ?? null)) return fail('share_boundary');
+    //
+    // The boundary lies between the OLD parent and the NEW one, not between the node and its
+    // destination (#401). For an interior node the two readings agree. A share root is where
+    // they part: it carries its share's mark while the folder it sits in does not, so the
+    // node-based reading refused every rename of a root — the one name in a share that is
+    // its holder's alone (SH-01), under their vault key, and which `fanOut` already keeps
+    // from reaching anybody else.
+    if ((row.parentShareId ?? null) !== (dest.rows[0]!.shareId ?? null)) return fail('share_boundary');
 
     const rev = await nextRev(c, input.vaultId);
     const newAncestry = [...dest.rows[0]!.ancestry, input.parentId];
