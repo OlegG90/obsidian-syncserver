@@ -179,7 +179,7 @@ AC-Q4).
 |---|---|---|
 | `nodes_private_writes_have_key_material` | a private node's blob carries its `KV` envelope and dedup tag in the same transaction as the reference | D-38, D-64 |
 | `nodes_active_share_writes_have_key_material` | a write inside an active share carries the `KS` envelope and tag too | D-45, SH-28 |
-| `versions_active_share_writes_have_key_material` | so does a version row — history left under one scope alone is history nobody else can open | D-45, SH-23 |
+| `versions_active_share_writes_have_key_material` | a version row carries its `KS` **envelope** — history left under one scope alone is history nobody else can open. Not the tag: that is the head's, and the node trigger above demands it (#397) | D-45, SH-23 |
 | `shares_activation_has_all_key_material` | `activate` succeeds only when every current **interior** shared node is named under `KS`, every blob reachable from nodes or versions has its `KS` **envelope**, and every live head has its `KS` **tag** | SH-28 |
 | `shares_keys_match_state` | an active share carries a subtree key and the initiator's envelope; the pairing is not enough, both must be present | D-39, D-50 |
 | `nodes_unmark_requires_finalization_material` | an unmark is allowed only during that member's finalization, after every affected node is named under `KV`, each current/history blob has its `KV` **envelope**, and a live head also has its `KV` **tag** | SH-05, SH-22, SH-29 |

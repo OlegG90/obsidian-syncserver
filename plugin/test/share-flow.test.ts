@@ -17,6 +17,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
   const notices: string[] = [];
   const shared: string[] = [];
   const invited: { shareId: string; login: string }[] = [];
+  const passes: boolean[] = [];
   let rebuilt = 0;
 
   const deps: ShareFlowDeps = {
@@ -40,10 +41,15 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     done: () => {
       rebuilt++;
     },
+    syncSoon: () => {
+      // What a real pass would do first: take the gate. Recorded as whether it could.
+      passes.push(deps.gate.tryBegin('syncing'));
+      if (passes.at(-1)) deps.gate.end();
+    },
     ...over,
   };
 
-  return { flow: openShareFlow(deps), gate: deps.gate, notices, shared, invited, rebuilt: () => rebuilt };
+  return { flow: openShareFlow(deps), gate: deps.gate, notices, shared, invited, passes, rebuilt: () => rebuilt };
 };
 
 describe('sharing a folder', () => {
@@ -162,14 +168,26 @@ describe('inviting', () => {
 });
 
 describe('answering an invitation', () => {
-  it('says the folder is not here yet, because joining only makes it on the server', async () => {
-    // The replica is materialised server-side; the files arrive with the next delta. A
-    // message implying otherwise sends somebody looking for a folder that is not there.
+  it('asks for the pass that brings the folder down, with the gate already free (#398)', async () => {
+    // Joining materialises the replica server-side and nothing more; the files come with a
+    // pass. Leaving that to "the next sync" left a joined folder missing until a restart,
+    // whenever the server's change hint did not make it back to this device.
     const h = harness();
     await h.flow.accept({ shareId: 'share-1', initiatorLogin: 'alice' });
 
-    assert.match(h.notices[0]!, /arrives on the next sync/);
+    assert.deepEqual(h.passes, [true], 'one pass asked for, and it could take the gate');
+    assert.match(h.notices[0]!, /Syncing the folder/);
     assert.equal(h.rebuilt(), 1);
+  });
+
+  it('asks for no pass when the join was refused', async () => {
+    const h = harness({
+      accept: async () => {
+        throw new Error('no such invitation');
+      },
+    });
+    await h.flow.accept({ shareId: 'share-1', initiatorLogin: 'alice' });
+    assert.deepEqual(h.passes, []);
   });
 
   it('hands on the invitation it was given, sender included, rather than asking again (#330)', async () => {
