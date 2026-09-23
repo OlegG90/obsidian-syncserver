@@ -17,6 +17,7 @@ import { removalWarning } from '../vault-removal.js';
 import { deviceLabel } from './device.js';
 import { askDeviceName } from './modals.js';
 import { deviceName } from '../device-name.js';
+import { seenLine, seenNote } from '../seen.js';
 import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
@@ -128,7 +129,9 @@ export class Panels {
         // Both lists, with each device put under the vault it syncs (#364, D-139). A device the server has
         // not yet seen open its vault — not opened since the server started asking — is grouped on its own
         // rather than guessed at.
-        const [vaults, devices] = await Promise.all([this.s.plugin.account.vaults(), this.s.plugin.account.devices()]);
+        const [vaults, seen] = await Promise.all([this.s.plugin.account.vaults(), this.s.plugin.account.devices()]);
+        const { devices } = seen;
+        this.seenWithinSeconds = seen.seenWithinSeconds;
         const known = new Set(vaults.map((v) => v.id));
         const groups: VaultGroup[] = vaults.map((v) => ({ vault: v, devices: devices.filter((d) => d.vault_id === v.id) }));
         const unplaced = devices.filter((d) => !d.vault_id || !known.has(d.vault_id));
@@ -136,9 +139,17 @@ export class Panels {
         return groups;
       },
       (group, list) => {
+        // **Read before anything is appended.** Both decisions below turn on "is this the first
+        // group", and the note is itself an element: asking the list again after adding it would
+        // put a separator above the first vault, which is exactly what the separator is not for.
+        const first = list.childElementCount === 0;
+        // Said once, above the first vault: every row below carries a reading whose freshness is
+        // the session's, not the sync's (#386), and a row that says "seen in the last 15 minutes"
+        // without that sentence still invites "why is it not syncing now".
+        if (first) list.createEl('p', { cls: 'setting-item-description', text: seenNote(this.seenWithinSeconds) });
         // A line above every vault but the first: without it one vault's devices run straight into the next
         // vault's heading, and the whole section reads as a single list.
-        if (list.childElementCount > 0) list.createEl('hr');
+        if (!first) list.createEl('hr');
         if (group.vault) this.vaultRow(group.vault, list);
         else {
           new Setting(list)
@@ -204,6 +215,15 @@ export class Panels {
   }
 
   /**
+   * How stale `last_seen_at` may be, as the server states it with the list (#386).
+   *
+   * Held on the panel rather than passed down every call: it describes the list, the rows are
+   * drawn from that same answer, and the default is the server's own so a row drawn before the
+   * list arrives still words itself sensibly.
+   */
+  private seenWithinSeconds = 15 * 60;
+
+  /**
    * One device, under the vault it syncs: renaming it, and taking it away (#156, #356, #364).
    *
    * The gap #156 closed is not cosmetic: `POST /auth/devices` and `DELETE /auth/devices/:id` both existed,
@@ -215,12 +235,14 @@ export class Panels {
    * as something unrelated. Disconnect is the act that means "this one", and it says what it keeps.
    */
   private deviceRow(d: OwnDeviceRow, list: HTMLElement): void {
-    const when = d.last_seen_at ? new Date(d.last_seen_at).toLocaleString() : 'not since it was added';
     const row = new Setting(list)
       .setName(d.current ? `↳ ${d.name} — this device` : `↳ ${d.name}`)
-      // As fresh as the access token's lifetime and no fresher (D-118): written on every refresh,
-      // never per request. Labelled as such rather than made to sound more precise than it is.
-      .setDesc(`${d.platform} — last seen ${when}`);
+      // **An interval, not an instant** (#386). The column is written on a refresh and never per
+      // request (D-118), so it is the token's lifetime stale at worst — and a timestamp to the
+      // second invited the reader to take it literally, which is how a device that was syncing
+      // came to be read as one that had gone quiet.
+      .setDesc(`${d.platform} — ${seenLine(d.last_seen_at, this.seenWithinSeconds)}`);
+    if (d.last_seen_at) row.settingEl.title = new Date(d.last_seen_at).toLocaleString();
 
     // On every row, this one included: a name is how a person tells the rows apart, and changing one
     // changes nothing about what the device may do (#356).

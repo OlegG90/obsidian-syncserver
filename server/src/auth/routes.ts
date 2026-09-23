@@ -603,7 +603,14 @@ export const registerAuthRoutes = (
 
     // Spread, not four assignments: `last_seen_at` is as fresh as the access token's lifetime and no
     // fresher (D-118), and `current` is the only field this surface adds — see `OwnDeviceRow`.
-    return { devices: rows.map((d): OwnDeviceRow => ({ ...d, current: d.id === req.caller!.deviceId })) };
+    return {
+      devices: rows.map((d): OwnDeviceRow => ({ ...d, current: d.id === req.caller!.deviceId })),
+      // **How fresh `last_seen_at` can be**, said rather than assumed (#386). A device is marked
+      // seen when it refreshes (D-118), which is about once per access-token lifetime — and a
+      // deployment that changes `ACCESS_TOKEN_TTL_SECONDS` changes what the column means. A screen
+      // that printed "15 minutes" from its own source would be right only by coincidence.
+      seen_within_seconds: cfg.accessTokenTtlSeconds,
+    };
   });
 
   /**

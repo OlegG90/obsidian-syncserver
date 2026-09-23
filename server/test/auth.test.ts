@@ -1116,6 +1116,15 @@ describe('the devices of an account', () => {
   const devicesOf = async (access: string) =>
     app.inject({ method: 'GET', url: '/auth/devices', headers: { authorization: `Bearer ${access}` } });
 
+  it('says how stale a last-seen reading can be, beside the rows (#386)', async () => {
+    // The column moves when a device refreshes, not when it syncs (D-118), so its freshness is
+    // the access token's lifetime — a fact of the deployment, not of the screen. A console or a
+    // plugin printing "15 minutes" of its own would be right only until somebody changed it.
+    const mine = await aDeviceOf(VAULT_LOGIN);
+    const out = (await devicesOf(await signIn(mine!.id))).json() as { seen_within_seconds: number };
+    assert.equal(out.seen_within_seconds, cfg.accessTokenTtlSeconds);
+  });
+
   it('hands a test a device it can actually sign in with', async () => {
     // The guard on this suite's own fixture, and the reason it exists is a flake that cost a red `main`
     // twice: ten tests asked for "a device" with `LIMIT 1` and no predicate, one test left a revoked one
@@ -1329,6 +1338,8 @@ describe('an operator looking at somebody’s devices', () => {
       headers: { authorization: `Bearer ${access}` },
     });
     assert.equal(list.statusCode, 200, list.body);
+    // The console words its own sentence from this, rather than printing an instant (#386).
+    assert.equal(list.json().seen_within_seconds, cfg.accessTokenTtlSeconds);
     const lost = (list.json().devices as { id: string; name: string }[]).find((d) => d.name === 'the lost phone');
     assert.ok(lost);
 

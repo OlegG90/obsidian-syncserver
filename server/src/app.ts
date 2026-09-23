@@ -118,7 +118,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     // (docs/10, D-73). The blobs come from the live store, which the configuration names once
     // (issue #219) rather than twice.
     makeLegs: legsFor(cfg, versionLine),
-  });
+  }, { accessTokenTtlSeconds: cfg.accessTokenTtlSeconds });
   await registerConsoleRoutes(app);
 
   // The halt after an unconfirmed restore (docs/11). The database is behind the state
