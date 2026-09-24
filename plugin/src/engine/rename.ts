@@ -69,8 +69,10 @@ export const basePath = (path: string): string => {
  * - **big enough to be identifying.** Below the threshold a hash proves nothing;
  * - **exactly one candidate.** Two vanished files with these bytes and the heuristic would
  *   pick whichever it saw first, which is a coin toss with a silent wrong side;
- * - **the source is still where the walk thinks it is**, and carries the same node id. A
- *   path that has since been reused by something else is not a rename source;
+ * - **the source's node is still live**: at the path the walk thinks it is, or — renamed on the
+ *   server meanwhile by somebody else — at another path (#418). Its node id is what makes it the
+ *   same file, not where it sits; a path reused by something else while the node is gone is not a
+ *   rename source;
  * - **not already claimed.** Callers consume the entry, so a second file with the same
  *   bytes cannot claim the same source.
  *
@@ -84,6 +86,8 @@ export const renameSourceFor = (
   meta: FileMeta,
   vanished: ReadonlyMap<string, Vanished[]>,
   tree: ReadonlyMap<string, TreeNode>,
+  /** Every live node by id, so a node renamed on the server meanwhile is still found (#418). */
+  byNodeId: ReadonlyMap<string, unknown> = new Map(),
 ): Vanished | undefined => {
   if (meta.size < RENAME_MIN_BYTES) return undefined;
 
@@ -92,7 +96,8 @@ export const renameSourceFor = (
 
   const source = candidates[0]!;
   const node = tree.get(source.path);
-  if (!node || node.nodeId !== source.nodeId) return undefined;
+  const stillThere = node !== undefined && node.nodeId === source.nodeId;
+  if (!stillThere && !byNodeId.has(source.nodeId)) return undefined;
 
   return source;
 };
