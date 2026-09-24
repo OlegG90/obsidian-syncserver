@@ -787,8 +787,16 @@ export class SyncEngine {
     // Every condition that decides whether this IS a folder move lives in `rename.ts`.
     // What is left here is what only this class can do: name the folder under the right
     // scope, call the server, and repair the walk's own view of the tree afterwards.
-    const plan = folderMoves(ctx.vanished, ctx.tree, ctx.meta, here);
-    this.holdShareRoots(plan, here, ctx);
+    // **A folder still on disk did not move** (#419). `folderMoves` reads files, and a folder emptied
+    // by moving its files out has none — but Obsidian keeps it, and a person who dragged the last
+    // note out of a shared folder meant the note to leave, not the folder to be renamed after
+    // wherever the note went. Asked here, where the vault is, rather than in the pure planner.
+    const plan: FolderMove[] = [];
+    for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
+      if (await this.stillHere(move.from, move.to)) continue;
+      plan.push(move);
+    }
+    await this.holdShareRoots(plan, here, ctx);
     for (const move of plan) {
       if (this.crossesShare(ctx, move.from, move.to)) {
         if (isShareRoot(ctx.tree.get(move.from)!, ctx.shareScopes)) {
@@ -855,12 +863,15 @@ export class SyncEngine {
    * names the old paths, so the next pass asks again — after the folder is moved back, or
    * renamed on its own.
    */
-  private holdShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): void {
+  private async holdShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): Promise<void> {
     for (const [path, node] of ctx.tree) {
       if (node.isFile || !isShareRoot(node, ctx.shareScopes)) continue;
       const within = (p: string): boolean => p.startsWith(`${path}/`);
       if ([...here].some(within)) continue;
       if (plan.some((m) => m.from === path || within(m.from) || path.startsWith(`${m.from}/`))) continue;
+      // Emptied on purpose, not moved (#419): its files were taken out one by one, and they leave
+      // the share by the per-file rules (#402).
+      if (await this.vault.folderExists(path)) continue;
 
       // Its vanished files, by path relative to it, and what could be them somewhere else: new
       // here, and at one of those relative paths.
@@ -919,6 +930,17 @@ export class SyncEngine {
     const inside = (f: VaultFile): boolean => f.path.startsWith(`${move.to}/`);
     for (const f of ctx.queue) if (inside(f)) ctx.handled.add(f.path);
     ctx.queue = ctx.queue.filter((f) => !inside(f));
+  }
+
+  /**
+   * Whether a folder a move was planned for is in fact still here — emptied, not moved (#419).
+   *
+   * **Except a change of letter case**: where case does not count, `Team` renamed to `team` still
+   * "exists" under its old name, and it is a rename all the same (#421).
+   */
+  private async stillHere(from: string, to: string): Promise<boolean> {
+    if (from.toLowerCase() === to.toLowerCase()) return false;
+    return this.vault.folderExists(from);
   }
 
   /**
