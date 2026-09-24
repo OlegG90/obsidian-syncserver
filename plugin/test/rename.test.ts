@@ -95,6 +95,14 @@ describe('is one file a rename of another', () => {
     assert.equal(source, undefined);
   });
 
+  it('still finds the source when somebody renamed it on the server meanwhile (#418)', () => {
+    // Nothing at the old path any more, but the node is live elsewhere: it is the same file.
+    const v = vanished([['h', [gone('old.md', 'id:x')]]]);
+    const moved = new Map([['id:x', { path: 'theirs.md' }]]);
+    assert.equal(renameSourceFor({ plainHash: 'h', size: BIG }, v, tree([]), moved)?.nodeId, 'id:x');
+    assert.equal(renameSourceFor({ plainHash: 'h', size: BIG }, v, tree([])), undefined, 'and without that, as before');
+  });
+
   it('refuses when the source is no longer on the server at all', () => {
     const source = renameSourceFor({ plainHash: 'h', size: BIG }, vanished([['h', [gone('old.md')]]]), tree([]));
     assert.equal(source, undefined);

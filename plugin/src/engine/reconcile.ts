@@ -148,6 +148,6 @@ export const decide = (s: Situation): Decision => {
   }
 
   // Never known here, not on the server: a rename source, or genuinely new.
-  const source = renameSourceFor(meta, s.vanished, s.tree);
+  const source = renameSourceFor(meta, s.vanished, s.tree, s.byNodeId);
   return source ? { kind: 'push-move', source } : { kind: 'push-new' };
 };
