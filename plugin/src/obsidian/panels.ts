@@ -10,7 +10,7 @@
  * registering a control is the same act wherever the panel is drawn, and that was the part with nowhere
  * to live while the tab was the only surface.
  */
-import { ButtonComponent, Notice, Setting } from 'obsidian';
+import { ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
 import { newestFirst } from '../history-flow.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
@@ -22,6 +22,8 @@ import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
+import { groupShares, memberState, peopleLine, whose } from '../share-list.js';
+import type { ShareMember } from '../api/client.js';
 import { errorText } from '../error-text.js';
 import type { OwnDeviceRow } from '@syncserver/shared';
 
@@ -56,6 +58,13 @@ const asked = <T>(
     })
     .catch(() => list.setText(`The ${what} could not be read.`));
   return list;
+};
+
+/** A run of secondary text inside a line — `setting-item-description` is a block, and this is not. */
+const muted = (host: HTMLElement, text: string): HTMLElement => {
+  const span = host.createSpan({ text });
+  span.style.cssText = 'color: var(--text-muted); font-size: var(--font-ui-smaller);';
+  return span;
 };
 
 /** One vault as the account asks list it. */
@@ -333,88 +342,132 @@ export class Panels {
         row.addButton((b) => this.s.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }
 
-      for (const share of out.joined) {
-        // The folder, and what is true of it. No id: a person never needs one, and two rows
-        // identified by uuid are two rows nobody can tell apart — which is exactly what
-        // happened the first time somebody had to choose between them.
-        const label = share.folder ? `“${share.folder}”` : 'A folder not synced here yet';
-        const state =
-          share.state === 'active'
-            ? share.isInitiator
-              ? 'Shared by you.'
-              : 'Shared with you.'
-            : 'This share is over — finish leaving to return the folder to your own key.';
-        // **The folder's name in an element of ours, not in `Setting`'s name.**
-        //
-        // `Setting` lays its text and its controls out in one row, sized for the settings tab.
-        // This panel is a sidebar leaf: a text field and two buttons take the whole 336px, and
-        // the text block is squeezed to a column ZERO pixels wide and 148 tall — the folder's
-        // name, wrapped one letter per line, occupying a blank gap on screen. Measured on a
-        // vault with two shared folders, where the panel showed two nameless rows.
-        //
-        // The member rows below keep using `Setting`: one button leaves room for a name.
-        const head = list.createEl('div');
-        head.createEl('div', { cls: 'setting-item-name', text: label });
-        head.createEl('div', { cls: 'setting-item-description', text: state });
-        const row = new Setting(list);
-
-        if (share.isInitiator) {
-          let login = '';
-          row.addText((t) => t.setPlaceholder('login to invite').onChange((v) => (login = v)));
-          row.addButton((b) =>
-            this.s.waits(b)
-              .setButtonText('Invite')
-              .onClick(() => void flow.invite(share.shareId, login)),
-          );
+      // The parent said once, above its folders (#428). The top of the vault has no heading, and
+      // neither do shares not synced here: their line already says so.
+      for (const group of groupShares(out.joined)) {
+        if (group.parent) {
+          const heading = list.createDiv({ text: `${group.parent}/` });
+          heading.style.cssText = 'margin-top: 0.75em; color: var(--text-muted); font-size: var(--font-ui-smaller);';
         }
-        // Leaving is everybody's, the initiator included — for them it ends the share, and
-        // the coordinator says which happened rather than guessing here.
-        row.addButton((b) =>
-          this.s.waits(b)
-            .setButtonText('Leave')
-            .setWarning()
-            .onClick(() => void flow.leave(share.shareId)),
-        );
+        for (const { row, name } of group.shares) this.shareEntry(list, flow, row, name);
+      }
+    });
+  }
 
-        // Who is in it, under the row it belongs to. Shown for everybody and not only the
-        // initiator: "who can read this folder" is the question a shared folder raises, and
-        // a participant who cannot answer it is being asked to trust a list they never see.
-        const people = list.createEl('div');
-        people.style.margin = '0 0 1em 1em';
-        void flow.members(share.shareId).then((members) => {
-          // Said, not left blank. An empty list under a shared folder reads as "nobody is in
-          // it", which is a worse claim than an error — and it is the claim this drew for
-          // every share but the first, back when the read took the sync gate (#387).
-          if (!members) {
-            people.createEl('p', { text: 'Who is in this folder could not be read.' });
-            return;
-          }
-          for (const m of members) {
-            // Three states, and they are not decoration: an invitation has been sent and not
-            // answered, a member holds a copy, and somebody finalizing is on their way out
-            // and cannot be removed again.
-            const state = m.finalizing
-              ? 'leaving — their copy is being converted back'
-              : m.joined_at
-                ? m.is_initiator
-                  ? 'shared this folder'
-                  : 'holds a copy'
-                : 'invited, no answer yet';
+  /**
+   * The shares open in this view. Every act on one — an invitation, a revocation — redraws the
+   * whole list, and a list that snapped shut after each would send a person looking for the share
+   * they were just working in (#428).
+   */
+  private readonly openShares = new Set<string>();
 
-            const who = new Setting(people).setName(m.login).setDesc(state);
+  /**
+   * One share: a line that says which folder, whose, and how many hold it, opening onto who they
+   * are and what can be done (#428).
+   *
+   * **None of it is `Setting`.** `Setting` lays text and controls out in one row, sized for the
+   * settings tab; in this sidebar leaf a text field and two buttons took the whole 336px and
+   * squeezed the folder's name to a column zero pixels wide. Its rows are also a settings row's
+   * height, which is how three shares came to fill several screens.
+   */
+  private shareEntry(list: HTMLElement, flow: ShareFlow, share: ShareRow, name: string): void {
+    const ended = share.state !== 'active';
+    const entry = list.createEl('details');
+    // An ended share is open from the start: finishing the departure is still owed.
+    entry.open = ended || this.openShares.has(share.shareId);
+    entry.addEventListener('toggle', () => {
+      if (entry.open) this.openShares.add(share.shareId);
+      else this.openShares.delete(share.shareId);
+    });
 
-            // Only the initiator may remove, and never themselves: their way out is Leave,
-            // which ends the share, and offering both would be offering the same act twice
-            // under two names.
-            if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
-            who.addButton((b) =>
-              this.s.waits(b)
-                .setButtonText(m.joined_at ? 'Revoke' : 'Withdraw')
-                .setWarning()
-                .onClick(() => void flow.remove(share.shareId, m.user_id, m.login)),
-            );
-          }
-        });
+    const line = entry.createEl('summary');
+    line.style.cssText = 'cursor: pointer; padding: 0.2em 0;';
+    if (share.folder) line.title = share.folder;
+    line.createSpan({ text: name });
+    const about = muted(line, '');
+    // Said before the members are read, and again once they are: whose it is does not wait on
+    // the network, and the count cannot be had without it.
+    const say = (members?: readonly ShareMember[]): void => {
+      const parts = [ended ? 'ended' : whose(share, members)];
+      if (members) parts.push(peopleLine(members));
+      about.setText(` · ${parts.join(' · ')}`);
+    };
+    say();
+    if (ended) about.style.color = 'var(--text-warning)';
+
+    const body = entry.createDiv();
+    body.style.cssText =
+      'margin: 0.25em 0 0.75em 0.5em; padding-left: 0.75em; border-left: 1px solid var(--background-modifier-border);';
+    if (ended) muted(body.createDiv(), 'This share is over — finish leaving to return the folder to your own key.');
+    const people = body.createDiv();
+    const actions = body.createDiv();
+    actions.style.cssText = 'display: flex; flex-wrap: wrap; gap: 0.5em; margin-top: 0.5em;';
+
+    if (share.isInitiator) {
+      // The field only when it is wanted: shown on every share, it was a full row under each.
+      const form = body.createDiv();
+      form.style.cssText = 'display: none; gap: 0.5em; margin-top: 0.5em;';
+      let login = '';
+      const field = new TextComponent(form).setPlaceholder('login to invite').onChange((v) => (login = v));
+      const send = (): void => void flow.invite(share.shareId, login);
+      field.inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') send();
+      });
+      this.s.waits(new ButtonComponent(form)).setButtonText('Invite').setCta().onClick(send);
+      new ButtonComponent(actions).setButtonText('+ Invite').onClick(() => {
+        form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+        if (form.style.display === 'flex') field.inputEl.focus();
+      });
+    }
+    // Leaving is everybody's, the initiator included — for them it ends the share, and the
+    // coordinator says which happened rather than guessing here.
+    this.s
+      .waits(new ButtonComponent(actions))
+      .setButtonText('Leave')
+      .setWarning()
+      .onClick(() => void flow.leave(share.shareId));
+
+    // Who is in it. Shown for everybody and not only the initiator: "who can read this folder" is
+    // the question a shared folder raises, and a participant who cannot answer it is being asked
+    // to trust a list they never see.
+    void flow.members(share.shareId).then((members) => {
+      // Said, not left blank. An empty list under a shared folder reads as "nobody is in it",
+      // which is a worse claim than an error (#387).
+      if (!members) {
+        muted(people.createDiv(), 'Who is in this folder could not be read.');
+        return;
+      }
+      say(members);
+      for (const m of members) {
+        const who = people.createDiv();
+        who.style.cssText = 'display: flex; align-items: center; gap: 0.5em; min-height: 1.8em;';
+        const text = who.createDiv();
+        text.style.flex = '1';
+        text.createSpan({ text: m.login });
+        muted(text, ` · ${memberState(m)}`);
+
+        // Only the initiator may remove, and never themselves: their way out is Leave, which ends
+        // the share, and offering both would be offering the same act twice under two names.
+        if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
+        const act = m.joined_at ? 'Revoke' : 'Withdraw';
+        // An icon is a small target, so it asks first — a misclick here stops somebody's copy
+        // receiving anything further.
+        this.s
+          .waits(new ButtonComponent(who))
+          .setIcon('user-minus')
+          .setTooltip(act)
+          .setClass('clickable-icon')
+          .onClick(() =>
+            new ConfirmModal(
+              this.s.app,
+              m.joined_at ? `Revoke ${m.login}?` : `Withdraw the invitation to ${m.login}?`,
+              m.joined_at
+                ? 'Nothing further in this folder reaches them. The copy they already hold stays theirs.'
+                : 'Nothing has been sent to them yet; the invitation simply goes.',
+              () => flow.remove(share.shareId, m.user_id, m.login),
+              act,
+            ).open(),
+          );
       }
     });
   }
