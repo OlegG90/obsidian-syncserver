@@ -78,6 +78,14 @@ export interface VaultAdapter {
    */
   stat(path: string): Promise<{ mtime: number; size: number } | undefined>;
   delete(path: string): Promise<void>;
+  /**
+   * Whether a folder is here, empty or not (#413).
+   *
+   * `list()` answers about files, and an empty folder has none — yet Obsidian keeps one, and a
+   * person who just made a folder has not deleted it. So "no files under it" cannot stand in for
+   * "gone": only this can say a folder was removed, which is what lets its deletion reach the server.
+   */
+  folderExists(path: string): Promise<boolean>;
 }
 
 /**

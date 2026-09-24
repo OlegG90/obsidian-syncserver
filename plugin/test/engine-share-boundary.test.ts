@@ -462,3 +462,45 @@ describe('a shared folder moved onto a folder the server already has (#412)', ()
     assert.equal(server.tree().get('Mine/plan.md')?.shareId, null);
   });
 });
+
+describe('a folder deleted here (#413)', () => {
+  it('is deleted on the server in the same pass as its files, nested folders and all', async () => {
+    const outer = server.seed(mine, 'Old', { scopeId: KV_SCOPE });
+    const inner = server.seed(outer, 'Deeper', { scopeId: KV_SCOPE });
+    server.seed(inner, 'gone.md', { scopeId: KV_SCOPE, text: body('gone') });
+    await engine.sync();
+
+    vault.rmdir('Mine/Old');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.rows.get(inner)!.deleted, true, 'the inner folder went');
+    assert.equal(server.rows.get(outer)!.deleted, true, 'and the one around it, once it was empty');
+    assert.equal(server.tree().get('Mine/Old'), undefined);
+  });
+
+  it('removes a leftover the server has held since before this fix', async () => {
+    const leftover = server.seed(mine, 'Leftover', { scopeId: KV_SCOPE });
+    await engine.sync();
+    assert.equal(server.rows.get(leftover)!.deleted, true);
+  });
+
+  it('keeps an empty folder that is still here', async () => {
+    const empty = server.seed(mine, 'Empty', { scopeId: KV_SCOPE });
+    vault.mkdir('Mine/Empty');
+    await engine.sync();
+    assert.equal(server.rows.get(empty)!.deleted, false);
+  });
+
+  it('never deletes a share root this way, even with nothing left in it', async () => {
+    const quiet = server.seed(ROOT, 'Quiet', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    await engine.sync();
+    assert.equal(server.rows.get(quiet)!.deleted, false);
+  });
+
+  it('deletes an empty folder inside a share, as deleting it there means for everybody', async () => {
+    const sub = server.seed(team, 'Sub', { scopeId: SHARES.team.scope, shareId: SHARES.team.id });
+    await engine.sync();
+    assert.equal(server.rows.get(sub)!.deleted, true);
+  });
+});

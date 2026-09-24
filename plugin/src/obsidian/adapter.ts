@@ -111,4 +111,9 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   async delete(path: string): Promise<void> {
     if (await this.vault.adapter.exists(path)) await this.vault.adapter.remove(path);
   }
+
+  /** The layer below the index, like `listConfig`: it answers for any path, and a folder is one. */
+  async folderExists(path: string): Promise<boolean> {
+    return this.vault.adapter.exists(path);
+  }
 }

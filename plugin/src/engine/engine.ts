@@ -490,6 +490,7 @@ export class SyncEngine {
       }
     }
     await this.removeCrossedFolders(ctx);
+    await this.removeDeletedFolders(ctx, inScope);
 
     // What is left: server files no local copy ever stood in for. Ordinary pull.
     const serverOnly = [...ctx.tree.values()].filter((n) => n.isFile && n.address && this.scope(n.path) && !ctx.handled.has(n.path));
@@ -917,6 +918,48 @@ export class SyncEngine {
    */
   private crossesShare(ctx: PassContext, from: string, to: string): boolean {
     return this.contentScopeId(ctx, from) !== this.contentScopeId(ctx, to);
+  }
+
+  /**
+   * Folders deleted here, deleted on the server too (#413).
+   *
+   * Deletions used to reach the server for files only: the vanished set is built from files, and a
+   * folder is never in it. So deleting a folder left its node behind, empty and invisible on every
+   * device — and still holding its name, which is what turned a later move onto that name into a
+   * merge (#412).
+   *
+   * A folder goes when **all** of these hold, deepest first so a nest of them goes in one pass:
+   *
+   * - nothing is left under it on the server — files first, by the walk above; a folder that still
+   *   holds something is not this function's to remove;
+   * - it is **not here**, not even empty: Obsidian keeps empty folders, and one somebody just made
+   *   is not deleted;
+   * - it is in scope, as the walk's own deletions are — `.obsidian/` with the switch off, or a share
+   *   whose key has not arrived, is somebody else's business;
+   * - it is not a **share root**: removing that is leaving the share, which has its own flow, and
+   *   the server refuses it anyway. An interior folder of a share goes like any other, and that
+   *   reaches everybody in it — which is what deleting a folder inside a shared folder means;
+   * - deletions are being pushed at all: under a restore, an absence proves nothing.
+   */
+  private async removeDeletedFolders(ctx: PassContext, inScope: (path: string) => boolean): Promise<void> {
+    if (!ctx.policy.pushDeletes) return;
+    const folders = [...ctx.tree]
+      .filter(([path, n]) => !n.isFile && inScope(path) && !isShareRoot(n, ctx.shareScopes))
+      .map(([path]) => path)
+      .sort((a, b) => depth(b) - depth(a));
+    for (const path of folders) {
+      const folder = ctx.tree.get(path);
+      if (!folder || [...ctx.tree.keys()].some((p) => p.startsWith(`${path}/`))) continue;
+      if (await this.vault.folderExists(path)) continue;
+      try {
+        await this.client.deleteNode(this.vaultId, folder.nodeId, folder.rev);
+        ctx.tree.delete(path);
+        ctx.byNodeId.delete(folder.nodeId);
+        ctx.report.deleted.push({ path });
+      } catch (e) {
+        ctx.report.errors.push({ path, message: errorText(e) });
+      }
+    }
   }
 
   /** The folders a crossing emptied, removed once nothing of theirs is left on the server (#402). */

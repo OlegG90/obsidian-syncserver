@@ -807,6 +807,13 @@ server already holds is a merge and is refused — unless it is a **leftover**: 
 which is what deleting a folder leaves on the server. That one is deleted and the folder moved in its place
 (#412); it cannot exist locally as an empty folder, or the local move would have collided with it.
 
+**A folder deleted here is deleted on the server** (#413), after its files, deepest first: a folder with
+nothing left under it on the server and not present here — not even empty, since Obsidian keeps empty
+folders — goes in the same pass. Never a share root (removing that is leaving the share), never out of
+scope, never while deletions are not being pushed. Empty folders are not synchronised between devices, so
+one device's empty folder is not another's, and a device that never had it removes it on the server too;
+the folder stays where it was made, as it always did.
+
 **A share root is never taken apart.** When one is emptied here and no folder move explains where it went,
 while its files turned up in folders the server has never seen — the shape of a rename that could not be
 proved — or regrouped under a folder of its own name that the server already holds, which is a merge
