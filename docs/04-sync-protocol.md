@@ -812,7 +812,10 @@ now. A node the server shows somewhere else is never deleted by id for having va
 reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
 not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
 a file edited as the folder was renamed is still the same file, and once the folder has moved its edit
-goes up against its node (#409). A tie between two possible destinations is refused. A destination the
+goes up against its node (#409). A tie between two possible destinations is refused. **A folder still
+here did not move** (#419): Obsidian keeps a folder emptied by moving its files out, so a person who drags
+the last note out of a folder moves the note, and the folder keeps its name — except a change of letter
+case, where the old name "exists" only because case does not count. A destination the
 server already holds is a merge and is refused — unless it is a **leftover**: an empty, unshared folder,
 which is what deleting a folder leaves on the server. That one is deleted and the folder moved in its place
 (#412); it cannot exist locally as an empty folder, or the local move would have collided with it.
