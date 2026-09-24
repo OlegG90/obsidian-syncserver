@@ -85,4 +85,22 @@ export class FakeVault implements VaultAdapter {
   async delete(path: string): Promise<void> {
     this.files.delete(path);
   }
+
+  /** Folders made on their own, with nothing in them — Obsidian keeps those (#413). */
+  private readonly emptyFolders = new Set<string>();
+
+  /** Make an empty folder, as a person does before putting anything in it. */
+  mkdir(path: string): void {
+    this.emptyFolders.add(path);
+  }
+
+  /** Remove a folder and everything in it, as deleting it in the file tree does. */
+  rmdir(path: string): void {
+    this.emptyFolders.delete(path);
+    for (const p of [...this.files.keys()]) if (p.startsWith(`${path}/`)) this.files.delete(p);
+  }
+
+  async folderExists(path: string): Promise<boolean> {
+    return this.emptyFolders.has(path) || [...this.files.keys()].some((p) => p.startsWith(`${path}/`));
+  }
 }
