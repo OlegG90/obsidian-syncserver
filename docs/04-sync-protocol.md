@@ -798,6 +798,11 @@ The heuristic must be conservative: for small identical files (empty notes, repe
 Restrict it to a unique candidate above a few hundred bytes; otherwise fall back to `del` + `put`, which
 costs nothing extra because the blob is deduplicated anyway.
 
+**A file renamed on the server meanwhile is still the same file** (#418). When somebody else renamed it
+before this device heard, a local rename of it moves that node — its current revision, this device's
+name — and a local delete of its old path deletes nothing: the file comes down under the name it has
+now. A node the server shows somewhere else is never deleted by id for having vanished from here.
+
 **A folder** is recognised as a whole, not file by file: the shallowest folder whose vanished files all
 reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
 not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
