@@ -799,6 +799,12 @@ export class SyncEngine {
       const destParent = move.to ? parentPath(move.to) : '';
       const destParentId = destParent ? ctx.tree.get(destParent)!.nodeId : ctx.rootNodeId;
       try {
+        if (move.replaces) {
+          // The leftover goes first: two live folders cannot share a name under one parent.
+          await this.client.deleteNode(this.vaultId, move.replaces.nodeId, move.replaces.rev);
+          ctx.tree.delete(move.to);
+          ctx.byNodeId.delete(move.replaces.nodeId);
+        }
         // The moved folder's new name is named under the destination parent's scope.
         const nameScopeId = this.contentScopeId(ctx, move.to);
         const out = await this.client.moveNode(this.vaultId, move.nodeId, move.rev, {
@@ -852,11 +858,15 @@ export class SyncEngine {
       for (const list of ctx.vanished.values()) for (const v of list) if (within(v.path)) rels.add(v.path.slice(path.length + 1));
       const couldBe = (f: VaultFile): boolean =>
         !ctx.state.nodes[f.path] && [...rels].some((rel) => f.path === rel || f.path.endsWith(`/${rel}`));
-      // **Only the shape of a rename is held.** Files dropped into folders the server already has
-      // were moved out on purpose, and the walk carries them out of the share (#402). Files that
-      // turned up in a folder the server has never seen are a folder that went somewhere this
-      // pass could not prove — the case that emptied a share for everybody.
-      if (!ctx.queue.some((f) => couldBe(f) && !ctx.tree.has(parentPath(f.path)))) continue;
+      // **Only the shape of a folder move is held.** Files dropped into folders the server already
+      // has, one here and one there, were moved out on purpose, and the walk carries them out of
+      // the share (#402). Two shapes are a folder that went somewhere this pass could not prove:
+      // files in a folder the server has never seen (#409), and every file regrouped under ONE
+      // folder of the shared folder's OWN name — the folder itself carried onto one that is
+      // already there, a merge (#412). A different name is files dropped into somebody's folder.
+      const under = regroupedUnder([...rels], ctx.queue.filter(couldBe).map((f) => f.path));
+      const regrouped = under !== undefined && basePath(under) === basePath(path) ? under : undefined;
+      if (!regrouped && !ctx.queue.some((f) => couldBe(f) && !ctx.tree.has(parentPath(f.path)))) continue;
 
       for (const [hash, list] of [...ctx.vanished]) {
         const rest = list.filter((v) => !within(v.path));
@@ -868,7 +878,10 @@ export class SyncEngine {
       ctx.queue = ctx.queue.filter((f) => !couldBe(f));
       ctx.report.errors.push({
         path,
-        message: 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
+        message:
+          regrouped && ctx.tree.has(regrouped)
+            ? `there is already a folder “${regrouped}” on the server, and a shared folder cannot be merged into one — nothing about it was sent. Move it back, or give it a name that is free there.`
+            : 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
       });
     }
   }
@@ -1351,6 +1364,19 @@ export class SyncEngine {
 }
 
 const depth = (path: string): number => path.split('/').length;
+
+/** The one folder every relative path reappears under, among `paths`, or nothing (#412). */
+const regroupedUnder = (rels: readonly string[], paths: readonly string[]): string | undefined => {
+  const first = rels[0];
+  if (first === undefined) return undefined;
+  const found = new Set(paths);
+  for (const p of paths) {
+    if (!p.endsWith(`/${first}`)) continue;
+    const under = p.slice(0, p.length - first.length - 1);
+    if (rels.every((rel) => found.has(`${under}/${rel}`))) return under;
+  }
+  return undefined;
+};
 
 /** The scope a node at `path` is named under, read off a tree — the rule itself is `scopes.ts`. */
 const scopeAt = (tree: ReadonlyMap<string, ServerNode>, shareScopes: ReadonlyMap<string, string>, vaultScopeId: string, path: string): string => {

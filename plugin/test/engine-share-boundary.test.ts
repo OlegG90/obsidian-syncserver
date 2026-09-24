@@ -425,6 +425,44 @@ describe('a shared folder renamed with something else going on inside it (#409)'
   });
 });
 
+describe('a shared folder moved onto a folder the server already has (#412)', () => {
+  it('replaces a leftover empty folder of that name, and moves the root in one piece', async () => {
+    // What a deleted folder leaves on the server (#413): invisible here, and still holding its name.
+    const stale = server.seed(mine, 'Team', { scopeId: KV_SCOPE });
+    moveLocal(vault, 'Team/plan.md', 'Mine/Team/plan.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(server.refused, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Mine/Team')?.id, team, 'the root itself is there now');
+    assert.equal(tree.get('Mine/Team/plan.md')?.shareId, SHARES.team.id, 'and its file never left the share');
+    assert.equal(server.rows.get(stale)!.deleted, true, 'the leftover is gone');
+    assert.deepEqual(vault.paths(), ['Mine/Team/plan.md', 'Mine/own.md']);
+  });
+
+  it('will not merge a shared folder into a folder that holds something, and touches nothing', async () => {
+    const there = server.seed(mine, 'Team', { scopeId: KV_SCOPE });
+    server.seed(there, 'theirs.md', { scopeId: KV_SCOPE, text: body('theirs') });
+    await engine.sync();
+    const before = [...server.tree().keys()].sort();
+
+    moveLocal(vault, 'Team/plan.md', 'Mine/Team/plan.md');
+    const report = await engine.sync();
+
+    assert.match(report.errors.map((e) => e.message).join(' '), /already a folder “Mine\/Team” on the server/);
+    assert.deepEqual([...server.tree().keys()].sort(), before, 'the server is exactly as it was');
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing left the share');
+  });
+
+  it('still lets a file dragged into an existing folder leave the share (#402)', async () => {
+    moveLocal(vault, 'Team/plan.md', 'Mine/plan.md');
+    const report = await engine.sync();
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.tree().get('Mine/plan.md')?.shareId, null);
+  });
+});
+
 describe('a folder deleted here (#413)', () => {
   it('is deleted on the server in the same pass as its files, nested folders and all', async () => {
     const outer = server.seed(mine, 'Old', { scopeId: KV_SCOPE });
