@@ -203,3 +203,30 @@ describe('walking the configuration directory', () => {
     assert.equal(new ObsidianVaultAdapter(vault).configDir, '.obsidian');
   });
 });
+
+describe('renaming a file in place (#421)', () => {
+  // A change of letter case: where case does not count, a direct rename is onto itself, so it goes
+  // through a name nobody uses.
+  it('goes through a temporary name, through the vault when Obsidian tracks the file', async () => {
+    const calls: string[] = [];
+    const file = { stat: { mtime: 0, size: 0 } };
+    const vault = {
+      getAbstractFileByPath: (p: string) => (p === 'A/Plan.md' ? file : null),
+      rename: async (_f: unknown, to: string) => void calls.push(to),
+      adapter: { rename: async (f: string, t: string) => void calls.push(`adapter ${f} > ${t}`) },
+    };
+    await new ObsidianVaultAdapter(vault as unknown as Vault).rename('A/Plan.md', 'A/plan.md');
+    assert.deepEqual(calls, ['A/Plan.md.syncserver-rename', 'A/plan.md'], 'the index follows the file');
+  });
+
+  it('uses the adapter for a file Obsidian does not track', async () => {
+    const calls: string[] = [];
+    const vault = {
+      getAbstractFileByPath: () => null,
+      rename: async () => void calls.push('vault'),
+      adapter: { rename: async (f: string, t: string) => void calls.push(`${f} > ${t}`) },
+    };
+    await new ObsidianVaultAdapter(vault as unknown as Vault).rename('Plan.md', 'plan.md');
+    assert.deepEqual(calls, ['Plan.md > Plan.md.syncserver-rename', 'Plan.md.syncserver-rename > plan.md']);
+  });
+});

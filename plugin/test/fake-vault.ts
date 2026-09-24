@@ -12,6 +12,21 @@ import type { VaultAdapter, VaultFile } from '../src/engine/vault.js';
 export class FakeVault implements VaultAdapter {
   private files = new Map<string, { bytes: Uint8Array; mtime: number }>();
 
+  /**
+   * `foldCase`: behave like Windows, where `Plan.md` and `plan.md` are one file (#421). A path that
+   * differs from an existing one only in case reads, writes and deletes THAT file, keeping its name —
+   * which is exactly what made write-then-delete lose it.
+   */
+  constructor(private readonly options: { foldCase?: boolean } = {}) {}
+
+  /** The key a path lands on: itself, or — folding case — the existing file it names. */
+  private at(path: string): string {
+    if (!this.options.foldCase) return path;
+    const lower = path.toLowerCase();
+    for (const key of this.files.keys()) if (key.toLowerCase() === lower) return key;
+    return path;
+  }
+
   /** Put a file there as if the user had written it. */
   seed(path: string, content: string, mtime = Date.now()): void {
     this.files.set(path, { bytes: utf8(content), mtime });
@@ -19,7 +34,7 @@ export class FakeVault implements VaultAdapter {
 
   /** What is at that path now, as text. `undefined` if nothing is. */
   contents(path: string): string | undefined {
-    const f = this.files.get(path);
+    const f = this.files.get(this.at(path));
     return f ? fromUtf8(f.bytes) : undefined;
   }
 
@@ -57,7 +72,7 @@ export class FakeVault implements VaultAdapter {
   }
 
   async read(path: string): Promise<Uint8Array> {
-    const f = this.files.get(path);
+    const f = this.files.get(this.at(path));
     if (!f) throw new Error(`no such file: ${path}`);
     return f.bytes;
   }
@@ -74,16 +89,24 @@ export class FakeVault implements VaultAdapter {
    * it — `seed()` is the way to plant a file, and `write()` is the engine doing what the engine does.
    */
   async write(path: string, bytes: Uint8Array, _mtime?: number): Promise<void> {
-    this.files.set(path, { bytes, mtime: Date.now() });
+    this.files.set(this.at(path), { bytes, mtime: Date.now() });
   }
 
   async stat(path: string): Promise<{ mtime: number; size: number } | undefined> {
-    const f = this.files.get(path);
+    const f = this.files.get(this.at(path));
     return f ? { mtime: f.mtime, size: f.bytes.length } : undefined;
   }
 
   async delete(path: string): Promise<void> {
-    this.files.delete(path);
+    this.files.delete(this.at(path));
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const key = this.at(from);
+    const f = this.files.get(key);
+    if (!f) throw new Error(`no such file: ${from}`);
+    this.files.delete(key);
+    this.files.set(to, f);
   }
 
   /** Folders made on their own, with nothing in them — Obsidian keeps those (#413). */

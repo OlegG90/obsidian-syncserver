@@ -798,6 +798,11 @@ The heuristic must be conservative: for small identical files (empty notes, repe
 Restrict it to a unique candidate above a few hundred bytes; otherwise fall back to `del` + `put`, which
 costs nothing extra because the blob is deduplicated anyway.
 
+**A rename that changes only letter case is applied in place** (#421), through a temporary name. Where
+case does not count — Windows, macOS by default — `Plan.md` and `plan.md` are one file, so the usual
+write-the-new-then-delete-the-old would write into the file and then delete it, and the next pass would
+push that deletion to every device.
+
 **A folder** is recognised as a whole, not file by file: the shallowest folder whose vanished files all
 reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
 not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
