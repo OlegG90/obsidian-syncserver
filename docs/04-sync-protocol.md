@@ -838,6 +838,12 @@ History survives a rename on its own, being keyed by `node_id`. What a `move` *d
 `ancestry` for the whole subtree in the same transaction — and, inside a shared folder, applying the same
 move to every participant's corresponding node.
 
+**A name a sibling already holds is `409 name_taken`** (#420) — on create, on move, and inside a share's
+propagation — without the database's message and without naming the node in the way, which inside a share
+may be another participant's. Two devices, or two people in one shared folder, can create one name at the
+same moment; the client reports the refusal, and its next pass finds that name taken on the server and
+resolves it as any conflict: theirs keeps the name, this device's file is kept beside it.
+
 `move` is valid only when the node's old parent and its destination are on the same side of a shared-folder
 boundary — so a share root, whose parent is its holder's own folder, may be renamed or moved among their
 folders (#401). A move into or out of a shared folder returns `409 {reason: "share_boundary"}`; the client

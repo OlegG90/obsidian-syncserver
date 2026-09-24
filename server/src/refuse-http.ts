@@ -42,7 +42,9 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
     case 'name_taken':
       // The blocking node is named because the client has to offer the user a choice, and
       // "something is in the way" is not a choice.
-      return reply.code(409).send({ error: 'name_taken', blocked_by: refusal.blockedBy });
+      return reply
+        .code(409)
+        .send(refusal.blockedBy === undefined ? { error: 'name_taken' } : { error: 'name_taken', blocked_by: refusal.blockedBy });
     case 'rate_limited':
       return reply
         .code(429)

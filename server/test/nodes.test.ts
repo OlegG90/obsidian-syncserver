@@ -516,3 +516,40 @@ describe('removing a set of nodes, deepest-first', () => {
     assert.equal(left, undefined, 'and nothing survived');
   });
 });
+
+describe('a name already taken by a sibling (#420)', () => {
+  // Two devices — or two people in one shared folder — creating one name at the same moment. No
+  // check before the insert can close that race, so the index decides, and its answer used to be a
+  // 500 carrying PostgreSQL's own message.
+  it('answers a second create of the same name with 409 name_taken, and no database text', async () => {
+    const folder = await createFolder(rootId, `taken-${randomUUID()}`);
+    await createFile(folder.node_id, 'same.md');
+    const hex = await putBlob(randomBytes(64));
+    const r = await app.inject({
+      method: 'POST', url: `/vaults/${vaultId}/nodes`, headers: auth(),
+      payload: {
+        parent_id: folder.node_id, type: 'file', sha256: hex, size: 64, mtime: new Date().toISOString(),
+        name_enc: Buffer.from('same.md').toString('base64'), name_hmac: sha(Buffer.from('same.md')),
+        name_key_id: vaultKeyId, ...materialFor(hex),
+      },
+    });
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'name_taken');
+    assert.doesNotMatch(r.body, /duplicate key|nodes_unique_sibling|23505/, 'nothing of the database leaks');
+    assert.equal(r.json().blocked_by, undefined, 'and nothing names a node that may be somebody else’s');
+  });
+
+  it('answers a move onto a sibling’s name the same way', async () => {
+    const folder = await createFolder(rootId, `taken-move-${randomUUID()}`);
+    await createFile(folder.node_id, 'there.md');
+    const mover = await createFile(folder.node_id, 'mover.md');
+    const r = await app.inject({
+      method: 'POST', url: `/vaults/${vaultId}/nodes/${mover.node_id}/move`,
+      headers: { ...auth(), 'if-match': String(mover.rev) },
+      payload: { parent_id: folder.node_id, name_enc: Buffer.from('there.md').toString('base64'),
+                 name_hmac: sha(Buffer.from('there.md')), name_key_id: vaultKeyId },
+    });
+    assert.equal(r.statusCode, 409, r.body);
+    assert.equal(r.json().error, 'name_taken');
+  });
+});

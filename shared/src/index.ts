@@ -175,7 +175,8 @@ export interface RefusalDetails {
   invalid_write: { detail: string };
   base_mismatch: { sha256?: string; rev?: number };
   rev_mismatch: { rev?: number };
-  name_taken: { blocked_by: string };
+  /** The node in the way — named on a restore, where it is the caller's; absent when it may be somebody else's (#420). */
+  name_taken: { blocked_by?: string };
   rate_limited: { retry_after: number };
   parts_missing: { have: number[] };
   share_not_active: { state: string };
