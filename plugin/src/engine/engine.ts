@@ -482,6 +482,16 @@ export class SyncEngine {
     for (const list of ctx.vanished.values()) {
       for (const v of list) {
         ctx.handled.add(v.path);
+        // **A node the server shows somewhere else was renamed there, not deleted here** (#418).
+        // Somebody moved it before this device heard, and this device's copy under the old path is
+        // what went — as a rename of its own would, had it matched, or as a delete of a path that
+        // no longer exists. Deleting by node id would take the file from everybody, and its history
+        // with it. It comes down under the name it has now.
+        const movedThere = ctx.byNodeId.get(v.nodeId);
+        if (movedThere && movedThere.path !== v.path) {
+          delete ctx.state.nodes[v.path];
+          continue;
+        }
         if (!ctx.policy.pushDeletes) {
           delete ctx.state.nodes[v.path];
           continue;
@@ -1015,12 +1025,17 @@ export class SyncEngine {
    */
   private async pushMove(file: VaultFile, m: LocalMeta, source: Vanished, ctx: PassContext): Promise<void> {
     const parentId = await this.ensureFolders(file.path, ctx);
+    // Where the node is NOW, which is not where this device left it when somebody renamed it in
+    // the meantime (#418). The move goes to the node as it stands — its revision, its place — and
+    // this device's name wins, as the later of two renames does on a single device.
+    const current = ctx.byNodeId.get(source.nodeId);
+    const from = current?.path ?? source.path;
 
     // Across a share boundary a move is not a move: the server refuses it, because the two
     // sides are different keys (docs/04). What the protocol asks instead is a copy under the
     // destination's key and a delete of the source — the file leaves the share for everybody
     // in it, or joins it, which is what moving it there means (#402).
-    if (this.crossesShare(ctx, source.path, file.path)) {
+    if (this.crossesShare(ctx, from, file.path)) {
       await this.pushNew(file, m, ctx);
       await this.pushDelete(source, ctx);
       return;
@@ -1033,7 +1048,7 @@ export class SyncEngine {
 
     let out: { rev: number };
     try {
-      out = await this.client.moveNode(this.vaultId, source.nodeId, source.rev, {
+      out = await this.client.moveNode(this.vaultId, source.nodeId, current?.rev ?? source.rev, {
         parent_id: parentId,
         ...nameUnder(nameKey, nameScopeId, name),
       });
@@ -1050,8 +1065,10 @@ export class SyncEngine {
     ctx.state.nodes[file.path] = { nodeId: source.nodeId, rev: out.rev, plainHash: m.plainHash, address: source.address, ...SyncEngine.hintFrom(m) };
 
     // The tree follows, so the pull at the end of the pass does not see the old path as a
-    // server-only node and fetch a file that has just moved.
-    ctx.tree.delete(source.path);
+    // server-only node and fetch a file that has just moved. Only this node's own entries: the
+    // old path may already hold somebody else's file.
+    if (ctx.tree.get(source.path)?.nodeId === source.nodeId) ctx.tree.delete(source.path);
+    if (ctx.tree.get(from)?.nodeId === source.nodeId) ctx.tree.delete(from);
     ctx.byNodeId.set(source.nodeId, { ...ctx.byNodeId.get(source.nodeId)!, path: file.path, parentId });
     ctx.tree.set(file.path, {
       nodeId: source.nodeId,
@@ -1063,7 +1080,7 @@ export class SyncEngine {
       nameKeyId: nameScopeId,
     });
 
-    ctx.report.renamed.push({ from: source.path, to: file.path });
+    ctx.report.renamed.push({ from, to: file.path });
   }
 
   /**

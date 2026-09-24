@@ -566,3 +566,44 @@ describe('two cases the analysis confirmed, kept confirmed (#419)', () => {
     assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing left the share');
   });
 });
+
+describe('a file renamed here while somebody renamed it there (#418)', () => {
+  /** Another participant's rename, already on the server, not yet pulled here. */
+  const renameThere = (path: string, name: string, key: Uint8Array) => {
+    const row = server.tree().get(path)!;
+    Object.assign(row, { nameEnc: encryptName(key, name), nameHmac: nameHmac(key, name), rev: row.rev + 100 });
+    return row.id;
+  };
+
+  it('keeps the one node and its history, under the name given here', async () => {
+    const node = renameThere('Team/plan.md', 'theirs.md', SHARES.team.key);
+    moveLocal(vault, 'Team/plan.md', 'Team/mine.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.rows.get(node)!.deleted, false, 'nobody lost the file');
+    assert.equal(server.tree().get('Team/mine.md')?.id, node, 'the same node carries the later name');
+    assert.equal(server.tree().get('Team/theirs.md'), undefined);
+    assert.equal([...server.rows.values()].filter((r) => r.sha256 === server.rows.get(node)!.sha256).length, 1, 'and no copy of it');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/mine.md']);
+  });
+
+  it('brings the file back under the other name when it was deleted here, rather than deleting it for everybody', async () => {
+    const node = renameThere('Team/plan.md', 'theirs.md', SHARES.team.key);
+    await vault.delete('Team/plan.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.rows.get(node)!.deleted, false, 'the rename there outranks a delete of a path that no longer exists');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/theirs.md']);
+  });
+
+  it('does the same for a file that is nobody else\'s — another device of this account', async () => {
+    const node = renameThere('Mine/own.md', 'renamed-on-the-phone.md', kv);
+    moveLocal(vault, 'Mine/own.md', 'Mine/renamed-here.md');
+    await engine.sync();
+
+    assert.equal(server.rows.get(node)!.deleted, false);
+    assert.equal(server.tree().get('Mine/renamed-here.md')?.id, node);
+  });
+});
