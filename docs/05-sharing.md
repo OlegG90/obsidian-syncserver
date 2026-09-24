@@ -355,6 +355,12 @@ every other route keeps. Measured, that is about 20 000 files with no history, o
 versions each — every version behind the head carries its own envelope. Preparation needs no such limit: it
 is sent in batches.
 
+**Deleting the shared folder is not leaving it** (#417). A person who deletes the folder itself on disk
+means "not here any more", and read as file deletes it would have emptied the share for everybody in it.
+So the client sends nothing for it, writes its files back, and says to leave the share first — after
+leaving, the folder is theirs to delete. Deleting files **inside** the folder, with the folder kept, is
+still deleting them for everybody (SH-10).
+
 Nor can any of them recall data. Anyone who was a participant holds a full copy (SH-02). That is a property
 of the model, stated here so it is not mistaken for an oversight: **revocation stops the flow of new
 content; it does not take back old content.**

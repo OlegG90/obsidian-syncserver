@@ -824,6 +824,10 @@ scope, never while deletions are not being pushed. Empty folders are not synchro
 one device's empty folder is not another's, and a device that never had it removes it on the server too;
 the folder stays where it was made, as it always did.
 
+**A share root deleted here comes back** (#417): gone from disk as a folder, its files gone and not turned
+up elsewhere, it is not sent as a delete of each file — which would empty the share for everybody — but
+written back, with a report that says to leave the share first.
+
 **A share root is never taken apart.** When one is emptied here and no folder move explains where it went,
 while its files turned up in folders the server has never seen — the shape of a rename that could not be
 proved — or regrouped under a folder of its own name that the server already holds, which is a merge

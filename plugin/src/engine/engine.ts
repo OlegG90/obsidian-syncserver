@@ -789,6 +789,7 @@ export class SyncEngine {
     // scope, call the server, and repair the walk's own view of the tree afterwards.
     const plan = folderMoves(ctx.vanished, ctx.tree, ctx.meta, here);
     this.holdShareRoots(plan, here, ctx);
+    await this.restoreDeletedShareRoots(plan, here, ctx);
     for (const move of plan) {
       if (this.crossesShare(ctx, move.from, move.to)) {
         if (isShareRoot(ctx.tree.get(move.from)!, ctx.shareScopes)) {
@@ -892,6 +893,57 @@ export class SyncEngine {
           regrouped && ctx.tree.has(regrouped)
             ? `there is already a folder “${regrouped}” on the server, and a shared folder cannot be merged into one — nothing about it was sent. Move it back, or give it a name that is free there.`
             : 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
+      });
+    }
+  }
+
+  /**
+   * A shared folder deleted here, as a folder: send nothing, and put its files back (#417).
+   *
+   * Deleting the folder read as deleting every file in it, and each of those deletes reached
+   * everybody in the share — the share emptied for all of them, its root left behind empty on the
+   * server, which refuses to delete one. What a person means by deleting a folder they share is
+   * "not here any more", and the act for that is **Leave** (SH-05), which leaves everybody else's
+   * copy alone. So a share root that is gone from disk — not emptied: GONE — with its files gone
+   * and not turned up anywhere else, keeps everything: its files leave the vanished set and the
+   * state, and the pull at the end of this pass writes them back. The pass says why, and what to
+   * do instead.
+   *
+   * Everything else is left to the rules that already hold. A root still on disk had its files
+   * deleted one by one, which is deleting them for everybody, on purpose (SH-10). Files that turned
+   * up elsewhere are a move, and `holdShareRoots` or the per-file walk answers for them (#402,
+   * #409). A private folder deleted with a shared folder inside it deletes its own files as ever;
+   * only the shared folder in it comes back.
+   */
+  private async restoreDeletedShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): Promise<void> {
+    for (const [path, node] of ctx.tree) {
+      if (node.isFile || !isShareRoot(node, ctx.shareScopes)) continue;
+      const within = (p: string): boolean => p.startsWith(`${path}/`);
+      if ([...here].some(within)) continue;
+      if (plan.some((m) => m.from === path || within(m.from) || path.startsWith(`${m.from}/`))) continue;
+
+      // Only files the server still holds where they were: one it shows somewhere else was renamed
+      // there, and #418's rule answers for it.
+      const gone = [...ctx.vanished.values()].flat().filter((v) => within(v.path) && ctx.byNodeId.get(v.nodeId)?.path === v.path);
+      if (gone.length === 0) continue;
+      const rels = gone.map((v) => v.path.slice(path.length + 1));
+      const elsewhere = ctx.queue.some(
+        (f) => !ctx.state.nodes[f.path] && rels.some((rel) => f.path === rel || f.path.endsWith(`/${rel}`)),
+      );
+      if (elsewhere) continue;
+      if (await this.vault.folderExists(path)) continue;
+
+      const restored = new Set(gone);
+      for (const [hash, list] of [...ctx.vanished]) {
+        const rest = list.filter((v) => !restored.has(v));
+        if (rest.length) ctx.vanished.set(hash, rest);
+        else ctx.vanished.delete(hash);
+      }
+      for (const v of gone) delete ctx.state.nodes[v.path];
+      ctx.report.errors.push({
+        path,
+        message:
+          'this shared folder was deleted here, and deleting it would have deleted its files for everybody in the share — so they were put back. To stop sharing it, leave the share first (Sharing section); after that the folder is yours to delete.',
       });
     }
   }
