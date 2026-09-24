@@ -232,10 +232,14 @@ keep even if the share later ends.
 **Share a folder:** type its path and share it. The folder must be synced first. Its contents are re-keyed
 so participants can read them; the folder's own name is not, so it stays private to you.
 
+The list shows each shared folder on one line — its name, whose it is and how many people hold it — under
+the folder it sits in. Click the line for who is in it and what you can do.
+
 **Invite** someone by login. They see the invitation in their own settings and can **Accept** or
 **Decline**. Accepting materialises a copy in their vault and syncs it down straight away.
 
-**Withdraw** an invitation nobody answered; **Revoke** somebody who joined. Either way **their copy
+**Withdraw** an invitation nobody answered; **Revoke** somebody who joined — the icon beside their name,
+which asks before it acts. Either way **their copy
 stays** — that is what replication means. What stops is propagation: nothing further reaches them.
 
 **Leave** a share you are in. Your copy stays and quietly becomes private files again. Leaving needs
