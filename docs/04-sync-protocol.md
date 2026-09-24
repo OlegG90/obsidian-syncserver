@@ -802,11 +802,15 @@ costs nothing extra because the blob is deduplicated anyway.
 reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
 not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
 a file edited as the folder was renamed is still the same file, and once the folder has moved its edit
-goes up against its node (#409). A tie between two possible destinations is refused.
+goes up against its node (#409). A tie between two possible destinations is refused. A destination the
+server already holds is a merge and is refused — unless it is a **leftover**: an empty, unshared folder,
+which is what deleting a folder leaves on the server. That one is deleted and the folder moved in its place
+(#412); it cannot exist locally as an empty folder, or the local move would have collided with it.
 
 **A share root is never taken apart.** When one is emptied here and no folder move explains where it went,
 while its files turned up in folders the server has never seen — the shape of a rename that could not be
-proved — the pass sends nothing about it, keeps the old paths, and says so. Left to the per-file walk,
+proved — or regrouped under a folder of its own name that the server already holds, which is a merge
+(#412) — the pass sends nothing about it, keeps the old paths, and says so. Left to the per-file walk,
 each file would read as leaving the share and be deleted from it for everybody (#409). Files dropped into
 folders the server already has were moved out on purpose, and leave the share as below.
 
