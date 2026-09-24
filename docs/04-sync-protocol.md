@@ -798,6 +798,11 @@ The heuristic must be conservative: for small identical files (empty notes, repe
 Restrict it to a unique candidate above a few hundred bytes; otherwise fall back to `del` + `put`, which
 costs nothing extra because the blob is deduplicated anyway.
 
+**A rename that changes only letter case is applied in place** (#421), through a temporary name. Where
+case does not count — Windows, macOS by default — `Plan.md` and `plan.md` are one file, so the usual
+write-the-new-then-delete-the-old would write into the file and then delete it, and the next pass would
+push that deletion to every device.
+
 **A file renamed on the server meanwhile is still the same file** (#418). When somebody else renamed it
 before this device heard, a local rename of it moves that node — its current revision, this device's
 name — and a local delete of its old path deletes nothing: the file comes down under the name it has
