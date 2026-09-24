@@ -35,7 +35,7 @@ export type Refusal =
   /** The revision precondition failed: placement moved on, and it is the subject of the write. */
   | { kind: 'rev_mismatch'; rev: number }
   /** Restoring into a name that has since been taken; no automatic renaming (D-36). */
-  | { kind: 'name_taken'; blockedBy: string }
+  | { kind: 'name_taken'; blockedBy?: string }
   | { kind: 'rate_limited'; retryAfterSeconds: number }
   /** The staged parts are not a contiguous run from 1 — a hole a resume fills. */
   | { kind: 'parts_missing'; have: number[] }
@@ -110,6 +110,10 @@ const RESTRICT_VIOLATION = '23001';
 /** The `HINT` `nodes_reject_frozen_write` puts on both of its refusals. */
 const FROZEN_HINT = 'frozen';
 
+/** PostgreSQL's `unique_violation`, and the one unique index whose violation is the caller's to hear about. */
+const UNIQUE_VIOLATION = '23505';
+const SIBLING_NAMES = 'nodes_unique_sibling';
+
 /**
  * A schema refusal, turned into one the caller can act on.
  *
@@ -130,9 +134,17 @@ const FROZEN_HINT = 'frozen';
  * frozen account. Both carry a sentence naming what to do instead. A unique violation, a
  * foreign key or a serialization failure mean something else and often mean a defect on this
  * side, so mapping those to `400` would file the server's own bugs under the caller's name.
+ *
+ * **One unique violation is not a defect: a sibling's name** (#420). Two devices, or two people
+ * in one shared folder, can create the same name at the same moment, and no check before the
+ * insert can close that race. It is `409 name_taken` — without the database's own message, and
+ * without naming the node in the way, which inside a share may be another participant's.
  */
 export const refusalFromDatabase = (e: unknown): Refusal | undefined => {
   const code = (e as { code?: unknown } | null)?.code;
+  if (code === UNIQUE_VIOLATION && (e as { constraint?: unknown }).constraint === SIBLING_NAMES) {
+    return { kind: 'name_taken' };
+  }
   if (code !== CHECK_VIOLATION && code !== RESTRICT_VIOLATION) return undefined;
   // The freeze is the one schema refusal with a name of its own (#339). Answered as
   // `invalid_write` it reached the person as "your write was malformed", and the client's

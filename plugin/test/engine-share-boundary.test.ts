@@ -165,7 +165,17 @@ class Server implements VaultWire {
     for (const t of body.dedup_tags ?? []) this.tags.set(t.content_tag, t.sha256);
   }
 
+  /** Something that lands on the server just before the next create — somebody else's, in a race. */
+  beforeCreate: (() => void) | undefined;
+
   async createNode(_v: string, body: Parameters<VaultWire['createNode']>[1]): Promise<{ node_id: string; rev: number }> {
+    const race = this.beforeCreate;
+    this.beforeCreate = undefined;
+    race?.();
+    // The sibling-name index, as the schema has it: among live nodes of one parent (#420).
+    if ([...this.rows.values()].some((r) => !r.deleted && r.parentId === body.parent_id && r.nameHmac === body.name_hmac)) {
+      return this.refuse(409, 'name_taken');
+    }
     const shareId = this.shareInside(body.parent_id);
     // What the schema insists on (SH-26, SH-28): inside a share, the name and the content are
     // under the share's key. A client that forgot would be refused, not quietly accepted.
@@ -502,5 +512,28 @@ describe('a folder deleted here (#413)', () => {
     const sub = server.seed(team, 'Sub', { scopeId: SHARES.team.scope, shareId: SHARES.team.id });
     await engine.sync();
     assert.equal(server.rows.get(sub)!.deleted, true);
+  });
+});
+
+describe('a name somebody else took a moment earlier (#420)', () => {
+  it('ends with both files kept, one of them a conflict copy, and no error after', async () => {
+    vault.seed('Team/dup.md', body('mine'));
+    server.beforeCreate = () => {
+      server.seed(team, 'dup.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('theirs') });
+    };
+
+    const first = await engine.sync();
+    assert.deepEqual(server.refused, ['name_taken'], 'the race is answered as a name conflict');
+    assert.equal(first.errors.length, 1);
+
+    const second = await engine.sync();
+    assert.deepEqual(second.errors, []);
+    const local = vault.paths().filter((p) => p.startsWith('Team/dup'));
+    assert.equal(local.length, 2, 'theirs at the name, mine beside it');
+    assert.equal(vault.contents('Team/dup.md'), body('theirs'));
+    assert.ok(local.some((p) => p !== 'Team/dup.md' && vault.contents(p) === body('mine')), 'nothing of mine is lost');
+
+    const third = await engine.sync();
+    assert.deepEqual(third.errors, [], 'and it settles');
   });
 });
