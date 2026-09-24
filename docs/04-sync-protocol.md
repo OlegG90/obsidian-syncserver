@@ -803,6 +803,11 @@ case does not count — Windows, macOS by default — `Plan.md` and `plan.md` ar
 write-the-new-then-delete-the-old would write into the file and then delete it, and the next pass would
 push that deletion to every device.
 
+**A file renamed on the server meanwhile is still the same file** (#418). When somebody else renamed it
+before this device heard, a local rename of it moves that node — its current revision, this device's
+name — and a local delete of its old path deletes nothing: the file comes down under the name it has
+now. A node the server shows somewhere else is never deleted by id for having vanished from here.
+
 **A folder** is recognised as a whole, not file by file: the shallowest folder whose vanished files all
 reappear under one new folder, at the same relative paths, with nothing left behind in it, the new folder
 not yet on the server and its parent already there. Its subfolders move with it. **Content may differ** —
