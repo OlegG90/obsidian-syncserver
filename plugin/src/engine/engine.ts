@@ -1261,10 +1261,17 @@ export class SyncEngine {
   private async applyRemoteRename(file: VaultFile, m: LocalMeta, known: { nodeId: string; plainHash: string; address: string }, movedTo: ServerNode, ctx: PassContext): Promise<void> {
     const localChanged = known.plainHash !== m.plainHash;
 
-    // Destination first, source after — the ordering rule at the top of this file (#239).
-    const plain = await this.vault.read(file.path);
-    await this.vault.write(movedTo.path, plain, file.mtime);
-    await this.vault.delete(file.path);
+    if (file.path.toLowerCase() === movedTo.path.toLowerCase()) {
+      // **Only the letter case changed** (#421). Where case does not count, the new name IS the
+      // old file: writing it lands in the file, and deleting the old name then removes it — and
+      // the next pass, finding a synced file gone, deletes it for every device. Renamed in place.
+      await this.vault.rename(file.path, movedTo.path);
+    } else {
+      // Destination first, source after — the ordering rule at the top of this file (#239).
+      const plain = await this.vault.read(file.path);
+      await this.vault.write(movedTo.path, plain, file.mtime);
+      await this.vault.delete(file.path);
+    }
 
     delete ctx.state.nodes[file.path];
     // `m` describes the file at its OLD path. The new one is a file this device wrote a moment ago, so
