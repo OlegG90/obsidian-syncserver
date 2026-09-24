@@ -504,3 +504,65 @@ describe('a folder deleted here (#413)', () => {
     assert.equal(server.rows.get(sub)!.deleted, true);
   });
 });
+
+describe('a folder emptied here is not a folder that moved (#419)', () => {
+  it('takes the last file of a shared folder out of the share, and leaves the folder its name', async () => {
+    moveLocal(vault, 'Team/plan.md', 'New/plan.md');
+    vault.mkdir('Team'); // Obsidian keeps the emptied folder
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Team')?.id, team, 'the shared folder was not renamed');
+    assert.equal(tree.get('New/plan.md')?.shareId, null, 'the file left the share, as moving it out means');
+    assert.equal(tree.get('Team/plan.md'), undefined);
+  });
+
+  it('moves files out of an ordinary folder one by one, and leaves that folder where it is', async () => {
+    const own = server.tree().get('Mine/own.md')!.id;
+    moveLocal(vault, 'Mine/own.md', 'Elsewhere/own.md');
+    vault.mkdir('Mine');
+    await engine.sync();
+
+    const tree = server.tree();
+    assert.equal(tree.get('Mine')?.id, mine, 'no folder move');
+    assert.equal(tree.get('Elsewhere/own.md')?.id, own, 'the file moved, as the same node');
+  });
+
+  it('still moves a folder that is gone from here', async () => {
+    moveLocal(vault, 'Mine/own.md', 'Renamed/own.md');
+    await engine.sync();
+    assert.equal(server.tree().get('Renamed')?.id, mine);
+  });
+});
+
+describe('two cases the analysis confirmed, kept confirmed (#419)', () => {
+  it('moves a file from one shared folder into another: it joins the second, leaves the first', async () => {
+    const other = server.seed(ROOT, 'Other', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    server.seed(other, 'x.md', { scopeId: SHARES.other.scope, shareId: SHARES.other.id, text: body('x') });
+    await engine.sync();
+
+    moveLocal(vault, 'Team/plan.md', 'Other/plan.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.tree().get('Other/plan.md')?.shareId, SHARES.other.id);
+    assert.equal(server.tree().get('Team/plan.md'), undefined);
+  });
+
+  it('renames a private folder holding a shared folder in one move, the share riding along', async () => {
+    const hub = server.seed(ROOT, 'Hub', { scopeId: KV_SCOPE });
+    const visa = server.seed(hub, 'Visa', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    server.seed(visa, 'x.md', { scopeId: SHARES.other.scope, shareId: SHARES.other.id, text: body('x') });
+    await engine.sync();
+
+    moveLocal(vault, 'Hub/Visa/x.md', 'Hub2/Visa/x.md');
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    const tree = server.tree();
+    assert.equal(tree.get('Hub2')?.id, hub);
+    assert.equal(tree.get('Hub2/Visa')?.id, visa);
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing left the share');
+  });
+});
