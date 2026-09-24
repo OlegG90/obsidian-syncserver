@@ -677,3 +677,43 @@ describe('a file renamed here while somebody renamed it there (#418)', () => {
     assert.equal(server.tree().get('Mine/renamed-here.md')?.id, node);
   });
 });
+
+describe('a shared folder deleted here (#417)', () => {
+  it('deletes nothing for anybody, puts the files back, and says to leave the share first', async () => {
+    vault.rmdir('Team');
+    const report = await engine.sync();
+
+    assert.match(report.errors.map((e) => e.message).join(' '), /leave the share first/);
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing was deleted on the server');
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/plan.md'], 'the files are back');
+
+    const after = await engine.sync();
+    assert.deepEqual(after.errors, [], 'and the next pass has nothing left to say');
+  });
+
+  it('deletes a private folder\'s own files, and brings back only the shared folder inside it', async () => {
+    const hub = server.seed(ROOT, 'Hub', { scopeId: KV_SCOPE });
+    const own = server.seed(hub, 'notes.md', { scopeId: KV_SCOPE, text: body('hub notes') });
+    const visa = server.seed(hub, 'Visa', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    const x = server.seed(visa, 'x.md', { scopeId: SHARES.other.scope, shareId: SHARES.other.id, text: body('x') });
+    await engine.sync();
+
+    vault.rmdir('Hub');
+    const report = await engine.sync();
+
+    assert.match(report.errors.map((e) => e.message).join(' '), /leave the share first/);
+    assert.equal(server.rows.get(own)!.deleted, true, 'the private file went, as deleting it means');
+    assert.equal(server.rows.get(x)!.deleted, false, 'the shared one did not');
+    assert.equal(vault.contents('Hub/Visa/x.md'), body('x'), 'and it is back on disk');
+  });
+
+  it('still deletes files taken out of a shared folder one by one, for everybody', async () => {
+    const plan = server.tree().get('Team/plan.md')!.id;
+    await vault.delete('Team/plan.md');
+    vault.mkdir('Team'); // the folder stays: only its file was deleted
+    const report = await engine.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.rows.get(plan)!.deleted, true);
+  });
+});
