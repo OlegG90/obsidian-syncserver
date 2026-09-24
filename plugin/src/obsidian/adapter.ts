@@ -116,4 +116,24 @@ export class ObsidianVaultAdapter implements VaultAdapter {
   async folderExists(path: string): Promise<boolean> {
     return this.vault.adapter.exists(path);
   }
+
+  /**
+   * Through a name nobody uses, so a change of letter case survives a file system that ignores it.
+   *
+   * A direct `Plan.md` → `plan.md` is a rename onto itself where case does not count, and what a
+   * platform does with that varies. Two steps through a temporary name mean the same thing
+   * everywhere. Through the vault when Obsidian tracks the file, so the index and an open editor
+   * follow it — the same reason `write` goes through `modifyBinary`.
+   */
+  async rename(from: string, to: string): Promise<void> {
+    const via = `${from}.syncserver-rename`;
+    const tracked = this.vault.getAbstractFileByPath(from);
+    if (tracked) {
+      await this.vault.rename(tracked, via);
+      await this.vault.rename(tracked, to);
+      return;
+    }
+    await this.vault.adapter.rename(from, via);
+    await this.vault.adapter.rename(via, to);
+  }
 }

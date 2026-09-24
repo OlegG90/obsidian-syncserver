@@ -505,6 +505,43 @@ describe('a folder deleted here (#413)', () => {
   });
 });
 
+describe('a rename that changes only letter case, arriving where case does not count (#421)', () => {
+  it('renames the file in place, and nothing is deleted anywhere', async () => {
+    // Windows: `Own.md` and `own.md` are one file.
+    const windows = new FakeVault({ foldCase: true });
+    const here = new SyncEngine(server, vaultId, scopes(), windows, new MemoryStateStore());
+    await here.sync();
+    assert.deepEqual(windows.paths(), ['Mine/own.md', 'Team/plan.md']);
+
+    // The phone, where case counts, renamed it.
+    const row = server.tree().get('Mine/own.md')!;
+    Object.assign(row, { nameEnc: encryptName(kv, 'Own.md'), nameHmac: nameHmac(kv, 'Own.md'), rev: row.rev + 100 });
+
+    const first = await here.sync();
+    assert.deepEqual(first.errors, []);
+    assert.deepEqual(windows.paths(), ['Mine/Own.md', 'Team/plan.md'], 'the file is there, under the new case');
+    assert.equal(windows.contents('Mine/Own.md'), body('own'));
+
+    const second = await here.sync();
+    assert.deepEqual(second.errors, []);
+    assert.equal(row.deleted, false, 'and the pass after it deleted nothing on the server');
+  });
+
+  it('sends a case-only rename made here as one move of the same node', async () => {
+    const windows = new FakeVault({ foldCase: true });
+    const here = new SyncEngine(server, vaultId, scopes(), windows, new MemoryStateStore());
+    await here.sync();
+    const node = server.tree().get('Mine/own.md')!.id;
+
+    await windows.rename('Mine/own.md', 'Mine/Own.md');
+    const report = await here.sync();
+
+    assert.deepEqual(report.errors, []);
+    assert.equal(server.tree().get('Mine/Own.md')?.id, node, 'the same node, renamed');
+    assert.ok([...server.rows.values()].every((r) => !r.deleted), 'nothing deleted');
+  });
+});
+
 describe('a file renamed here while somebody renamed it there (#418)', () => {
   /** Another participant's rename, already on the server, not yet pulled here. */
   const renameThere = (path: string, name: string, key: Uint8Array) => {

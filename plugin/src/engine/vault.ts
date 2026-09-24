@@ -86,6 +86,14 @@ export interface VaultAdapter {
    * "gone": only this can say a folder was removed, which is what lets its deletion reach the server.
    */
   folderExists(path: string): Promise<boolean>;
+  /**
+   * Rename a file in place (#421).
+   *
+   * Only for the one rename that write-then-delete cannot do: a change of letter case. On a file
+   * system that does not tell `Plan.md` from `plan.md` — Windows, macOS by default — the two are one
+   * file, so writing the new name lands in the old file and deleting the old name then removes it.
+   */
+  rename(from: string, to: string): Promise<void>;
 }
 
 /**
