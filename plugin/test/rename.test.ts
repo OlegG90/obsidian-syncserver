@@ -213,11 +213,29 @@ describe('did a whole folder move', () => {
     assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
   });
 
-  it('refuses a destination that already exists, because that is a merge', () => {
+  it('refuses a destination that already holds something, because that is a merge', () => {
     // A merge means something different to everybody else syncing the folder, so it is not
     // something to infer from a hash match.
     const f = collapsed();
     f.tree.set('N', folder('id:N'));
+    f.tree.set('N/theirs.md', file('id:theirs'));
+
+    assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
+  });
+
+  it('replaces an empty folder the server still holds at the destination (#412)', () => {
+    // A leftover of a folder deleted here: folder deletions never reached the server (#413).
+    const f = collapsed();
+    f.tree.set('N', folder('id:N'));
+
+    const plan = folderMoves(f.vanished, f.tree, f.meta, f.here);
+    assert.deepEqual(plan.map((m) => [m.from, m.to]), [['V', 'N']]);
+    assert.deepEqual(plan[0]!.replaces, { nodeId: 'id:N', rev: 1 });
+  });
+
+  it('does not replace an empty folder that is shared', () => {
+    const f = collapsed();
+    f.tree.set('N', { ...folder('id:N'), shareId: 'a-share' });
 
     assert.deepEqual(folderMoves(f.vanished, f.tree, f.meta, f.here), []);
   });

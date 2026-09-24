@@ -30,6 +30,8 @@ export interface TreeNode {
   nodeId: string;
   rev: number;
   isFile: boolean;
+  /** The share this node belongs to, when the tree read says so — a shared folder is never a leftover. */
+  shareId?: string | null;
 }
 
 /** Only what the decision reads about a local file. */
@@ -103,6 +105,14 @@ export interface FolderMove {
   rev: number;
   /** `hash` so the caller can consume the vanished entry; `to` is the child's new path. */
   children: { hash: string; to: string }[];
+  /**
+   * An empty folder the server still holds at `to`, to delete before the move (#412).
+   *
+   * A leftover: folder deletions do not reach the server (#413), so a name nobody can see locally
+   * can still be taken there. It cannot exist here as an empty folder either, or the local move
+   * would have collided with it, so replacing it loses nothing anybody can see.
+   */
+  replaces?: { nodeId: string; rev: number };
 }
 
 /**
@@ -130,7 +140,9 @@ export interface FolderMove {
  * - **nothing stays behind** under `V`: moving a folder moves everything in it, so a folder that
  *   still holds anything locally did not move — only its vanished files did (#370);
  * - `N` is not already on the server, or this is a merge — a different operation with a
- *   different meaning for anybody else syncing — and it is not inside `V` (#351);
+ *   different meaning for anybody else syncing — and it is not inside `V` (#351). The one
+ *   exception is a leftover: an **empty**, unshared folder the server still holds at `N`, which
+ *   the move replaces (#412);
  * - `N`'s own parent chain already exists, so no folder is invented mid-walk;
  * - exactly one `N` fits, and no two folders are planned into it.
  *
@@ -172,7 +184,9 @@ export const folderMoves = (
       .map(({ v, hash }) => ({ hash, rel: v.path.slice(from.length + 1) }));
     const to = destinationOf(children, here, tree, meta);
     if (to === undefined || to === from || within(from)(to)) continue;
-    if (tree.has(to) || !parentChainExists(to, tree) || claimed.has(to)) continue;
+    if (!parentChainExists(to, tree) || claimed.has(to)) continue;
+    const there = tree.get(to);
+    if (there && !leftover(to, there, tree)) continue;
     claimed.add(to);
 
     plan.push({
@@ -181,11 +195,16 @@ export const folderMoves = (
       nodeId: source.nodeId,
       rev: source.rev,
       children: children.map(({ hash, rel }) => ({ hash, to: `${to}/${rel}` })),
+      ...(there ? { replaces: { nodeId: there.nodeId, rev: there.rev } } : {}),
     });
   }
 
   return plan;
 };
+
+/** A folder the server holds with nothing in it and no share on it — what a deleted folder leaves (#413). */
+const leftover = (path: string, node: TreeNode, tree: ReadonlyMap<string, TreeNode>): boolean =>
+  !node.isFile && !node.shareId && ![...tree.keys()].some((p) => p.startsWith(`${path}/`));
 
 /**
  * The one folder every child reappears under at its relative path, or nothing.
