@@ -18,7 +18,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { EXPECTED_CODES, pruneProblems, refusalCode, registerProblemRecorder, type SeenProblem } from '../src/sync-problems.js';
+import { DETAIL_MAX, EXPECTED_CODES, pruneProblems, refusalCode, refusalDetail, registerProblemRecorder, type SeenProblem } from '../src/sync-problems.js';
 import { testStore } from './support/store.js';
 
 describe('which answers the hook writes down', () => {
@@ -30,8 +30,8 @@ describe('which answers the hook writes down', () => {
     const db = {
       query: async (_sql: string, params?: unknown[]) => {
         if (opts.failWrites) throw new Error('the device row is gone');
-        const [userId, deviceId, method, route, status, code] = params as [string, string, string, string, number, string];
-        written.push({ userId, deviceId, method, route, status, code });
+        const [userId, deviceId, method, route, status, code, detail] = params as [string, string, string, string, number, string, string | null];
+        written.push({ userId, deviceId, method, route, status, code, detail });
         return [];
       },
     };
@@ -49,16 +49,16 @@ describe('which answers the hook writes down', () => {
     return { app, ask, written, logged };
   };
 
-  it('writes a refusal with the route template and the code, and nothing of the body', async () => {
+  it('writes a refusal with the route template, the code, and the detail with its ids masked (#433)', async () => {
     const { app, ask, written, logged } = await bare();
     const out = await ask({ 'x-status': '400', 'x-code': 'invalid_write' });
     assert.equal(out.statusCode, 400);
     assert.deepEqual(written, [
-      { userId: 'u1', deviceId: 'd1', method: 'POST', route: '/things/:id/move', status: 400, code: 'invalid_write' },
+      { userId: 'u1', deviceId: 'd1', method: 'POST', route: '/things/:id/move', status: 400, code: 'invalid_write', detail: 'node <id>' },
     ]);
     assert.equal(logged.length, 1);
-    assert.match(logged[0]!, /refused POST \/things\/:id\/move → 400 invalid_write/);
-    assert.doesNotMatch(logged[0]!, /node /, 'the detail, which can carry ids, is not logged');
+    assert.match(logged[0]!, /refused POST \/things\/:id\/move → 400 invalid_write: node <id> /);
+    assert.doesNotMatch(logged[0]!, /[0-9a-f]{8}-[0-9a-f]{4}-/, 'the node id itself is not logged');
     await app.close();
   });
 
@@ -92,6 +92,20 @@ describe('which answers the hook writes down', () => {
     assert.equal(out.json().error, 'invalid_write');
     assert.match(logged.join('\n'), /could not record that refusal: the device row is gone/);
     await app.close();
+  });
+
+  it('masks every id and hash in a detail, keeps the rule, and bounds its length (#433)', () => {
+    const id = randomUUID();
+    const detail = (text: string) => refusalDetail(JSON.stringify({ error: 'invalid_write', detail: text }));
+    assert.equal(
+      detail(`node ${id} is live, but its folder ${randomUUID()} is deleted`),
+      'node <id> is live, but its folder <id> is deleted',
+    );
+    assert.equal(detail(`blob \\x${'ab'.repeat(32)} lacks its share envelope`), 'blob <bytes> lacks its share envelope');
+    assert.equal(detail(`address ${'c'.repeat(64)} is unknown`), 'address <hash> is unknown');
+    assert.equal(detail('x'.repeat(1000))!.length, DETAIL_MAX);
+    assert.equal(refusalDetail('{"error":"not_found"}'), null, 'no detail, nothing kept');
+    assert.equal(refusalDetail('not json'), null);
   });
 
   it('reads a code only when it is a refusal’s name', () => {

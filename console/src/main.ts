@@ -953,6 +953,8 @@ const problemsScreen = (): void => {
         el('span', { className: 'when', textContent: `last ${when(p.lastAt)}, first ${when(p.firstAt)}` }),
       );
       log.append(line);
+      // The rule the last one broke, which is what tells two `invalid_write` loops apart (#433).
+      if (p.detail) log.append(el('div', { className: 'muted', textContent: p.detail }));
     }
     list.replaceChildren(log);
   };

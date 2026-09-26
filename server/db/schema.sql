@@ -112,7 +112,8 @@ INSERT INTO schema_migrations (id, name, checksum) VALUES
     (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60'),
     (5, 'backup-schedule', 'cb2b4c2ba9c651dd0ba3649067fff5829db0ee81850491d52607cdd6b2ec7068'),
     (6, 'share-history-needs-no-tag', '141b83bd48a03d3e4a5e589278e57f652b9235b9de2d72b15544dee86b446bbe'),
-    (7, 'live-under-live', '5f6f914c75c4c8c356d4712695b650c89bdee1a09fddc62b60eb7750d93052d2');
+    (7, 'live-under-live', '5f6f914c75c4c8c356d4712695b650c89bdee1a09fddc62b60eb7750d93052d2'),
+    (8, 'sync-problem-detail', '7a2526f959a41573a3cf3479c2cc5b9e886d8ed47f94094d2de77bf456f9eeb1');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -543,8 +544,9 @@ CREATE INDEX devices_user ON devices (user_id);
 CREATE INDEX devices_vault ON devices (vault_id);
 
 -- What went wrong for which device, counted rather than listed (#355, D-134). One row per device,
--- method, route template, status and refusal code; a repeat moves `count` and `last_at`. No paths,
--- names, bodies or node ids. Rows not seen for 30 days are removed by the collector.
+-- method, route template, status and refusal code; a repeat moves `count` and `last_at`, and `detail`
+-- to the last refusal's sentence with its ids masked (#433). No paths, names, bodies or node ids. Rows
+-- not seen for 30 days are removed by the collector.
 CREATE TABLE sync_problems (
     user_id   uuid        NOT NULL REFERENCES users ON DELETE CASCADE,
     device_id uuid        NOT NULL REFERENCES devices ON DELETE CASCADE,
@@ -555,6 +557,8 @@ CREATE TABLE sync_problems (
     count     bigint      NOT NULL DEFAULT 1 CHECK (count > 0),
     first_at  timestamptz NOT NULL DEFAULT now(),
     last_at   timestamptz NOT NULL DEFAULT now(),
+    detail    text
+        CONSTRAINT sync_problems_detail_is_short CHECK (char_length(detail) <= 300),
     PRIMARY KEY (device_id, method, route, status, code)
 );
 
