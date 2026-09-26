@@ -428,6 +428,12 @@ SELECT expect_fail($$
     VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
             'GET', '/other/:id', 404, 'not_found', 0)
 $$, '23514', 'sync_problems_count_check', 'a sync problem counted zero times');
+-- Its detail is a sentence, not a body (#433).
+SELECT expect_fail($$
+    INSERT INTO sync_problems (user_id, device_id, method, route, status, code, detail)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001',
+            'GET', '/long/:id', 400, 'invalid_write', repeat('x', 301))
+$$, '23514', 'sync_problems_detail_is_short', 'a sync problem whose detail is a whole body');
 
 -- Migrations are numbered from 1 (#354).
 SELECT expect_fail($$

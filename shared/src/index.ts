@@ -415,6 +415,8 @@ export type SyncProblemRow = {
   status: number;
   /** The refusal's name (`invalid_write`), or `unknown` when the answer carried none. */
   code: string;
+  /** The last refusal's own sentence, ids and hashes masked (#433); absent when it carried none. */
+  detail: string | null;
   count: string;
   firstAt: string;
   lastAt: string;

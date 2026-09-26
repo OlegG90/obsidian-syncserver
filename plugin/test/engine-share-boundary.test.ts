@@ -219,11 +219,9 @@ class Server implements VaultWire {
   async deleteNode(_v: string, nodeId: string, ifMatchRev: number): Promise<{ rev: number }> {
     const r = this.rows.get(nodeId)!;
     if (r.rev !== ifMatchRev) return this.refuse(409, 'rev_mismatch');
-    const gone = (id: string): void => {
-      this.rows.get(id)!.deleted = true;
-      for (const c of this.rows.values()) if (c.parentId === id && !c.deleted) gone(c.id);
-    };
-    gone(nodeId);
+    // The server's rule since #431: a folder goes after what is in it.
+    if ([...this.rows.values()].some((c) => c.parentId === nodeId && !c.deleted)) return this.refuse(409, 'folder_not_empty');
+    r.deleted = true;
     return { rev: ++this.rev };
   }
 
