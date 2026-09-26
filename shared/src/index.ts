@@ -59,6 +59,7 @@ export type RefusalCode =
   | 'rev_mismatch'
   | 'share_boundary'
   | 'name_taken'
+  | 'folder_not_empty'
   // Blob upload, whole and resumable.
   | 'address_mismatch'
   | 'size_mismatch'

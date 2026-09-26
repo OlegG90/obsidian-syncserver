@@ -111,7 +111,8 @@ INSERT INTO schema_migrations (id, name, checksum) VALUES
     (3, 'sync-problems', '49ab0b7ceddbe0684af50da5e40cdafb82c93dcf300e1322ed3ea67b5cb605e0'),
     (4, 'device-vaults', 'a63b8aab826990a2ef6f5df2f3d1d89071a57abc3ce1462fc068ef13fc36ad60'),
     (5, 'backup-schedule', 'cb2b4c2ba9c651dd0ba3649067fff5829db0ee81850491d52607cdd6b2ec7068'),
-    (6, 'share-history-needs-no-tag', '141b83bd48a03d3e4a5e589278e57f652b9235b9de2d72b15544dee86b446bbe');
+    (6, 'share-history-needs-no-tag', '141b83bd48a03d3e4a5e589278e57f652b9235b9de2d72b15544dee86b446bbe'),
+    (7, 'live-under-live', '5f6f914c75c4c8c356d4712695b650c89bdee1a09fddc62b60eb7750d93052d2');
 
 -- An epoch may only ever go UP. Lowering one silently makes stale cursors look current
 -- again — the exact failure the epoch exists to prevent. Shared by server_meta and
@@ -932,6 +933,49 @@ CREATE CONSTRAINT TRIGGER nodes_ancestry_matches_parents
     AFTER INSERT OR UPDATE OF parent_id, ancestry ON nodes
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION nodes_check_ancestry();
+
+-- A live node never sits under a deleted folder (#431). Deleting a folder marks the folder and
+-- nothing under it; a client deletes what is in it first, deepest first (docs/04). A folder deleted
+-- with live content left the content live under a parent no listing shows — every participant's
+-- copy of it, once the delete fanned out — and a client placing it by its parent put it at the top
+-- of the vault. DEFERRED: a pass over a subtree (catch-up, a restore lifting its ancestors) may
+-- touch parent and child in either order, and only the state at COMMIT must hold; the check
+-- re-reads the row rather than trusting NEW.
+CREATE FUNCTION nodes_check_live_under_live() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    cur  nodes%ROWTYPE;
+    held uuid;
+BEGIN
+    SELECT * INTO cur FROM nodes WHERE vault_id = NEW.vault_id AND id = NEW.id;
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    IF cur.deleted_at IS NULL THEN
+        IF EXISTS (SELECT 1 FROM nodes p
+                    WHERE p.vault_id = cur.vault_id AND p.id = cur.parent_id AND p.deleted_at IS NOT NULL) THEN
+            RAISE EXCEPTION 'node % is live, but its folder % is deleted', cur.id, cur.parent_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    SELECT c.id INTO held FROM nodes c
+     WHERE c.vault_id = cur.vault_id AND c.parent_id = cur.id AND c.deleted_at IS NULL
+     LIMIT 1;
+    IF held IS NOT NULL THEN
+        RAISE EXCEPTION 'folder % cannot be deleted while it still holds live node %; delete what is in it first',
+            cur.id, held USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER nodes_live_under_live
+    AFTER INSERT OR UPDATE OF parent_id, deleted_at ON nodes
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION nodes_check_live_under_live();
 
 -- Version history (D-14). Keyed by node, so a rename touches nothing here. Carries
 -- vault_id for the composite FK to nodes.
