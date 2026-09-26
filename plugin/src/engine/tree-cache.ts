@@ -41,6 +41,8 @@ export interface WalkedTree {
   scopes: string;
   tree: Map<string, ServerNode>;
   unreadable: UnreadableFolder[];
+  /** Nodes whose parent the listing does not hold (#432) — left out of `tree`, by id. */
+  orphans: string[];
 }
 
 export interface TreeCache {
@@ -54,6 +56,7 @@ const copy = (w: WalkedTree): WalkedTree => ({
   scopes: w.scopes,
   tree: new Map(w.tree),
   unreadable: [...w.unreadable],
+  orphans: [...w.orphans],
 });
 
 export const openTreeCache = (): TreeCache => {

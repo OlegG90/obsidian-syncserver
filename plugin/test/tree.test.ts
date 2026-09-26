@@ -130,3 +130,21 @@ describe('a folder whose key has not arrived', () => {
     assert.equal(out.tree.size, 0);
   });
 });
+
+describe('a node whose folder is not in the listing (#432)', () => {
+  it('is left out with everything below it, and named by id rather than put at the vault root', () => {
+    // The listing holds live nodes only, parents first: a parent it lacks is a deleted one.
+    const out = treeFrom(
+      [
+        node('a', ROOT, 'notes', VAULT_KEY),
+        node('b', 'gone', 'stray.md', VAULT_KEY, { sha256: 'addr' }),
+        node('c', 'gone', 'Sub', VAULT_KEY),
+        node('d', 'c', 'deeper.md', VAULT_KEY, { sha256: 'addr2' }),
+      ],
+      ROOT,
+      keys(),
+    );
+    assert.deepEqual([...out.tree.keys()], ['notes']);
+    assert.deepEqual(out.orphans, ['b', 'c', 'd']);
+  });
+});

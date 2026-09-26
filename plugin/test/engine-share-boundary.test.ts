@@ -717,3 +717,30 @@ describe('a shared folder deleted here (#417)', () => {
     assert.equal(server.rows.get(plan)!.deleted, true);
   });
 });
+
+describe('a node the server holds under a deleted folder (#432)', () => {
+  it('is left out, not put at the top of the vault: the copy here stays, nothing is pushed', async () => {
+    const own = server.tree().get('Mine/own.md')!.id;
+    server.rows.get(mine)!.deleted = true; // what a delete-before-its-files left behind (#431)
+    const report = await engine.sync();
+
+    assert.match(report.errors.map((e) => e.message).join(' '), /under a folder that was deleted/);
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/plan.md'], 'the copy here stays where it was');
+    assert.equal(server.rows.get(own)!.deleted, false, 'and nothing was deleted for it');
+    assert.equal(server.tree().get('own.md'), undefined, 'nor re-created at the top of the vault');
+
+    server.rows.get(mine)!.deleted = false; // the folder restored from the trash
+    const after = await engine.sync();
+    assert.deepEqual(after.errors, [], 'and it resumes as itself');
+  });
+
+  it('writes nothing to disk for one this device never had, and says how many', async () => {
+    const gone = server.seed(ROOT, 'Gone', { scopeId: KV_SCOPE });
+    server.seed(gone, 'stray.md', { scopeId: KV_SCOPE, text: body('stray') });
+    server.rows.get(gone)!.deleted = true;
+    const report = await engine.sync();
+
+    assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/plan.md'], 'no stray.md at the top of the vault');
+    assert.match(report.errors.map((e) => e.message).join(' '), /1 item\(s\) on the server sit under a folder that was deleted/);
+  });
+});
