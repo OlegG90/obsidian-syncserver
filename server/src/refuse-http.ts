@@ -31,6 +31,8 @@ export const refuse = (reply: FastifyReply, refusal: Refusal): FastifyReply => {
       return reply.code(400).send({ error: refusal.kind });
     case 'share_boundary':
       return reply.code(409).send({ error: 'share_boundary' });
+    case 'folder_not_empty':
+      return reply.code(409).send({ error: 'folder_not_empty' });
     case 'base_mismatch':
       // The caller is told what the content actually is, because that is what lets the
       // client decide between "same text reached independently" and a real conflict.

@@ -30,6 +30,8 @@ export type Refusal =
   | { kind: 'address_mismatch' }
   | { kind: 'size_mismatch' }
   | { kind: 'share_boundary' }
+  /** A folder that still holds live nodes; deleting it would leave them under a deleted parent (#431). */
+  | { kind: 'folder_not_empty' }
   /** The content precondition failed: someone else wrote first (D-52). */
   | { kind: 'base_mismatch'; currentSha256: string | null; rev: number }
   /** The revision precondition failed: placement moved on, and it is the subject of the write. */
@@ -224,6 +226,7 @@ const REFUSAL_KINDS: Record<Refusal['kind'], true> = {
   console_account: true,
   device_revoked: true,
   finalization_incomplete: true,
+  folder_not_empty: true,
   frozen: true,
   initiator_cannot_be_removed: true,
   invalid_write: true,

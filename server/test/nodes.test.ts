@@ -337,6 +337,24 @@ describe('delete', () => {
       [vaultId, file.node_id]);
     assert.equal(journal!.op, 'del');
   });
+
+  it('refuses a folder that still holds a live node, and takes it once it is empty (#431)', async () => {
+    const folder = await createFolder(rootId, 'still-full');
+    const file = await createFile(folder.node_id, 'inside.md');
+    const del = (id: string, rev: number) =>
+      app.inject({ method: 'DELETE', url: `/vaults/${vaultId}/nodes/${id}`, headers: { ...auth(), 'if-match': String(rev) } });
+
+    const refused = await del(folder.node_id, folder.rev);
+    assert.equal(refused.statusCode, 409, refused.body);
+    assert.equal(refused.json().error, 'folder_not_empty');
+    const live = await db.one<{ deleted: boolean }>(
+      `SELECT deleted_at IS NOT NULL AS deleted FROM nodes WHERE vault_id = $1 AND id = $2`,
+      [vaultId, folder.node_id]);
+    assert.equal(live!.deleted, false, 'the folder is untouched');
+
+    assert.equal((await del(file.node_id, file.rev)).statusCode, 200);
+    assert.equal((await del(folder.node_id, folder.rev)).statusCode, 200, 'emptied, it goes');
+  });
 });
 
 describe('dedup lookup', () => {

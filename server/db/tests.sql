@@ -635,6 +635,44 @@ SELECT expect_fail($$
 $$, '23514', 'stale ancestry',
    'a move that forgot to rewrite a descendant');
 
+-- ---- a live node never sits under a deleted folder (#431)
+-- a2 holds live nodes (d1 among them): deleting it alone leaves them under a deleted parent.
+SELECT expect_fail($$
+    DO $inner$
+    BEGIN
+        SET CONSTRAINTS nodes_live_under_live IMMEDIATE;   -- drain clean fixtures
+        SET CONSTRAINTS nodes_live_under_live DEFERRED;
+        UPDATE nodes SET deleted_at = now()
+         WHERE vault_id = 'aa000000-0000-0000-0000-000000000001'
+           AND id = 'a0000000-0000-0000-0000-0000000000a2';
+        SET CONSTRAINTS nodes_live_under_live IMMEDIATE;
+    END $inner$
+$$, '23514', 'still holds live node',
+   'deleting a folder with live content in it');
+
+-- And the other direction: a live node placed under a folder that is already deleted.
+SELECT expect_fail($$
+    DO $inner$
+    BEGIN
+        SET CONSTRAINTS nodes_live_under_live IMMEDIATE;
+        SET CONSTRAINTS nodes_live_under_live DEFERRED;
+        INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry, deleted_at)
+        VALUES ('aa000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1',
+                'a0000000-0000-0000-0000-0000000000a1', '\xda7a30'::bytea, nh('Gone'),
+                'ac000000-0000-0000-0000-000000000001', 'folder', now(), 7,
+                ARRAY['a0000000-0000-0000-0000-0000000000a1']::uuid[], now());
+        SET CONSTRAINTS nodes_live_under_live IMMEDIATE;   -- the folder's own event, clean
+        SET CONSTRAINTS nodes_live_under_live DEFERRED;
+        INSERT INTO nodes (vault_id, id, parent_id, name_enc, name_hmac, name_key_id, type, mtime, rev, ancestry)
+        VALUES ('aa000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e2',
+                'a0000000-0000-0000-0000-0000000000e1', '\xda7a31'::bytea, nh('Orphan'),
+                'ac000000-0000-0000-0000-000000000001', 'folder', now(), 8,
+                ARRAY['a0000000-0000-0000-0000-0000000000a1','a0000000-0000-0000-0000-0000000000e1']::uuid[]);
+        SET CONSTRAINTS nodes_live_under_live IMMEDIATE;
+    END $inner$
+$$, '23514', 'is live, but its folder',
+   'a live node under a deleted folder');
+
 -- ============================================================ blobs
 
 SELECT expect_fail($$

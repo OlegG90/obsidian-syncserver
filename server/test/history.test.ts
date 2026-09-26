@@ -64,6 +64,20 @@ const createNode = async (name: string, parent: string, type: 'file' | 'folder' 
 const del = (nodeId: string, rev: number) =>
   app.inject({ method: 'DELETE', url: `/vaults/${vaultId}/nodes/${nodeId}`, headers: { ...auth(), 'if-match': String(rev) } });
 
+/**
+ * A folder trashed with something alive still in it — which no write can produce any more (#431),
+ * and which a database from before migration 0007 may still hold. The purge's guard is for those,
+ * so the fixture builds one the way it came about: the rule switched off for this one statement.
+ */
+const trashedStillFull = (nodeId: string) =>
+  db.tx(async (c) => {
+    await c.query(`ALTER TABLE nodes DISABLE TRIGGER nodes_live_under_live`);
+    await c.query(`UPDATE nodes SET deleted_at = now() WHERE vault_id = $1 AND id = $2`, [vaultId, nodeId]);
+    // The update queued the other deferred checks; ALTER TABLE refuses to run with any pending.
+    await c.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+    await c.query(`ALTER TABLE nodes ENABLE TRIGGER nodes_live_under_live`);
+  });
+
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
@@ -313,14 +327,11 @@ describe('emptying the trash — the only way usage goes down', () => {
   });
 
   it('refuses a trashed folder that still holds something alive', async () => {
-    // Deleting a folder does not delete what is in it, so a purge that removed the folder
-    // would orphan a live file — which the foreign key refuses, in a sentence about a
-    // constraint the caller cannot see. This says the thing itself.
+    // A purge that removed the folder would orphan a live file — which the foreign key
+    // refuses, in a sentence about a constraint the caller cannot see. This says the thing itself.
     const folder = await createNode(`half-${randomUUID()}`, rootId, 'folder');
     await createNode(`alive-${randomUUID()}.md`, folder.node_id);
-    const rev = await db.one<{ rev: string }>(
-      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, folder.node_id]);
-    await del(folder.node_id, Number(rev!.rev));
+    await trashedStillFull(folder.node_id);
 
     const r = await purge(folder.node_id);
     assert.equal(r.statusCode, 400, r.body);
@@ -339,9 +350,7 @@ describe('emptying the trash — the only way usage goes down', () => {
     await del(doomed.node_id, doomed.rev);
     const keeper = await createNode(`keeper-${randomUUID()}`, rootId, 'folder');
     await createNode(`still-here-${randomUUID()}.md`, keeper.node_id);
-    const rev = await db.one<{ rev: string }>(
-      `SELECT rev::text AS rev FROM nodes WHERE vault_id = $1 AND id = $2`, [vaultId, keeper.node_id]);
-    await del(keeper.node_id, Number(rev!.rev));
+    await trashedStillFull(keeper.node_id);
 
     const r = await purge();
     assert.equal(r.statusCode, 200, r.body);

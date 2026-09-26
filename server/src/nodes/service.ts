@@ -254,6 +254,14 @@ export const deleteNode = async (
     if (!row) return fail('not_found');
     if (Number(row.rev) !== input.ifMatchRev) return { kind: 'rev_mismatch', rev: Number(row.rev) };
 
+    // A folder goes after what is in it (#431). `nodes_live_under_live` would refuse this at commit
+    // as well; asked here first, so the caller hears a precondition rather than a broken rule.
+    const held = await c.query(
+      `SELECT 1 FROM nodes WHERE vault_id = $1 AND parent_id = $2 AND deleted_at IS NULL LIMIT 1`,
+      [input.vaultId, input.nodeId],
+    );
+    if (held.rowCount) return fail('folder_not_empty');
+
     // Deleting stays available to a frozen account: it is the only way out of over-quota,
     // so a freeze that blocked it would be a deadlock (SH-20). Inside a share the schema
     // refuses it as `frozen` — the replica does not move — and the way out there is to

@@ -842,6 +842,11 @@ History survives a rename on its own, being keyed by `node_id`. What a `move` *d
 `ancestry` for the whole subtree in the same transaction — and, inside a shared folder, applying the same
 move to every participant's corresponding node.
 
+**A folder is deleted after what is in it: one that still holds a live node is `409 folder_not_empty`**
+(#431). Deleting a folder marks the folder and nothing under it, so a folder deleted first would leave its
+content live under a parent no listing shows — in every copy, once a share propagated it. The schema holds
+the same rule at commit (`nodes_live_under_live`), for every path that deletes or restores.
+
 **A name a sibling already holds is `409 name_taken`** (#420) — on create, on move, and inside a share's
 propagation — without the database's message and without naming the node in the way, which inside a share
 may be another participant's. Two devices, or two people in one shared folder, can create one name at the
