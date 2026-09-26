@@ -14,6 +14,14 @@
  * sit under it — and it names the *parent* path, because the unreadable node's own name is exactly what
  * could not be read.
  *
+ * **A node whose parent is not in the listing has no path, and is left out** (#432). The listing is
+ * parents-first and holds live nodes only, so an absent parent is a deleted one — which the server
+ * no longer lets happen under a live node (#431), and which a database from before that still
+ * holds. Falling back to the vault root put such files at the top of the vault while the server
+ * had them inside a shared folder, and moving them back read as leaving the share. The top of the
+ * vault is a real place; a guess that lands there looks like a decision. Their ids come back as
+ * `orphans`, so the pass can leave their local copies alone, and everything below them goes too.
+ *
  * **A file is a node with an address; a folder is one without.** The server does not label them, and
  * asking it to would be asking it to know something about content it cannot see.
  *
@@ -53,19 +61,31 @@ export const treeFrom = (
   nodes: readonly Change[],
   rootNodeId: string,
   keys: NameKeys,
-): { tree: Map<string, ServerNode>; unreadable: UnreadableFolder[] } => {
+): { tree: Map<string, ServerNode>; unreadable: UnreadableFolder[]; orphans: string[] } => {
   const pathOf = new Map<string, string>([[rootNodeId, '']]);
   const tree = new Map<string, ServerNode>();
   const skipped = new Set<string>();
   const unreadable: UnreadableFolder[] = [];
+  const orphans: string[] = [];
+  const cut = new Set<string>();
 
   for (const n of nodes) {
     if (n.node_id === rootNodeId) continue;
+    if (n.parent_id && cut.has(n.parent_id)) {
+      cut.add(n.node_id);
+      orphans.push(n.node_id);
+      continue;
+    }
     if (n.parent_id && skipped.has(n.parent_id)) {
       skipped.add(n.node_id);
       continue;
     }
-    const parentPath = pathOf.get(n.parent_id ?? '') ?? '';
+    const parentPath = n.parent_id ? pathOf.get(n.parent_id) : undefined;
+    if (parentPath === undefined) {
+      cut.add(n.node_id);
+      orphans.push(n.node_id);
+      continue;
+    }
     // A node's name is encrypted under the scope it is named in — the vault's, or a share's `KS` for a
     // node inside a shared folder (SH-28). The wire names that scope.
     const key = n.name_enc ? keys.keyIfOpenable(n.name_key_id) : keys.vaultKey;
@@ -96,5 +116,5 @@ export const treeFrom = (
     });
   }
 
-  return { tree, unreadable };
+  return { tree, unreadable, orphans };
 };

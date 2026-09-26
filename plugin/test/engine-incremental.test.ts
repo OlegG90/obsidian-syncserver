@@ -483,6 +483,7 @@ describe('the tree is walked once while nothing happens (issue #252)', () => {
       scopes: 'kv|',
       tree: new Map([['a.md', { nodeId: 'n1', parentId: 'root', path: 'a.md', rev: 1, isFile: true } as never]]),
       unreadable: [],
+      orphans: [],
     };
     cache.put(walked);
 
@@ -496,7 +497,7 @@ describe('the tree is walked once while nothing happens (issue #252)', () => {
 
   it('answers nothing for a cursor it did not walk at', async () => {
     const cache = openTreeCache();
-    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [] });
+    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [], orphans: [] });
     assert.equal(cache.get({ cursor: 'two', scopes: 'kv|' }), undefined);
   });
 
@@ -508,7 +509,7 @@ describe('the tree is walked once while nothing happens (issue #252)', () => {
     // probe answers `quiet`. Keyed on the cursor alone, the cache went on hiding a share whose key had
     // just arrived until some unrelated node happened to change.
     const cache = openTreeCache();
-    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [] });
+    cache.put({ cursor: 'one', scopes: 'kv|', tree: new Map(), unreadable: [], orphans: [] });
 
     assert.equal(cache.get({ cursor: 'one', scopes: 'kv|share-a' }), undefined, 'a key arrived');
     assert.ok(cache.get({ cursor: 'one', scopes: 'kv|' }), 'and the unchanged case still answers');

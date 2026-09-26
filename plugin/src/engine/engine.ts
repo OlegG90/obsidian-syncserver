@@ -338,9 +338,32 @@ export class SyncEngine {
     const remembered = this.rememberedTree(state.cursor, probe);
     const walked = remembered ?? { ...(await this.readServerTree(rootNodeId)), scopes: this.scopes.fingerprint() };
     if (!remembered) this.cache?.put(walked);
-    const { tree, cursor, unreadable } = walked;
+    const { tree, cursor, unreadable, orphans } = walked;
     const byNodeId = new Map<string, ServerNode>();
     for (const n of tree.values()) byNodeId.set(n.nodeId, n);
+
+    // **A node the server holds under a deleted folder is nobody's to decide here** (#432). It is left
+    // out of the tree, which on its own would read a copy this device synced as "deleted on the
+    // server" and remove it, or its absence here as "deleted on this device" and push that. Neither
+    // is known, so its copy is frozen by the same rule as an unreadable share, and the pass says so.
+    const orphaned = new Set(orphans);
+    const stranded = new Set(
+      Object.entries(state.nodes)
+        .filter(([, known]) => orphaned.has(known.nodeId))
+        .map(([path]) => path),
+    );
+    for (const path of stranded) {
+      report.errors.push({
+        path,
+        message: 'on the server this sits under a folder that was deleted, so it is left alone here until that folder is restored from the trash',
+      });
+    }
+    if (orphans.length > stranded.size) {
+      report.errors.push({
+        path: '',
+        message: `${orphans.length - stranded.size} item(s) on the server sit under a folder that was deleted; they are left out of this vault until that folder is restored`,
+      });
+    }
 
     /**
      * In scope for this pass: syncable, and not inside a shared folder we cannot read.
@@ -352,7 +375,9 @@ export class SyncEngine {
      * `.obsidian/`: out of scope, in both directions, for as long as it stays unreadable.
      */
     const inScope = (path: string): boolean =>
-      this.scope(path) && !unreadable.some((u) => path === u.path || path.startsWith(`${u.path}/`));
+      this.scope(path) &&
+      !unreadable.some((u) => path === u.path || path.startsWith(`${u.path}/`)) &&
+      !stranded.has(path);
 
     report.unreadable = unreadable;
 

@@ -831,6 +831,12 @@ the folder stays where it was made, as it always did.
 up elsewhere, it is not sent as a delete of each file — which would empty the share for everybody — but
 written back, with a report that says to leave the share first.
 
+**A node under a deleted folder has no path here, and is left alone** (#432). The listing holds live
+nodes, parents first, so a parent it lacks is a deleted one — a state the server no longer lets a write
+produce (#431), and one a database from before that may still hold. Such a node, and everything below it,
+is left out of the tree rather than placed at the top of the vault; a copy this device synced is frozen,
+neither deleted here nor pushed as deleted, and the pass reports it until the folder is restored.
+
 **A share root is never taken apart.** When one is emptied here and no folder move explains where it went,
 while its files turned up in folders the server has never seen — the shape of a rename that could not be
 proved — or regrouped under a folder of its own name that the server already holds, which is a merge
