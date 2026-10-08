@@ -103,6 +103,11 @@
       label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.9em; }
       input { width: 100%; padding: 0.5rem; border: 1px solid var(--edge); border-radius: 6px;
               background: transparent; color: inherit; font-size: inherit; }
+      /* A box is a box: stretched to the field's width it sat alone on a line, apart from its label. */
+      input[type="checkbox"] { width: auto; margin: 0 0.4rem 0 0; vertical-align: middle; }
+      /* Choices that belong together, side by side — the schedule's weekdays (#438). */
+      .choices { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+      .choices label { display: inline-flex; align-items: center; margin: 0; }
       button { margin-top: 1rem; padding: 0.45rem 0.9rem; border: 1px solid var(--edge);
                border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
       button:hover:not(:disabled) { border-color: var(--accent); }
