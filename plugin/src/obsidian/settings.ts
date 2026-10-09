@@ -630,7 +630,11 @@ export class SyncServerSettings extends PluginSettingTab {
     void this.plugin.account
       .hasRecoveryCode()
       .then(paint)
-      .catch(() => setting.setDesc('The server could not be asked whether this account has one.'));
+      // A block, not an arrow body: `setDesc` returns the setting, which Obsidian 1.14 made a thenable,
+      // and a catch that resolves with one never settles — it froze the application (#440).
+      .catch(() => {
+        setting.setDesc('The server could not be asked whether this account has one.');
+      });
   }
 
   /**
