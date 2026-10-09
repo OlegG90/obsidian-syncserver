@@ -236,14 +236,6 @@ export class SyncServerSettings extends PluginSettingTab {
         }),
     );
 
-    /** A transport failure names a category, never an address — and the address is the likeliest mistake. */
-    const explain = (e: unknown): string => {
-      const reason = errorText(e);
-      return /ERR_|network|fetch|refused|timeout/i.test(reason)
-        ? `nothing answered at ${draft.serverUrl} — ${reason}`
-        : reason;
-    };
-
     /**
      * One route at a time, chosen before anything is filled in (#130).
      *
@@ -341,7 +333,7 @@ export class SyncServerSettings extends PluginSettingTab {
           try {
             await this.attemptRoute(chosen, draft, pairingTarget);
           } catch (e) {
-            new Notice(`SyncServer: ${explain(e)}`, 12000);
+            new Notice(`SyncServer: ${errorText(e)}`, 12000);
           } finally {
             b.setDisabled(false);
           }

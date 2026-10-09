@@ -46,6 +46,8 @@ export type Transport = (req: HttpRequest) => Promise<HttpResponse>;
  */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const BLOB_TIMEOUT_MS = 5 * 60_000;
+/** `SyncClient.reachable` — a server that has not answered `/health` in this long is not there for a person waiting. */
+export const REACHABLE_TIMEOUT_MS = 5_000;
 
 /**
  * Raced against a transport call so nothing waits forever — see `client.ts`, which is the
@@ -56,6 +58,24 @@ export const BLOB_TIMEOUT_MS = 5 * 60_000;
  * the server, where a genuinely cancelled one cannot.
  */
 export class TimeoutError extends Error {}
+
+/**
+ * The server could not be reached at all — as opposed to a server that answered with a refusal (#440).
+ *
+ * The transport never throws for a status, so anything it throws is this: no network, a name that
+ * does not resolve, a refused connection, a wait that ran out. Those arrived as whatever the platform
+ * called them — `net::ERR_NAME_NOT_RESOLVED`, `Failed to fetch` — which names a mechanism and leaves
+ * a person to work out that the answer is "you are offline, or the server is down". This says that,
+ * and keeps the platform's word for the record.
+ */
+export class UnreachableError extends Error {
+  constructor(
+    readonly serverUrl: string,
+    readonly reason: string,
+  ) {
+    super(`the server at ${serverUrl} cannot be reached — no network, or the server is not running (${reason})`);
+  }
+}
 
 export const withTimeout = <T>(work: Promise<T>, ms: number): Promise<T> =>
   new Promise((resolve, reject) => {
