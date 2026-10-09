@@ -189,6 +189,11 @@ The short line distinguishes two things that look alike and are not:
 - **`vault looks empty`** — no local files were found at all. If your vault is not empty, the plugin is
   not seeing it. That is worth reporting, not a quiet success.
 
+**`offline`** replaces `locked` or a resting state when the last request this device made got no answer
+(#441): no network, or the server is not running. The passphrase is not asked for then — opening the
+session needs the server — and **Show sync status** says when the server last answered, or since when it
+has not, with the reason.
+
 Two states outrank every sync result, because they are the *reason* for it, and they stay on screen
 until they stop being true:
 
@@ -305,6 +310,7 @@ Coming back needs the passphrase, or another device that is still connected.
 | `Sync: vault looks empty` on a vault that is not | the plugin is not seeing your files; worth reporting |
 | a red line under the version | `main.js` and `manifest.json` disagree — reinstall through BRAT |
 | `Sync: over your limit` | see [If the account freezes](#if-the-account-freezes) |
+| `Sync: offline`, or *the server … cannot be reached* | no network, or the server is down; nothing to unlock until it answers |
 | `restore_pending` from every request | the administrator restored a backup and has not confirmed it; their console has the way out |
 | `the server is being backed up` | a backup is running. New writes wait; it is over in seconds |
 

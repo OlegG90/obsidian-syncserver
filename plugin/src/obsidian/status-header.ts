@@ -57,7 +57,7 @@ export const statusHeader = (containerEl: HTMLElement, s: Surface, conn: Connect
    * the status bar and the ribbon were told, and both are behind this modal.
    */
   const paint = (): void => {
-    phase.setText(shortStatus(plugin.phaseNow()));
+    phase.setText(shortStatus(plugin.phaseNow(), plugin.contactNow()));
     const said = lastActionLine(plugin.lastAction());
     line.setText(said ?? '');
     line.style.display = said ? '' : 'none';
