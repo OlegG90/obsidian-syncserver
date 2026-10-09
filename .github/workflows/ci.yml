@@ -55,6 +55,9 @@ jobs:
       # into its icon, and both reached a release — a phone was offered "Sync: not connected" beside a
       # vault that had synced.
       - run: node checks/check-registration.mjs
+      # Nothing Obsidian draws is handed to a promise. 1.14 made every Setting and component a
+      # thenable, and `.catch(() => setting.setDesc(…))` froze the application for good (#440).
+      - run: node checks/check-thenables.mjs
 
   # The runtime image is BUILT here, and the reason is `pg_dump`. The static check next door
   # only proves two numbers agree in two files; whether the pinned package actually exists in

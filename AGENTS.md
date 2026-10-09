@@ -34,7 +34,7 @@ comments explain themselves; nothing else states a contract.
 | `server/db/migrations/` | the same changes as steps for a database that already exists, applied by the server at start (D-132) |
 | `server/db/tests.sql` | negative tests for the schema, run inside a transaction that ends in `ROLLBACK` |
 | `plugin/` | the Obsidian plugin: one bundle for Electron and a Capacitor WebView |
-| `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a registration Obsidian keeps taking only constants, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI — except `schema-equivalence.sh`, which needs a database and runs in CI's server job |
+| `checks/` | the repository's own tests: one version across six manifests, `D-N` kept apart from `#N`, docblocks above their code, no workspace redeclaring a `shared` export, a registration Obsidian keeps taking only constants, nothing Obsidian draws handed to a promise, a compose file still shaped the way `docs/13` promises. Run by `npm test` and by CI — except `schema-equivalence.sh`, which needs a database and runs in CI's server job |
 | `tools/` | things a person picks up: database reset, packing a deployment archive, deploying, smoke-walking a server. Nothing in CI runs these |
 
 ## What is safe to delete
