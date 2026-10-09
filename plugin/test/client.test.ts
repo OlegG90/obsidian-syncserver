@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ApiError, SyncClient } from '../src/api/client.js';
-import type { HttpRequest, HttpResponse, Transport } from '../src/api/transport.js';
+import { UnreachableError, type HttpRequest, type HttpResponse, type Transport } from '../src/api/transport.js';
 
 const ok = (body: unknown, status = 200): HttpResponse => {
   const text = JSON.stringify(body);
@@ -125,6 +125,31 @@ describe('SyncClient bounds how long it waits', () => {
     // SOME bound applies and a hung transport cannot wedge the caller forever.
     const client = new SyncClient('http://x', hang, 20);
     await assert.rejects(client.health(), /timed out/i);
+  });
+});
+
+describe('a server that cannot be reached says so (#440)', () => {
+  it('names the server and the likely cause, and keeps the platform’s own word for it', async () => {
+    const offline: Transport = async () => {
+      throw new Error('net::ERR_NAME_NOT_RESOLVED');
+    };
+    const client = new SyncClient('http://sync.example:8287', offline);
+    const e = await client.health().catch((x: unknown) => x);
+    assert.ok(e instanceof UnreachableError);
+    assert.equal(
+      e.message,
+      'the server at http://sync.example:8287 cannot be reached — no network, or the server is not running (net::ERR_NAME_NOT_RESOLVED)',
+    );
+  });
+
+  it('counts a wait that ran out as the same thing', async () => {
+    const client = new SyncClient('http://x', () => new Promise(() => {}), 20);
+    await assert.rejects(client.health(), (e: unknown) => e instanceof UnreachableError && /timed out/.test(e.message));
+  });
+
+  it('is not a refusal: a server that answered with a status is still an ApiError', async () => {
+    const client = new SyncClient('http://x', async () => fail(503, 'bootstrap_pending'));
+    await assert.rejects(client.health(), (e: unknown) => e instanceof ApiError);
   });
 });
 

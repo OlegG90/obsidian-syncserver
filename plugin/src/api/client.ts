@@ -28,7 +28,16 @@ import type {
   RestoreResult,
   WriteConflict,
 } from '@syncserver/shared';
-import { BLOB_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, withTimeout, type HttpRequest, type HttpResponse, type Transport } from './transport.js';
+import {
+  BLOB_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS,
+  REACHABLE_TIMEOUT_MS,
+  UnreachableError,
+  withTimeout,
+  type HttpRequest,
+  type HttpResponse,
+  type Transport,
+} from './transport.js';
 
 /**
  * The client's parsed result of a refused write: the wire body is `{ error: <code> }`, this
@@ -330,10 +339,16 @@ export class SyncClient {
     const headers: Record<string, string> = { ...req.headers };
     if (req.auth !== false && this.access) headers['authorization'] = `Bearer ${this.access}`;
 
-    const res = await withTimeout(
-      this.transport({ method: req.method, url: this.baseUrl + req.path, headers, body: req.body }),
-      req.timeoutMs ?? this.defaultTimeoutMs,
-    );
+    let res: HttpResponse;
+    try {
+      res = await withTimeout(
+        this.transport({ method: req.method, url: this.baseUrl + req.path, headers, body: req.body }),
+        req.timeoutMs ?? this.defaultTimeoutMs,
+      );
+    } catch (e) {
+      // The transport hands every status back, so whatever it throws is "nothing answered" (#440).
+      throw new UnreachableError(this.baseUrl, e instanceof Error ? e.message : String(e));
+    }
 
     // Refreshed and retried ONCE, and only for the one 401 that refreshing can fix: an
     // expired or otherwise invalid access token. `device_revoked` is also a 401 (on the
@@ -398,6 +413,17 @@ export class SyncClient {
 
   health(): Promise<HealthResponse> {
     return this.json('GET', '/health', undefined, { auth: false });
+  }
+
+  /**
+   * Whether anything answers, asked on a short clock (#440): throws `UnreachableError` when not.
+   *
+   * Asked before the passphrase is, because opening a session costs a second of Argon2id on the
+   * thread that draws Obsidian and then needs the server anyway. Offline, every attempt paid that
+   * second — and the prompt before it — to learn what this learns in a few.
+   */
+  async reachable(): Promise<void> {
+    await this.json('GET', '/health', undefined, { auth: false, timeoutMs: REACHABLE_TIMEOUT_MS });
   }
 
   /**
