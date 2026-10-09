@@ -251,6 +251,7 @@ export default class SyncServerPlugin extends Plugin {
       sessionState: () => (this.sess ? this.sess.state : 'none'),
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
+      reachable: () => new SyncClient(this.sess!.connection.serverUrl, transport).reachable(),
       runPass: async (opts) => {
         // `sess.use` and not `withVault`: a pass runs on an already-open session and must never be the
         // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
@@ -852,6 +853,8 @@ export default class SyncServerPlugin extends Plugin {
 
   /** The question itself, held by `unlocked` so that concurrent callers share one asking. */
   private async askAndOpen(): Promise<Session> {
+    // Before the question, for the reason the sync coordinator asks first (#440).
+    await new SyncClient(this.sess!.connection.serverUrl, transport).reachable();
     const passphrase = await askPassphrase(this.app);
     if (!passphrase) throw new Error('the passphrase is needed to open this account');
     if ((await this.sess!.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');

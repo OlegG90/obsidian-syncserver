@@ -31,6 +31,8 @@ export interface SyncCoordinatorDeps {
   unlock(passphrase: string): Promise<boolean>;
   /** Ask for the passphrase; undefined means dismissed. Never called without permission to prompt. */
   askPassphrase(): Promise<string | undefined>;
+  /** Throws `UnreachableError` when the server does not answer — asked before the passphrase (#440). */
+  reachable(): Promise<void>;
   /**
    * Run one engine pass. Called only with an open session.
    *
@@ -104,6 +106,9 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
         // edit would be the same spam by another name. What a person needs to know is that the sync
         // is locked, which is on the ribbon; what they do about it is unlock, which starts a pass.
         if (!attended) return;
+        // Offline, the prompt and the unlock behind it can only end in "cannot be reached" — after a
+        // passphrase typed for nothing and a second of Argon2id on the thread that draws the window.
+        await deps.reachable();
         const passphrase = await deps.askPassphrase();
         if (!passphrase) return; // dismissed
         if (!(await deps.unlock(passphrase))) return; // refused

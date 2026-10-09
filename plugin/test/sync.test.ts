@@ -49,6 +49,7 @@ const rig = (over: Partial<SyncCoordinatorDeps> = {}) => {
       calls.ask++;
       return 'phrase';
     },
+    reachable: async () => {},
     runPass: async () => {
       calls.pass++;
       return emptyReport();
@@ -188,6 +189,24 @@ describe('the sync coordinator', () => {
     const failed = r.phases.at(-1) as { kind: string; message: string };
     assert.equal(failed.kind, 'failed');
     assert.equal(failed.message, 'wrong passphrase');
+  });
+
+  it('asks nothing while the server cannot be reached, and says that instead (#440)', async () => {
+    const r = rig({
+      reachable: async () => {
+        throw new Error('the server at http://sync.example:8287 cannot be reached — no network, or the server is not running');
+      },
+    });
+    r.setState('locked');
+    const sync = openSyncCoordinator(r.deps);
+    await sync.run();
+    assert.equal(r.calls.ask, 0, 'no passphrase typed for nothing');
+    assert.equal(r.calls.unlock, 0, 'and no Argon2id run for nothing');
+    const failed = r.phases.at(-1) as { kind: string; message: string };
+    assert.equal(failed.kind, 'failed');
+    assert.match(failed.message, /cannot be reached/);
+    await sync.run();
+    assert.equal(r.calls.ask, 0, 'and the next attempt is just as cheap');
   });
 
   it('says so when there is no connection yet', async () => {
