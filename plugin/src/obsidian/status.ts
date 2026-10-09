@@ -20,6 +20,7 @@ import { mib } from './format.js';
 import type { SyncReport } from '../engine/engine.js';
 import { counterText, displayFor, type PassProgress } from '../pass-progress.js';
 import { categories, priority, type ReportCategory } from '../engine/report.js';
+import type { Contact } from '../contact.js';
 
 export type SyncPhase =
   | { kind: 'disconnected' }
@@ -61,9 +62,10 @@ const accountState = (phase: SyncPhase): string | undefined => {
  * accessible name — the desktop tooltip — is the place the state belongs. One string cannot
  * be both, and the one that was tried read as a report and reported the wrong thing (#285).
  */
-export const phaseState = (phase: SyncPhase, now = Date.now()): string => {
+export const phaseState = (phase: SyncPhase, now = Date.now(), contact?: Contact): string => {
   const state = accountState(phase);
   if (state) return state;
+  if (offline(phase, contact)) return 'offline';
   switch (phase.kind) {
     case 'disconnected':
       return 'not connected';
@@ -107,7 +109,29 @@ export const phaseState = (phase: SyncPhase, now = Date.now()): string => {
 };
 
 /** What the status bar and the status screen say: the state, under the word they head it with. */
-export const shortStatus = (phase: SyncPhase): string => `Sync: ${phaseState(phase)}`;
+export const shortStatus = (phase: SyncPhase, contact?: Contact): string => `Sync: ${phaseState(phase, Date.now(), contact)}`;
+
+/**
+ * Whether the state a surface would show is really "the server cannot be reached" (#441).
+ *
+ * Only for a session at rest — locked, or idle between passes. Locked offline is not a passphrase
+ * waiting to be typed, and pointing at one sends a person to a prompt that can only fail. A pass
+ * under way says so, and a failed one already carries its own reason.
+ */
+const offline = (phase: SyncPhase, contact?: Contact): boolean =>
+  contact?.kind === 'unreachable' && (phase.kind === 'locked' || phase.kind === 'idle');
+
+/** One line about the server's answers, for the long status (#441). */
+export const contactLine = (contact: Contact): string => {
+  switch (contact.kind) {
+    case 'unknown':
+      return 'Connection: not asked yet this session.';
+    case 'answered':
+      return `Connection: the server answered at ${when(contact.at)}.`;
+    case 'unreachable':
+      return `Connection: cannot reach the server since ${when(contact.since)} — no network, or the server is not running (${contact.reason}).`;
+  }
+};
 
 /**
  * The mood of a phase, as a Lucide icon name — what the ribbon shows.
@@ -122,10 +146,11 @@ export const shortStatus = (phase: SyncPhase): string => `Sync: ${phaseState(pha
  * `conflicts` and `quarantined` share the warning icon because to a person glancing at a
  * ribbon they are one thing: something needs you.
  */
-export const phaseIcon = (phase: SyncPhase): string => {
+export const phaseIcon = (phase: SyncPhase, contact?: Contact): string => {
   // The same precedence the words use: a frozen account is not a healthy tick, whatever the
   // pass that discovered it managed to move.
   if (accountState(phase)) return 'alert-triangle';
+  if (offline(phase, contact)) return 'wifi-off';
   switch (phase.kind) {
     case 'disconnected':
       return 'cloud-off';
@@ -157,10 +182,12 @@ export const statusLines = (
   phase: SyncPhase,
   connection?: { serverUrl: string; login: string; vaultId: string },
   usage?: AccountUsage,
+  contact?: Contact,
 ): string[] => {
   const lines: string[] = [];
 
   lines.push(connection ? `Server: ${connection.serverUrl}` : 'Server: not connected');
+  if (connection && contact) lines.push(contactLine(contact));
   if (connection) {
     lines.push(`Login: ${connection.login}`);
     lines.push(`Vault: ${connection.vaultId}`);
@@ -185,7 +212,11 @@ export const statusLines = (
       lines.push('State: this vault is not connected to a server yet.');
       break;
     case 'locked':
-      lines.push('State: locked — the passphrase is asked for once per session.');
+      lines.push(
+        offline(phase, contact)
+          ? 'State: offline — the session opens once the server answers; the passphrase is asked for then.'
+          : 'State: locked — the passphrase is asked for once per session.',
+      );
       break;
     case 'syncing':
       lines.push('State: syncing now.');

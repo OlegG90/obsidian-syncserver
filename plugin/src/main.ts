@@ -18,7 +18,7 @@ import { Notice, Platform, Plugin, setIcon } from 'obsidian';
 import { teardownStep } from './teardown.js';
 import { autoSyncByDefault, watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
-import { ApiError, SyncClient } from './api/client.js';
+import { ApiError, SyncClient, type AccountUsage } from './api/client.js';
 import { SyncEngine, type PassOptions } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
@@ -27,7 +27,9 @@ import { deviceName, nameIfUnnamed } from './device-name.js';
 import { PushListener } from './obsidian/push.js';
 import { newHumanCode } from './crypto/human-code.js';
 import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
-import { transport } from './obsidian/net.js';
+import { transport as platformTransport } from './obsidian/net.js';
+import { watchContact, type Contact, type ContactWatch } from './contact.js';
+import { UnreachableError } from './api/transport.js';
 import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
 
@@ -168,6 +170,12 @@ export default class SyncServerPlugin extends Plugin {
   private unlocking: Promise<Session> | undefined;
   /** One operation at a time across sync, sharing and the trash — created once, shared by all three. */
   private gate = openGate();
+  /**
+   * Every request this plugin makes goes through here, so whether the server answers is known
+   * without asking it (#441). A change of kind repaints the glanceable surfaces.
+   */
+  private readonly contact: ContactWatch = watchContact(platformTransport, () => this.paint());
+  private readonly transport = this.contact.transport;
   /** Which local folder each share is, and the badge that says so — see `shared-folder-marks.ts`. */
   private marks: SharedFolderMarks | undefined;
 
@@ -251,7 +259,7 @@ export default class SyncServerPlugin extends Plugin {
       sessionState: () => (this.sess ? this.sess.state : 'none'),
       unlock: async (passphrase) => (await this.sess!.open(passphrase)) === 'open',
       askPassphrase: () => askPassphrase(this.app),
-      reachable: () => new SyncClient(this.sess!.connection.serverUrl, transport).reachable(),
+      reachable: () => new SyncClient(this.sess!.connection.serverUrl, this.transport).reachable(),
       runPass: async (opts) => {
         // `sess.use` and not `withVault`: a pass runs on an already-open session and must never be the
         // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
@@ -362,7 +370,7 @@ export default class SyncServerPlugin extends Plugin {
     // If a connection exists from a previous run, the session is locked — the seed was
     // never written down, so the passphrase has to come from the person again.
     if (this.data.connection) {
-      await this.held.resume(session.create(this.data.connection, transport));
+      await this.held.resume(session.create(this.data.connection, this.transport));
     } else {
       this.setPhase({ kind: 'disconnected' });
     }
@@ -517,6 +525,11 @@ export default class SyncServerPlugin extends Plugin {
     return this.phase;
   }
 
+  /** Whether the server has been answering, for the settings header (#441). */
+  contactNow(): Contact {
+    return this.contact.current();
+  }
+
   /** One pass, asked for by a person: the ribbon, the settings button and the command all land here. */
   syncNow(opts?: PassOptions): Promise<void> {
     return this.sync?.run(opts) ?? Promise.resolve();
@@ -541,13 +554,14 @@ export default class SyncServerPlugin extends Plugin {
    */
   private paint(): void {
     const phase = this.phase;
-    this.statusBar?.setText(shortStatus(phase));
+    const contact = this.contact.current();
+    this.statusBar?.setText(shortStatus(phase, contact));
     this.passNotice?.onPhase(phase);
     if (this.ribbon) {
       this.ribbon.toggleClass(SPINNING, phase.kind === 'syncing');
       // Only when it changed. This runs once per file of a pass and once a second besides, and
       // `setIcon` rebuilds the SVG each time — hundreds of identical rebuilds on an idle pass.
-      const icon = phaseIcon(phase);
+      const icon = phaseIcon(phase, contact);
       if (icon !== this.paintedIcon) {
         setIcon(this.ribbon, icon);
         this.paintedIcon = icon;
@@ -556,7 +570,7 @@ export default class SyncServerPlugin extends Plugin {
       // tooltip, and a button whose name reads "Sync: 3 conflicts" announces a report rather
       // than what it will do. Only the desktop sees it — the mobile sheet uses the registered
       // title above, which is why that one has to stand alone.
-      const label = `${RIBBON_ACTION} — ${phaseState(phase)}`;
+      const label = `${RIBBON_ACTION} — ${phaseState(phase, Date.now(), contact)}`;
       if (label !== this.ribbon.getAttribute('aria-label')) this.ribbon.setAttribute('aria-label', label);
     }
   }
@@ -571,13 +585,26 @@ export default class SyncServerPlugin extends Plugin {
    * the network before showing the state of a device would have the priorities backwards.
    */
   showStatus(): void {
-    const modal = new StatusModal(this.app, statusLines(this.phase, this.sess?.connection));
+    const lines = (usage?: AccountUsage): string[] =>
+      statusLines(this.phase, this.sess?.connection, usage, this.contact.current());
+    const modal = new StatusModal(this.app, lines());
     modal.open();
+
+    // Asked now, because "answered at 14:03" is about 14:03 — the window is where somebody comes to
+    // find out whether it answers at all (#441). A short clock, and the line is redrawn either way.
+    if (this.sess) {
+      void new SyncClient(this.sess.connection.serverUrl, this.transport)
+        .reachable()
+        .catch((e: unknown) => {
+          if (e instanceof UnreachableError) this.contact.unreachable(e.reason);
+        })
+        .finally(() => modal.replace(lines()));
+    }
 
     if (this.sess?.state !== 'open') return;
     void this.sess
       .use((h) => h.client.usage())
-      .then((usage) => modal.replace(statusLines(this.phase, this.sess?.connection, usage)))
+      .then((usage) => modal.replace(lines(usage)))
       .catch(() => {
         // Offline, or the token expired between opening and asking. The status is about this
         // device first, and it is already on screen.
@@ -646,7 +673,7 @@ export default class SyncServerPlugin extends Plugin {
         vaultName: this.app.vault.getName(),
         ...thisDevice(typedName),
       },
-      transport,
+      this.transport,
     );
     await this.held.take(s);
   }
@@ -686,7 +713,7 @@ export default class SyncServerPlugin extends Plugin {
           // one, and asking here costs a caller nothing.
           askVault: (v) => this.askVault(v),
         },
-        transport,
+        this.transport,
       ),
     );
   }
@@ -712,7 +739,7 @@ export default class SyncServerPlugin extends Plugin {
           ...thisDevice(args.deviceName),
           askVault: (v) => this.askVault(v),
         },
-        transport,
+        this.transport,
       ),
     );
   }
@@ -736,7 +763,7 @@ export default class SyncServerPlugin extends Plugin {
         ...thisDevice(args.deviceName),
         askVault: (v) => this.askVault(v),
       },
-      transport,
+      this.transport,
       waiting,
     );
     await this.held.take(s);
@@ -854,7 +881,7 @@ export default class SyncServerPlugin extends Plugin {
   /** The question itself, held by `unlocked` so that concurrent callers share one asking. */
   private async askAndOpen(): Promise<Session> {
     // Before the question, for the reason the sync coordinator asks first (#440).
-    await new SyncClient(this.sess!.connection.serverUrl, transport).reachable();
+    await new SyncClient(this.sess!.connection.serverUrl, this.transport).reachable();
     const passphrase = await askPassphrase(this.app);
     if (!passphrase) throw new Error('the passphrase is needed to open this account');
     if ((await this.sess!.open(passphrase)) !== 'open') throw new Error('that passphrase does not open this account');
@@ -1219,7 +1246,7 @@ export default class SyncServerPlugin extends Plugin {
 
     // Moving servers is a resume with one field changed — which is why `resume` takes the session
     // rather than the URL: the two callers stop being two blocks that must be kept in step.
-    await this.held.resume(session.create({ ...conn, serverUrl }, transport));
+    await this.held.resume(session.create({ ...conn, serverUrl }, this.transport));
   }
 
   /**
