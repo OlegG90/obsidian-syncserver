@@ -64,7 +64,7 @@ export const concat = (...parts: Uint8Array[]): Uint8Array => {
 };
 
 /**
- * The one source of randomness. Present in Electron, the WebView and Node 22.
+ * The one source of randomness. Present in Electron, the WebView and Node.
  *
  * Filled in chunks because `getRandomValues` refuses more than 65,536 bytes per call, with
  * a message about a length rather than about randomness. Nothing here asks for more than 32

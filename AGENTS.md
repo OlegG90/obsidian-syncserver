@@ -93,7 +93,7 @@ answering 503 to everything.
 
 ## Development environment
 
-PostgreSQL 18+ and Node 22+ must be on the **same side of the machine**. On Windows that means
+PostgreSQL 18+ and Node 26+ must be on the **same side of the machine**. On Windows that means
 running everything from WSL: the development database listens on a unix socket there, and a
 connection from the Windows side reports `client password must be a string`, which explains
 nothing.

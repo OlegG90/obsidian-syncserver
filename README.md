@@ -103,7 +103,7 @@ always be traced from the constraint that enforces it back to the sentence that 
 
 ## Running it
 
-Requires **PostgreSQL 18+** and **Node 22+**.
+Requires **PostgreSQL 18+** and **Node 26+**.
 
 ```bash
 npm ci
