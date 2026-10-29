@@ -5,7 +5,7 @@
   "description": "Self-hosted synchronisation server for Obsidian vaults: multi-device sync plus per-folder sharing, end-to-end encrypted",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "workspaces": [
     "shared",
@@ -31,8 +31,11 @@
     "clean": "./tools/clean.sh"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.6.6",
     "typescript": "^5.7.0",
     "yaml": "^2.9.0"
+  },
+  "allowScripts": {
+    "esbuild": false
   }
 }
