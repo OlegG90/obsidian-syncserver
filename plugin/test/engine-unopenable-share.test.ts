@@ -145,7 +145,7 @@ describe('a shared folder this device cannot open', () => {
     const report = await engineOver(vault).sync();
 
     assert.deepEqual(report.errors, [], 'nothing failed — the folder is unreachable, not broken');
-    assert.deepEqual(report.pulled, [{ path: 'ordinary.md' }], 'the rest of the vault came down as usual');
+    assert.deepEqual(report.pulled.map((p) => p.path), ['ordinary.md'], 'the rest of the vault came down as usual');
     assert.equal(vault.contents('ordinary.md'), 'an ordinary note');
   });
 

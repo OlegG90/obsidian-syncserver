@@ -113,6 +113,7 @@ export const treeFrom = (
       isFile: n.sha256 !== null,
       nameKeyId: n.name_key_id,
       shareId: n.share_id,
+      authorId: n.author_id,
     });
   }
 

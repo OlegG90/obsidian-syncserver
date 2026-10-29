@@ -72,6 +72,8 @@ interface ServerRow {
   size: number | null;
   rev: number;
   deleted: boolean;
+  /** Who wrote the content there now — what the listing reports as `author_id` (#447). */
+  authorId?: string | null;
 }
 
 /** A vault as the server holds it: writes apply, and a move across a share's edge is refused. */
@@ -92,7 +94,7 @@ class Server implements VaultWire {
   }
 
   /** A node placed directly, as another device or an earlier session left it. */
-  seed(parentId: string, name: string, opts: { scopeId: string; shareId?: string; text?: string }): string {
+  seed(parentId: string, name: string, opts: { scopeId: string; shareId?: string; text?: string; author?: string }): string {
     const id = `n${++this.ids}`;
     let sha256: string | null = null;
     let size: number | null = null;
@@ -106,9 +108,19 @@ class Server implements VaultWire {
     const key = keyOf(opts.scopeId);
     this.rows.set(id, {
       id, parentId, nameEnc: encryptName(key, name), nameHmac: nameHmac(key, name), nameKeyId: opts.scopeId,
-      shareId: opts.shareId ?? null, sha256, size, rev: ++this.rev, deleted: false,
+      shareId: opts.shareId ?? null, sha256, size, rev: ++this.rev, deleted: false, authorId: opts.author ?? null,
     });
     return id;
+  }
+
+  /** New content in an existing file, written by somebody — another participant's edit arriving. */
+  rewrite(id: string, text: string, author: string): void {
+    const r = this.rows.get(id)!;
+    const scopeId = r.shareId ? Object.values(SHARES).find((x) => x.id === r.shareId)!.scope : KV_SCOPE;
+    const sealed = sealBlob(utf8(text));
+    this.blobs.set(sealed.sha256, sealed.bytes);
+    this.envelopes.set(sealed.sha256, [{ scopeId, wrappedKey: wrapContentKey(keyOf(scopeId), sealed.contentKey) }]);
+    Object.assign(r, { sha256: sealed.sha256, size: sealed.bytes.length, rev: ++this.rev, authorId: author });
   }
 
   /** The live nodes by path, with the facts a test asserts on. */
@@ -127,7 +139,7 @@ class Server implements VaultWire {
   async listNodes(): Promise<{ nodes: Change[]; snapshot: string }> {
     const nodes = [...this.rows.values()].filter((r) => !r.deleted).map((r): Change => ({
       node_id: r.id, parent_id: r.parentId, name_enc: r.nameEnc, name_hmac: r.nameHmac, name_key_id: r.nameKeyId,
-      op: 'put', rev: r.rev, sha256: r.sha256, size: r.size, mtime: new Date(0).toISOString(), share_id: r.shareId, author_id: null,
+      op: 'put', rev: r.rev, sha256: r.sha256, size: r.size, mtime: new Date(0).toISOString(), share_id: r.shareId, author_id: r.authorId ?? null,
     }));
     return { nodes, snapshot: `c${this.rev}` };
   }
@@ -740,5 +752,36 @@ describe('a node the server holds under a deleted folder (#432)', () => {
 
     assert.deepEqual(vault.paths(), ['Mine/own.md', 'Team/plan.md'], 'no stray.md at the top of the vault');
     assert.match(report.errors.map((e) => e.message).join(' '), /1 item\(s\) on the server sit under a folder that was deleted/);
+  });
+});
+
+describe('what a pass says about what arrived, for the marks (#447)', () => {
+  it('names a file another account added to a shared folder as new, and who wrote it', async () => {
+    server.seed(team, 'theirs.md', { scopeId: SHARES.team.scope, shareId: SHARES.team.id, text: body('theirs'), author: 'them' });
+    const report = await engine.sync();
+    assert.deepEqual(report.pulled, [
+      { path: 'Team/theirs.md', isNew: true, authorId: 'them', shareRoot: 'Team', firstFromShare: false },
+    ]);
+  });
+
+  it('names an edit to a file this device had as not new', async () => {
+    server.rewrite(server.tree().get('Team/plan.md')!.id, body('plan, edited'), 'them');
+    const report = await engine.sync();
+    assert.deepEqual(report.pulled, [
+      { path: 'Team/plan.md', isNew: false, authorId: 'them', shareRoot: 'Team', firstFromShare: false },
+    ]);
+  });
+
+  it('says a share arrived whole when none of its files were here before — the join', async () => {
+    const other = server.seed(ROOT, 'Other', { scopeId: KV_SCOPE, shareId: SHARES.other.id });
+    server.seed(other, 'a.md', { scopeId: SHARES.other.scope, shareId: SHARES.other.id, text: body('a'), author: 'them' });
+    const report = await engine.sync();
+    assert.deepEqual(report.pulled, [{ path: 'Other/a.md', isNew: true, authorId: 'them', shareRoot: 'Other', firstFromShare: true }]);
+  });
+
+  it('puts no share on a private file', async () => {
+    server.seed(mine, 'more.md', { scopeId: KV_SCOPE, text: body('more'), author: 'me' });
+    const report = await engine.sync();
+    assert.deepEqual(report.pulled, [{ path: 'Mine/more.md', isNew: true, authorId: 'me' }]);
   });
 });

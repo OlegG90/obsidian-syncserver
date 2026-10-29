@@ -40,6 +40,11 @@ export interface ServerNode {
    * the parent already said it was.
    */
   shareId?: string | null;
+  /**
+   * The account that wrote the content there now — the latest version's author (#447). Absent for
+   * a folder, for a node this pass wrote itself, and from a server too old to say.
+   */
+  authorId?: string | null;
 }
 
 export interface VaultWire {
