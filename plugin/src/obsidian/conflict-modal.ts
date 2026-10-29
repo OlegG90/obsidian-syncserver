@@ -51,9 +51,7 @@ export class ConflictModal extends Modal {
           .setButtonText('Keep the server’s')
           .setTooltip('Delete the copy; the note stays as it is.')
           .onClick(() => {
-            void this.settle(async () => {
-              await this.trash(this.copy);
-            }, 'The server’s version kept; the copy is in the trash.');
+            void this.settle(() => this.trash(this.copy), 'The server’s version kept; the copy is in the trash.');
           }),
       )
       .addButton((b) =>
@@ -82,7 +80,12 @@ export class ConflictModal extends Modal {
 
   /** The two texts as one column: the server's lines that went, this device's that came. */
   private drawDiff(server: string, mine: string): void {
-    const rows = folded(lineDiff(server, mine));
+    const diff = lineDiff(server, mine);
+    if (!diff) {
+      this.contentEl.createEl('p', { text: 'The two differ in too many places to compare line by line. Merge by hand opens both.' });
+      return;
+    }
+    const rows = folded(diff);
     if (!rows.some((r) => r.kind === 'removed' || r.kind === 'added')) {
       this.contentEl.createEl('p', { text: 'The two are identical. Keeping either one settles it.' });
       return;

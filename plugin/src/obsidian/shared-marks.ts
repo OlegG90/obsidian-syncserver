@@ -19,10 +19,17 @@
  * name, a quote in a title. Unescaped, either ends the string early and the rule silently
  * matches something else — or everything.
  */
-const cssString = (path: string): string => path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+export const cssString = (path: string): string => path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 /** What the badge says. Short, because it sits inside a tree row that already has a name. */
 const LABEL = 'shared';
+
+/** A badge's shape, wherever one sits in the tree — the `shared` folder's and the marks of #447 alike. */
+export const BADGE_SHAPE = `  margin-inline-start: 0.5em;
+  padding: 0 0.4em;
+  border-radius: 0.4em;
+  font-size: var(--font-ui-smaller);
+  vertical-align: middle;`;
 
 /**
  * The stylesheet marking each of these folders, and nothing else.
@@ -30,7 +37,7 @@ const LABEL = 'shared';
  * Returns `''` for an empty list rather than an empty rule set, so the caller can treat "no
  * shares" and "no stylesheet" as the same thing.
  */
-export const sharedFolderCss = (paths: readonly string[]): string => {
+export const sharedFolderCss = (paths: readonly string[], label: (path: string) => string = () => LABEL): string => {
   const rows = [...new Set(paths)].filter((p) => p.length > 0);
   if (rows.length === 0) return '';
 
@@ -51,16 +58,23 @@ export const sharedFolderCss = (paths: readonly string[]): string => {
 }
 ${listOf(' .nav-folder-title-content::after')} {
   content: '${LABEL}';
-  margin-inline-start: 0.5em;
-  padding: 0 0.4em;
-  border-radius: 0.4em;
-  font-size: var(--font-ui-smaller);
+${BADGE_SHAPE}
   /* The accent, at low opacity: visible enough to notice while scanning, quiet enough that
      a vault where everything is shared does not become a wall of badges. */
   color: var(--text-on-accent);
   background: var(--interactive-accent);
   opacity: 0.65;
-  vertical-align: middle;
 }
-`;
+${relabelled(rows, label)}`;
 };
+
+/**
+ * The folders whose badge says more than `shared` — what is waiting inside (#447). Written here, after
+ * the badge's own rule and in the same sheet, so one stylesheet decides what the badge reads.
+ */
+const relabelled = (rows: readonly string[], label: (path: string) => string): string =>
+  rows
+    .map((p) => [p, label(p)] as const)
+    .filter(([, text]) => text !== LABEL)
+    .map(([p, text]) => `.nav-folder-title[data-path="${cssString(p)}"] .nav-folder-title-content::after { content: '${text}'; }\n`)
+    .join('');

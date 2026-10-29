@@ -29,7 +29,7 @@ import { newHumanCode } from './crypto/human-code.js';
 import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport as platformTransport } from './obsidian/net.js';
 import { watchContact, type Contact, type ContactWatch } from './contact.js';
-import { afterPass, allSeen, opened, removed, renamed, unseenCss, type Marks } from './unseen.js';
+import { afterPass, allSeen, opened, removed, renamed, shareLabel, unseenCss, type Marks } from './unseen.js';
 import { copiesOf, originalOf } from './conflict.js';
 import { ConflictModal } from './obsidian/conflict-modal.js';
 import { UnreachableError } from './api/transport.js';
@@ -83,6 +83,16 @@ const UNSEEN_STYLE = 'syncserver-unseen';
  * has asked this too, and the status bar and the notice carry the same fact in words.
  */
 const SPINNER_STYLE = 'syncserver-spinner';
+
+/** Put a stylesheet of this plugin's on screen by id, replacing what was there; `''` takes it away. */
+const setStyle = (id: string, css: string): void => {
+  document.getElementById(id)?.remove();
+  if (!css) return;
+  const style = document.createElement('style');
+  style.id = id;
+  style.textContent = css;
+  document.head.appendChild(style);
+};
 const SPINNING = 'syncserver-spinning';
 const SPINNER_CSS = `
 @keyframes syncserver-turn { to { transform: rotate(360deg); } }
@@ -252,14 +262,9 @@ export default class SyncServerPlugin extends Plugin {
           return rootOf;
         }),
       existing: (paths) => paths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null),
-      render: (css) => {
-        document.getElementById(SHARED_MARKS_STYLE)?.remove();
-        if (!css) return;
-        const style = document.createElement('style');
-        style.id = SHARED_MARKS_STYLE;
-        style.textContent = css;
-        document.head.appendChild(style);
-      },
+      render: (css) => setStyle(SHARED_MARKS_STYLE, css),
+      // The badge says what is waiting inside the folder (#447), so it is redrawn with the marks.
+      label: (path) => shareLabel(this.data.unseen ?? {}, path),
     });
 
     // Everything Obsidian is bound here, at the edge; the coordinator itself is a module.
@@ -316,17 +321,17 @@ export default class SyncServerPlugin extends Plugin {
     // `null` when the last tab closes, which opens nothing.
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
-        if (file && this.data.unseen) void this.setUnseen(opened(this.data.unseen, file.path));
+        if (file) void this.setUnseen(opened(this.data.unseen ?? {}, file.path));
       }),
     );
     this.registerEvent(
       this.app.vault.on('rename', (file, from) => {
-        if (this.data.unseen) void this.setUnseen(renamed(this.data.unseen, from, file.path));
+        void this.setUnseen(renamed(this.data.unseen ?? {}, from, file.path));
       }),
     );
     this.registerEvent(
       this.app.vault.on('delete', (file) => {
-        if (this.data.unseen) void this.setUnseen(removed(this.data.unseen, file.path));
+        void this.setUnseen(removed(this.data.unseen ?? {}, file.path));
       }),
     );
     this.paintUnseen();
@@ -354,10 +359,7 @@ export default class SyncServerPlugin extends Plugin {
     // and synced, for ever (#285). The state lives on the element, which `setPhase` can reach.
     this.ribbon = this.addRibbonIcon(RIBBON_GLYPH, RIBBON_ACTION, () => void this.syncNow());
 
-    const spinner = document.createElement('style');
-    spinner.id = SPINNER_STYLE;
-    spinner.textContent = SPINNER_CSS;
-    document.head.appendChild(spinner);
+    setStyle(SPINNER_STYLE, SPINNER_CSS);
 
     /**
      * The notice, and the only place `Notice` is held rather than fired and forgotten.
@@ -520,9 +522,9 @@ export default class SyncServerPlugin extends Plugin {
     // Before the rest: a quiet period still counting would fire against a session being torn down.
     await teardownStep('stop watching for local changes', () => this.localChanges?.stop());
     await teardownStep('close the push connection', () => this.stopPush());
-    await teardownStep('remove the shared-folder styles', () => document.getElementById(SHARED_MARKS_STYLE)?.remove());
-    await teardownStep('remove the unseen marks', () => document.getElementById(UNSEEN_STYLE)?.remove());
-    await teardownStep('remove the spinner styles', () => document.getElementById(SPINNER_STYLE)?.remove());
+    await teardownStep('remove the stylesheets', () => {
+      for (const id of [SHARED_MARKS_STYLE, UNSEEN_STYLE, SPINNER_STYLE]) setStyle(id, '');
+    });
     await teardownStep('take down any progress notice', () => this.passNotice?.stop());
   }
 
@@ -539,6 +541,7 @@ export default class SyncServerPlugin extends Plugin {
     if (JSON.stringify(before) === JSON.stringify(next)) return;
     this.data.unseen = next;
     this.paintUnseen();
+    this.marks?.applyMarks();
     await this.save();
   }
 
@@ -558,15 +561,9 @@ export default class SyncServerPlugin extends Plugin {
     return copy instanceof TFile ? { note: file, copy } : undefined;
   }
 
-  /** The marks' stylesheet, with the shared folders' counts in their badges. */
+  /** The marks' stylesheet; the shared folders' counts are their own badge's (`label` above). */
   private paintUnseen(): void {
-    document.getElementById(UNSEEN_STYLE)?.remove();
-    const css = unseenCss(this.data.unseen ?? {}, Object.values(this.data.sharedFolders ?? {}));
-    if (!css) return;
-    const style = document.createElement('style');
-    style.id = UNSEEN_STYLE;
-    style.textContent = css;
-    document.head.appendChild(style);
+    setStyle(UNSEEN_STYLE, unseenCss(this.data.unseen ?? {}, Object.values(this.data.sharedFolders ?? {})));
   }
 
   /**
