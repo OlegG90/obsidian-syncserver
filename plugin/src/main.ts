@@ -14,7 +14,7 @@
  * reason the plugin asks again after every restart instead of remembering.
  */
 import type { OwnDeviceRow } from '@syncserver/shared';
-import { Notice, Platform, Plugin, setIcon } from 'obsidian';
+import { Notice, Platform, Plugin, setIcon, TFile } from 'obsidian';
 import { teardownStep } from './teardown.js';
 import { autoSyncByDefault, watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
@@ -30,6 +30,8 @@ import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from 
 import { transport as platformTransport } from './obsidian/net.js';
 import { watchContact, type Contact, type ContactWatch } from './contact.js';
 import { afterPass, allSeen, opened, removed, renamed, unseenCss, type Marks } from './unseen.js';
+import { copiesOf, originalOf } from './conflict.js';
+import { ConflictModal } from './obsidian/conflict-modal.js';
 import { UnreachableError } from './api/transport.js';
 import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
@@ -456,6 +458,31 @@ export default class SyncServerPlugin extends Plugin {
       callback: () => this.showStatus(),
     });
 
+    // A conflict, settled where it is (#448): from the command palette on the open note or copy, and
+    // from a file's own menu in the tree, where the `conflict` mark is.
+    this.addCommand({
+      id: 'resolve-conflict',
+      name: 'Resolve the conflict on this note',
+      checkCallback: (checking) => {
+        const pair = this.conflictPair(this.app.workspace.getActiveFile());
+        if (!pair) return false;
+        if (!checking) new ConflictModal(this.app, pair.note, pair.copy).open();
+        return true;
+      },
+    });
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        const pair = this.conflictPair(file instanceof TFile ? file : null);
+        if (!pair) return;
+        menu.addItem((item) => {
+          item
+            .setTitle('Resolve conflict')
+            .setIcon('git-compare')
+            .onClick(() => new ConflictModal(this.app, pair.note, pair.copy).open());
+        });
+      }),
+    );
+
     this.addCommand({
       id: 'mark-all-seen',
       name: 'Mark everything as seen (conflicts stay until resolved)',
@@ -513,6 +540,22 @@ export default class SyncServerPlugin extends Plugin {
     this.data.unseen = next;
     this.paintUnseen();
     await this.save();
+  }
+
+  /**
+   * The note and its conflict copy, from either of the two — or nothing when this file is neither, or
+   * its note is gone (#448). A note with several copies settles the oldest first.
+   */
+  private conflictPair(file: TFile | null): { note: TFile; copy: TFile } | undefined {
+    if (!file) return undefined;
+    const original = originalOf(file.path);
+    if (original !== undefined) {
+      const note = this.app.vault.getAbstractFileByPath(original);
+      return note instanceof TFile ? { note, copy: file } : undefined;
+    }
+    const first = copiesOf(file.path, this.app.vault.getFiles().map((f) => f.path))[0];
+    const copy = first === undefined ? null : this.app.vault.getAbstractFileByPath(first);
+    return copy instanceof TFile ? { note: file, copy } : undefined;
   }
 
   /** The marks' stylesheet, with the shared folders' counts in their badges. */

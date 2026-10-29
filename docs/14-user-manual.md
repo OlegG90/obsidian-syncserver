@@ -206,7 +206,16 @@ until they stop being true:
 When the same file changed in two places, **the server's version becomes the file** and yours is kept
 beside it as `Note (conflict 2026-08-01 laptop).md` — the date and the device that had the other copy.
 
-Nothing is thrown away. You decide which to keep, by hand.
+Nothing is thrown away. You decide which to keep — **Resolve conflict** in the copy's or the note's menu
+in the file tree, or the command *Resolve the conflict on this note* (#448). It shows the two line by line —
+`−` what the server's version has, `+` what yours has — and offers three ways out:
+
+- **Keep the server's** — the copy goes to the trash;
+- **Keep mine** — the copy's text becomes the note and the copy goes to the trash; it reaches the server
+  with the next sync, and the server's version stays in the note's history;
+- **Merge by hand** — both open side by side; delete the copy when you are done.
+
+A file that is not text — a PDF, an image — is not compared line by line; the screen gives both sizes.
 
 The copy carries a red **`conflict`** badge in the file tree, and every folder above it a dot, until the
 conflict is resolved — which is the copy being deleted. Opening it is not resolving it.
