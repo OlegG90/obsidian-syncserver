@@ -208,6 +208,9 @@ beside it as `Note (conflict 2026-08-01 laptop).md` — the date and the device 
 
 Nothing is thrown away. You decide which to keep, by hand.
 
+The copy carries a red **`conflict`** badge in the file tree, and every folder above it a dot, until the
+conflict is resolved — which is the copy being deleted. Opening it is not resolving it.
+
 ### Files that vanished
 
 If files are on the server but gone from this device, the plugin **does not delete them from the
@@ -236,6 +239,13 @@ keep even if the share later ends.
 
 **Share a folder:** type its path and share it. The folder must be synced first. Its contents are re-keyed
 so participants can read them; the folder's own name is not, so it stays private to you.
+
+**What arrived from the others is marked** (#447). A note another participant added carries **`new`** in
+the file tree, one they changed **`changed`**; the folders above it get a dot, and the shared folder says
+how many are waiting — `shared · 3 new`. Joining a folder marks the folder once rather than every file it
+brings. Opening a note clears its mark, on this device only: each device keeps its own. Your own edits
+from another of your devices are not marked. **Mark everything as seen** in the command palette clears
+them all, except conflicts.
 
 The list shows each shared folder on one line — its name, whose it is and how many people hold it — under
 the folder it sits in. Click the line for who is in it and what you can do.

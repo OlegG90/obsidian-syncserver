@@ -748,6 +748,13 @@ because the content key is random and a pass makes its one dedup lookup before t
 is evidence and not proof: only the bytes decide, and they are compared in the one place a conflict
 file is written.
 
+**What a pass brings down is reported with how it came** (#447): whether this device had the file,
+who wrote the content now there — the latest version's author, which the listing carries as the delta
+does — and the shared folder it sits in. A share none of whose files this device had when the pass began
+is reported as arriving whole: that is the pass that joined it. The plugin marks from this, and only what
+**another account** wrote into a shared folder, and every conflict copy; marks are per device and never
+reach the server.
+
 The precondition for a write is **content**, not a revision number.
 
 `nodes.rev` increases on *any* operation, `move` included. Using it as the precondition would turn the

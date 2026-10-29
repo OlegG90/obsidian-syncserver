@@ -138,7 +138,12 @@ export const listSubtree = async (
             encode(n.sha256, 'hex')      AS sha256,
             n.size::text                 AS size,
             n.mtime, n.share_id,
-            NULL::uuid                   AS author_id
+            -- Who wrote what is there now (#447): the client marks a note another participant
+            -- changed, and a walk is how a device first learns of most of them. A folder has no
+            -- versions and says nobody.
+            (SELECT ve.author_id FROM versions ve
+              WHERE ve.vault_id = n.vault_id AND ve.node_id = n.id
+              ORDER BY ve.rev DESC LIMIT 1) AS author_id
        FROM nodes n
       WHERE n.vault_id = $1
         AND n.deleted_at IS NULL

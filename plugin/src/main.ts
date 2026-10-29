@@ -29,6 +29,7 @@ import { newHumanCode } from './crypto/human-code.js';
 import { phaseIcon, phaseState, shortStatus, statusLines, type SyncPhase } from './obsidian/status.js';
 import { transport as platformTransport } from './obsidian/net.js';
 import { watchContact, type Contact, type ContactWatch } from './contact.js';
+import { afterPass, allSeen, opened, removed, renamed, unseenCss, type Marks } from './unseen.js';
 import { UnreachableError } from './api/transport.js';
 import { askConfirmation, askFolderName, askPassphrase, askVaultChoice, StatusModal } from './obsidian/modals.js';
 import { SyncServerSettings } from './obsidian/settings.js';
@@ -67,6 +68,7 @@ import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
  * is exactly why unloading has to say so.
  */
 const SHARED_MARKS_STYLE = 'syncserver-shared-folders';
+const UNSEEN_STYLE = 'syncserver-unseen';
 
 /**
  * The stylesheet that makes the ribbon icon turn while a pass runs (#320).
@@ -100,6 +102,11 @@ interface PluginData {
   sharedFolders?: Record<string, string>;
   /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
   syncObsidian?: boolean;
+  /**
+   * What arrived from somebody else and is not looked at yet, and the conflicts still open (#447),
+   * by path. This device's alone: opening a note here is not opening it on the phone.
+   */
+  unseen?: Marks;
   /**
    * Sync on its own once the vault has been still for a moment (issue #238).
    *
@@ -273,6 +280,7 @@ export default class SyncServerPlugin extends Plugin {
           // there and nothing ever came back for it — which the initiator never saw, their
           // folder having been on disk before they shared it.
           await this.marks!.reconcile((await h.client.shares()).joined);
+          await this.setUnseen(afterPass(this.data.unseen ?? {}, out, h.userId, Date.now()));
           return out;
         });
         return report;
@@ -301,6 +309,25 @@ export default class SyncServerPlugin extends Plugin {
     this.registerEvent(this.app.vault.on('modify', touched));
     this.registerEvent(this.app.vault.on('delete', touched));
     this.registerEvent(this.app.vault.on('rename', touched));
+
+    // The marks follow what a person does to the files they sit on (#447). `file-open` fires with
+    // `null` when the last tab closes, which opens nothing.
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        if (file && this.data.unseen) void this.setUnseen(opened(this.data.unseen, file.path));
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on('rename', (file, from) => {
+        if (this.data.unseen) void this.setUnseen(renamed(this.data.unseen, from, file.path));
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on('delete', (file) => {
+        if (this.data.unseen) void this.setUnseen(removed(this.data.unseen, file.path));
+      }),
+    );
+    this.paintUnseen();
 
     // Desktop only — Obsidian does not render a status bar on a phone (docs/02), which is
     // exactly why the same state is a command as well, and not only here.
@@ -430,6 +457,12 @@ export default class SyncServerPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'mark-all-seen',
+      name: 'Mark everything as seen (conflicts stay until resolved)',
+      callback: () => void this.setUnseen(allSeen(this.data.unseen ?? {})),
+    });
+
+    this.addCommand({
       id: 'lock',
       name: 'Forget the passphrase until next unlock',
       callback: () => this.lock(),
@@ -461,12 +494,36 @@ export default class SyncServerPlugin extends Plugin {
     await teardownStep('stop watching for local changes', () => this.localChanges?.stop());
     await teardownStep('close the push connection', () => this.stopPush());
     await teardownStep('remove the shared-folder styles', () => document.getElementById(SHARED_MARKS_STYLE)?.remove());
+    await teardownStep('remove the unseen marks', () => document.getElementById(UNSEEN_STYLE)?.remove());
     await teardownStep('remove the spinner styles', () => document.getElementById(SPINNER_STYLE)?.remove());
     await teardownStep('take down any progress notice', () => this.passNotice?.stop());
   }
 
   async save(): Promise<void> {
     await this.saveData(this.data);
+  }
+
+  /**
+   * Keep the marks and redraw them (#447) — only when they changed: `file-open` fires on every note,
+   * and a write of the plugin's data for each one would be a write per click.
+   */
+  private async setUnseen(next: Marks): Promise<void> {
+    const before = this.data.unseen ?? {};
+    if (JSON.stringify(before) === JSON.stringify(next)) return;
+    this.data.unseen = next;
+    this.paintUnseen();
+    await this.save();
+  }
+
+  /** The marks' stylesheet, with the shared folders' counts in their badges. */
+  private paintUnseen(): void {
+    document.getElementById(UNSEEN_STYLE)?.remove();
+    const css = unseenCss(this.data.unseen ?? {}, Object.values(this.data.sharedFolders ?? {}));
+    if (!css) return;
+    const style = document.createElement('style');
+    style.id = UNSEEN_STYLE;
+    style.textContent = css;
+    document.head.appendChild(style);
   }
 
   /**

@@ -69,7 +69,7 @@ export interface SyncReport {
    */
   scanned: number;
   pushed: { path: string }[];
-  pulled: { path: string }[];
+  pulled: Arrival[];
   /** Local and server agreed already: recorded, nothing moved either way (docs/07). */
   matched: { path: string }[];
   /** Adoption found the same path holding different content on each side (docs/04's naming). */
@@ -175,6 +175,24 @@ const POLICY: Record<RemoteEpoch, SyncPolicy> = {
 };
 
 /**
+ * One file a pass brought down from the server, and what is known about how it came (#447).
+ *
+ * The optional fields are facts the pass had in hand; a consumer that does not mark anything reads
+ * the path and nothing else.
+ */
+export interface Arrival {
+  path: string;
+  /** This device had no copy of it when the pass began. */
+  isNew?: boolean;
+  /** Who wrote the content now there — `null` when the server did not say. */
+  authorId?: string | null;
+  /** The shared folder it sits in, when it sits in one. */
+  shareRoot?: string;
+  /** None of that share's files were on this device when the pass began: the pass that joined it. */
+  firstFromShare?: boolean;
+}
+
+/**
  * Everything one pass mutates, built fresh in `sync()` and handed to every helper.
  *
  * The instance used to carry this state as a dozen `!`-typed fields written in `sync()`,
@@ -210,6 +228,10 @@ interface PassContext {
    * the emptied folder is removed once the walk is done with them.
    */
   crossed: string[];
+  /** The paths this device had synced when the pass began — what "new here" is measured against (#447). */
+  knownBefore: ReadonlySet<string>;
+  /** Share root → whether `knownBefore` held any of its files: asked once per share, not once per file. */
+  sharesKnown: Map<string, boolean>;
   state: VaultState;
   report: SyncReport;
 }
@@ -448,7 +470,7 @@ export class SyncEngine {
       tree, byNodeId, meta, dedup,
       state, report, rootNodeId, vaultScopeId,
       shareScopes,
-      vanished: new Map(), handled: new Set(), queue: [], crossed: [],
+      vanished: new Map(), handled: new Set(), queue: [], crossed: [], knownBefore: new Set(Object.keys(state.nodes)), sharesKnown: new Map(),
     };
 
     if (epoch === 'reset') {
@@ -1441,17 +1463,42 @@ export class SyncEngine {
     for (const node of nodes) {
       try {
         const plain = await this.openNode(node, envelopes, ctx);
+        const isNew = !ctx.state.nodes[node.path];
         await this.vault.write(node.path, plain);
 
         ctx.state.nodes[node.path] = {
           nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!,
           ...(await this.hintFor(node.path)),
         };
-        ctx.report.pulled.push({ path: node.path });
+        ctx.report.pulled.push(this.arrival(node, isNew, ctx));
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: errorText(e) });
       }
     }
+  }
+
+  /**
+   * What a pulled file is, for whoever marks what arrived (#447): whether this device had it, who
+   * wrote it, and which shared folder it is in.
+   *
+   * `firstFromShare` is the join: a share none of whose files this device had when the pass began.
+   * Everything in it is new here, and saying so file by file would bury the one fact that matters —
+   * that the folder arrived.
+   */
+  private arrival(node: ServerNode, isNew: boolean, ctx: PassContext): Arrival {
+    const parts = node.path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const folder = parts.slice(0, i).join('/');
+      const at = ctx.tree.get(folder);
+      if (!at || at.isFile || !isShareRoot(at, ctx.shareScopes)) continue;
+      let known = ctx.sharesKnown.get(folder);
+      if (known === undefined) {
+        known = [...ctx.knownBefore].some((p) => p.startsWith(`${folder}/`));
+        ctx.sharesKnown.set(folder, known);
+      }
+      return { path: node.path, isNew, authorId: node.authorId ?? null, shareRoot: folder, firstFromShare: !known };
+    }
+    return { path: node.path, isNew, authorId: node.authorId ?? null };
   }
 
   /** Every folder on the way to a file, created once and remembered in the tree we are holding. */

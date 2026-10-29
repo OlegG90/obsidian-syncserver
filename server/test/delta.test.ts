@@ -272,6 +272,14 @@ describe('the full walk', () => {
     const body = r.json();
     assert.ok(body.nodes.length > 0);
     assert.ok(body.nodes.every((n: { name_enc: string | null }) => n.name_enc !== undefined));
+    // Who wrote each file's current content, as the delta says it (#447); a folder has nobody.
+    const files = body.nodes.filter((n: { sha256: string | null }) => n.sha256 !== null);
+    assert.ok(files.length > 0);
+    assert.ok(files.every((n: { author_id: string | null }) => n.author_id === userId), 'every file names its author');
+    assert.ok(
+      body.nodes.filter((n: { sha256: string | null }) => n.sha256 === null).every((n: { author_id: string | null }) => n.author_id === null),
+      'and a folder names nobody',
+    );
 
     const resumed = await delta(body.snapshot);
     assert.equal(resumed.statusCode, 200, 'the snapshot is a cursor, so the walk has a position to continue from');
