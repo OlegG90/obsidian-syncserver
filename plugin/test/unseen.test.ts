@@ -3,7 +3,8 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { afterPass, allSeen, opened, removed, renamed, unseenCss, type Marks } from '../src/unseen.js';
+import { afterPass, allSeen, opened, removed, renamed, shareLabel, unseenCss, type Marks } from '../src/unseen.js';
+import { sharedFolderCss } from '../src/obsidian/shared-marks.js';
 
 const ME = 'me';
 const pass = (pulled: object[], conflicts: { path: string; conflictPath: string }[] = []) => ({ pulled: pulled as never[], conflicts });
@@ -94,11 +95,17 @@ describe('how the marks are drawn (#447)', () => {
     assert.match(css, /\.nav-file-title\[data-path="Notes\/n \(conflict\)\.md"\][^{]*\{\s*content: 'conflict'[^}]*var\(--text-error\)/);
     assert.match(css, /\.nav-folder-title\[data-path="Team\/sub"\][^{]*::before/, 'a dot on the folder holding it');
     assert.match(css, /\.nav-folder-title\[data-path="Notes"\][^{]*::before/);
-    assert.match(css, /\.nav-folder-title\.nav-folder-title\[data-path="Team"\][^{]*\{\s*content: 'shared · 1 new'/, 'and a count on the share');
+    assert.doesNotMatch(css, /data-path="Team"\][^{]*::before/, 'and no dot on the share: its own badge counts');
   });
 
-  it('says a joined share is new, on the share itself', () => {
-    assert.match(unseenCss({ Visa: { kind: 'joined', at: 1 } }, ['Visa']), /content: 'shared · new'/);
+  it('gives a shared folder’s badge the count, and a joined share “new”', () => {
+    const marks: Marks = { 'Team/a.md': { kind: 'new', at: 1 }, 'Team/b.md': { kind: 'changed', at: 1 }, Visa: { kind: 'joined', at: 1 } };
+    assert.equal(shareLabel(marks, 'Team'), 'shared · 2 new');
+    assert.equal(shareLabel(marks, 'Visa'), 'shared · new');
+    assert.equal(shareLabel(marks, 'Other'), 'shared');
+    const css = sharedFolderCss(['Team', 'Other'], (p) => shareLabel(marks, p));
+    assert.match(css, /data-path="Team"\] \.nav-folder-title-content::after \{ content: 'shared · 2 new'; \}/);
+    assert.doesNotMatch(css, /data-path="Other"\] \.nav-folder-title-content::after \{ content/, 'the plain badge needs no second rule');
   });
 
   it('escapes a path with a quote in it', () => {

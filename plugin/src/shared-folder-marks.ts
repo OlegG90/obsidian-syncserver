@@ -42,6 +42,8 @@ export interface SharedFolderMarksDeps {
   existing(paths: readonly string[]): readonly string[];
   /** Put the badge stylesheet on screen, or take it away. */
   render(css: string): void;
+  /** What a folder's badge says — `shared`, or what is waiting inside it (#447). */
+  label?(path: string): string;
 }
 
 export interface SharedFolderMarks {
@@ -74,7 +76,7 @@ export const openSharedFolderMarks = (deps: SharedFolderMarksDeps): SharedFolder
 
   /** The badge, redrawn from the current map. Always cheap — only the resolve is expensive. */
   const applyMarks = (): void => {
-    deps.render(sharedFolderCss(deps.existing(Object.values(map))));
+    deps.render(sharedFolderCss(deps.existing(Object.values(map)), deps.label));
   };
 
   const guardKey = (joined: readonly JoinedShareWire[]): string =>

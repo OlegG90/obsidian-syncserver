@@ -11,6 +11,7 @@
  * is something a person did here, and carrying it across would need the server to hold it.
  */
 import type { Arrival } from './engine/engine.js';
+import { BADGE_SHAPE, cssString } from './obsidian/shared-marks.js';
 
 /**
  * - `new` / `changed` — another account wrote it, into a shared folder; cleared by opening it;
@@ -81,21 +82,19 @@ export const removed = (marks: Marks, path: string): Marks =>
 /** Everything marked as seen — except a conflict, which is not a thing to have seen but to settle. */
 export const allSeen = (marks: Marks): Marks => Object.fromEntries(Object.entries(marks).filter(([, m]) => m.kind === 'conflict'));
 
-/** Same escaping as the shared badge: paths are user-chosen and may hold both characters. */
-const cssString = (path: string): string => path.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-const BADGE = `  margin-inline-start: 0.5em;
-  padding: 0 0.4em;
-  border-radius: 0.4em;
-  font-size: var(--font-ui-smaller);
-  vertical-align: middle;`;
+/**
+ * What a shared folder's badge says: `shared`, or how much is waiting inside it. The badge is the
+ * shared folder's own (`obsidian/shared-marks.ts`); this only gives it the words.
+ */
+export const shareLabel = (marks: Marks, root: string): string => {
+  const waiting = Object.keys(marks).filter((p) => p === root || under(p, root)).length;
+  if (waiting === 0) return 'shared';
+  return waiting === 1 && marks[root]?.kind === 'joined' ? 'shared · new' : `shared · ${waiting} new`;
+};
 
 /**
- * The stylesheet: a badge on each marked file, a dot on every folder above one, and — on a shared
- * folder — how many are waiting inside it, in the place its `shared` badge already stands.
- *
- * `sharedRoots` is the list the `shared` badge is drawn from. A root's count is written with a doubled
- * class so it outranks that badge's rule whichever stylesheet the document reads last.
+ * The stylesheet: a badge on each marked file and a dot on every folder above one. A shared folder gets
+ * no dot — its own badge says how many are waiting (`shareLabel`).
  */
 export const unseenCss = (marks: Marks, sharedRoots: readonly string[]): string => {
   const entries = Object.entries(marks);
@@ -107,33 +106,26 @@ export const unseenCss = (marks: Marks, sharedRoots: readonly string[]): string 
     const conflict = mark.kind === 'conflict';
     rules.push(`.nav-file-title[data-path="${cssString(path)}"] .nav-file-title-content::after {
   content: '${mark.kind}';
-${BADGE}
+${BADGE_SHAPE}
   color: var(--text-on-accent);
   background: ${conflict ? 'var(--text-error)' : 'var(--interactive-accent)'};
 }`);
   }
 
-  const counts = new Map<string, number>();
+  const roots = new Set(sharedRoots);
   const folders = new Set<string>();
   for (const [path, mark] of entries) {
     const parts = path.split('/');
     // A `joined` mark sits ON its folder; everything else marks the folders above it.
     const upTo = mark.kind === 'joined' ? parts.length : parts.length - 1;
     for (let i = 1; i <= upTo; i++) folders.add(parts.slice(0, i).join('/'));
-    for (const root of sharedRoots) if (path === root || under(path, root)) counts.set(root, (counts.get(root) ?? 0) + 1);
   }
 
   for (const folder of folders) {
-    if (counts.has(folder)) continue;
+    if (roots.has(folder)) continue;
     rules.push(`.nav-folder-title[data-path="${cssString(folder)}"] .nav-folder-title-content::before {
   content: '● ';
   color: var(--interactive-accent);
-}`);
-  }
-  for (const [root, n] of counts) {
-    const joined = marks[root]?.kind === 'joined' && n === 1;
-    rules.push(`.nav-folder-title.nav-folder-title[data-path="${cssString(root)}"] .nav-folder-title-content::after {
-  content: '${joined ? 'shared · new' : `shared · ${n} new`}';
 }`);
   }
   return rules.join('\n');

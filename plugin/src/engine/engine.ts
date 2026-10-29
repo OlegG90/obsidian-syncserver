@@ -43,6 +43,7 @@
 import type { DeltaEvent } from '@syncserver/shared';
 import { resolveContent } from './content.js';
 import { treeFrom, type UnreadableFolder } from './tree.js';
+import { conflictCopyName } from '../conflict.js';
 import type { TreeCache, WalkedTree } from './tree-cache.js';
 import { remapState, remapTree } from './remap.js';
 import type { ServerNode } from './wire.js';
@@ -1301,7 +1302,7 @@ export class SyncEngine {
       return;
     }
 
-    const conflictPath = withConflictSuffix(file.path, this.deviceLabel);
+    const conflictPath = conflictCopyName(file.path, this.deviceLabel);
 
     // The same ordering rule (#242), and it reads inverted here because the *destination* is the
     // conflict copy: `localPlain` exists nowhere but memory, so overwriting the path first and failing
@@ -1463,14 +1464,13 @@ export class SyncEngine {
     for (const node of nodes) {
       try {
         const plain = await this.openNode(node, envelopes, ctx);
-        const isNew = !ctx.state.nodes[node.path];
         await this.vault.write(node.path, plain);
 
         ctx.state.nodes[node.path] = {
           nodeId: node.nodeId, rev: node.rev, plainHash: toHex(sha256(plain)), address: node.address!,
           ...(await this.hintFor(node.path)),
         };
-        ctx.report.pulled.push(this.arrival(node, isNew, ctx));
+        ctx.report.pulled.push(this.arrival(node, ctx));
       } catch (e) {
         ctx.report.errors.push({ path: node.path, message: errorText(e) });
       }
@@ -1485,7 +1485,8 @@ export class SyncEngine {
    * Everything in it is new here, and saying so file by file would bury the one fact that matters —
    * that the folder arrived.
    */
-  private arrival(node: ServerNode, isNew: boolean, ctx: PassContext): Arrival {
+  private arrival(node: ServerNode, ctx: PassContext): Arrival {
+    const base = { path: node.path, isNew: !ctx.knownBefore.has(node.path), authorId: node.authorId ?? null };
     const parts = node.path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const folder = parts.slice(0, i).join('/');
@@ -1493,12 +1494,13 @@ export class SyncEngine {
       if (!at || at.isFile || !isShareRoot(at, ctx.shareScopes)) continue;
       let known = ctx.sharesKnown.get(folder);
       if (known === undefined) {
-        known = [...ctx.knownBefore].some((p) => p.startsWith(`${folder}/`));
+        known = false;
+        for (const p of ctx.knownBefore) if (p.startsWith(`${folder}/`)) known = true;
         ctx.sharesKnown.set(folder, known);
       }
-      return { path: node.path, isNew, authorId: node.authorId ?? null, shareRoot: folder, firstFromShare: !known };
+      return { ...base, shareRoot: folder, firstFromShare: !known };
     }
-    return { path: node.path, isNew, authorId: node.authorId ?? null };
+    return base;
   }
 
   /** Every folder on the way to a file, created once and remembered in the tree we are holding. */
@@ -1561,19 +1563,4 @@ const scopeAt = (tree: ReadonlyMap<string, ServerNode>, shareScopes: ReadonlyMap
 const isShareRoot = (node: ServerNode, shareScopes: ReadonlyMap<string, string>): boolean =>
   Boolean(node.shareId) && node.nameKeyId !== shareScopes.get(node.shareId!);
 
-/**
- * `Note (conflict 2026-08-01 laptop).md` — the exact form docs/04 specifies for a content
- * conflict, reused here for adoption's "no common ancestor" case since it is the same
- * situation stated the other way: two versions with no shared history landed on one path.
- */
-const withConflictSuffix = (path: string, device: string): string => {
-  const slash = path.lastIndexOf('/');
-  const dir = slash === -1 ? '' : path.slice(0, slash + 1);
-  const name = slash === -1 ? path : path.slice(slash + 1);
-  const dot = name.lastIndexOf('.');
-  const stem = dot <= 0 ? name : name.slice(0, dot);
-  const ext = dot <= 0 ? '' : name.slice(dot);
-  const date = new Date().toISOString().slice(0, 10);
-  return `${dir}${stem} (conflict ${date} ${device})${ext}`;
-};
 
