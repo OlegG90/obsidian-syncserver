@@ -9,6 +9,7 @@
  * only ever **names** a folder from the offered list: whatever is typed is resolved against it
  * here, and anything that resolves to nothing is answered on this device and never sent.
  */
+import { basePath } from './engine/rename.js';
 
 /**
  * The offered folders that match what has been typed so far.
@@ -27,8 +28,8 @@ export const suggestFolders = (offered: readonly string[], query: string): strin
     const path = f.toLowerCase();
     return words.every((w) => path.includes(w));
   });
-  const ownName = (f: string): boolean => f.slice(f.lastIndexOf('/') + 1).toLowerCase().includes(last);
-  return [...hits.filter(ownName), ...hits.filter((f) => !ownName(f))];
+  const ownName = (f: string): number => Number(basePath(f).toLowerCase().includes(last));
+  return hits.sort((a, b) => ownName(b) - ownName(a));
 };
 
 /**
