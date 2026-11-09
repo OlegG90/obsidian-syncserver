@@ -14,6 +14,8 @@ import { ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
 import { newestFirst } from '../history-flow.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
+import { pickFolder } from '../folder-pick.js';
+import { FolderSuggest } from './folder-suggest.js';
 import { deviceLabel } from './device.js';
 import { askDeviceName } from './modals.js';
 import { deviceName } from '../device-name.js';
@@ -475,11 +477,13 @@ export class Panels {
   /**
    * Choosing the folder to share, from the ones that could be.
    *
-   * It was a text field, `Folder/path`, which made a misspelling and a real refusal read the
-   * same — "the server does not know that folder yet" — with nothing to tell a person which
-   * of the two had happened to them (#125). A list has no spelling.
+   * A field that suggests as it is typed into, because a dropdown of every folder in a large
+   * vault is scrolled rather than read (issue #455). It is not the free-text field issue #125
+   * removed: what is typed is resolved against the offered list before anything is sent
+   * (`folder-pick.ts`), so a misspelling is answered here, in its own words, and never arrives
+   * as the server's "does not know that folder".
    *
-   * It also enforces, by omission, a rule the screen had no way to express: **a share may not
+   * The list also enforces, by omission, a rule the screen had no way to express: **a share may not
    * overlap another in either direction.** `nodes_check_share_membership` refuses a marked
    * node whose parent belongs to a different share, and refuses one whose child carries a
    * different mark — so a folder inside a share cannot start one, and neither can a folder
@@ -495,26 +499,39 @@ export class Panels {
 
     const setting = new Setting(host).setName('Share a folder');
     if (offered.length === 0) {
-      // The reason, not an empty dropdown. A control with nothing in it and no sentence beside
+      // The reason, not an empty field. A control with nothing in it and no sentence beside
       // it reads as a broken screen rather than as an answer.
       setting.setDesc(reason ?? 'There is no folder to share.');
       return;
     }
 
-    let folder = offered[0]!;
+    // Below the row, and only once Share was pressed: a refusal shown while somebody is still
+    // typing answers a question they have not asked yet.
+    const refusal = host.createEl('p', { cls: 'setting-item-description' });
+    refusal.style.color = 'var(--text-error)';
+    refusal.hide();
+
+    let field!: TextComponent;
     setting
-      .setDesc('Its contents are re-keyed so participants can read them. Synced folders only.')
-      .addDropdown((d) => {
-        for (const f of offered) d.addOption(f, f);
-        d.setValue(folder).onChange((v) => (folder = v));
+      .setDesc('Type part of its path and pick it from the list. Its contents are re-keyed so participants can read them.')
+      .addText((t) => {
+        field = t;
+        t.setPlaceholder('Folder/path').onChange(() => refusal.hide());
+        new FolderSuggest(this.s.app, t.inputEl, offered);
       })
       .addButton((b) =>
         this.s.waits(b)
           .setButtonText('Share')
           .onClick(async () => {
+            const pick = pickFolder(offered, field.getValue());
+            if ('reason' in pick) {
+              refusal.setText(pick.reason);
+              refusal.show();
+              return;
+            }
             b.setDisabled(true);
             try {
-              await flow.share(folder);
+              await flow.share(pick.folder);
             } finally {
               b.setDisabled(false);
             }
