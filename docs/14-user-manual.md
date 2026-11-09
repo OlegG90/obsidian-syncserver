@@ -246,7 +246,9 @@ the graph view and plugin caches stay on this device.
 Sharing gives another person on the same server a **replica** — their own copy of the folder, which they
 keep even if the share later ends.
 
-**Share a folder:** type its path and share it. The folder must be synced first. Its contents are re-keyed
+**Share a folder:** type part of its path, pick it from the suggestions, and share it. Only folders
+that can be shared are suggested: the folder must be synced first, and it may not sit inside a share or
+hold one. **Share** stays disabled until the field names one of them, and says why under the field. Its contents are re-keyed
 so participants can read them; the folder's own name is not, so it stays private to you.
 
 **What arrived from the others is marked** (#447). A note another participant added carries **`new`** in

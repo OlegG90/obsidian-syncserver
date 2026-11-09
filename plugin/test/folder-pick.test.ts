@@ -48,7 +48,8 @@ describe('the field names a folder only when the list offers it', () => {
   it('needs the exact spelling when two offered folders differ only by case', () => {
     const both = ['Notes', 'notes'];
     assert.deepEqual(pickFolder(both, 'notes'), { folder: 'notes' });
-    assert.ok('reason' in pickFolder(both, 'NOTES'));
+    const out = pickFolder(both, 'NOTES');
+    assert.ok('reason' in out && out.reason.includes('differ only by case'));
   });
 
   it('refuses part of a path, and says to pick from the list', () => {

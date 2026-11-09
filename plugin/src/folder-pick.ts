@@ -37,7 +37,7 @@ export const suggestFolders = (offered: readonly string[], query: string): strin
  * Exact first; then the one folder that matches ignoring case and a trailing slash, because
  * `work/notes/` typed by hand means `Work/Notes` and nothing else could be meant. Two folders
  * that differ only by case are both real on a case-sensitive file system, and then only the exact
- * spelling picks one.
+ * spelling picks one — and the refusal says that, rather than that the path is incomplete.
  *
  * The two refusals are different situations: text that is the beginning of something offered
  * needs a choice from the list, while text that matches nothing offered will not start matching
@@ -52,6 +52,9 @@ export const pickFolder = (
   if (offered.includes(text)) return { folder: text };
   const folded = offered.filter((f) => f.toLowerCase() === text.toLowerCase());
   if (folded.length === 1) return { folder: folded[0]! };
+  if (folded.length > 1) {
+    return { reason: `"${text}" matches ${folded.length} folders that differ only by case. Pick the one you mean from the list.` };
+  }
   if (suggestFolders(offered, text).length > 0) {
     return { reason: `"${text}" is not a whole folder path. Pick the folder from the list.` };
   }

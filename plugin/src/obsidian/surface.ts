@@ -18,7 +18,7 @@ import { busyLine } from '../gate.js';
 import type SyncServerPlugin from '../main.js';
 
 export class Surface {
-  private waiting: ButtonComponent[] = [];
+  private waiting: { button: ButtonComponent; ready: () => boolean }[] = [];
   private busyNote: HTMLElement | undefined;
   /**
    * What has to be undone when this draw goes away.
@@ -66,11 +66,23 @@ export class Surface {
     this.busyNote.style.fontSize = 'var(--font-ui-smaller)';
   }
 
-  /** A control that cannot work while an operation is running. */
-  waits(b: ButtonComponent): ButtonComponent {
-    this.waiting.push(b);
-    if (this.plugin.busyWith() !== undefined) b.setDisabled(true);
+  /**
+   * A control that cannot work while an operation is running — nor, given `ready`, until its own
+   * form names something to act on.
+   *
+   * Both conditions live here because both write the same `disabled`: a form that disabled its
+   * button itself would see the gate enable it again the moment any operation ended (issue #455).
+   * A form whose readiness changes calls `recheck`.
+   */
+  waits(b: ButtonComponent, ready: () => boolean = () => true): ButtonComponent {
+    this.waiting.push({ button: b, ready });
+    b.setDisabled(this.plugin.busyWith() !== undefined || !ready());
     return b;
+  }
+
+  /** Apply the gate and every button's readiness again, after a form changed what it names. */
+  recheck(): void {
+    this.showBusy(this.plugin.busyWith());
   }
 
   /** Start mirroring, and apply the state straight away — an operation may already be running. */
@@ -86,7 +98,7 @@ export class Surface {
   }
 
   private showBusy(holding: string | undefined): void {
-    for (const b of this.waiting) b.setDisabled(holding !== undefined);
+    for (const { button, ready } of this.waiting) button.setDisabled(holding !== undefined || !ready());
     if (!this.busyNote) return;
     this.busyNote.setText(holding === undefined ? '' : busyLine(holding));
     this.busyNote.style.display = holding === undefined ? 'none' : '';

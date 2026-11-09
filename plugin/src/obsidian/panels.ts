@@ -478,10 +478,8 @@ export class Panels {
    * Choosing the folder to share, from the ones that could be.
    *
    * A field that suggests as it is typed into, because a dropdown of every folder in a large
-   * vault is scrolled rather than read (issue #455). It is not the free-text field issue #125
-   * removed: what is typed is resolved against the offered list before anything is sent
-   * (`folder-pick.ts`), so a misspelling is answered here, in its own words, and never arrives
-   * as the server's "does not know that folder".
+   * vault is scrolled rather than read (issue #455). Share stays disabled until the text names
+   * an offered folder, for the reason `folder-pick.ts` gives.
    *
    * The list also enforces, by omission, a rule the screen had no way to express: **a share may not
    * overlap another in either direction.** `nodes_check_share_membership` refuses a marked
@@ -505,35 +503,36 @@ export class Panels {
       return;
     }
 
-    // Below the row, and only once Share was pressed: a refusal shown while somebody is still
-    // typing answers a question they have not asked yet.
-    const refusal = host.createEl('p', { cls: 'setting-item-description' });
-    refusal.style.color = 'var(--text-error)';
-    refusal.hide();
+    // Why Share is disabled, said under the row as the text changes — a disabled button with no
+    // sentence beside it reads as a broken one. Not for an empty field: the description above
+    // already says what to do, and a refusal before anything is typed answers nothing.
+    const why = host.createEl('p', { cls: 'setting-item-description' });
+    why.hide();
 
-    let field!: TextComponent;
+    let pick = pickFolder(offered, '');
     setting
       .setDesc('Type part of its path and pick it from the list. Its contents are re-keyed so participants can read them.')
       .addText((t) => {
-        field = t;
-        t.setPlaceholder('Folder/path').onChange(() => refusal.hide());
+        t.setPlaceholder('Folder/path').onChange((text) => {
+          pick = pickFolder(offered, text);
+          why.setText('reason' in pick ? pick.reason : '');
+          why.toggle('reason' in pick && text.trim() !== '');
+          this.s.recheck();
+        });
         new FolderSuggest(this.s.app, t.inputEl, offered);
       })
       .addButton((b) =>
-        this.s.waits(b)
+        this.s.waits(b, () => 'folder' in pick)
           .setButtonText('Share')
           .onClick(async () => {
-            const pick = pickFolder(offered, field.getValue());
-            if ('reason' in pick) {
-              refusal.setText(pick.reason);
-              refusal.show();
-              return;
-            }
+            if (!('folder' in pick)) return;
             b.setDisabled(true);
             try {
               await flow.share(pick.folder);
             } finally {
-              b.setDisabled(false);
+              // Not `setDisabled(false)`: the field may have changed meanwhile, and the gate may
+              // be held by something else now.
+              this.s.recheck();
             }
           }),
       );
