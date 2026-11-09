@@ -1,10 +1,11 @@
 /**
- * Which folders this vault can actually share, so the answer is picked instead of typed.
+ * Which folders this vault can actually share, so the answer is picked instead of guessed.
  *
- * The share field was a text box (`Folder/path`), which made a misspelling and a genuine
+ * The share field was a free text box (`Folder/path`), which made a misspelling and a genuine
  * refusal arrive as the same sentence — "the server does not know that folder yet" — with no
- * way for the person to tell which of the two had happened. A list cannot be misspelled, and
- * it removes the question rather than improving the error.
+ * way for the person to tell which of the two had happened. Choosing from this list removes the
+ * question rather than improving the error; the field that searches it (`folder-pick.ts`) names
+ * only what is here.
  *
  * Two rules decide what belongs in it, and both come from somewhere outside this file:
  *
@@ -55,7 +56,7 @@ export const shareableFolders = (
 /**
  * Why the list is empty, when it is — or nothing, when it is not.
  *
- * An empty dropdown with no sentence beside it reads as a broken screen. The two reasons are
+ * An empty picker with no sentence beside it reads as a broken screen. The two reasons are
  * genuinely different situations and only one of them is waiting on a sync, so they are not
  * collapsed into "nothing to share".
  */

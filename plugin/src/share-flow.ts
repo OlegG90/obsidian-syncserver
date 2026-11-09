@@ -171,7 +171,7 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
     list: () => reads('reading the share list', () => deps.list()),
 
     // Not through `once`: nothing leaves this device, so taking the gate for it would make a
-    // dropdown refuse while a sync ran, and there is nothing here for a sync to disturb.
+    // folder picker refuse while a sync ran, and there is nothing here for a sync to disturb.
     shareable(shared) {
       const folders = deps.folders();
       const offered = shareableFolders(folders, deps.syncedPaths(), shared);

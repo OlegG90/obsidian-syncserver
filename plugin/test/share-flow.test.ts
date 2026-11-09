@@ -109,7 +109,7 @@ describe('sharing a folder', () => {
   });
 
   it('offers the synced folders that are not in a share, and does not take the gate to do it', () => {
-    // The folder list is read while a sync may be running — it is a dropdown being drawn, not
+    // The folder list is read while a sync may be running — it is a picker being drawn, not
     // an operation — so going through the gate would make the screen refuse to show a list.
     const h = harness({ share: () => new Promise(() => undefined) });
     void h.flow.share('Team'); // takes the gate and never gives it back

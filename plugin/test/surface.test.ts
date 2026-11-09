@@ -59,3 +59,44 @@ describe('a surface lets go of everything its draw subscribed to', () => {
     assert.equal(undone, 1);
   });
 });
+
+describe('a button the gate holds also waits for its own form', () => {
+  /** A button that remembers only what was last done to it. */
+  const button = () => {
+    const b = { disabled: false, setDisabled: (d: boolean) => ((b.disabled = d), b) };
+    return b;
+  };
+  /** A plugin whose gate is held or free as the test says, and which tells its watcher when it changes. */
+  const gate = () => {
+    let holding: string | undefined;
+    let watcher: (h: string | undefined) => void = () => {};
+    const plugin = {
+      busyWith: () => holding,
+      watchBusy: (w: typeof watcher) => ((watcher = w), () => {}),
+    };
+    return { plugin: plugin as never, set: (h: string | undefined) => ((holding = h), watcher(h)) };
+  };
+
+  it('does not enable a button whose form names nothing when an operation ends (issue #455)', () => {
+    // The defect this guards: the share field disabled its own button, and the gate enabled it again
+    // the moment any sync finished — with text in the field that named no folder.
+    const g = gate();
+    const s = new Surface({} as never, g.plugin, () => {});
+    s.watch();
+    let ready = false;
+    const b = button();
+    s.waits(b as never, () => ready);
+    assert.equal(b.disabled, true, 'not ready from the start');
+
+    g.set('syncing');
+    g.set(undefined);
+    assert.equal(b.disabled, true, 'the gate letting go did not make the form ready');
+
+    ready = true;
+    s.recheck();
+    assert.equal(b.disabled, false);
+
+    g.set('syncing');
+    assert.equal(b.disabled, true, 'ready, and still held back by the gate');
+  });
+});
