@@ -18,8 +18,8 @@ import { Notice, Platform, Plugin, setIcon, TFile } from 'obsidian';
 import { teardownStep } from './teardown.js';
 import { autoSyncByDefault, watchLocalChanges, type LocalChangeWatcher } from './local-changes.js';
 
-import { ApiError, SyncClient, type AccountUsage } from './api/client.js';
-import { SyncEngine, type PassOptions } from './engine/engine.js';
+import { SyncClient, type AccountUsage } from './api/client.js';
+import type { PassOptions } from './engine/engine.js';
 import { emptyState, type StateStore, type VaultState } from './engine/state.js';
 import { ObsidianVaultAdapter } from './obsidian/adapter.js';
 import { deviceLabel } from './obsidian/device.js';
@@ -41,8 +41,7 @@ import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
 import { openShareFlow, type ShareFlow, type ShareSnapshot } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
-import { VaultScopes, type ShareKeyDeps } from './share-keys.js';
-import type { BoundVault } from './bound-vault.js';
+import { bindVault, type BoundVault, type VaultBinding } from './bound-vault.js';
 import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
 import {
@@ -58,7 +57,6 @@ import { openPairingView, type PairingView } from './obsidian/pairing-view.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
 import { SECTIONS, SYNCSERVER_VIEW, SyncServerView, type SectionName } from './obsidian/view.js';
-import { VAULT_GONE } from './vault-removal.js';
 import { installWarning, PLUGIN_VERSION, versionWarning } from './version.js';
 
 
@@ -281,8 +279,7 @@ export default class SyncServerPlugin extends Plugin {
         // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
         // prompt in the middle of a background sync.
         const report = await this.sess!.use(async (h) => {
-          const scopes = await this.openVault(h);
-          const out = await this.engineFor(h, scopes).sync(opts);
+          const out = await (await bindVault(h, this.binding())).engine.sync(opts);
           // Asked here because the session is already open and the folder this pass may
           // have just created is now on disk. A shared folder somebody ACCEPTED does not
           // exist locally until then, so its badge was filtered out as a path that is not
@@ -938,20 +935,7 @@ export default class SyncServerPlugin extends Plugin {
    * to do.
    */
   private async withVault<T>(fn: (v: BoundVault) => Promise<T>): Promise<T> {
-    return this.withSession(async (h) => {
-      const scopes = await this.openVault(h);
-      const engine = this.engineFor(h, scopes);
-      return fn({
-        id: this.data.connection!.vaultId,
-        client: h.client,
-        scopes,
-        engine,
-        paths: async () => {
-          const tree = await engine.readTree();
-          return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
-        },
-      });
-    });
+    return this.withSession(async (h) => fn(await bindVault(h, this.binding())));
   }
 
   /**
@@ -999,63 +983,20 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * The engine, built the one way there is to build it.
+   * What binding a vault takes from this plugin (`bound-vault.ts`), built the one way there is.
    *
-   * Nine arguments assembled twice is nine chances for the two to differ, and they already
-   * did: one call built its own `ObsidianVaultAdapter` where the other went through
-   * `vault()`, and a tenth dependency would have had to be remembered in both places. So a
-   * sync uses this too, and there is exactly one signature to keep true.
-   *
-   * **With the share keys**, and that is not optional: reading the tree means decrypting
-   * every name, and the interior of any share this vault is in is named under `KS`. An
-   * engine built without them fails on the first such name — which is exactly what happened
-   * on the first live share, one press after preparation had re-keyed two nodes. Every
-   * sharing operation here meets those names, and so does a pass.
-   *
-   * The vault id is read from the same field `openVault` reads, so the engine is built for
-   * the vault whose scopes it was handed.
+   * A pass and every operation go through it, so the engine has one set of dependencies to keep
+   * true: one call once built its own `ObsidianVaultAdapter` where another went through `vault()`,
+   * and a new dependency would have had to be remembered in both places.
    */
-  private engineFor(h: Handle, scopes: VaultScopes): SyncEngine {
-    return new SyncEngine(
-      h.client,
-      this.data.connection!.vaultId,
-      scopes,
-      this.vault(),
-      this.stateStore(),
-      deviceLabel(),
-      this.data.syncObsidian === true,
-      h.treeCache,
-    );
-  }
-
-  /**
-   * The vault, opened once for an operation and passed to everything the operation needs.
-   *
-   * A share whose key did not arrive is **not** announced here, though this is where it is
-   * discovered. It used to be: a notice, once per operation, about a state that lasts until
-   * somebody delivers a key — so pressing anything three times said it three times, and a
-   * sync said nothing about the folder it had just left alone. The pass reports it now, once,
-   * naming the folder rather than counting scopes (`SyncReport.unreadable`).
-   */
-  private async openVault(h: Handle): Promise<VaultScopes> {
-    const opened = await h.client.openVault(this.data.connection!.vaultId).catch((e: unknown) => {
-      // A vault that is gone is not a broken server, and a bare `404 not_found` surfacing out of the
-      // middle of a sync reads exactly like one (#175). Said once, here, because every operation goes
-      // through this method to reach its tree.
-      if (e instanceof ApiError && e.status === 404) throw new Error(VAULT_GONE);
-      throw e;
-    });
-    return VaultScopes.open(opened, this.keyDeps(h));
-  }
-
-  /**
-   * What opening a wrapped share key takes, from the session that holds it.
-   *
-   * `openIdentity` stays a function all the way down, so the seed never leaves the session
-   * to satisfy a share that may not even need the account form.
-   */
-  private keyDeps(h: Handle): ShareKeyDeps {
-    return { vaultKey: h.kv, openIdentity: () => h.openIdentity(), userId: h.userId };
+  private binding(): VaultBinding {
+    return {
+      vaultId: this.data.connection!.vaultId,
+      vault: this.vault(),
+      store: this.stateStore(),
+      deviceLabel: deviceLabel(),
+      syncObsidian: this.data.syncObsidian === true,
+    };
   }
 
   /**
