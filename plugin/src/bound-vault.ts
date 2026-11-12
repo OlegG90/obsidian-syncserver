@@ -18,8 +18,9 @@
  * for one vault, and the second could disagree with the first about which share keys arrived — the exact
  * failure `VaultScopes` was built to make impossible **within** one opening.
  *
- * So the opening is the value. `bindVault` makes one and the plugin's `withVault` hands it out; nothing
- * else can be assembled by accident, because assembling it is no longer something a caller does.
+ * So the opening is the value. `bindVault` is the only thing that makes one — the plugin's `withVault`
+ * hands it to an operation, and a sync pass calls it on a session that is already open — so nothing
+ * can be assembled by accident, because assembling it is not something a caller does.
  *
  * No session handle rides along. The two operations it was kept for — leaving and inviting, which
  * need a share key sealed to the account — reopened that key from the handle, and `scopes` already
@@ -54,10 +55,9 @@ export interface BoundVault {
 /**
  * What binding a vault takes from the plugin: the pieces only it holds, read once per operation.
  *
- * The vault id is here, once, and both the opening and the engine take it from this value. It used to
- * be read three times from the settings — to open the vault, to build the engine, and for `id` — and
- * the engine was "built for the vault whose scopes it was handed" only because all three reads
- * happened to agree.
+ * The vault id is here, once, and the opening, the engine and `id` all take it from this value — so
+ * the engine is built for the vault whose scopes it was handed by construction, not because separate
+ * reads of the settings happened to agree while the open was in flight.
  */
 export interface VaultBinding {
   vaultId: string;

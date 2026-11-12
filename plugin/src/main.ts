@@ -279,7 +279,8 @@ export default class SyncServerPlugin extends Plugin {
         // thing that asks for the passphrase — `withVault` goes through `unlocked()`, which would put a
         // prompt in the middle of a background sync.
         const report = await this.sess!.use(async (h) => {
-          const out = await (await bindVault(h, this.binding())).engine.sync(opts);
+          const v = await bindVault(h, this.binding());
+          const out = await v.engine.sync(opts);
           // Asked here because the session is already open and the folder this pass may
           // have just created is now on disk. A shared folder somebody ACCEPTED does not
           // exist locally until then, so its badge was filtered out as a path that is not
@@ -983,11 +984,11 @@ export default class SyncServerPlugin extends Plugin {
   }
 
   /**
-   * What binding a vault takes from this plugin (`bound-vault.ts`), built the one way there is.
+   * What binding a vault takes from this plugin (`bound-vault.ts`): the pieces only it holds.
    *
-   * A pass and every operation go through it, so the engine has one set of dependencies to keep
-   * true: one call once built its own `ObsidianVaultAdapter` where another went through `vault()`,
-   * and a new dependency would have had to be remembered in both places.
+   * A pass and every operation go through it, so there is one place where the engine's
+   * dependencies come from — two would be two chances for a pass and an operation to build
+   * different engines for the same vault.
    */
   private binding(): VaultBinding {
     return {

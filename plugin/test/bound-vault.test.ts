@@ -1,9 +1,9 @@
 /**
  * Binding a vault: one opening, by one id, and a vault that is gone said as such.
  *
- * The plugin's root used to assemble this by hand in three methods that each read the vault id from
- * the settings, so "the engine is built for the vault whose scopes it was handed" held only while the
- * three reads agreed. These tests hold it without Obsidian: a client that records what it was asked.
+ * What these hold, without Obsidian and with a client that records what it was asked: the vault is
+ * opened once, by the binding's id; the value names that id and carries that opening's scopes; and a
+ * 404 from the server reads as a vault that is gone rather than a broken server.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
