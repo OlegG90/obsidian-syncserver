@@ -44,6 +44,13 @@ export interface BoundVault {
   /** Built from the three above, so no caller can build one for a different vault than it opened. */
   engine: SyncEngine;
   /**
+   * A file's plaintext, from the vault on this device that the engine walks.
+   *
+   * Here rather than beside it for the reason the engine is: an operation that read files through a
+   * second, separately found adapter would be reading a vault this value never promised was the same.
+   */
+  read(path: string): Promise<Uint8Array>;
+  /**
    * Where each node lives, by node id — the tree turned around.
    *
    * A method rather than a field because two callers out of many need it and it costs a read of the
@@ -102,6 +109,7 @@ export const bindVault = async (
     client: h.client,
     scopes,
     engine,
+    read: (path) => b.vault.read(path),
     paths: async () => {
       const tree = await engine.readTree();
       return new Map([...tree.entries()].map(([path, n]) => [n.nodeId, path]));
