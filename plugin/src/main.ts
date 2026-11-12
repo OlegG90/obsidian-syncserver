@@ -1108,7 +1108,6 @@ export default class SyncServerPlugin extends Plugin {
   /** What the sharing operations take from this plugin (`vault-shares.ts`). */
   private shareDeps(): VaultShareDeps {
     return {
-      read: (p) => this.vault().read(p),
       marks: this.marks!,
       askFolderName: (suggestion) => askFolderName(this.app, suggestion),
       newScopeId: () => crypto.randomUUID(),

@@ -21,19 +21,18 @@ const fakeVault = (
   opts: { readable?: (keyId: string | null | undefined) => boolean; replica?: unknown[] } = {},
 ) => {
   const readable = opts.readable ?? (() => true);
-  const calls = log;
   const record =
     (name: string, answer: unknown = undefined) =>
     async () => {
-      calls.push(name);
+      log.push(name);
       return answer;
     };
   const vaultKey = randomBytes(32);
-  const v = {
+  return {
     id: 'vault-1',
     client: {
       joinShare: async (shareId: string, body: unknown) => {
-        calls.push(`joinShare ${shareId}`);
+        log.push(`joinShare ${shareId}`);
         return { root_node_id: 'joined-root', body };
       },
       shareReplica: record('shareReplica', opts.replica ?? [{ node_id: 'n1', name_enc: 'enc', name_key_id: 'ks-1' }]),
@@ -50,20 +49,18 @@ const fakeVault = (
       keyFor: () => vaultKey,
     },
     engine: { readTree: async () => new Map(paths.map((p) => [p, { nodeId: `id:${p}`, address: null }])) },
+    read: async () => new Uint8Array(),
     paths: async () => new Map<string, string>(),
   } as unknown as BoundVault;
-  return v;
 };
 
 /** The plugin's side, logging what the badges were told and recording what was asked. */
 const plugin = (log: string[], answer: string | undefined) => {
   const asked: string[] = [];
-  const marks = log;
   const d: VaultShareDeps = {
-    read: async () => new Uint8Array(),
     marks: {
-      remember: async (shareId, path) => void marks.push(`remember ${shareId} ${path}`),
-      forget: async (shareId) => void marks.push(`forget ${shareId}`),
+      remember: async (shareId, path) => void log.push(`remember ${shareId} ${path}`),
+      forget: async (shareId) => void log.push(`forget ${shareId}`),
     },
     askFolderName: async (suggestion) => (asked.push(suggestion), answer),
     newScopeId: () => 'scope-new',

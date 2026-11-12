@@ -14,16 +14,26 @@ import { landingFor } from './share-landing.js';
 import type { SharedFolderMarks } from './shared-folder-marks.js';
 import { acceptInvitation, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode } from './sharing.js';
 
-/** What the operations take from the plugin: the disk, the folder badges, and the one question asked. */
+/** What the operations take from the plugin: the folder badges, the one question asked, and fresh ids. */
 export interface VaultShareDeps {
-  /** A file's plaintext, from this vault — dedup tags under a new scope are over it. */
-  read(path: string): Promise<Uint8Array>;
   marks: Pick<SharedFolderMarks, 'remember' | 'forget'>;
   /** Asks what to call an accepted folder; `undefined` when the person dismissed the question. */
   askFolderName(suggestion: string): Promise<string | undefined>;
   /** A fresh key scope id for a new share. */
   newScopeId(): string;
 }
+
+/**
+ * What every protocol step needs to know about the vault it acts on — said once, from the binding.
+ *
+ * Each step in `sharing.ts` asks for this record plus what it alone needs (a reader, an id source).
+ */
+const protocolOf = (v: BoundVault) => ({
+  client: v.client,
+  vaultId: v.id,
+  vaultKey: v.scopes.vaultKey,
+  vaultScopeId: v.scopes.vaultScopeId,
+});
 
 /** Share a folder of this vault: its subtree re-keyed under a new `KS`, and its badge remembered. */
 export const shareFrom = async (v: BoundVault, d: VaultShareDeps, folderPath: string): Promise<{ shareId: string }> => {
@@ -32,14 +42,7 @@ export const shareFrom = async (v: BoundVault, d: VaultShareDeps, folderPath: st
   const tree = await v.engine.readTree();
   const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({ path, nodeId: n.nodeId, address: n.address }));
   const out = await shareFolder(
-    {
-      client: v.client,
-      read: (p) => d.read(p),
-      vaultId: v.id,
-      vaultKey: v.scopes.vaultKey,
-      vaultScopeId: v.scopes.vaultScopeId,
-      newScopeId: () => d.newScopeId(),
-    },
+    { ...protocolOf(v), read: v.read, newScopeId: d.newScopeId },
     folderPath,
     nodes,
   );
@@ -72,7 +75,7 @@ export const acceptInto = async (
   const landing = landingFor(tree.keys(), invitation.initiatorLogin);
   const name = landing.settle((await d.askFolderName(landing.suggestion)) ?? '');
   await acceptInvitation(
-    { client: v.client, vaultId: v.id, vaultKey: v.scopes.vaultKey, vaultScopeId: v.scopes.vaultScopeId },
+    protocolOf(v),
     invitation.shareId,
     v.scopes.opened.root_node_id,
     name,
@@ -101,7 +104,7 @@ export const leaveFrom = async (v: BoundVault, d: VaultShareDeps, shareId: strin
   requireEveryNameReadable(rows, v.scopes);
 
   const out = await leaveShare(
-    { client: v.client, read: (p) => d.read(p), vaultId: v.id, vaultKey: v.scopes.vaultKey, vaultScopeId: v.scopes.vaultScopeId },
+    { ...protocolOf(v), read: v.read },
     shareId,
     key,
     scopeId,
