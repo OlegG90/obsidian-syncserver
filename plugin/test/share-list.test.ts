@@ -77,21 +77,27 @@ describe('the shared-folders list, one line a share (#428)', () => {
 });
 
 describe('whom an invitation can be offered to', () => {
-  const visa = [member('oleg', { is_initiator: true }), member('keti')];
-  const trip = [member('oleg'), member('teona'), member('keti')];
-  const plans = [member('oleg', { is_initiator: true })];
+  const met = new Map([
+    ['visa', [member('oleg', { is_initiator: true }), member('keti')]],
+    ['trip', [member('oleg'), member('teona'), member('keti')]],
+    ['plans', [member('oleg', { is_initiator: true })]],
+  ]);
 
   it('offers the people met in other shares, once each, by name — not the inviter, not who is already in', () => {
-    assert.deepEqual(invitable([visa, trip, plans], plans, 'oleg', ''), ['keti', 'teona']);
-    assert.deepEqual(invitable([visa, trip, plans], visa, 'oleg', ''), ['teona']);
+    assert.deepEqual(invitable(met, 'plans', 'oleg', ''), ['keti', 'teona']);
+    assert.deepEqual(invitable(met, 'visa', 'oleg', ''), ['teona']);
   });
 
   it('narrows by any part of the login, ignoring case', () => {
-    assert.deepEqual(invitable([trip], plans, 'oleg', 'EON'), ['teona']);
-    assert.deepEqual(invitable([trip], plans, 'oleg', 'zz'), []);
+    assert.deepEqual(invitable(met, 'plans', 'oleg', 'EON'), ['teona']);
+    assert.deepEqual(invitable(met, 'plans', 'oleg', 'zz'), []);
   });
 
-  it('leaves the inviter out however the login was capitalised when connecting', () => {
-    assert.deepEqual(invitable([trip], plans, 'Oleg', ''), ['keti', 'teona']);
+  it('leaves the inviter out however the login was spelled when connecting', () => {
+    assert.deepEqual(invitable(met, 'plans', ' Oleg ', ''), ['keti', 'teona']);
+  });
+
+  it('offers nobody until the members of this share are known, rather than people already in it', () => {
+    assert.deepEqual(invitable(met, 'unread', 'oleg', ''), []);
   });
 });

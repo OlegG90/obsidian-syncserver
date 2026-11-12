@@ -11,6 +11,7 @@
  * rules in it.
  */
 import type { ShareMember } from './api/client.js';
+import { canonicalLogin } from './crypto/account.js';
 import type { ShareRow } from './share-flow.js';
 
 /**
@@ -97,28 +98,31 @@ export const memberState = (m: ShareMember): string =>
       : 'invited, no answer yet';
 
 /**
- * Logins to offer when inviting somebody to `share`: the people met in the membership of any
- * share this device has read, matching what has been typed, by name. Whom a client may offer is
- * docs/12, SH-16.
+ * Logins to offer when inviting somebody to `shareId`: the people met in the membership of any
+ * share this device has read (`met`, by share id), matching what has been typed, by name. Whom a
+ * client may offer is docs/12, SH-16.
  *
  * Left out: the inviter, and whoever already belongs to this share — an invitation to either
- * could only be refused. Compared ignoring case, because the server's logins are: the inviter's
- * own is kept as typed at connecting, which need not be how the membership spells it.
+ * could only be refused. So nothing at all until this share's own members have been read, and
+ * logins compared in their canonical form: the inviter's own is kept as typed at connecting,
+ * which need not be how the membership spells it.
  */
 export const invitable = (
-  met: Iterable<readonly ShareMember[]>,
-  share: readonly ShareMember[],
+  met: ReadonlyMap<string, readonly ShareMember[]>,
+  shareId: string,
   self: string | undefined,
   query: string,
 ): string[] => {
-  const taken = new Set(share.map((m) => m.login.toLowerCase()));
-  if (self) taken.add(self.toLowerCase());
-  const q = query.trim().toLowerCase();
+  const own = met.get(shareId);
+  if (!own) return [];
+  const taken = new Set(own.map((m) => canonicalLogin(m.login)));
+  if (self) taken.add(canonicalLogin(self));
+  const q = canonicalLogin(query);
   const out = new Set<string>();
-  for (const members of met) {
+  for (const members of met.values()) {
     for (const { login } of members) {
-      const folded = login.toLowerCase();
-      if (!taken.has(folded) && folded.includes(q)) out.add(login);
+      const key = canonicalLogin(login);
+      if (!taken.has(key) && key.includes(q)) out.add(login);
     }
   }
   return [...out].sort((a, b) => a.localeCompare(b));
