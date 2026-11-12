@@ -38,7 +38,7 @@ import { SyncServerSettings } from './obsidian/settings.js';
 
 import { session, type Connection, type Handle, type Session, type VaultChoice } from './session/index.js';
 import { openPairingFlow, type PairingFlow } from './pairing-flow.js';
-import { openShareFlow, type ShareFlow } from './share-flow.js';
+import { openShareFlow, type ShareFlow, type ShareSnapshot } from './share-flow.js';
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
 import { VaultScopes, type ShareKeyDeps } from './share-keys.js';
@@ -112,6 +112,8 @@ interface PluginData {
    * against the server whenever the share list is read.
    */
   sharedFolders?: Record<string, string>;
+  /** The share list as last read, for when the server cannot be asked — `ShareSnapshot` says why. */
+  shareSnapshot?: ShareSnapshot;
   /** Synchronise `.obsidian/` configuration — off by default (D-7, docs/01). */
   syncObsidian?: boolean;
   /**
@@ -1238,6 +1240,12 @@ export default class SyncServerPlugin extends Plugin {
 
       members: (shareId) => this.withSession((h) => h.client.shareMembers(shareId)),
 
+      remembered: () => this.data.shareSnapshot,
+      remember: (snapshot) => {
+        this.data.shareSnapshot = snapshot;
+        void this.save();
+      },
+
       // The initiator's half of a departure, which the server has had all along and no
       // button reached: withdrawing an invitation, and revoking somebody who joined.
       remove: (shareId, userId) => this.withSession((h) => h.client.removeMember(shareId, userId)),
@@ -1371,5 +1379,8 @@ export default class SyncServerPlugin extends Plugin {
     // Nothing is shared with anybody from here any more, whatever the badges said. Outside the
     // release because it is a different domain: the hold knows nothing about shared folders.
     await this.marks!.clear();
+    // And nobody's list is this device's to show: the next account would see the last one's.
+    delete this.data.shareSnapshot;
+    await this.save();
   }
 }

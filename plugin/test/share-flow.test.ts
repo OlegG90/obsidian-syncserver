@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.js';
-import { openShareFlow, type ShareFlowDeps } from '../src/share-flow.js';
+import { openShareFlow, type ShareFlowDeps, type ShareSnapshot } from '../src/share-flow.js';
 import { openGate } from '../src/gate.js';
 
 const harness = (over: Partial<ShareFlowDeps> = {}) => {
@@ -19,6 +19,7 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
   const invited: { shareId: string; login: string }[] = [];
   const passes: boolean[] = [];
   let rebuilt = 0;
+  let snapshot: ShareSnapshot | undefined;
 
   const deps: ShareFlowDeps = {
     gate: openGate(),
@@ -41,6 +42,10 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     done: () => {
       rebuilt++;
     },
+    remembered: () => snapshot,
+    remember: (s) => {
+      snapshot = s;
+    },
     syncSoon: () => {
       // What a real pass would do first: take the gate. Recorded as whether it could.
       passes.push(deps.gate.tryBegin('syncing'));
@@ -50,7 +55,16 @@ const harness = (over: Partial<ShareFlowDeps> = {}) => {
     ...over,
   };
 
-  return { flow: openShareFlow(deps), gate: deps.gate, notices, shared, invited, passes, rebuilt: () => rebuilt };
+  return {
+    flow: openShareFlow(deps),
+    gate: deps.gate,
+    notices,
+    shared,
+    invited,
+    passes,
+    rebuilt: () => rebuilt,
+    snapshot: () => snapshot,
+  };
 };
 
 describe('sharing a folder', () => {
@@ -268,6 +282,88 @@ describe('reading the lists', () => {
     const out = await h.flow.list();
     assert.equal(out!.joined[0]!.shareId, 's1');
     assert.equal(out!.invitations[0]!.initiatorLogin, 'bob');
+  });
+});
+
+describe('the list as last read, for when the server cannot be asked', () => {
+  const keti = { user_id: 'u', login: 'keti', is_initiator: false, invited_at: 'now', joined_at: 'now', finalizing: false };
+
+  /** A server that answers until it is told not to — the same flow, before and after going offline. */
+  const flaky = () => {
+    let up = true;
+    let joined = [
+      { shareId: 'visa', isInitiator: true, state: 'active', folder: 'Cases/Visa' },
+      { shareId: 'trip', isInitiator: false, state: 'active', folder: 'Trip' },
+    ];
+    const h = harness({
+      list: async () => {
+        if (!up) throw new Error('the server cannot be reached');
+        return { joined, invitations: [{ shareId: 'plans', initiatorLogin: 'teona' }] };
+      },
+      members: async () => {
+        if (!up) throw new Error('the server cannot be reached');
+        return [keti];
+      },
+    });
+    return { ...h, down: () => (up = false), drop: (id: string) => (joined = joined.filter((s) => s.shareId !== id)) };
+  };
+
+  it('draws the shares, the invitations and who is in each as they were last read, and says when', async () => {
+    const h = flaky();
+    await h.flow.list();
+    await h.flow.members('visa');
+    const readAt = h.snapshot()!.at;
+
+    h.down();
+    const out = await h.flow.list();
+
+    assert.deepEqual(out!.joined.map((s) => s.folder), ['Cases/Visa', 'Trip']);
+    assert.equal(out!.invitations[0]!.initiatorLogin, 'teona');
+    assert.equal(out!.remembered!.at, readAt);
+    assert.deepEqual(out!.remembered!.members['visa'], [keti]);
+    assert.equal(out!.remembered!.members['trip'], undefined, 'a share whose members were never read says so');
+    assert.match(h.notices[0]!, /cannot be reached/, 'and the failure is still reported');
+  });
+
+  it('marks nothing as remembered while the server answers', async () => {
+    const h = flaky();
+    assert.equal((await h.flow.list())!.remembered, undefined);
+  });
+
+  it('shows no people older than the list they are shown under', async () => {
+    const h = flaky();
+    await h.flow.list();
+    await h.flow.members('visa');
+    h.drop('visa');
+    await h.flow.list();
+    h.down();
+
+    const out = await h.flow.list();
+    assert.deepEqual(out!.joined.map((s) => s.shareId), ['trip']);
+    assert.deepEqual(out!.remembered!.members, {});
+  });
+
+  it('keeps what it had when reading the members fails', async () => {
+    const h = flaky();
+    await h.flow.list();
+    await h.flow.members('visa');
+    const before = h.snapshot();
+
+    h.down();
+    await h.flow.members('trip');
+    assert.equal(h.snapshot(), before);
+  });
+
+  it('remembers no members before there is a list to file them under', async () => {
+    const h = flaky();
+    await h.flow.members('visa');
+    assert.equal(h.snapshot(), undefined);
+  });
+
+  it('still answers undefined when nothing was ever read', async () => {
+    const h = flaky();
+    h.down();
+    assert.equal(await h.flow.list(), undefined);
   });
 });
 

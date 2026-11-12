@@ -14,8 +14,8 @@ import { ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
 import { newestFirst } from '../history-flow.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
-import { pickFolder } from '../folder-pick.js';
-import { FolderSuggest } from './folder-suggest.js';
+import { pickFolder, suggestFolders } from '../folder-pick.js';
+import { PickSuggest } from './pick-suggest.js';
 import { deviceLabel } from './device.js';
 import { askDeviceName } from './modals.js';
 import { deviceName } from '../device-name.js';
@@ -24,10 +24,19 @@ import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
-import { groupShares, memberState, peopleLine, whose } from '../share-list.js';
+import { groupShares, invitable, memberState, peopleLine, whose } from '../share-list.js';
 import type { ShareMember } from '../api/client.js';
 import { errorText } from '../error-text.js';
 import type { OwnDeviceRow } from '@syncserver/shared';
+
+/**
+ * What every share line is drawn with: the members met so far, which the invite field suggests
+ * from, and — when the server could not be asked — the members as last read, by share id.
+ */
+interface ShareView {
+  met: Map<string, readonly ShareMember[]>;
+  remembered?: Record<string, ShareMember[]>;
+}
 
 /**
  * A list the server has to answer before it can be drawn (#182).
@@ -304,9 +313,8 @@ export class Panels {
   /**
    * Folders shared with other people, and the invitations waiting for an answer.
    *
-   * Drawn from what the server says rather than from anything remembered: a share can be
-   * ended by somebody else while this screen is closed, and a list rebuilt from a cache
-   * would offer actions on something that is already gone.
+   * Drawn from what the server says. When it cannot be asked, the list as last read is drawn
+   * instead, said to be that, and with nothing on it to press (`ShareSnapshot` says why).
    */
   shareSection(containerEl: HTMLElement): void {
     containerEl.createEl('h3', { text: 'Shared folders' });
@@ -326,15 +334,30 @@ export class Panels {
         // a guess, and the one that overlaps fails inside a database trigger.
         return;
       }
-      this.shareControl(offer, flow, out.joined);
+      const { remembered } = out;
+      if (remembered) {
+        // No offer: what may be shared depends on what already is, and that is what is unknown.
+        const note = list.createEl('p', {
+          cls: 'setting-item-description',
+          // Not "the server cannot be reached": a cancelled passphrase or a refusal ends here
+          // too, and the notice already gave the actual reason.
+          text: `The share list could not be read just now, so this is the list as read on ${new Date(remembered.at).toLocaleString()}. Nothing here can be changed until it can be.`,
+        });
+        note.style.color = 'var(--text-warning)';
+      } else {
+        this.shareControl(offer, flow, out.joined);
+      }
       if (out.joined.length === 0 && out.invitations.length === 0) {
         list.createEl('p', { text: 'No shared folders yet.' });
       }
 
       for (const inv of out.invitations) {
-        const row = new Setting(list)
-          .setName(`Invitation from ${inv.initiatorLogin}`)
-          .setDesc('Accepting materialises a copy in this vault and syncs it down straight away.');
+        const row = new Setting(list).setName(`Invitation from ${inv.initiatorLogin}`);
+        if (remembered) {
+          row.setDesc('It can be answered once the list can be read again.');
+          continue;
+        }
+        row.setDesc('Accepting materialises a copy in this vault and syncs it down straight away.');
         row.addButton((b) =>
           this.s.waits(b)
             .setButtonText('Accept')
@@ -344,6 +367,12 @@ export class Panels {
         row.addButton((b) => this.s.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }
 
+      // Every share's members as they arrive, so that inviting to one can offer the people
+      // already met in the others. Read at the moment of typing, not when the field is drawn:
+      // the lists answer one by one, and the field may be opened before the last has.
+      const met = new Map<string, readonly ShareMember[]>();
+      const view: ShareView = remembered ? { met, remembered: remembered.members } : { met };
+
       // The parent said once, above its folders (#428). The top of the vault has no heading, and
       // neither do shares not synced here: their line already says so.
       for (const group of groupShares(out.joined)) {
@@ -351,7 +380,7 @@ export class Panels {
           const heading = list.createDiv({ text: `${group.parent}/` });
           heading.style.cssText = 'margin-top: 0.75em; color: var(--text-muted); font-size: var(--font-ui-smaller);';
         }
-        for (const { row, name } of group.shares) this.shareEntry(list, flow, row, name);
+        for (const { row, name } of group.shares) this.shareEntry(list, flow, row, name, view);
       }
     });
   }
@@ -371,8 +400,11 @@ export class Panels {
    * settings tab; in this sidebar leaf a text field and two buttons took the whole 336px and
    * squeezed the folder's name to a column zero pixels wide. Its rows are also a settings row's
    * height, which is how three shares came to fill several screens.
+   *
+   * Drawn from a remembered list it is the same line and the same people, with no control on it.
    */
-  private shareEntry(list: HTMLElement, flow: ShareFlow, share: ShareRow, name: string): void {
+  private shareEntry(list: HTMLElement, flow: ShareFlow, share: ShareRow, name: string, view: ShareView): void {
+    const { met, remembered } = view;
     const ended = share.state !== 'active';
     const entry = list.createEl('details');
     // An ended share is open from the start: finishing the departure is still owed.
@@ -400,21 +432,26 @@ export class Panels {
     const body = entry.createDiv();
     body.style.cssText =
       'margin: 0.25em 0 0.75em 0.5em; padding-left: 0.75em; border-left: 1px solid var(--background-modifier-border);';
-    if (ended) muted(body.createDiv(), 'This share is over — finish leaving to return the folder to your own key.');
+    if (ended) {
+      muted(
+        body.createDiv(),
+        remembered ? 'This share is over.' : 'This share is over — finish leaving to return the folder to your own key.',
+      );
+    }
     const people = body.createDiv();
     const actions = body.createDiv();
     actions.style.cssText = 'display: flex; flex-wrap: wrap; gap: 0.5em; margin-top: 0.5em;';
 
-    if (share.isInitiator) {
+    if (share.isInitiator && !remembered) {
       // The field only when it is wanted: shown on every share, it was a full row under each.
       const form = body.createDiv();
       form.style.cssText = 'display: none; gap: 0.5em; margin-top: 0.5em;';
       let login = '';
       const field = new TextComponent(form).setPlaceholder('login to invite').onChange((v) => (login = v));
       const send = (): void => void flow.invite(share.shareId, login);
-      field.inputEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') send();
-      });
+      field.inputEl.style.flex = '1';
+      const self = this.s.plugin.data.connection?.login;
+      new PickSuggest(this.s.app, field.inputEl, (q) => invitable(met, share.shareId, self, q), send);
       this.s.waits(new ButtonComponent(form)).setButtonText('Invite').setCta().onClick(send);
       new ButtonComponent(actions).setButtonText('+ Invite').onClick(() => {
         form.style.display = form.style.display === 'none' ? 'flex' : 'none';
@@ -423,22 +460,29 @@ export class Panels {
     }
     // Leaving is everybody's, the initiator included — for them it ends the share, and the
     // coordinator says which happened rather than guessing here.
-    this.s
-      .waits(new ButtonComponent(actions))
-      .setButtonText('Leave')
-      .setWarning()
-      .onClick(() => void flow.leave(share.shareId));
+    if (!remembered) {
+      this.s
+        .waits(new ButtonComponent(actions))
+        .setButtonText('Leave')
+        .setWarning()
+        .onClick(() => void flow.leave(share.shareId));
+    }
 
     // Who is in it. Shown for everybody and not only the initiator: "who can read this folder" is
     // the question a shared folder raises, and a participant who cannot answer it is being asked
     // to trust a list they never see.
-    void flow.members(share.shareId).then((members) => {
+    const read = remembered ? Promise.resolve(remembered[share.shareId]) : flow.members(share.shareId);
+    void read.then((members) => {
       // Said, not left blank. An empty list under a shared folder reads as "nobody is in it",
       // which is a worse claim than an error (#387).
       if (!members) {
-        muted(people.createDiv(), 'Who is in this folder could not be read.');
+        muted(
+          people.createDiv(),
+          remembered ? 'Who is in this folder was not read with that list.' : 'Who is in this folder could not be read.',
+        );
         return;
       }
+      met.set(share.shareId, members);
       say(members);
       for (const m of members) {
         const who = people.createDiv();
@@ -450,7 +494,7 @@ export class Panels {
 
         // Only the initiator may remove, and never themselves: their way out is Leave, which ends
         // the share, and offering both would be offering the same act twice under two names.
-        if (!share.isInitiator || m.is_initiator || m.finalizing) continue;
+        if (remembered || !share.isInitiator || m.is_initiator || m.finalizing) continue;
         const act = m.joined_at ? 'Revoke' : 'Withdraw';
         // An icon is a small target, so it asks first — a misclick here stops somebody's copy
         // receiving anything further.
@@ -503,6 +547,11 @@ export class Panels {
       return;
     }
 
+    // Label above, field and button below. Side by side, the pane's width went to the field and
+    // the button, and the name and description wrapped a word per line beside them.
+    setting.settingEl.style.cssText = 'flex-direction: column; align-items: stretch; gap: 0.5em;';
+    setting.controlEl.style.justifyContent = 'flex-start';
+
     // Why Share is disabled, said under the row as the text changes — a disabled button with no
     // sentence beside it reads as a broken one. Not for an empty field: the description above
     // already says what to do, and a refusal before anything is typed answers nothing.
@@ -513,13 +562,14 @@ export class Panels {
     setting
       .setDesc('Type part of its path and pick it from the list. Its contents are re-keyed so participants can read them.')
       .addText((t) => {
+        t.inputEl.style.flex = '1';
         t.setPlaceholder('Folder/path').onChange((text) => {
           pick = pickFolder(offered, text);
           why.setText('reason' in pick ? pick.reason : '');
           why.toggle('reason' in pick && text.trim() !== '');
           this.s.recheck();
         });
-        new FolderSuggest(this.s.app, t.inputEl, offered);
+        new PickSuggest(this.s.app, t.inputEl, (q) => suggestFolders(offered, q));
       })
       .addButton((b) =>
         this.s.waits(b, () => 'folder' in pick)

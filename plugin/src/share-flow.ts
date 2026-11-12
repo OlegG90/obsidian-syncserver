@@ -44,6 +44,31 @@ export interface InvitationRow {
   initiatorLogin: string;
 }
 
+/**
+ * The share list as this device last read it, with whoever it saw in each share since — shown,
+ * never acted on, when the list cannot be read (docs/05). Without it the panel had nothing to say
+ * about which folders are shared, whose, and with whom, which is what a person opening it offline
+ * is asking.
+ */
+export interface ShareSnapshot {
+  /** When the list was read, in epoch milliseconds. */
+  at: number;
+  joined: ShareRow[];
+  invitations: InvitationRow[];
+  /**
+   * By share id, read since `at`; a share whose members were not has no entry. Never older than
+   * `at`, because it is labelled with it.
+   */
+  members: Record<string, ShareMember[]>;
+}
+
+/** What the panel draws from: the server's answer, or — `remembered` set — the snapshot. */
+export interface ShareList {
+  joined: ShareRow[];
+  invitations: InvitationRow[];
+  remembered?: Pick<ShareSnapshot, 'at' | 'members'>;
+}
+
 export interface ShareFlowDeps {
   /** The one gate every operation family shares — one operation at a time, across all of them. */
   gate: Gate;
@@ -74,6 +99,10 @@ export interface ShareFlowDeps {
   notify(message: string, durationMs?: number): void;
   /** The screen showing this is now out of date. */
   done(): void;
+  /** The last snapshot written, if any. */
+  remembered(): ShareSnapshot | undefined;
+  /** Replace the snapshot. Synchronous in effect: the next `remembered()` returns it. */
+  remember(snapshot: ShareSnapshot): void;
   /**
    * Ask for a sync pass, the kind nobody pressed for: it runs if nothing else is in flight and
    * prompts for nothing. Called with the gate already released — taken, the pass would refuse.
@@ -84,7 +113,11 @@ export interface ShareFlowDeps {
 }
 
 export interface ShareFlow {
-  list(): Promise<{ joined: ShareRow[]; invitations: InvitationRow[] } | undefined>;
+  /**
+   * The server's list, remembered as it arrives; when the server cannot be asked, the list as
+   * last remembered. `undefined` only when it fails and nothing was ever remembered.
+   */
+  list(): Promise<ShareList | undefined>;
   /**
    * The folders that could be shared right now, and — when there are none — why.
    *
@@ -168,7 +201,17 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
   };
 
   return {
-    list: () => reads('reading the share list', () => deps.list()),
+    async list() {
+      const out = await reads('reading the share list', () => deps.list());
+      if (out) {
+        // Members start again with the list: carried over, an earlier read would be shown under
+        // this one's time.
+        deps.remember({ at: Date.now(), ...out, members: {} });
+        return out;
+      }
+      const last = deps.remembered();
+      return last && { joined: last.joined, invitations: last.invitations, remembered: { at: last.at, members: last.members } };
+    },
 
     // Not through `once`: nothing leaves this device, so taking the gate for it would make a
     // folder picker refuse while a sync ran, and there is nothing here for a sync to disturb.
@@ -274,7 +317,12 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
       deps.done();
     },
 
-    members: (shareId) => reads('reading the members', () => deps.members(shareId)),
+    async members(shareId) {
+      const out = await reads('reading the members', () => deps.members(shareId));
+      const last = deps.remembered();
+      if (out && last) deps.remember({ ...last, members: { ...last.members, [shareId]: out } });
+      return out;
+    },
 
     async remove(shareId, userId, login) {
       const out = await once('removing', () => deps.remove(shareId, userId));

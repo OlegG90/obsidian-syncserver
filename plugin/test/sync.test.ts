@@ -244,6 +244,8 @@ describe('the sync coordinator', () => {
       folders: () => ['Team'],
       notify: (m) => shareNotices.push(m),
       done: () => undefined,
+      remembered: () => undefined,
+      remember: () => undefined,
       syncSoon: () => sync.soon(),
     });
 
