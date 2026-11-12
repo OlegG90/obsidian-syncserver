@@ -47,8 +47,9 @@ interface ShareView {
  * been written and there is nothing to draw.
  *
  * **The placeholder is not decoration.** These arrive over the network after the surface is drawn, and a
- * section that renders empty for a moment is one somebody reads as "you have none". Every list in this
- * window goes through here, so the window says the wait one way.
+ * section that renders empty for a moment is one somebody reads as "you have none". Every list section
+ * in this window goes through here, so the window says the wait one way. The members line inside a share
+ * row does not: it is a sentence within a row that is already drawn, with nothing to stand in for.
  *
  * **A failure is a sentence and not an empty list**, for the same reason: "the list could not be read"
  * and "there is nothing in it" are different facts, and only one of them is worth acting on. A call may
