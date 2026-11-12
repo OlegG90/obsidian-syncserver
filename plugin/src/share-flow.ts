@@ -20,7 +20,7 @@
  *   the share for everybody, and "you left" would be the wrong sentence for it.
  */
 import { ApiError, type ShareMember } from './api/client.js';
-import { busyNotice, type Gate } from './gate.js';
+import { exclusively, type Gate } from './gate.js';
 import { holdsSynced, nothingToShare, shareableFolders } from './shareable-folders.js';
 
 /** A share as the person sees it in the list. */
@@ -185,20 +185,9 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
   };
 
   /** One operation at a time, with its failure reported rather than thrown at the UI. */
-  const once = async <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
-    // The shared gate, taken synchronously before any await, for the reason `sync.ts`
-    // gives: two presses arrive as two calls before either has reached the network. It is
-    // the SAME gate a sync takes, so a departure cannot start mid-pass or vice versa.
-    if (!deps.gate.tryBegin(what)) {
-      deps.notify(busyNotice(deps.gate), 8000);
-      return undefined;
-    }
-    try {
-      return await reads(what, fn);
-    } finally {
-      deps.gate.end();
-    }
-  };
+  const once = <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> =>
+    // The SAME gate a sync takes, so a departure cannot start mid-pass or vice versa.
+    exclusively(deps.gate, what, (notice) => deps.notify(notice, 8000), () => reads(what, fn));
 
   return {
     async list() {

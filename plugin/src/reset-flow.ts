@@ -15,7 +15,7 @@
  *   forgotten what it synced against a server that still holds everything, and the next pass would
  *   re-upload the lot as new files beside the old ones.
  */
-import { busyNotice, type Gate } from './gate.js';
+import { exclusively, type Gate } from './gate.js';
 import { errorText } from './error-text.js';
 
 export interface ResetFlowDeps {
@@ -39,25 +39,21 @@ export interface ResetFlow {
 
 export const openResetFlow = (deps: ResetFlowDeps): ResetFlow => ({
   async start() {
-    // Taken synchronously before any await, as everywhere else: two presses arrive as two calls before
-    // either has reached the network.
-    if (!deps.gate.tryBegin('a reset')) {
-      deps.notify(busyNotice(deps.gate), 8000);
-      return false;
-    }
-
-    let removed: number;
+    let removed: number | undefined;
     try {
-      ({ removed } = await deps.reset());
-      await deps.forgetState();
+      removed = await exclusively(deps.gate, 'a reset', (notice) => deps.notify(notice, 8000), async () => {
+        const out = await deps.reset();
+        await deps.forgetState();
+        return out.removed;
+      });
     } catch (e) {
-      // The gate is released by the `finally` below, so a failed reset leaves the device exactly as it
-      // was: the server refused, and nothing here has forgotten anything.
+      // The gate has gone back by now, so a failed reset leaves the device exactly as it was: the
+      // server refused, and nothing here has forgotten anything.
       deps.notify(`SyncServer: the reset failed — ${errorText(e)}`, 12000);
       return false;
-    } finally {
-      deps.gate.end();
     }
+    // Turned away by the gate, which has already said what holds it.
+    if (removed === undefined) return false;
 
     // Said before the upload starts rather than after it finishes: the sync may take minutes, and the
     // number is the answer to "did that do what I meant".

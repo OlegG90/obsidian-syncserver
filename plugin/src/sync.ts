@@ -19,7 +19,7 @@
 import type { PassOptions, SyncReport } from './engine/engine.js';
 import { eventSentence, priority, summary } from './engine/report.js';
 import type { SyncPhase } from './obsidian/status.js';
-import { busyNotice, type Gate } from './gate.js';
+import { exclusively, type Gate } from './gate.js';
 import { errorText } from './error-text.js';
 
 export interface SyncCoordinatorDeps {
@@ -81,15 +81,22 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
    * than for the prompt, because since #238 the unattended path is the common one — the vault settling
    * starts far more passes than a button ever did.
    */
-  const pass = async (attended: boolean, rescan = false): Promise<void> => {
-    // The shared gate, taken synchronously before any await: a second call — manual or a
-    // push hint — cannot slip past while the first waits on the passphrase or the pass. It
-    // is the SAME gate the share and trash flows take, so a hint arriving mid-departure
-    // finds it held and yields instead of meeting interior names with no key.
-    if (!deps.gate.tryBegin(A_SYNC)) {
-      if (attended) deps.notify(busyNotice(deps.gate), 8000);
-      return;
-    }
+  const pass = (attended: boolean, rescan = false): Promise<void> =>
+    // The shared gate: a second call — manual or a push hint — cannot slip past while the first
+    // waits on the passphrase or the pass. It is the SAME gate the share and trash flows take, so a
+    // hint arriving mid-departure finds it held and yields instead of meeting interior names with no
+    // key. Turned away, only a pass somebody asked for says so.
+    exclusively(
+      deps.gate,
+      A_SYNC,
+      (notice) => {
+        if (attended) deps.notify(notice, 8000);
+      },
+      () => passHoldingGate(attended, rescan),
+    );
+
+  /** The pass itself, run holding the gate; a failure ends in the `failed` phase and a notice, never a throw. */
+  const passHoldingGate = async (attended: boolean, rescan: boolean): Promise<void> => {
     try {
       const state = deps.sessionState();
       if (state === 'none') {
@@ -136,8 +143,6 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
       const message = errorText(e);
       deps.setPhase({ kind: 'failed', message, at: Date.now() });
       deps.notify(`SyncServer: ${message}`, 10000);
-    } finally {
-      deps.gate.end();
     }
   };
 
