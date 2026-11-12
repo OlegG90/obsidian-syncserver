@@ -1,0 +1,69 @@
+/**
+ * Binding a vault: one opening, by one id, and a vault that is gone said as such.
+ *
+ * What these hold, without Obsidian and with a client that records what it was asked: the vault is
+ * opened once, by the binding's id; the value names that id and carries that opening's scopes; and a
+ * 404 from the server reads as a vault that is gone rather than a broken server.
+ */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { ApiError, type SyncClient } from '../src/api/client.js';
+import { bindVault, type VaultBinding } from '../src/bound-vault.js';
+import { randomBytes } from '../src/crypto/bytes.js';
+import { emptyState } from '../src/engine/state.js';
+import { openTreeCache } from '../src/engine/tree-cache.js';
+import { VAULT_GONE } from '../src/vault-removal.js';
+import { FakeVault } from './fake-vault.js';
+import { openedWith, Store } from './one-file-wire.js';
+
+const kv = randomBytes(32);
+const opened = openedWith({ vaultId: 'vault-1', rootNodeId: 'root', scopeId: 'scope-vault', kv });
+
+/** A client whose only answer is `openVault`, recording every id it was asked for. */
+const clientAnswering = (answer: () => Promise<typeof opened>) => {
+  const asked: string[] = [];
+  const client = { openVault: (id: string) => (asked.push(id), answer()) } as unknown as SyncClient;
+  return { client, asked };
+};
+
+const handle = (client: SyncClient) => ({
+  client,
+  kv,
+  userId: 'user',
+  openIdentity: () => randomBytes(32),
+  treeCache: openTreeCache(),
+});
+
+const binding: VaultBinding = {
+  vaultId: 'vault-1',
+  vault: new FakeVault(),
+  store: new Store(emptyState()),
+  deviceLabel: 'laptop',
+  syncObsidian: false,
+};
+
+describe('binding a vault', () => {
+  it('opens it once, by the binding’s id, and names that id', async () => {
+    const { client, asked } = clientAnswering(async () => opened);
+    const v = await bindVault(handle(client), binding);
+    assert.deepEqual(asked, ['vault-1']);
+    assert.equal(v.id, 'vault-1');
+    assert.equal(v.client, client);
+    assert.equal(v.scopes.opened, opened, 'the scopes come from this opening, not another');
+  });
+
+  it('says a vault is gone when the server has no such vault (#175)', async () => {
+    const { client } = clientAnswering(async () => {
+      throw new ApiError(404, 'not_found', '{}');
+    });
+    await assert.rejects(bindVault(handle(client), binding), (e: Error) => e.message === VAULT_GONE);
+  });
+
+  it('lets any other refusal through as itself', async () => {
+    const refusal = new ApiError(503, 'unavailable', '{}');
+    const { client } = clientAnswering(async () => {
+      throw refusal;
+    });
+    await assert.rejects(bindVault(handle(client), binding), (e) => e === refusal);
+  });
+});
