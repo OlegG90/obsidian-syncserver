@@ -56,6 +56,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { decide, type LocalMeta, type SyncPolicy } from './reconcile.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
+import { foldersToAsk, isShareRoot, planFolders, removeVanished, type FolderPlanInput } from './folder-plan.js';
 import { basePath, folderMoves, parentPath, type FolderMove, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
 import { errorText } from '../error-text.js';
@@ -832,20 +833,46 @@ export class SyncEngine {
    * conservative by construction (docs/04).
    */
   private async moveRenamedFolders(local: VaultFile[], here: Set<string>, ctx: PassContext): Promise<void> {
-    // Every condition that decides whether this IS a folder move lives in `rename.ts`.
-    // What is left here is what only this class can do: name the folder under the right
-    // scope, call the server, and repair the walk's own view of the tree afterwards.
-    // **A folder still on disk did not move** (#419). `folderMoves` reads files, and a folder emptied
-    // by moving its files out has none — but Obsidian keeps it, and a person who dragged the last
-    // note out of a shared folder meant the note to leave, not the folder to be renamed after
-    // wherever the note went. Asked here, where the vault is, rather than in the pure planner.
-    const plan: FolderMove[] = [];
-    for (const move of folderMoves(ctx.vanished, ctx.tree, ctx.meta, here)) {
-      if (await this.stillHere(move.from, move.to)) continue;
-      plan.push(move);
+    // Every condition that decides what happens to a folder lives in `rename.ts` and
+    // `folder-plan.ts`. What is left here is what only this class can do: ask the vault which
+    // folders are still there, name a folder under the right scope, call the server, and repair
+    // the walk's own view of the tree afterwards.
+    const input: FolderPlanInput = {
+      vanished: ctx.vanished,
+      tree: ctx.tree,
+      byNodeId: ctx.byNodeId,
+      here,
+      queue: ctx.queue.map((f) => f.path),
+      known: { has: (path) => Boolean(ctx.state.nodes[path]) },
+      shareScopes: ctx.shareScopes,
+    };
+    const found = folderMoves(ctx.vanished, ctx.tree, ctx.meta, here);
+    const onDisk = new Map<string, boolean>();
+    for (const path of foldersToAsk(found, input)) onDisk.set(path, await this.vault.folderExists(path));
+    const { moves: plan, held, restored, vanished, queue } = planFolders(found, input, onDisk);
+
+    ctx.vanished = vanished;
+    const walking = new Set(queue);
+    ctx.queue = ctx.queue.filter((f) => walking.has(f.path));
+    for (const hold of held) {
+      for (const v of hold.claimed) ctx.handled.add(v.path);
+      for (const path of hold.outOfWalk) ctx.handled.add(path);
+      ctx.report.errors.push({
+        path: hold.root,
+        message: hold.mergeInto
+          ? `there is already a folder “${hold.mergeInto}” on the server, and a shared folder cannot be merged into one — nothing about it was sent. Move it back, or give it a name that is free there.`
+          : 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
+      });
     }
-    await this.holdShareRoots(plan, here, ctx);
-    await this.restoreDeletedShareRoots(plan, here, ctx);
+    for (const back of restored) {
+      for (const v of back.files) delete ctx.state.nodes[v.path];
+      ctx.report.errors.push({
+        path: back.root,
+        message:
+          'this shared folder was deleted here, and deleting it would have deleted its files for everybody in the share — so they were put back. To stop sharing it, leave the share first (Sharing section); after that the folder is yours to delete.',
+      });
+    }
+
     for (const move of plan) {
       if (this.crossesShare(ctx, move.from, move.to)) {
         if (isShareRoot(ctx.tree.get(move.from)!, ctx.shareScopes)) {
@@ -901,113 +928,6 @@ export class SyncEngine {
   }
 
   /**
-   * A share root this device emptied, with no move that explains where it went: touch nothing.
-   *
-   * Left to the per-file walk, every file of it would read as leaving the share — re-created in
-   * whatever folder it turned up in, and deleted from the share for everybody in it (#409). That
-   * is what a rename looked like when `folderMoves` could not recognise it, and it is the one
-   * outcome a missed rename must never have: a duplicate is recoverable at a glance, a share
-   * emptied for somebody else is not. So the root's vanished files stay claimed and undeleted,
-   * the files that could be them stay out of the walk, and the pass says so. The state still
-   * names the old paths, so the next pass asks again — after the folder is moved back, or
-   * renamed on its own.
-   */
-  private async holdShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): Promise<void> {
-    for (const [path, node] of ctx.tree) {
-      if (node.isFile || !isShareRoot(node, ctx.shareScopes)) continue;
-      const within = (p: string): boolean => p.startsWith(`${path}/`);
-      if ([...here].some(within)) continue;
-      if (plan.some((m) => m.from === path || within(m.from) || path.startsWith(`${m.from}/`))) continue;
-      // Emptied on purpose, not moved (#419): its files were taken out one by one, and they leave
-      // the share by the per-file rules (#402).
-      if (await this.vault.folderExists(path)) continue;
-
-      // Its vanished files, by path relative to it, and what could be them somewhere else: new
-      // here, and at one of those relative paths.
-      const rels = new Set<string>();
-      for (const list of ctx.vanished.values()) for (const v of list) if (within(v.path)) rels.add(v.path.slice(path.length + 1));
-      const couldBe = (f: VaultFile): boolean =>
-        !ctx.state.nodes[f.path] && [...rels].some((rel) => f.path === rel || f.path.endsWith(`/${rel}`));
-      // **Only the shape of a folder move is held.** Files dropped into folders the server already
-      // has, one here and one there, were moved out on purpose, and the walk carries them out of
-      // the share (#402). Two shapes are a folder that went somewhere this pass could not prove:
-      // files in a folder the server has never seen (#409), and every file regrouped under ONE
-      // folder of the shared folder's OWN name — the folder itself carried onto one that is
-      // already there, a merge (#412). A different name is files dropped into somebody's folder.
-      const under = regroupedUnder([...rels], ctx.queue.filter(couldBe).map((f) => f.path));
-      const regrouped = under !== undefined && basePath(under) === basePath(path) ? under : undefined;
-      if (!regrouped && !ctx.queue.some((f) => couldBe(f) && !ctx.tree.has(parentPath(f.path)))) continue;
-
-      for (const [hash, list] of [...ctx.vanished]) {
-        const rest = list.filter((v) => !within(v.path));
-        for (const v of list) if (within(v.path)) ctx.handled.add(v.path);
-        if (rest.length) ctx.vanished.set(hash, rest);
-        else ctx.vanished.delete(hash);
-      }
-      for (const f of ctx.queue) if (couldBe(f)) ctx.handled.add(f.path);
-      ctx.queue = ctx.queue.filter((f) => !couldBe(f));
-      ctx.report.errors.push({
-        path,
-        message:
-          regrouped && ctx.tree.has(regrouped)
-            ? `there is already a folder “${regrouped}” on the server, and a shared folder cannot be merged into one — nothing about it was sent. Move it back, or give it a name that is free there.`
-            : 'this shared folder is gone from here and it is not clear where to — nothing about it was sent. Rename it back, or rename it with nothing else changed inside it. To stop sharing it, use Leave in the Sharing section.',
-      });
-    }
-  }
-
-  /**
-   * A shared folder deleted here, as a folder: send nothing, and put its files back (#417).
-   *
-   * Deleting the folder read as deleting every file in it, and each of those deletes reached
-   * everybody in the share — the share emptied for all of them, its root left behind empty on the
-   * server, which refuses to delete one. What a person means by deleting a folder they share is
-   * "not here any more", and the act for that is **Leave** (SH-05), which leaves everybody else's
-   * copy alone. So a share root that is gone from disk — not emptied: GONE — with its files gone
-   * and not turned up anywhere else, keeps everything: its files leave the vanished set and the
-   * state, and the pull at the end of this pass writes them back. The pass says why, and what to
-   * do instead.
-   *
-   * Everything else is left to the rules that already hold. A root still on disk had its files
-   * deleted one by one, which is deleting them for everybody, on purpose (SH-10). Files that turned
-   * up elsewhere are a move, and `holdShareRoots` or the per-file walk answers for them (#402,
-   * #409). A private folder deleted with a shared folder inside it deletes its own files as ever;
-   * only the shared folder in it comes back.
-   */
-  private async restoreDeletedShareRoots(plan: readonly FolderMove[], here: ReadonlySet<string>, ctx: PassContext): Promise<void> {
-    for (const [path, node] of ctx.tree) {
-      if (node.isFile || !isShareRoot(node, ctx.shareScopes)) continue;
-      const within = (p: string): boolean => p.startsWith(`${path}/`);
-      if ([...here].some(within)) continue;
-      if (plan.some((m) => m.from === path || within(m.from) || path.startsWith(`${m.from}/`))) continue;
-
-      // Only files the server still holds where they were: one it shows somewhere else was renamed
-      // there, and #418's rule answers for it.
-      const gone = [...ctx.vanished.values()].flat().filter((v) => within(v.path) && ctx.byNodeId.get(v.nodeId)?.path === v.path);
-      if (gone.length === 0) continue;
-      const rels = gone.map((v) => v.path.slice(path.length + 1));
-      const elsewhere = ctx.queue.some(
-        (f) => !ctx.state.nodes[f.path] && rels.some((rel) => f.path === rel || f.path.endsWith(`/${rel}`)),
-      );
-      if (elsewhere) continue;
-      if (await this.vault.folderExists(path)) continue;
-
-      const restored = new Set(gone);
-      for (const [hash, list] of [...ctx.vanished]) {
-        const rest = list.filter((v) => !restored.has(v));
-        if (rest.length) ctx.vanished.set(hash, rest);
-        else ctx.vanished.delete(hash);
-      }
-      for (const v of gone) delete ctx.state.nodes[v.path];
-      ctx.report.errors.push({
-        path,
-        message:
-          'this shared folder was deleted here, and deleting it would have deleted its files for everybody in the share — so they were put back. To stop sharing it, leave the share first (Sharing section); after that the folder is yours to delete.',
-      });
-    }
-  }
-
-  /**
    * Leave a folder move exactly as it was: nothing uploaded, nothing deleted, nothing pulled.
    *
    * The state still records the old paths, so the next pass sees the same move and tries again.
@@ -1016,31 +936,16 @@ export class SyncEngine {
    * new one: two folders where there was one (#402).
    */
   private holdBack(move: Pick<FolderMove, 'from' | 'to' | 'children'>, ctx: PassContext): void {
-    for (const child of move.children) {
-      const rest: Vanished[] = [];
-      for (const v of ctx.vanished.get(child.hash) ?? []) {
-        if (v.path.startsWith(`${move.from}/`)) ctx.handled.add(v.path);
-        else rest.push(v);
-      }
-      if (rest.length) ctx.vanished.set(child.hash, rest);
-      else ctx.vanished.delete(child.hash);
-    }
+    const claimed = new Set(
+      move.children.flatMap((child) => (ctx.vanished.get(child.hash) ?? []).filter((v) => v.path.startsWith(`${move.from}/`))),
+    );
+    for (const v of claimed) ctx.handled.add(v.path);
+    removeVanished(ctx.vanished, claimed);
     // Out of the walk, not merely marked: the walk decides every file it is handed, and a file
     // at a path the server has never seen is decided as new.
     const inside = (f: VaultFile): boolean => f.path.startsWith(`${move.to}/`);
     for (const f of ctx.queue) if (inside(f)) ctx.handled.add(f.path);
     ctx.queue = ctx.queue.filter((f) => !inside(f));
-  }
-
-  /**
-   * Whether a folder a move was planned for is in fact still here — emptied, not moved (#419).
-   *
-   * **Except a change of letter case**: where case does not count, `Team` renamed to `team` still
-   * "exists" under its old name, and it is a rename all the same (#421).
-   */
-  private async stillHere(from: string, to: string): Promise<boolean> {
-    if (from.toLowerCase() === to.toLowerCase()) return false;
-    return this.vault.folderExists(from);
   }
 
   /**
@@ -1537,30 +1442,8 @@ export class SyncEngine {
 
 const depth = (path: string): number => path.split('/').length;
 
-/** The one folder every relative path reappears under, among `paths`, or nothing (#412). */
-const regroupedUnder = (rels: readonly string[], paths: readonly string[]): string | undefined => {
-  const first = rels[0];
-  if (first === undefined) return undefined;
-  const found = new Set(paths);
-  for (const p of paths) {
-    if (!p.endsWith(`/${first}`)) continue;
-    const under = p.slice(0, p.length - first.length - 1);
-    if (rels.every((rel) => found.has(`${under}/${rel}`))) return under;
-  }
-  return undefined;
-};
-
 /** The scope a node at `path` is named under, read off a tree — the rule itself is `scopes.ts`. */
 const scopeAt = (tree: ReadonlyMap<string, ServerNode>, shareScopes: ReadonlyMap<string, string>, vaultScopeId: string, path: string): string => {
   const parent = parentPath(path);
   return contentScopeFor(parent ? tree.get(parent) : undefined, shareScopes, vaultScopeId);
 };
-
-/**
- * Whether a node is the ROOT of a share: in the share, yet named under its holder's vault key
- * rather than the share's (SH-01). The one folder that must never be carried into another share.
- */
-const isShareRoot = (node: ServerNode, shareScopes: ReadonlyMap<string, string>): boolean =>
-  Boolean(node.shareId) && node.nameKeyId !== shareScopes.get(node.shareId!);
-
-

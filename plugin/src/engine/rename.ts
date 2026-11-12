@@ -152,7 +152,7 @@ export interface FolderMove {
  * - exactly one `N` fits, and no two folders are planned into it.
  *
  * Anything failing falls through to the per-file walk, which is conservative by construction —
- * except for a share root, which the engine refuses to take apart (`holdShareRoots`).
+ * except for a share root, which `folder-plan.ts` holds rather than take apart.
  *
  * @param here the local paths that exist now, so a reappearance can be found.
  * @param meta what each local file hashes to: a tie between two possible destinations goes to
