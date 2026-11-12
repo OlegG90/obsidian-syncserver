@@ -2,11 +2,10 @@
  * The four sharing operations on one bound vault: share a folder, invite, accept, leave.
  *
  * `sharing.ts` performs each protocol step and `share-flow.ts` decides when a button may run one.
- * Between them sat the part that ties a step to *this* vault — which tree, which keys, where a
- * file is read from, which badge changes afterwards — and it lived in closures in the plugin's
- * root, where nothing could ask it anything without Obsidian. It is here now, over a `BoundVault`
- * and three things only the plugin has, so the order those closures relied on can be tested:
- * nothing is refused after the server has been changed, and a badge follows the change it marks.
+ * This is the part between them that ties a step to *this* vault — which tree, which keys, where a
+ * file is read from, which badge changes afterwards. It takes a `BoundVault` and the few things only
+ * the plugin has, and no Obsidian, so the order it depends on can be tested: nothing is refused
+ * after the server has been changed, and a badge follows the change it marks.
  */
 import { replicaForLeave } from './departure.js';
 import type { BoundVault } from './bound-vault.js';
@@ -83,7 +82,7 @@ export const acceptInto = async (
 };
 
 /**
- * Leave a share: this vault's copy returns to `KV` and stays, and its badge goes (SH-05).
+ * Leave a share: this vault's copy returns to `KV` and stays, keeping its name, and its badge goes (SH-05).
  *
  * The set to convert is asked of the server rather than assembled from the tree: it includes nodes
  * no listing this client has would show — a folder in the trash carries the mark, has no versions,
@@ -92,7 +91,7 @@ export const acceptInto = async (
  * bare name is not a path. `Baby.md` was looked for at the vault root while it sat inside the
  * shared folder.
  */
-export const leaveFrom = async (v: BoundVault, d: VaultShareDeps, shareId: string) => {
+export const leaveFrom = async (v: BoundVault, d: VaultShareDeps, shareId: string): ReturnType<typeof leaveShare> => {
   const { key, keyId: scopeId } = v.scopes.shareKey(shareId);
   const pathOfNode = await v.paths();
   const rows = await v.client.shareReplica(shareId);
