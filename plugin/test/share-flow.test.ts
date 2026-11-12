@@ -330,7 +330,7 @@ describe('the list as last read, for when the server cannot be asked', () => {
     assert.equal((await h.flow.list())!.remembered, undefined);
   });
 
-  it('forgets the people of a share that is no longer in the list', async () => {
+  it('shows no people older than the list they are shown under', async () => {
     const h = flaky();
     await h.flow.list();
     await h.flow.members('visa');
@@ -340,7 +340,24 @@ describe('the list as last read, for when the server cannot be asked', () => {
 
     const out = await h.flow.list();
     assert.deepEqual(out!.joined.map((s) => s.shareId), ['trip']);
-    assert.deepEqual(Object.keys(out!.remembered!.members), []);
+    assert.deepEqual(out!.remembered!.members, {});
+  });
+
+  it('keeps what it had when reading the members fails', async () => {
+    const h = flaky();
+    await h.flow.list();
+    await h.flow.members('visa');
+    const before = h.snapshot();
+
+    h.down();
+    await h.flow.members('trip');
+    assert.equal(h.snapshot(), before);
+  });
+
+  it('remembers no members before there is a list to file them under', async () => {
+    const h = flaky();
+    await h.flow.members('visa');
+    assert.equal(h.snapshot(), undefined);
   });
 
   it('still answers undefined when nothing was ever read', async () => {

@@ -45,16 +45,20 @@ export interface InvitationRow {
 }
 
 /**
- * The share list as this device last read it, with whoever it last saw in each share — shown,
- * never acted on, when the server cannot be asked (docs/05). A blank "could not be read" answered
- * nothing a person opening the panel offline actually asked.
+ * The share list as this device last read it, with whoever it saw in each share since — shown,
+ * never acted on, when the list cannot be read (docs/05). Without it the panel had nothing to say
+ * about which folders are shared, whose, and with whom, which is what a person opening it offline
+ * is asking.
  */
 export interface ShareSnapshot {
   /** When the list was read, in epoch milliseconds. */
   at: number;
   joined: ShareRow[];
   invitations: InvitationRow[];
-  /** By share id; a share whose members were never read here has no entry. */
+  /**
+   * By share id, read since `at`; a share whose members were not has no entry. Never older than
+   * `at`, because it is labelled with it.
+   */
   members: Record<string, ShareMember[]>;
 }
 
@@ -62,7 +66,7 @@ export interface ShareSnapshot {
 export interface ShareList {
   joined: ShareRow[];
   invitations: InvitationRow[];
-  remembered?: { at: number; members: Record<string, ShareMember[]> };
+  remembered?: Pick<ShareSnapshot, 'at' | 'members'>;
 }
 
 export interface ShareFlowDeps {
@@ -200,11 +204,9 @@ export const openShareFlow = (deps: ShareFlowDeps): ShareFlow => {
     async list() {
       const out = await reads('reading the share list', () => deps.list());
       if (out) {
-        // Members carried over only for shares still in the list: one that ended is gone from
-        // it, and its people with it.
-        const seen = deps.remembered()?.members ?? {};
-        const members = Object.fromEntries(out.joined.flatMap((s) => (seen[s.shareId] ? [[s.shareId, seen[s.shareId]!]] : [])));
-        deps.remember({ at: Date.now(), ...out, members });
+        // Members start again with the list: carried over, an earlier read would be shown under
+        // this one's time.
+        deps.remember({ at: Date.now(), ...out, members: {} });
         return out;
       }
       const last = deps.remembered();

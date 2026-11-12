@@ -24,7 +24,7 @@ changes or the stored path is gone from disk — the rename case, where nothing 
 moved but the badge would otherwise stay stuck on a folder that no longer exists.
 
 The client also remembers the **share list as it last read it**, with the members it last saw
-in each share, and shows that when the server cannot be asked — labelled with when it was read,
+in each share since, and shows that when the list cannot be read — labelled with when it was read,
 and with **no control on it**. It is only ever shown: a share may have ended elsewhere since,
 and an act offered from a remembered row would be an act on something that may be gone. The
 memory belongs to the connection, and disconnecting forgets it.

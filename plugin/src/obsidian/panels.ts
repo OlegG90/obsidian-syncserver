@@ -339,7 +339,9 @@ export class Panels {
         // No offer: what may be shared depends on what already is, and that is what is unknown.
         const note = list.createEl('p', {
           cls: 'setting-item-description',
-          text: `The server could not be asked, so this is the list as read on ${new Date(remembered.at).toLocaleString()}. Nothing here can be changed until it answers.`,
+          // Not "the server cannot be reached": a cancelled passphrase or a refusal ends here
+          // too, and the notice already gave the actual reason.
+          text: `The share list could not be read just now, so this is the list as read on ${new Date(remembered.at).toLocaleString()}. Nothing here can be changed until it can be.`,
         });
         note.style.color = 'var(--text-warning)';
       } else {
@@ -352,7 +354,7 @@ export class Panels {
       for (const inv of out.invitations) {
         const row = new Setting(list).setName(`Invitation from ${inv.initiatorLogin}`);
         if (remembered) {
-          row.setDesc('It can be answered once the server can be reached.');
+          row.setDesc('It can be answered once the list can be read again.');
           continue;
         }
         row.setDesc('Accepting materialises a copy in this vault and syncs it down straight away.');
@@ -430,7 +432,12 @@ export class Panels {
     const body = entry.createDiv();
     body.style.cssText =
       'margin: 0.25em 0 0.75em 0.5em; padding-left: 0.75em; border-left: 1px solid var(--background-modifier-border);';
-    if (ended) muted(body.createDiv(), 'This share is over — finish leaving to return the folder to your own key.');
+    if (ended) {
+      muted(
+        body.createDiv(),
+        remembered ? 'This share is over.' : 'This share is over — finish leaving to return the folder to your own key.',
+      );
+    }
     const people = body.createDiv();
     const actions = body.createDiv();
     actions.style.cssText = 'display: flex; flex-wrap: wrap; gap: 0.5em; margin-top: 0.5em;';
@@ -471,7 +478,7 @@ export class Panels {
       if (!members) {
         muted(
           people.createDiv(),
-          remembered ? 'Who is in this folder was never read on this device.' : 'Who is in this folder could not be read.',
+          remembered ? 'Who is in this folder was not read with that list.' : 'Who is in this folder could not be read.',
         );
         return;
       }
