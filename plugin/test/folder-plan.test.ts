@@ -118,6 +118,46 @@ describe('a share root emptied with no move to explain it is held (#409, #412)',
       assert.deepEqual(plan.held, [], `${m.from} → ${m.to}`);
     }
   });
+
+  it('leaves a root inside a folder that moved: the move carries it along', () => {
+    const tree = new Map<string, PlanNode>([folder('Area'), root('Area/Team'), inShare('Area/Team/a.md')]);
+    const input = world(['Zone/Team/a.md'], {
+      tree,
+      vanished: new Map([['ha', [gone('Area/Team/a.md')]]]),
+      byNodeId: new Map([...tree].map(([path, n]) => [n.nodeId, { path }])),
+      known: new Set(['Area/Team/a.md']),
+    });
+    const plan = planFolders([move('Area', 'Zone')], input, new Set());
+    assert.deepEqual([plan.held, plan.restored], [[], []]);
+  });
+});
+
+describe('each decision sees what the previous one left', () => {
+  it('a file one held root keeps out of the walk is no longer evidence that another root moved', () => {
+    // `Club` lost its own `a.md`. The only `a.md` that turned up is `Team`'s, under a folder the
+    // server has never seen — so `Team` is held, and once its files are out of the walk nothing
+    // says `Club`'s went anywhere: it was deleted as a folder, and comes back.
+    const input = world(['Renamed/a.md', 'Renamed/b.md']);
+    const tree = new Map(input.tree);
+    tree.set(...folder('Club', { shareId: 's2', nameKeyId: KV }));
+    tree.set(...file('Club/a.md', { shareId: 's2', nameKeyId: 'ks2' }));
+    const vanished = new Map(input.vanished);
+    vanished.set('hc', [gone('Club/a.md')]);
+    const plan = planFolders(
+      [],
+      {
+        ...input,
+        tree,
+        vanished,
+        byNodeId: new Map([...tree].map(([path, n]) => [n.nodeId, { path }])),
+        known: new Set([...input.known, 'Club/a.md']),
+        shareScopes: new Map([...input.shareScopes, ['s2', 'ks2']]),
+      },
+      new Set(),
+    );
+    assert.deepEqual(plan.held.map((h) => h.root), ['Team']);
+    assert.deepEqual(plan.restored.map((r) => r.root), ['Club']);
+  });
 });
 
 describe('a share root deleted as a folder comes back (#417)', () => {
