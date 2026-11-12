@@ -25,7 +25,7 @@
  *   enough to lift a freeze — because making room is usually why anybody asked.
  */
 import { ApiError, type AccountUsage } from './api/client.js';
-import { busyNotice, type Gate } from './gate.js';
+import { exclusively, type Gate } from './gate.js';
 import type { TrashRow } from './trash-map.js';
 import { errorText } from './error-text.js';
 
@@ -114,20 +114,11 @@ export const openHistoryFlow = (deps: HistoryFlowDeps): HistoryFlow => {
    * The gate is the shared one — the same a sync and a share operation take — so a
    * discard cannot interleave with a pass that is reading what is about to be removed.
    */
-  const once = async <T>(what: string, doing: string, run: () => Promise<T>): Promise<T | undefined> => {
+  const once = <T>(what: string, doing: string, run: () => Promise<T>): Promise<T | undefined> =>
     // Two phrasings of the same act, because they sit in different sentences: `what` completes
     // "could not …" and `doing` completes "waiting for … to finish". One string cannot be both
     // without one of the two reading like a fault in the software.
-    if (!deps.gate.tryBegin(doing)) {
-      deps.notify(busyNotice(deps.gate), 8000);
-      return undefined;
-    }
-    try {
-      return await attempt(what, run);
-    } finally {
-      deps.gate.end();
-    }
-  };
+    exclusively(deps.gate, doing, (notice) => deps.notify(notice, 8000), () => attempt(what, run));
 
   return {
     trash: () => attempt('read the trash', () => deps.trash()),

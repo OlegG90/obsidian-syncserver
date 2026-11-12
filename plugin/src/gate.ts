@@ -59,6 +59,38 @@ export const busyLine = (holding: string): string =>
 export const busyNotice = (gate: Pick<Gate, 'holding'>): string =>
   `SyncServer: ${busyLine(gate.holding() ?? 'another operation')}`;
 
+/**
+ * Run `fn` holding the gate, or not at all — and give the gate back however it ends.
+ *
+ * **Taken before anything is awaited.** Two presses arrive as two calls before either has reached the
+ * network, and only a take in the same tick as the call keeps the second out; an `async` function runs
+ * synchronously up to its first `await`, so the take below happens while the caller is still calling.
+ *
+ * Refused, `refused` is handed the sentence that says what holds the gate, and `fn` never runs: each
+ * caller decides whether a refusal is worth saying (a pass nobody asked for says nothing). Released in
+ * `finally`, so neither a throw nor an early return can leave it held for the rest of the session —
+ * which, while every coordinator wrote these lines out for itself, was true only because each copy
+ * happened to be right.
+ *
+ * @returns what `fn` returned, or `undefined` when the gate was held.
+ */
+export const exclusively = async <T>(
+  gate: Gate,
+  what: string,
+  refused: (notice: string) => void,
+  fn: () => Promise<T>,
+): Promise<T | undefined> => {
+  if (!gate.tryBegin(what)) {
+    refused(busyNotice(gate));
+    return undefined;
+  }
+  try {
+    return await fn();
+  } finally {
+    gate.end();
+  }
+};
+
 export const openGate = (): Gate => {
   let busy: string | undefined;
   const listeners = new Set<(holding: string | undefined) => void>();

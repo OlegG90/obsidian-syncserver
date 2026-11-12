@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { busyLine, openGate } from '../src/gate.js';
+import { busyLine, exclusively, openGate } from '../src/gate.js';
 
 describe('one operation at a time', () => {
   it('lets the first in and refuses the second', () => {
@@ -121,5 +121,39 @@ describe('the sentence both the screen and the refusal use', () => {
     // mockup's wording said pairing waits; the code says otherwise, and the screen must not
     // describe a rule nothing enforces.
     assert.ok(!/pairing/i.test(busyLine('a sync')));
+  });
+});
+
+describe('running under the gate', () => {
+  it('turns the second of two calls made in the same tick away, before either has awaited anything', async () => {
+    const gate = openGate();
+    const said: string[] = [];
+    const ran: string[] = [];
+    const first = exclusively(gate, 'a sync', (n) => said.push(n), async () => void ran.push('sync'));
+    const second = exclusively(gate, 'sharing the folder', (n) => said.push(n), async () => void ran.push('share'));
+    assert.equal(await second, undefined);
+    await first;
+    assert.deepEqual(ran, ['sync']);
+    assert.equal(said.length, 1);
+    assert.match(said[0]!, /Waiting for a sync to finish/);
+  });
+
+  it('gives the gate back when the work throws', async () => {
+    const gate = openGate();
+    await assert.rejects(
+      exclusively(gate, 'a discard', () => undefined, async () => {
+        throw new Error('refused');
+      }),
+      /refused/,
+    );
+    assert.equal(gate.holding(), undefined);
+    assert.ok(gate.tryBegin('a restore'), 'and the next operation can run');
+  });
+
+  it('answers what the work returned, holding the gate only while it runs', async () => {
+    const gate = openGate();
+    const out = await exclusively(gate, 'a restore', () => undefined, async () => gate.holding());
+    assert.equal(out, 'a restore');
+    assert.equal(gate.holding(), undefined);
   });
 });
