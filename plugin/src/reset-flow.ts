@@ -39,23 +39,20 @@ export interface ResetFlow {
 
 export const openResetFlow = (deps: ResetFlowDeps): ResetFlow => ({
   async start() {
-    const removed = await exclusively(
-      deps.gate,
-      'a reset',
-      (notice) => deps.notify(notice, 8000),
-      async () => {
-        try {
-          const { removed } = await deps.reset();
-          await deps.forgetState();
-          return removed;
-        } catch (e) {
-          // The gate goes back however this ends, so a failed reset leaves the device exactly as it
-          // was: the server refused, and nothing here has forgotten anything.
-          deps.notify(`SyncServer: the reset failed — ${errorText(e)}`, 12000);
-          return undefined;
-        }
-      },
-    );
+    let removed: number | undefined;
+    try {
+      removed = await exclusively(deps.gate, 'a reset', (notice) => deps.notify(notice, 8000), async () => {
+        const out = await deps.reset();
+        await deps.forgetState();
+        return out.removed;
+      });
+    } catch (e) {
+      // The gate has gone back by now, so a failed reset leaves the device exactly as it was: the
+      // server refused, and nothing here has forgotten anything.
+      deps.notify(`SyncServer: the reset failed — ${errorText(e)}`, 12000);
+      return false;
+    }
+    // Turned away by the gate, which has already said what holds it.
     if (removed === undefined) return false;
 
     // Said before the upload starts rather than after it finishes: the sync may take minutes, and the

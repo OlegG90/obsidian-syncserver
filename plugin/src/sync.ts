@@ -81,16 +81,19 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
    * than for the prompt, because since #238 the unattended path is the common one — the vault settling
    * starts far more passes than a button ever did.
    */
-  const pass = async (attended: boolean, rescan = false): Promise<void> => {
+  const pass = (attended: boolean, rescan = false): Promise<void> =>
     // The shared gate: a second call — manual or a push hint — cannot slip past while the first
     // waits on the passphrase or the pass. It is the SAME gate the share and trash flows take, so a
     // hint arriving mid-departure finds it held and yields instead of meeting interior names with no
     // key. Turned away, only a pass somebody asked for says so.
-    const refused = (notice: string): void => {
-      if (attended) deps.notify(notice, 8000);
-    };
-    await exclusively(deps.gate, A_SYNC, refused, () => passHoldingGate(attended, rescan));
-  };
+    exclusively(
+      deps.gate,
+      A_SYNC,
+      (notice) => {
+        if (attended) deps.notify(notice, 8000);
+      },
+      () => passHoldingGate(attended, rescan),
+    );
 
   /** The pass itself, run holding the gate; a failure ends in the `failed` phase and a notice, never a throw. */
   const passHoldingGate = async (attended: boolean, rescan: boolean): Promise<void> => {

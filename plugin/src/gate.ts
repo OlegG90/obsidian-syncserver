@@ -25,7 +25,7 @@ export interface Gate {
    * message.
    */
   tryBegin(what: string): boolean;
-  /** Give the gate back. Always in a `finally`. */
+  /** Give the gate back, in a `finally`. `exclusively` is the way in that does both halves. */
   end(): void;
   /** What holds it, or nothing when it is free. */
   holding(): string | undefined;
