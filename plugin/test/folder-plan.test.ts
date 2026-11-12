@@ -55,25 +55,34 @@ const world = (here: string[], over: Partial<FolderPlanInput> = {}): FolderPlanI
 
 const move = (from: string, to: string): FolderMove => ({ from, to, nodeId: `id:${from}`, rev: 1, children: [] });
 
+/** The plan as the engine makes it: the vault asked about what `foldersToAsk` names, and `present` on disk. */
+const planned = (moves: FolderMove[], input: FolderPlanInput, present: ReadonlySet<string>) =>
+  planFolders(moves, input, new Map(foldersToAsk(moves, input).map((p) => [p, present.has(p)])));
+
 describe('folder moves and the disk (#419, #421)', () => {
   it('drops a move whose source folder is still on disk', () => {
-    const plan = planFolders([move('Notes', 'Elsewhere')], world([]), new Set(['Notes']));
+    const plan = planned([move('Notes', 'Elsewhere')], world([]), new Set(['Notes']));
     assert.deepEqual(plan.moves, []);
   });
 
   it('keeps a move whose source is gone', () => {
     const m = move('Notes', 'Elsewhere');
-    assert.deepEqual(planFolders([m], world([]), new Set()).moves, [m]);
+    assert.deepEqual(planned([m], world([]), new Set()).moves, [m]);
   });
 
   it('keeps a change of letter case, which a case-blind disk still answers to by its old name', () => {
     const m = move('Notes', 'notes');
-    assert.deepEqual(planFolders([m], world([]), new Set(['Notes'])).moves, [m]);
+    assert.deepEqual(planned([m], world([]), new Set(['Notes'])).moves, [m]);
   });
 
-  it('asks about move sources except case-only ones, and about share roots emptied here', () => {
+  it('asks about move sources and share roots emptied here, never a case-only source', () => {
     const asked = foldersToAsk([move('Notes', 'Elsewhere'), move('Old', 'old')], world([]));
-    assert.deepEqual(asked.sort(), ['Notes', 'Team']);
+    assert.ok(asked.includes('Notes') && asked.includes('Team'), asked.join(', '));
+    assert.ok(!asked.includes('Old'), 'a case-blind disk would answer for the new name');
+  });
+
+  it('refuses to read a folder the vault was never asked about, rather than take it for absent', () => {
+    assert.throws(() => planFolders([move('Notes', 'Elsewhere')], world([]), new Map()), /never asked about “Notes”/);
   });
 
   it('does not ask about a share root that still has files here', () => {
@@ -83,7 +92,7 @@ describe('folder moves and the disk (#419, #421)', () => {
 
 describe('a share root emptied with no move to explain it is held (#409, #412)', () => {
   it('holds it when its files turned up in a folder the server has never seen', () => {
-    const plan = planFolders([], world(['Renamed/a.md', 'Renamed/b.md']), new Set());
+    const plan = planned([], world(['Renamed/a.md', 'Renamed/b.md']), new Set());
     assert.equal(plan.held.length, 1);
     const [hold] = plan.held;
     assert.equal(hold!.root, 'Team');
@@ -94,7 +103,7 @@ describe('a share root emptied with no move to explain it is held (#409, #412)',
   });
 
   it('does not hold files dropped into folders the server already has — they left on purpose (#402)', () => {
-    const plan = planFolders([], world(['Notes/a.md', 'Notes/b.md']), new Set());
+    const plan = planned([], world(['Notes/a.md', 'Notes/b.md']), new Set());
     assert.deepEqual(plan.held, []);
   });
 
@@ -103,18 +112,18 @@ describe('a share root emptied with no move to explain it is held (#409, #412)',
     const tree = new Map(input.tree);
     tree.set(...folder('Archive'));
     tree.set(...folder('Archive/Team'));
-    const plan = planFolders([], { ...input, tree }, new Set());
+    const plan = planned([], { ...input, tree }, new Set());
     assert.equal(plan.held[0]?.mergeInto, 'Archive/Team');
   });
 
   it('does not hold a root still on disk: it was emptied, not moved (#419)', () => {
-    const plan = planFolders([], world(['Renamed/a.md', 'Renamed/b.md']), new Set(['Team']));
+    const plan = planned([], world(['Renamed/a.md', 'Renamed/b.md']), new Set(['Team']));
     assert.deepEqual(plan.held, []);
   });
 
   it('leaves a root a planned move accounts for — moved itself, or inside a folder that moved', () => {
     for (const m of [move('Team', 'Renamed'), move('Team/sub', 'Elsewhere')]) {
-      const plan = planFolders([m], world(['Renamed/a.md', 'Renamed/b.md']), new Set());
+      const plan = planned([m], world(['Renamed/a.md', 'Renamed/b.md']), new Set());
       assert.deepEqual(plan.held, [], `${m.from} → ${m.to}`);
     }
   });
@@ -127,7 +136,7 @@ describe('a share root emptied with no move to explain it is held (#409, #412)',
       byNodeId: new Map([...tree].map(([path, n]) => [n.nodeId, { path }])),
       known: new Set(['Area/Team/a.md']),
     });
-    const plan = planFolders([move('Area', 'Zone')], input, new Set());
+    const plan = planned([move('Area', 'Zone')], input, new Set());
     assert.deepEqual([plan.held, plan.restored], [[], []]);
   });
 });
@@ -143,14 +152,14 @@ describe('each decision sees what the previous one left', () => {
     tree.set(...file('Club/a.md', { shareId: 's2', nameKeyId: 'ks2' }));
     const vanished = new Map(input.vanished);
     vanished.set('hc', [gone('Club/a.md')]);
-    const plan = planFolders(
+    const plan = planned(
       [],
       {
         ...input,
         tree,
         vanished,
         byNodeId: new Map([...tree].map(([path, n]) => [n.nodeId, { path }])),
-        known: new Set([...input.known, 'Club/a.md']),
+        known: new Set(['Team/a.md', 'Team/b.md', 'Club/a.md']),
         shareScopes: new Map([...input.shareScopes, ['s2', 'ks2']]),
       },
       new Set(),
@@ -162,25 +171,25 @@ describe('each decision sees what the previous one left', () => {
 
 describe('a share root deleted as a folder comes back (#417)', () => {
   it('puts back the files of a root gone from disk whose files turned up nowhere', () => {
-    const plan = planFolders([], world([]), new Set());
+    const plan = planned([], world([]), new Set());
     assert.equal(plan.restored.length, 1);
     assert.deepEqual(plan.restored[0]!.files.map((v) => v.path).sort(), ['Team/a.md', 'Team/b.md']);
   });
 
   it('puts nothing back when the root is still on disk — its files were deleted one by one (SH-10)', () => {
-    assert.deepEqual(planFolders([], world([]), new Set(['Team'])).restored, []);
+    assert.deepEqual(planned([], world([]), new Set(['Team'])).restored, []);
   });
 
   it('leaves a file the server shows somewhere else: renamed there, and #418 answers for it', () => {
     const input = world([]);
     const byNodeId = new Map(input.byNodeId);
     byNodeId.set('id:Team/a.md', { path: 'Team/moved.md' });
-    const plan = planFolders([], { ...input, byNodeId }, new Set());
+    const plan = planned([], { ...input, byNodeId }, new Set());
     assert.deepEqual(plan.restored[0]!.files.map((v) => v.path), ['Team/b.md']);
   });
 
   it('puts nothing back when its files turned up elsewhere — that is a move', () => {
-    assert.deepEqual(planFolders([], world(['Notes/a.md']), new Set()).restored, []);
+    assert.deepEqual(planned([], world(['Notes/a.md']), new Set()).restored, []);
   });
 });
 
@@ -188,7 +197,7 @@ describe('the plan reads its input and never changes it', () => {
   it('leaves the vanished set and the queue as they were', () => {
     const input = world(['Renamed/a.md', 'Renamed/b.md']);
     const before = { vanished: structuredClone([...input.vanished]), queue: [...input.queue] };
-    planFolders([], input, new Set());
+    planned([], input, new Set());
     assert.deepEqual([...input.vanished], before.vanished);
     assert.deepEqual(input.queue, before.queue);
   });

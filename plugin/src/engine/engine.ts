@@ -56,7 +56,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import type { StateStore, VaultState } from './state.js';
 import { decide, type LocalMeta, type SyncPolicy } from './reconcile.js';
 import { isSyncable, type VaultAdapter, type VaultFile } from './vault.js';
-import { drop, foldersToAsk, isShareRoot, planFolders, type FolderPlanInput } from './folder-plan.js';
+import { foldersToAsk, isShareRoot, planFolders, removeVanished, type FolderPlanInput } from './folder-plan.js';
 import { basePath, folderMoves, parentPath, type FolderMove, type Vanished } from './rename.js';
 import { contentScopeFor } from './scopes.js';
 import { errorText } from '../error-text.js';
@@ -843,20 +843,20 @@ export class SyncEngine {
       byNodeId: ctx.byNodeId,
       here,
       queue: ctx.queue.map((f) => f.path),
-      known: new Set(Object.keys(ctx.state.nodes)),
+      known: { has: (path) => Boolean(ctx.state.nodes[path]) },
       shareScopes: ctx.shareScopes,
     };
     const found = folderMoves(ctx.vanished, ctx.tree, ctx.meta, here);
-    const onDisk = new Set<string>();
-    for (const path of foldersToAsk(found, input)) if (await this.vault.folderExists(path)) onDisk.add(path);
-    const { moves: plan, held, restored } = planFolders(found, input, onDisk);
+    const onDisk = new Map<string, boolean>();
+    for (const path of foldersToAsk(found, input)) onDisk.set(path, await this.vault.folderExists(path));
+    const { moves: plan, held, restored, vanished, queue } = planFolders(found, input, onDisk);
 
+    ctx.vanished = vanished;
+    const walking = new Set(queue);
+    ctx.queue = ctx.queue.filter((f) => walking.has(f.path));
     for (const hold of held) {
-      drop(ctx.vanished, new Set(hold.claimed));
       for (const v of hold.claimed) ctx.handled.add(v.path);
-      const out = new Set(hold.outOfWalk);
-      for (const path of out) ctx.handled.add(path);
-      ctx.queue = ctx.queue.filter((f) => !out.has(f.path));
+      for (const path of hold.outOfWalk) ctx.handled.add(path);
       ctx.report.errors.push({
         path: hold.root,
         message: hold.mergeInto
@@ -865,7 +865,6 @@ export class SyncEngine {
       });
     }
     for (const back of restored) {
-      drop(ctx.vanished, new Set(back.files));
       for (const v of back.files) delete ctx.state.nodes[v.path];
       ctx.report.errors.push({
         path: back.root,
@@ -937,15 +936,11 @@ export class SyncEngine {
    * new one: two folders where there was one (#402).
    */
   private holdBack(move: Pick<FolderMove, 'from' | 'to' | 'children'>, ctx: PassContext): void {
-    for (const child of move.children) {
-      const rest: Vanished[] = [];
-      for (const v of ctx.vanished.get(child.hash) ?? []) {
-        if (v.path.startsWith(`${move.from}/`)) ctx.handled.add(v.path);
-        else rest.push(v);
-      }
-      if (rest.length) ctx.vanished.set(child.hash, rest);
-      else ctx.vanished.delete(child.hash);
-    }
+    const claimed = new Set(
+      move.children.flatMap((child) => (ctx.vanished.get(child.hash) ?? []).filter((v) => v.path.startsWith(`${move.from}/`))),
+    );
+    for (const v of claimed) ctx.handled.add(v.path);
+    removeVanished(ctx.vanished, claimed);
     // Out of the walk, not merely marked: the walk decides every file it is handed, and a file
     // at a path the server has never seen is decided as new.
     const inside = (f: VaultFile): boolean => f.path.startsWith(`${move.to}/`);

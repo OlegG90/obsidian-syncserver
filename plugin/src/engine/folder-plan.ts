@@ -10,7 +10,7 @@
  *
  * So the question is asked up front instead. `foldersToAsk` names every folder the plan could
  * depend on, the engine asks the vault about them once, and `planFolders` decides from the
- * answer. Nothing here performs anything; the engine executes the plan. Normative: docs/04.
+ * answers. Nothing here performs anything; the engine executes the plan. Normative: docs/04.
  */
 import { basePath, parentPath, type FolderMove, type TreeNode, type Vanished } from './rename.js';
 
@@ -30,7 +30,7 @@ export interface FolderPlanInput {
   /** The walk's queue, by path and in order: what the per-file walk would otherwise decide. */
   queue: readonly string[];
   /** The paths this device had synced — a file at one of them is not "new here". */
-  known: ReadonlySet<string>;
+  known: Pick<ReadonlySet<string>, 'has'>;
   /** Share id → the scope its interior is named under (SH-01). */
   shareScopes: ReadonlyMap<string, string>;
 }
@@ -72,6 +72,10 @@ export interface FolderPlan {
   moves: FolderMove[];
   held: HeldRoot[];
   restored: RestoredRoot[];
+  /** The vanished set the walk goes on with: without what the holds claimed and the restores put back. */
+  vanished: Map<string, Vanished[]>;
+  /** The queue the walk goes on with: without what the holds kept out of it. */
+  queue: string[];
 }
 
 /**
@@ -86,14 +90,12 @@ export const isShareRoot = (node: Pick<PlanNode, 'shareId' | 'nameKeyId'>, share
  *
  * The sources of the planned moves, except a change of letter case — where case does not count,
  * `Team` renamed to `team` still "exists" under its old name and is a rename all the same (#421) —
- * and every share root with nothing left here under it. A superset is harmless; a path missing
- * from it reads as "not on disk", which is the answer that sends things to the server.
+ * and every share root with nothing left here under it.
  */
-export const foldersToAsk = (moves: readonly FolderMove[], input: FolderPlanInput): string[] => {
-  const ask = moves.filter((m) => !caseOnly(m)).map((m) => m.from);
-  for (const [path] of emptiedShareRoots(input)) ask.push(path);
-  return ask;
-};
+export const foldersToAsk = (moves: readonly FolderMove[], input: FolderPlanInput): string[] => [
+  ...moves.filter((m) => !caseOnly(m)).map((m) => m.from),
+  ...emptiedShareRoots(input),
+];
 
 /**
  * The folder moves to carry out, the share roots to hold, and those to put back.
@@ -103,33 +105,40 @@ export const foldersToAsk = (moves: readonly FolderMove[], input: FolderPlanInpu
  * vanished set and the queue as the previous ones left them, exactly as the walk will.
  *
  * @param moves what `folderMoves` found.
- * @param onDisk the folders, out of `foldersToAsk`, that the vault still has.
+ * @param onDisk the vault's answer for each folder `foldersToAsk` named. A folder it was not asked
+ *   about is a defect, not an absence: "not on disk" is the answer that sends things to the server,
+ *   so reading it by default would fail open.
  */
-export const planFolders = (moves: readonly FolderMove[], input: FolderPlanInput, onDisk: ReadonlySet<string>): FolderPlan => {
+export const planFolders = (moves: readonly FolderMove[], input: FolderPlanInput, onDisk: ReadonlyMap<string, boolean>): FolderPlan => {
+  const stillThere = (path: string): boolean => {
+    const answer = onDisk.get(path);
+    if (answer === undefined) throw new Error(`folder plan: the vault was never asked about “${path}”`);
+    return answer;
+  };
+
   // **A folder still on disk did not move** (#419). `folderMoves` reads files, and a folder emptied
   // by moving its files out has none — but Obsidian keeps it, and a person who dragged the last
   // note out of a shared folder meant the note to leave, not the folder to be renamed after
   // wherever the note went.
-  const plan = moves.filter((m) => caseOnly(m) || !onDisk.has(m.from));
+  const plan = moves.filter((m) => caseOnly(m) || !stillThere(m.from));
 
   const vanished = new Map([...input.vanished].map(([hash, list]) => [hash, [...list]]));
   let queue = [...input.queue];
   const roots = emptiedShareRoots(input).filter(
-    ([path]) => !plan.some((m) => m.from === path || m.from.startsWith(`${path}/`) || path.startsWith(`${m.from}/`)),
+    (path) => !plan.some((m) => m.from === path || inside(path)(m.from) || inside(m.from)(path)),
   );
+  const filesUnder = (root: string): Vanished[] => [...vanished.values()].flat().filter((v) => inside(root)(v.path));
+  const relativeTo = (root: string, files: readonly Vanished[]): string[] => files.map((v) => v.path.slice(root.length + 1));
 
   const held: HeldRoot[] = [];
-  for (const [path] of roots) {
+  for (const path of roots) {
     // Emptied on purpose, not moved (#419): its files were taken out one by one, and they leave
     // the share by the per-file rules (#402).
-    if (onDisk.has(path)) continue;
-    const within = (p: string): boolean => p.startsWith(`${path}/`);
+    if (stillThere(path)) continue;
 
-    // Its vanished files, by path relative to it, and what could be them somewhere else: new
-    // here, and at one of those relative paths.
-    const claimed = [...vanished.values()].flat().filter((v) => within(v.path));
-    const rels = claimed.map((v) => v.path.slice(path.length + 1));
-    const couldBe = (p: string): boolean => !input.known.has(p) && rels.some((rel) => p === rel || p.endsWith(`/${rel}`));
+    const claimed = filesUnder(path);
+    const rels = relativeTo(path, claimed);
+    const couldBe = couldBeOneOf(rels, input.known);
 
     // **Only the shape of a folder move is held.** Files dropped into folders the server already
     // has, one here and one there, were moved out on purpose, and the walk carries them out of
@@ -141,7 +150,7 @@ export const planFolders = (moves: readonly FolderMove[], input: FolderPlanInput
     const regrouped = under !== undefined && basePath(under) === basePath(path) ? under : undefined;
     if (!regrouped && !queue.some((p) => couldBe(p) && !input.tree.has(parentPath(p)))) continue;
 
-    drop(vanished, new Set(claimed));
+    removeVanished(vanished, new Set(claimed));
     const outOfWalk = queue.filter(couldBe);
     queue = queue.filter((p) => !couldBe(p));
     held.push({ root: path, claimed, outOfWalk, ...(regrouped && input.tree.has(regrouped) ? { mergeInto: regrouped } : {}) });
@@ -153,39 +162,53 @@ export const planFolders = (moves: readonly FolderMove[], input: FolderPlanInput
   // A private folder deleted with a shared folder inside it deletes its own files as ever; only the
   // shared folder in it comes back.
   const restored: RestoredRoot[] = [];
-  for (const [path] of roots) {
-    const within = (p: string): boolean => p.startsWith(`${path}/`);
+  for (const path of roots) {
     // Only files the server still holds where they were: one it shows somewhere else was renamed
     // there, and #418's rule answers for it.
-    const files = [...vanished.values()].flat().filter((v) => within(v.path) && input.byNodeId.get(v.nodeId)?.path === v.path);
+    const files = filesUnder(path).filter((v) => input.byNodeId.get(v.nodeId)?.path === v.path);
     if (files.length === 0) continue;
-    const rels = files.map((v) => v.path.slice(path.length + 1));
-    if (queue.some((p) => !input.known.has(p) && rels.some((rel) => p === rel || p.endsWith(`/${rel}`)))) continue;
-    if (onDisk.has(path)) continue;
+    if (queue.some(couldBeOneOf(relativeTo(path, files), input.known))) continue;
+    if (stillThere(path)) continue;
 
-    drop(vanished, new Set(files));
+    removeVanished(vanished, new Set(files));
     restored.push({ root: path, files });
   }
 
-  return { moves: plan, held, restored };
+  return { moves: plan, held, restored, vanished, queue };
 };
 
-/** A rename that changes only letter case, which a case-blind disk still answers to by its old name. */
-const caseOnly = (m: Pick<FolderMove, 'from' | 'to'>): boolean => m.from.toLowerCase() === m.to.toLowerCase();
-
-/** Share roots with nothing left here under them — the only ones a hold or a restore can be about. */
-const emptiedShareRoots = (input: FolderPlanInput): [string, PlanNode][] =>
-  [...input.tree].filter(
-    ([path, node]) => !node.isFile && isShareRoot(node, input.shareScopes) && ![...input.here].some((p) => p.startsWith(`${path}/`)),
-  );
-
 /** Remove these entries from a vanished set, dropping any hash left with none. */
-export const drop = (vanished: Map<string, Vanished[]>, gone: ReadonlySet<Vanished>): void => {
+export const removeVanished = (vanished: Map<string, Vanished[]>, gone: ReadonlySet<Vanished>): void => {
   for (const [hash, list] of [...vanished]) {
     const rest = list.filter((v) => !gone.has(v));
     if (rest.length) vanished.set(hash, rest);
     else vanished.delete(hash);
   }
+};
+
+/** A rename that changes only letter case, which a case-blind disk still answers to by its old name. */
+const caseOnly = (m: Pick<FolderMove, 'from' | 'to'>): boolean => m.from.toLowerCase() === m.to.toLowerCase();
+
+/** Whether a path lies strictly below `dir`. */
+const inside = (dir: string) => (path: string): boolean => path.startsWith(`${dir}/`);
+
+/** A local file that could be one of these vanished files: new here, and at one of their relative paths. */
+const couldBeOneOf =
+  (rels: readonly string[], known: FolderPlanInput['known']) =>
+  (path: string): boolean =>
+    !known.has(path) && rels.some((rel) => path === rel || path.endsWith(`/${rel}`));
+
+/** Share roots with nothing left here under them — the only ones a hold or a restore can be about. */
+const emptiedShareRoots = (input: FolderPlanInput): string[] => {
+  const roots: string[] = [];
+  for (const [path, node] of input.tree) {
+    if (node.isFile || !isShareRoot(node, input.shareScopes)) continue;
+    const under = inside(path);
+    let empty = true;
+    for (const p of input.here) if (under(p)) { empty = false; break; }
+    if (empty) roots.push(path);
+  }
+  return roots;
 };
 
 /** The one folder every relative path reappears under, among `paths`, or nothing (#412). */
