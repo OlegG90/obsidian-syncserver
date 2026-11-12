@@ -98,13 +98,12 @@ export const memberState = (m: ShareMember): string =>
 
 /**
  * Logins to offer when inviting somebody to `share`: the people met in the membership of any
- * share this device has read, matching what has been typed, by name.
+ * share this device has read, matching what has been typed, by name. Whom a client may offer is
+ * docs/12, SH-16.
  *
- * Only people already met, and never a directory of the server's accounts. The server answers
- * an unknown login exactly as it answers a real one (D-73); a list of every account would be the
- * oracle that rule exists to deny. Somebody nobody here has shared with yet is still typed in
- * full, as before. Left out: the inviter, and whoever already belongs to this share — an
- * invitation to either could only be refused.
+ * Left out: the inviter, and whoever already belongs to this share — an invitation to either
+ * could only be refused. Compared ignoring case, because the server's logins are: the inviter's
+ * own is kept as typed at connecting, which need not be how the membership spells it.
  */
 export const invitable = (
   met: Iterable<readonly ShareMember[]>,
@@ -112,13 +111,14 @@ export const invitable = (
   self: string | undefined,
   query: string,
 ): string[] => {
-  const taken = new Set(share.map((m) => m.login));
-  if (self) taken.add(self);
+  const taken = new Set(share.map((m) => m.login.toLowerCase()));
+  if (self) taken.add(self.toLowerCase());
   const q = query.trim().toLowerCase();
   const out = new Set<string>();
   for (const members of met) {
     for (const { login } of members) {
-      if (!taken.has(login) && login.toLowerCase().includes(q)) out.add(login);
+      const folded = login.toLowerCase();
+      if (!taken.has(folded) && folded.includes(q)) out.add(login);
     }
   }
   return [...out].sort((a, b) => a.localeCompare(b));

@@ -425,9 +425,12 @@ export class Panels {
       const send = (): void => void flow.invite(share.shareId, login);
       field.inputEl.style.flex = '1';
       const self = this.s.plugin.data.connection?.login;
-      const suggest = new PickSuggest(this.s.app, field.inputEl, (q) =>
-        invitable(met.values(), met.get(share.shareId) ?? [], self, q),
-      );
+      // Nothing until this share's own members have been read: without them the list would
+      // offer people already in it, whose invitation could only be refused.
+      const suggest = new PickSuggest(this.s.app, field.inputEl, (q) => {
+        const own = met.get(share.shareId);
+        return own ? invitable(met.values(), own, self, q) : [];
+      });
       // Enter while the list is open is a pick, not a send; which listener hears it first is
       // Obsidian's, so both signs are checked.
       field.inputEl.addEventListener('keydown', (e) => {

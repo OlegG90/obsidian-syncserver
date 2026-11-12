@@ -91,7 +91,7 @@ describe('whom an invitation can be offered to', () => {
     assert.deepEqual(invitable([trip], plans, 'oleg', 'zz'), []);
   });
 
-  it('offers nobody before any share has been read: there is no directory to fall back on (D-73)', () => {
-    assert.deepEqual(invitable([], [], 'oleg', ''), []);
+  it('leaves the inviter out however the login was capitalised when connecting', () => {
+    assert.deepEqual(invitable([trip], plans, 'Oleg', ''), ['keti', 'teona']);
   });
 });

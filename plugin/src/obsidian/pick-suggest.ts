@@ -10,7 +10,11 @@ export class PickSuggest extends AbstractInputSuggest<string> {
    * Whether the list is on screen. Enter there picks a suggestion, and a field that also acts on
    * Enter would otherwise act on the half-typed text the pick was about to replace.
    */
-  shown = false;
+  private open_ = false;
+
+  get shown(): boolean {
+    return this.open_;
+  }
 
   constructor(
     app: App,
@@ -29,12 +33,12 @@ export class PickSuggest extends AbstractInputSuggest<string> {
 
   override open(): void {
     super.open();
-    this.shown = true;
+    this.open_ = true;
   }
 
   override close(): void {
     super.close();
-    this.shown = false;
+    this.open_ = false;
   }
 
   protected getSuggestions(query: string): string[] {
