@@ -7,20 +7,20 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { OpenedVault } from '@syncserver/shared';
-
 import { ApiError, type SyncClient } from '../src/api/client.js';
 import { bindVault, type VaultBinding } from '../src/bound-vault.js';
 import { randomBytes } from '../src/crypto/bytes.js';
-import type { TreeCache } from '../src/engine/tree-cache.js';
-import type { StateStore } from '../src/engine/state.js';
-import type { VaultAdapter } from '../src/engine/vault.js';
+import { emptyState } from '../src/engine/state.js';
+import { openTreeCache } from '../src/engine/tree-cache.js';
 import { VAULT_GONE } from '../src/vault-removal.js';
+import { FakeVault } from './fake-vault.js';
+import { openedWith, Store } from './one-file-wire.js';
 
-const opened: OpenedVault = { root_node_id: 'root', head_rev: 1, scopes: [{ scope: 'vault', key_id: 'scope-vault' }] };
+const kv = randomBytes(32);
+const opened = openedWith({ vaultId: 'vault-1', rootNodeId: 'root', scopeId: 'scope-vault', kv });
 
 /** A client whose only answer is `openVault`, recording every id it was asked for. */
-const clientAnswering = (answer: () => Promise<OpenedVault>) => {
+const clientAnswering = (answer: () => Promise<typeof opened>) => {
   const asked: string[] = [];
   const client = { openVault: (id: string) => (asked.push(id), answer()) } as unknown as SyncClient;
   return { client, asked };
@@ -28,16 +28,16 @@ const clientAnswering = (answer: () => Promise<OpenedVault>) => {
 
 const handle = (client: SyncClient) => ({
   client,
-  kv: randomBytes(32),
+  kv,
   userId: 'user',
   openIdentity: () => randomBytes(32),
-  treeCache: {} as TreeCache,
+  treeCache: openTreeCache(),
 });
 
 const binding: VaultBinding = {
   vaultId: 'vault-1',
-  vault: {} as VaultAdapter,
-  store: {} as StateStore,
+  vault: new FakeVault(),
+  store: new Store(emptyState()),
   deviceLabel: 'laptop',
   syncObsidian: false,
 };

@@ -978,7 +978,7 @@ export default class SyncServerPlugin extends Plugin {
     return this.sess!;
   }
 
-  /** The vault adapter, built the same way the sync pass builds it. */
+  /** The vault adapter over this Obsidian vault — what a binding hands the engine, and what history reads through. */
   private vault(): ObsidianVaultAdapter {
     return new ObsidianVaultAdapter(this.app.vault);
   }
