@@ -95,3 +95,31 @@ export const memberState = (m: ShareMember): string =>
         ? 'shared this folder'
         : 'holds a copy'
       : 'invited, no answer yet';
+
+/**
+ * Logins to offer when inviting somebody to `share`: the people met in the membership of any
+ * share this device has read, matching what has been typed, by name.
+ *
+ * Only people already met, and never a directory of the server's accounts. The server answers
+ * an unknown login exactly as it answers a real one (D-73); a list of every account would be the
+ * oracle that rule exists to deny. Somebody nobody here has shared with yet is still typed in
+ * full, as before. Left out: the inviter, and whoever already belongs to this share — an
+ * invitation to either could only be refused.
+ */
+export const invitable = (
+  met: Iterable<readonly ShareMember[]>,
+  share: readonly ShareMember[],
+  self: string | undefined,
+  query: string,
+): string[] => {
+  const taken = new Set(share.map((m) => m.login));
+  if (self) taken.add(self);
+  const q = query.trim().toLowerCase();
+  const out = new Set<string>();
+  for (const members of met) {
+    for (const { login } of members) {
+      if (!taken.has(login) && login.toLowerCase().includes(q)) out.add(login);
+    }
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
+};

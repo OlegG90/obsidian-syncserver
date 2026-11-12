@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import type { ShareMember } from '../src/api/client.js';
 import type { ShareRow } from '../src/share-flow.js';
-import { groupShares, memberState, peopleLine, whose } from '../src/share-list.js';
+import { groupShares, invitable, memberState, peopleLine, whose } from '../src/share-list.js';
 
 const share = (folder: string | undefined, isInitiator = true): ShareRow => ({
   shareId: folder ?? 'unplaced',
@@ -73,5 +73,25 @@ describe('the shared-folders list, one line a share (#428)', () => {
     assert.equal(memberState(member('keti')), 'holds a copy');
     assert.equal(memberState(member('keti', { joined_at: null })), 'invited, no answer yet');
     assert.equal(memberState(member('keti', { finalizing: true })), 'leaving — their copy is being converted back');
+  });
+});
+
+describe('whom an invitation can be offered to', () => {
+  const visa = [member('oleg', { is_initiator: true }), member('keti')];
+  const trip = [member('oleg'), member('teona'), member('keti')];
+  const plans = [member('oleg', { is_initiator: true })];
+
+  it('offers the people met in other shares, once each, by name — not the inviter, not who is already in', () => {
+    assert.deepEqual(invitable([visa, trip, plans], plans, 'oleg', ''), ['keti', 'teona']);
+    assert.deepEqual(invitable([visa, trip, plans], visa, 'oleg', ''), ['teona']);
+  });
+
+  it('narrows by any part of the login, ignoring case', () => {
+    assert.deepEqual(invitable([trip], plans, 'oleg', 'EON'), ['teona']);
+    assert.deepEqual(invitable([trip], plans, 'oleg', 'zz'), []);
+  });
+
+  it('offers nobody before any share has been read: there is no directory to fall back on (D-73)', () => {
+    assert.deepEqual(invitable([], [], 'oleg', ''), []);
   });
 });

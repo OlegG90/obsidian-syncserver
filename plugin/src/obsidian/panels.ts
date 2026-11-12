@@ -14,8 +14,8 @@ import { ButtonComponent, Notice, Setting, TextComponent } from 'obsidian';
 import { newestFirst } from '../history-flow.js';
 import { matching, showing } from '../trash-filter.js';
 import { removalWarning } from '../vault-removal.js';
-import { pickFolder } from '../folder-pick.js';
-import { FolderSuggest } from './folder-suggest.js';
+import { pickFolder, suggestFolders } from '../folder-pick.js';
+import { PickSuggest } from './pick-suggest.js';
 import { deviceLabel } from './device.js';
 import { askDeviceName } from './modals.js';
 import { deviceName } from '../device-name.js';
@@ -24,7 +24,7 @@ import { mib } from './format.js';
 import { section, type Surface } from './surface.js';
 import { ConfirmModal } from './modals.js';
 import type { ShareFlow, ShareRow } from '../share-flow.js';
-import { groupShares, memberState, peopleLine, whose } from '../share-list.js';
+import { groupShares, invitable, memberState, peopleLine, whose } from '../share-list.js';
 import type { ShareMember } from '../api/client.js';
 import { errorText } from '../error-text.js';
 import type { OwnDeviceRow } from '@syncserver/shared';
@@ -344,6 +344,11 @@ export class Panels {
         row.addButton((b) => this.s.waits(b).setButtonText('Decline').onClick(() => void flow.decline(inv.shareId)));
       }
 
+      // Every share's members as they arrive, so that inviting to one can offer the people
+      // already met in the others. Read at the moment of typing, not when the field is drawn:
+      // the lists answer one by one, and the field may be opened before the last has.
+      const met = new Map<string, readonly ShareMember[]>();
+
       // The parent said once, above its folders (#428). The top of the vault has no heading, and
       // neither do shares not synced here: their line already says so.
       for (const group of groupShares(out.joined)) {
@@ -351,7 +356,7 @@ export class Panels {
           const heading = list.createDiv({ text: `${group.parent}/` });
           heading.style.cssText = 'margin-top: 0.75em; color: var(--text-muted); font-size: var(--font-ui-smaller);';
         }
-        for (const { row, name } of group.shares) this.shareEntry(list, flow, row, name);
+        for (const { row, name } of group.shares) this.shareEntry(list, flow, row, name, met);
       }
     });
   }
@@ -372,7 +377,13 @@ export class Panels {
    * squeezed the folder's name to a column zero pixels wide. Its rows are also a settings row's
    * height, which is how three shares came to fill several screens.
    */
-  private shareEntry(list: HTMLElement, flow: ShareFlow, share: ShareRow, name: string): void {
+  private shareEntry(
+    list: HTMLElement,
+    flow: ShareFlow,
+    share: ShareRow,
+    name: string,
+    met: Map<string, readonly ShareMember[]>,
+  ): void {
     const ended = share.state !== 'active';
     const entry = list.createEl('details');
     // An ended share is open from the start: finishing the departure is still owed.
@@ -412,8 +423,15 @@ export class Panels {
       let login = '';
       const field = new TextComponent(form).setPlaceholder('login to invite').onChange((v) => (login = v));
       const send = (): void => void flow.invite(share.shareId, login);
+      field.inputEl.style.flex = '1';
+      const self = this.s.plugin.data.connection?.login;
+      const suggest = new PickSuggest(this.s.app, field.inputEl, (q) =>
+        invitable(met.values(), met.get(share.shareId) ?? [], self, q),
+      );
+      // Enter while the list is open is a pick, not a send; which listener hears it first is
+      // Obsidian's, so both signs are checked.
       field.inputEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') send();
+        if (e.key === 'Enter' && !e.defaultPrevented && !suggest.shown) send();
       });
       this.s.waits(new ButtonComponent(form)).setButtonText('Invite').setCta().onClick(send);
       new ButtonComponent(actions).setButtonText('+ Invite').onClick(() => {
@@ -439,6 +457,7 @@ export class Panels {
         muted(people.createDiv(), 'Who is in this folder could not be read.');
         return;
       }
+      met.set(share.shareId, members);
       say(members);
       for (const m of members) {
         const who = people.createDiv();
@@ -503,6 +522,11 @@ export class Panels {
       return;
     }
 
+    // Label above, field and button below. Side by side, the pane's width went to the field and
+    // the button, and the name and description wrapped a word per line beside them.
+    setting.settingEl.style.cssText = 'flex-direction: column; align-items: stretch; gap: 0.5em;';
+    setting.controlEl.style.justifyContent = 'flex-start';
+
     // Why Share is disabled, said under the row as the text changes — a disabled button with no
     // sentence beside it reads as a broken one. Not for an empty field: the description above
     // already says what to do, and a refusal before anything is typed answers nothing.
@@ -513,13 +537,14 @@ export class Panels {
     setting
       .setDesc('Type part of its path and pick it from the list. Its contents are re-keyed so participants can read them.')
       .addText((t) => {
+        t.inputEl.style.flex = '1';
         t.setPlaceholder('Folder/path').onChange((text) => {
           pick = pickFolder(offered, text);
           why.setText('reason' in pick ? pick.reason : '');
           why.toggle('reason' in pick && text.trim() !== '');
           this.s.recheck();
         });
-        new FolderSuggest(this.s.app, t.inputEl, offered);
+        new PickSuggest(this.s.app, t.inputEl, (q) => suggestFolders(offered, q));
       })
       .addButton((b) =>
         this.s.waits(b, () => 'folder' in pick)

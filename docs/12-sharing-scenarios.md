@@ -145,6 +145,10 @@ The initiator, and **only** the initiator, may:
 - invite a participant;
 - revoke a participant's access.
 
+Whom to invite is named by login. A client may offer the logins it has met in the membership of the
+inviter's own shares, and nothing wider: the server publishes no list of its accounts, because one would
+be the enumeration oracle D-73 refuses. Anybody not met that way is typed in full.
+
 An **outstanding invitation** is the one case with nothing to keep: whether the invitee declines it or the
 initiator withdraws it, the membership row is deleted outright and the slot is free again. No copy was ever
 materialised, so there is nothing to finalize.
