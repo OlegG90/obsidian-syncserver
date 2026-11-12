@@ -47,8 +47,8 @@ interface ShareView {
  * been written and there is nothing to draw.
  *
  * **The placeholder is not decoration.** These arrive over the network after the surface is drawn, and a
- * section that renders empty for a moment is one somebody reads as "you have none". It is worded here,
- * once, so one screen does not say the same wait in two ways.
+ * section that renders empty for a moment is one somebody reads as "you have none". Every list in this
+ * window goes through here, so the window says the wait one way.
  *
  * **A failure is a sentence and not an empty list**, for the same reason: "the list could not be read"
  * and "there is nothing in it" are different facts, and only one of them is worth acting on. A call may
@@ -59,9 +59,12 @@ const awaiting = async <T>(list: HTMLElement, what: string, fetch: () => Promise
   list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
   const answer = await fetch().catch(() => undefined);
   list.empty();
-  if (answer === undefined) list.createEl('p', { text: `The ${what} could not be read.` });
+  if (answer === undefined) list.createEl('p', { text: unreadable(what) });
   return answer;
 };
+
+/** The one sentence for a list that could not be read, wherever in the drawing it failed. */
+const unreadable = (what: string): string => `The ${what} could not be read.`;
 
 /** A list the server answers, drawn one row per item — with a line for the empty case. */
 const asked = <T>(
@@ -80,7 +83,7 @@ const asked = <T>(
     })
     // A row that cannot be drawn leaves the same sentence as a list that cannot be read, rather than
     // half a list that looks whole.
-    .catch(() => list.setText(`The ${what} could not be read.`));
+    .catch(() => list.setText(unreadable(what)));
   return list;
 };
 
@@ -339,8 +342,8 @@ export class Panels {
     const offer = containerEl.createEl('div');
 
     void awaiting(list, 'share list', () => flow.list()).then((out) => {
-      // No offer either: without knowing what is already shared, every folder here would be
-      // a guess, and the one that overlaps fails inside a database trigger.
+      // Unread, there is no offer: without knowing what is already shared, every folder here
+      // would be a guess, and the one that overlaps fails inside a database trigger.
       if (!out) return;
       const { remembered } = out;
       if (remembered) {
