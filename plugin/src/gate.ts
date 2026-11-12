@@ -1,15 +1,14 @@
 /**
  * One operation at a time, across every coordinator.
  *
- * `sync.ts`, `share-flow.ts` and `history-flow.ts` each guarded only themselves with a
- * local boolean — so a push-triggered sync could start while a departure was midway
- * between `leave/begin` and `finalize-leave`, because the sync's guard did not know the
- * share flow's was held. The share and history flows were also built per call, so their
- * guards reset on every settings rebuild: two presses across one `display()` each found a
- * fresh `false`.
+ * A guard per coordinator cannot see the others: a push-triggered sync would start while a
+ * departure was midway between `leave/begin` and `finalize-leave`, because the sync's guard
+ * would not know the share flow's was held — and a guard that lives in a flow built per call
+ * resets on every settings rebuild, so two presses across one `display()` each find it free.
  *
- * One gate, created in `main.ts` and handed to all three, makes them aware of each other:
- * any operation refuses to start while any other is in flight.
+ * So there is one gate, created in `main.ts` and handed to every coordinator — `sync.ts`,
+ * `share-flow.ts`, `history-flow.ts` and `reset-flow.ts` — and each runs its changes through
+ * `exclusively`: any operation refuses to start while any other is in flight.
  *
  * **It can also be watched, which is what makes the rule sayable before it is enforced**
  * (#125). A gate that could only answer `false` to a press meant a person pressed *Invite*
@@ -68,9 +67,8 @@ export const busyNotice = (gate: Pick<Gate, 'holding'>): string =>
  *
  * Refused, `refused` is handed the sentence that says what holds the gate, and `fn` never runs: each
  * caller decides whether a refusal is worth saying (a pass nobody asked for says nothing). Released in
- * `finally`, so neither a throw nor an early return can leave it held for the rest of the session —
- * which, while every coordinator wrote these lines out for itself, was true only because each copy
- * happened to be right.
+ * `finally`, so neither a throw nor an early return can leave it held for the rest of the session; a
+ * coordinator that takes the gate any other way has to get that right on its own.
  *
  * @returns what `fn` returned, or `undefined` when the gate was held.
  */

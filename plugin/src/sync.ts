@@ -89,11 +89,11 @@ export const openSyncCoordinator = (deps: SyncCoordinatorDeps): SyncCoordinator 
     const refused = (notice: string): void => {
       if (attended) deps.notify(notice, 8000);
     };
-    await exclusively(deps.gate, A_SYNC, refused, () => attempt(attended, rescan));
+    await exclusively(deps.gate, A_SYNC, refused, () => passHoldingGate(attended, rescan));
   };
 
   /** The pass itself, run holding the gate; a failure ends in the `failed` phase and a notice, never a throw. */
-  const attempt = async (attended: boolean, rescan: boolean): Promise<void> => {
+  const passHoldingGate = async (attended: boolean, rescan: boolean): Promise<void> => {
     try {
       const state = deps.sessionState();
       if (state === 'none') {
