@@ -42,17 +42,13 @@ import { openShareFlow, type ShareFlow, type ShareSnapshot } from './share-flow.
 import { openHistoryFlow, type HistoryFlow } from './history-flow.js';
 import { openResetFlow, type ResetFlow } from './reset-flow.js';
 import { bindVault, type BoundVault, type VaultBinding } from './bound-vault.js';
-import { replicaForLeave } from './departure.js';
 import { trashRows } from './trash-map.js';
-import {
-  acceptInvitation, inviteTo, leaveShare, requireEveryNameReadable, shareFolder, type SharedNode,
-} from './sharing.js';
+import { acceptInto, inviteFrom, leaveFrom, shareFrom, type VaultShareDeps } from './vault-shares.js';
 import { openSyncCoordinator, type SyncCoordinator } from './sync.js';
 import { openAccountAsks, type AccountAsks } from './account-asks.js';
 import { openGate } from './gate.js';
 import { openPassNotice, type PassNotice } from './pass-notice.js';
 import { openSessionHold, type SessionHold } from './session-hold.js';
-import { landingFor } from './share-landing.js';
 import { openPairingView, type PairingView } from './obsidian/pairing-view.js';
 import type { Action } from './last-action.js';
 import { openSharedFolderMarks, type SharedFolderMarks } from './shared-folder-marks.js';
@@ -1077,108 +1073,13 @@ export default class SyncServerPlugin extends Plugin {
           };
         }),
 
-      share: (folderPath) =>
-        this.withVault(async (v) => {
-          // The tree comes from the engine, which is the one place that turns encrypted
-          // names back into paths — and a share is rooted at a node id.
-          const tree = await v.engine.readTree();
-          const nodes: SharedNode[] = [...tree.entries()].map(([path, n]) => ({
-            path,
-            nodeId: n.nodeId,
-            address: n.address,
-          }));
-          const out = await shareFolder(
-            {
-              client: v.client,
-              read: (p) => this.vault().read(p),
-              vaultId: v.id,
-              vaultKey: v.scopes.vaultKey,
-              vaultScopeId: v.scopes.vaultScopeId,
-              newScopeId: () => crypto.randomUUID(),
-            },
-            folderPath,
-            nodes,
-          );
-          await this.marks!.remember(out.shareId, folderPath);
-          return { shareId: out.shareId };
-        }),
-
-      invite: (shareId, login) =>
-        this.withVault(async (v) => {
-          const { key } = v.scopes.shareKey(shareId);
-          await inviteTo({ client: v.client }, shareId, login, key);
-        }),
-
-      accept: ({ shareId, initiatorLogin }) =>
-        this.withVault(async (v) => {
-          const tree = await v.engine.readTree();
-
-          // Asked, not invented. The initiator's own label for that folder is under THEIR
-          // vault key (SH-01) and cannot be read here — so the joiner names their copy, as
-          // docs/05 says they do. Offering who shared it is the one fact this side holds, and
-          // it arrived with the invitation the button was drawn from: fetching the whole share
-          // list again to recover it was a round trip for a field already on screen (#330).
-          //
-          // What to offer, what may collide with it, and what to do with the answer: four rules that
-          // used to sit in this closure, where nothing could ask them anything (`share-landing.ts`).
-          const landing = landingFor(tree.keys(), initiatorLogin);
-          const name = landing.settle((await askFolderName(this.app, landing.suggestion)) ?? '');
-          await acceptInvitation(
-            {
-              client: v.client,
-              vaultId: v.id,
-              vaultKey: v.scopes.vaultKey,
-              vaultScopeId: v.scopes.vaultScopeId,
-            },
-            shareId,
-            v.scopes.opened.root_node_id,
-            name,
-          );
-          // The replica's root lands directly under the vault root, so its path is its name.
-          await this.marks!.remember(shareId, name);
-        }),
+      share: (folderPath) => this.withVault((v) => shareFrom(v, this.shareDeps(), folderPath)),
+      invite: (shareId, login) => this.withVault((v) => inviteFrom(v, shareId, login)),
+      accept: (invitation) => this.withVault((v) => acceptInto(v, this.shareDeps(), invitation)),
 
       decline: (shareId) => this.withSession((h) => h.client.declineShare(shareId)),
 
-      leave: (shareId) =>
-        this.withVault(async (v) => {
-          const { key, keyId: scopeId } = v.scopes.shareKey(shareId);
-          // Asked of the server rather than assembled from the tree: the set that must be
-          // converted includes nodes no listing this client has would show — a folder in
-          // the trash carries the mark, has no versions, and appears in neither.
-          // Where each node actually LIVES, which the replica listing cannot say: the server
-          // has no paths at all. The dedup tag is over a file's plaintext, so leaving reads
-          // it from disk — and a bare name is not a path. `Baby.md` was looked for at the
-          // vault root while it sat inside the shared folder.
-          const pathOfNode = await v.paths();
-
-          const rows = await v.client.shareReplica(shareId);
-
-          // Before anything starts, and it has to be before: `leaveShare` opens by stopping
-          // propagation, and past that point there is no unaltered share left to refuse on
-          // behalf of.
-          requireEveryNameReadable(rows, v.scopes);
-
-          const replica = replicaForLeave(rows, v.scopes, pathOfNode);
-
-          const out = await leaveShare(
-            {
-              client: v.client,
-              read: (p) => this.vault().read(p),
-              vaultId: v.id,
-              vaultKey: v.scopes.vaultKey,
-              vaultScopeId: v.scopes.vaultScopeId,
-            },
-            shareId,
-            key,
-            scopeId,
-            replica,
-          );
-          // The folder stays and keeps its name (SH-05); what ends is its being shared, so
-          // the badge is what has to go.
-          await this.marks!.forget(shareId);
-          return out;
-        }),
+      leave: (shareId) => this.withVault((v) => leaveFrom(v, this.shareDeps(), shareId)),
 
       members: (shareId) => this.withSession((h) => h.client.shareMembers(shareId)),
 
@@ -1202,6 +1103,16 @@ export default class SyncServerPlugin extends Plugin {
       notify: (message, durationMs) => this.say(message, durationMs),
       done,
     });
+  }
+
+  /** What the sharing operations take from this plugin (`vault-shares.ts`). */
+  private shareDeps(): VaultShareDeps {
+    return {
+      read: (p) => this.vault().read(p),
+      marks: this.marks!,
+      askFolderName: (suggestion) => askFolderName(this.app, suggestion),
+      newScopeId: () => crypto.randomUUID(),
+    };
   }
 
   /** Whether this device is behind a passphrase the account has stopped using (#138). */
