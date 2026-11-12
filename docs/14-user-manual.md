@@ -261,7 +261,8 @@ them all, except conflicts.
 The list shows each shared folder on one line — its name, whose it is and how many people hold it — under
 the folder it sits in. Click the line for who is in it and what you can do.
 
-**Invite** someone by login. They see the invitation in their own settings and can **Accept** or
+**Invite** someone by login. The field suggests the people you already share another folder with;
+anybody else is typed in full, since the server keeps its list of accounts to itself. They see the invitation in their own settings and can **Accept** or
 **Decline**. Accepting materialises a copy in their vault and syncs it down straight away.
 
 **Withdraw** an invitation nobody answered; **Revoke** somebody who joined — the icon beside their name,
@@ -272,6 +273,9 @@ stays** — that is what replication means. What stops is propagation: nothing f
 every name in the folder to be readable on this device, so it refuses rather than half-finishing.
 
 A share ends when the person who started it leaves, or when the last other participant does.
+
+**Without a connection** the list still shows the folders, whose they are and who is in them, as this
+device last read them, and says when that was. Nothing on it can be pressed until the server answers.
 
 ---
 
