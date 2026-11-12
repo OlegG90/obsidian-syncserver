@@ -39,19 +39,35 @@ interface ShareView {
 }
 
 /**
- * A list the server has to answer before it can be drawn (#182).
+ * Whatever the server has to answer before a part of the screen can be drawn (#182).
  *
- * The vault list and the device list had this shape each, written out twice: a placeholder while the
- * network call is out, empty the placeholder and draw rows, a line for the empty case, and one sentence
- * if the call fails. Two copies of a shape is two places to remember when the shape changes — and it did
- * change, twice, once for what a row says about a vault and once for how fresh `last_seen_at` is.
+ * Every such part has the same first half: a placeholder while the call is out, the placeholder gone
+ * once it answers, and one sentence if it cannot. What comes after differs — rows, a filter, a list as
+ * last read — so this hands the answer back and the caller draws it; `undefined` means the sentence has
+ * been written and there is nothing to draw.
  *
- * **The placeholder is not decoration.** Both lists arrive over the network after the surface is drawn,
- * and a section that renders empty for a moment is one somebody reads as "you have none".
+ * **The placeholder is not decoration.** These arrive over the network after the surface is drawn, and a
+ * section that renders empty for a moment is one somebody reads as "you have none". Every list section
+ * in this window goes through here, so the window says the wait one way. The members line inside a share
+ * row does not: it is a sentence within a row that is already drawn, with nothing to stand in for.
  *
  * **A failure is a sentence and not an empty list**, for the same reason: "the list could not be read"
- * and "there is nothing in it" are different facts, and only one of them is worth acting on.
+ * and "there is nothing in it" are different facts, and only one of them is worth acting on. A call may
+ * fail by throwing or, if it belongs to a coordinator that has already put the reason in a notice, by
+ * answering `undefined`; the screen says the same thing either way.
  */
+const awaiting = async <T>(list: HTMLElement, what: string, fetch: () => Promise<T | undefined>): Promise<T | undefined> => {
+  list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
+  const answer = await fetch().catch(() => undefined);
+  list.empty();
+  if (answer === undefined) list.createEl('p', { text: unreadable(what) });
+  return answer;
+};
+
+/** The one sentence for a list that could not be read, wherever in the drawing it failed. */
+const unreadable = (what: string): string => `The ${what} could not be read.`;
+
+/** A list the server answers, drawn one row per item — with a line for the empty case. */
 const asked = <T>(
   host: HTMLElement,
   what: string,
@@ -60,14 +76,15 @@ const asked = <T>(
   empty?: string,
 ): HTMLElement => {
   const list = host.createEl('div');
-  list.createEl('p', { text: 'Asking the server…', cls: 'setting-item-description' });
-  void fetch()
+  void awaiting(list, what, fetch)
     .then((items) => {
-      list.empty();
+      if (!items) return;
       for (const item of items) row(item, list);
       if (items.length === 0 && empty) list.createEl('p', { text: empty });
     })
-    .catch(() => list.setText(`The ${what} could not be read.`));
+    // A row that cannot be drawn leaves the same sentence as a list that cannot be read, rather than
+    // half a list that looks whole.
+    .catch(() => list.setText(unreadable(what)));
   return list;
 };
 
@@ -319,21 +336,16 @@ export class Panels {
   shareSection(containerEl: HTMLElement): void {
     containerEl.createEl('h3', { text: 'Shared folders' });
     const list = containerEl.createEl('div');
-    list.createEl('p', { text: 'Loading…' });
 
     const flow = this.s.plugin.sharing(() => this.s.refresh());
     // Filled in once the share list has answered, because what may be shared depends on what
     // already is — and drawn above that list, where it was.
     const offer = containerEl.createEl('div');
 
-    void flow.list().then((out) => {
-      list.empty();
-      if (!out) {
-        list.createEl('p', { text: 'The share list could not be read.' });
-        // No offer either: without knowing what is already shared, every folder here would be
-        // a guess, and the one that overlaps fails inside a database trigger.
-        return;
-      }
+    void awaiting(list, 'share list', () => flow.list()).then((out) => {
+      // Unread, there is no offer: without knowing what is already shared, every folder here
+      // would be a guess, and the one that overlaps fails inside a database trigger.
+      if (!out) return;
       const { remembered } = out;
       if (remembered) {
         // No offer: what may be shared depends on what already is, and that is what is unknown.
@@ -613,16 +625,11 @@ export class Panels {
     const emptyHere = containerEl.createEl('div');
 
     const list = containerEl.createEl('div');
-    list.createEl('p', { text: 'Loading…' });
 
     const flow = this.s.plugin.history(() => this.s.refresh());
 
-    void flow.trash().then((page) => {
-      list.empty();
-      if (!page) {
-        list.createEl('p', { text: 'The trash could not be read.' });
-        return;
-      }
+    void awaiting(list, 'trash', () => flow.trash()).then((page) => {
+      if (!page) return;
       if (page.total === 0) {
         list.createEl('p', { text: 'Nothing has been deleted.' });
         return;
