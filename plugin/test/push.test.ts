@@ -52,6 +52,7 @@ interface ListenerState {
   refreshCalls: number;
   refreshResult: boolean;
   notified: string[];
+  revoked: number;
 }
 
 const makeListener = (over: { token?: string | undefined; refreshResult?: boolean; delays?: number[] } = {}) => {
@@ -66,6 +67,7 @@ const makeListener = (over: { token?: string | undefined; refreshResult?: boolea
     refreshCalls: 0,
     refreshResult: over.refreshResult ?? true,
     notified: [],
+    revoked: 0,
   };
   const options: import('../src/obsidian/push.js').PushListenerOptions = {
     url: 'ws://x.test/events',
@@ -78,6 +80,7 @@ const makeListener = (over: { token?: string | undefined; refreshResult?: boolea
       return state.refreshResult;
     },
     onNotify: (vaultId) => state.notified.push(vaultId),
+    onRevoked: () => state.revoked++,
     socketFactory: factory,
   };
   if (over.delays) options.delays = over.delays;
@@ -86,6 +89,30 @@ const makeListener = (over: { token?: string | undefined; refreshResult?: boolea
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * One connection, an ending scripted onto it, and what the listener did about it: how often it
+ * refreshed, how many sockets it opened, and which token the next one carried.
+ */
+const afterEnding = async (
+  end: (socket: FakeSocket, state: ListenerState) => void,
+  over: { refreshResult?: boolean } = {},
+) => {
+  const made = makeListener({ delays: [1], ...over });
+  made.listener.start();
+  const first = made.sockets[0]!;
+  first.open();
+  end(first, made.state);
+  await sleep(20);
+  const next = made.sockets[1];
+  next?.open();
+  await made.listener.stop();
+  const nextToken = next ? (JSON.parse(next.sent[0]!) as { token: string }).token : undefined;
+  return { ...made, nextToken };
+};
+
+const refused = (reason: string) => JSON.stringify({ error: 'refused', reason });
+const ok = JSON.stringify({ status: 'ok' });
 
 describe('PushListener', () => {
   it('authenticates with the token as the first message, then wakes on a matching vault', async () => {
@@ -126,7 +153,7 @@ describe('PushListener', () => {
     assert.equal(first.closed, true, 'the refused socket is closed');
 
     // The reconnect comes after the (tiny) backoff delay.
-    await new Promise((r) => setTimeout(r, 20));
+    await sleep(20);
     const second = sockets[1]!;
     assert.ok(second, 'a second connection is attempted');
     second.open();
@@ -137,92 +164,74 @@ describe('PushListener', () => {
   it('waits for a token instead of spinning when the session is locked', async () => {
     const { listener, sockets } = makeListener({ token: undefined });
     listener.start();
-    await new Promise((r) => setTimeout(r, 30));
+    await sleep(30);
     // No socket should even be attempted while there is no token.
     assert.equal(sockets.length, 0, 'no connection while locked');
     await listener.stop();
   });
 
-  it('stops for a revoked device, with no refresh and no reconnect, and wakes the sync that reports it', async () => {
-    const { listener, sockets, state } = makeListener({ delays: [1] });
-    listener.start();
-    const first = sockets[0]!;
-    first.open();
-    first.receive(JSON.stringify({ error: 'refused', reason: 'device_revoked' }));
-    first.serverClose(4003);
-
-    await sleep(20);
-    assert.equal(state.refreshCalls, 0, 'a refresh cannot help a revoked device');
-    assert.equal(sockets.length, 1, 'nothing reconnects');
-    assert.deepEqual(state.notified, ['vault-1'], 'one sync is woken, and its 401 tells the user');
+  it('stops for a revoked device, with no refresh and no reconnect, and says so once', async () => {
+    const out = await afterEnding((s) => {
+      s.receive(refused('device_revoked'));
+      s.serverClose(4003);
+    });
+    assert.equal(out.state.refreshCalls, 0, 'a refresh cannot help a revoked device');
+    assert.equal(out.sockets.length, 1, 'nothing reconnects');
+    assert.equal(out.state.revoked, 1, 'onRevoked is how the user comes to hear of it');
   });
 
-  it('refreshes on invalid_token, the reason a stale token is given', async () => {
-    const { listener, sockets, state } = makeListener({ delays: [1] });
-    listener.start();
-    sockets[0]!.open();
-    sockets[0]!.receive(JSON.stringify({ error: 'refused', reason: 'invalid_token' }));
-    sockets[0]!.serverClose(4003);
-
-    await sleep(20);
-    assert.equal(state.refreshCalls, 1);
-    assert.equal(sockets.length, 2, 'one reconnect, not one for the refusal and one for its close');
-    await listener.stop();
+  it('refreshes on invalid_token, and reconnects once for the refusal and its close together', async () => {
+    const out = await afterEnding((s) => {
+      s.receive(refused('invalid_token'));
+      s.serverClose(4003);
+    });
+    assert.equal(out.state.refreshCalls, 1);
+    assert.equal(out.sockets.length, 2);
+    assert.equal(out.nextToken, 'access-2');
   });
 
-  for (const reason of ['auth_timeout', 'no_token']) {
-    it(`reconnects with the same token on ${reason}, since the token was never judged`, async () => {
-      const { listener, sockets, state } = makeListener({ delays: [1] });
-      listener.start();
-      sockets[0]!.open();
-      sockets[0]!.receive(JSON.stringify({ error: 'refused', reason }));
-
-      await sleep(20);
-      assert.equal(state.refreshCalls, 0);
-      sockets[1]!.open();
-      assert.deepEqual(sockets[1]!.sent, [JSON.stringify({ token: 'access-1' })]);
-      await listener.stop();
+  // Endings that say nothing about the token: the same one tries again, unrefreshed.
+  for (const [name, end] of [
+    ['auth_timeout', (s: FakeSocket) => s.receive(refused('auth_timeout'))],
+    ['no_token', (s: FakeSocket) => s.receive(refused('no_token'))],
+    ['a 1011 close, which carries no refusal', (s: FakeSocket) => s.serverClose(1011)],
+  ] as const) {
+    it(`reconnects with the same token on ${name}`, async () => {
+      const out = await afterEnding(end);
+      assert.equal(out.state.refreshCalls, 0);
+      assert.equal(out.nextToken, 'access-1');
     });
   }
 
   it('refreshes before reconnecting when the server closes for an expired token', async () => {
-    const { listener, sockets, state } = makeListener({ delays: [1] });
-    listener.start();
-    sockets[0]!.open();
-    sockets[0]!.receive(JSON.stringify({ status: 'ok' }));
-    sockets[0]!.serverClose(4004);
-
-    await sleep(20);
-    assert.equal(state.refreshCalls, 1, 'refreshed first');
-    sockets[1]!.open();
-    assert.deepEqual(sockets[1]!.sent, [JSON.stringify({ token: 'access-2' })], 'and the new socket carries the new token');
-    await listener.stop();
+    const out = await afterEnding((s) => {
+      s.receive(ok);
+      s.serverClose(4004);
+    });
+    assert.equal(out.state.refreshCalls, 1, 'refreshed first');
+    assert.equal(out.nextToken, 'access-2', 'and the new socket carries the new token');
   });
 
-  it('keeps the token when the server could not ask its database', async () => {
-    // `1011` comes with no `refused` frame: nothing was refused, so nothing is refreshed.
-    const { listener, sockets, state } = makeListener({ delays: [1] });
-    listener.start();
-    sockets[0]!.open();
-    sockets[0]!.serverClose(1011);
-
-    await sleep(20);
-    assert.equal(state.refreshCalls, 0);
-    sockets[1]!.open();
-    assert.deepEqual(sockets[1]!.sent, [JSON.stringify({ token: 'access-1' })]);
-    await listener.stop();
+  it('does not refresh again when the session already holds a newer token', async () => {
+    // A sync met the same expiry on its own requests and refreshed for them.
+    const out = await afterEnding((s, state) => {
+      s.receive(ok);
+      state.token = 'access-from-a-sync';
+      s.serverClose(4004);
+    });
+    assert.equal(out.state.refreshCalls, 0);
+    assert.equal(out.nextToken, 'access-from-a-sync');
   });
 
   it('still reconnects when the refresh fails, because offline is not revoked', async () => {
-    const { listener, sockets, state } = makeListener({ delays: [1], refreshResult: false });
-    listener.start();
-    sockets[0]!.open();
-    sockets[0]!.receive(JSON.stringify({ status: 'ok' }));
-    sockets[0]!.serverClose(4004);
-
-    await sleep(20);
-    assert.equal(state.refreshCalls, 1);
-    assert.equal(sockets.length, 2, 'the channel keeps trying; a revoked device is told so by its own reason');
-    await listener.stop();
+    const out = await afterEnding(
+      (s) => {
+        s.receive(ok);
+        s.serverClose(4004);
+      },
+      { refreshResult: false },
+    );
+    assert.equal(out.state.refreshCalls, 1);
+    assert.equal(out.sockets.length, 2, 'the channel keeps trying; a revoked device is told so by its own reason');
   });
 });

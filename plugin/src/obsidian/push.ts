@@ -12,8 +12,9 @@
  * `tokenSource` so the module never holds the session or the key material — it asks.
  *
  * Each reason the server refuses or closes for has one answer; docs/04 states them. The one
- * worth a word here: a revoked device stops, and wakes a sync on its way out — that sync meets
- * the same `401`, and it, not this module, is how the plugin tells the user (`session.ts`).
+ * worth a word here: a revoked device stops and calls `onRevoked` on its way out — the plugin
+ * runs a sync there, which meets the same `401`, and that sync, not this module, is how the
+ * user is told (`session.ts`).
  */
 
 import type { EventsRefusal, EventsTokenExpired } from '@syncserver/shared';
@@ -42,6 +43,12 @@ export interface PushListenerOptions {
   refresh: () => Promise<boolean>;
   /** Called when a notification names our vault. */
   onNotify: (vaultId: string) => void;
+  /**
+   * Called once when the server refuses this device as revoked, as the listener stops. A hook of
+   * its own rather than a borrowed `onNotify`, which is documented as a hint and may one day be
+   * throttled — and a revocation is the one thing this channel says that must reach somebody.
+   */
+  onRevoked: () => void;
   socketFactory?: PushSocketFactory;
   /** Backoff between attempts, milliseconds; a test shrinks it. */
   delays?: number[];
@@ -51,7 +58,6 @@ export interface PushListenerOptions {
 const DEFAULT_DELAYS = [1_000, 2_000, 4_000, 8_000];
 
 const TOKEN_EXPIRED: EventsTokenExpired = 4004;
-
 
 export class PushListener {
   private readonly factory: PushSocketFactory;
@@ -117,7 +123,7 @@ export class PushListener {
         if (msg.error === 'refused') {
           decided = true;
           socket.close();
-          this.afterRefusal(msg.reason);
+          this.afterRefusal(msg.reason, token);
           return;
         }
         return; // anything else before auth is ignored
@@ -131,7 +137,7 @@ export class PushListener {
       if (decided) return;
       // The ordinary end of a socket's life, not a failure: a new token first, then a socket
       // that can use it — rather than a reconnect the server is bound to refuse.
-      if (ev.code === TOKEN_EXPIRED) return this.refreshThenReconnect(0);
+      if (ev.code === TOKEN_EXPIRED) return this.refreshThenReconnect(0, token);
       // Anything else — a server going away, `1011` when it could not ask its database — is
       // no comment on the token, so the same token tries again.
       this.schedule(this.attempt);
@@ -148,13 +154,12 @@ export class PushListener {
   }
 
   /** What a refusal's reason asks for. */
-  private afterRefusal(reason: EventsRefusal | undefined): void {
+  private afterRefusal(reason: EventsRefusal | undefined, sent: string): void {
     switch (reason) {
       case 'device_revoked':
-        // Nothing this device holds will be accepted again, a refreshed token included. The
-        // sync woken here is what reports it; stopping alone would leave the user to find out
-        // whenever a sync next happened to run.
-        this.options.onNotify(this.options.vaultId);
+        // Nothing this device holds will be accepted again, a refreshed token included. Stopping
+        // alone would leave the user to find out whenever a sync next happened to run.
+        this.options.onRevoked();
         void this.stop();
         return;
       case 'no_token':
@@ -164,16 +169,23 @@ export class PushListener {
         return;
       default:
         // `invalid_token`, or a server too old to say: the token is stale.
-        this.refreshThenReconnect(this.attempt + 1);
+        this.refreshThenReconnect(this.attempt + 1, sent);
     }
   }
 
   /**
+   * Reconnect with a token newer than `sent`, refreshing for one only when nobody already has.
+   *
+   * A sync meets the same expiry on its own requests and refreshes for them, so by the time a
+   * socket's end arrives the session may hold a new token already — and a second refresh would
+   * be a round trip spent on nothing.
+   *
    * Whatever the refresh answers, a reconnect follows: a refresh fails offline as well as for a
    * spent token, and a channel that gave up on a moment's outage would stay silent until the
    * vault was next unlocked.
    */
-  private refreshThenReconnect(attempt: number): void {
+  private refreshThenReconnect(attempt: number, sent: string): void {
+    if (this.options.tokenSource() !== sent) return this.schedule(attempt);
     void this.options
       .refresh()
       .catch(() => false)
