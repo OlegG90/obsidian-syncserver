@@ -26,12 +26,6 @@ declare module 'fastify' {
      * removing a vault from the list — and it asks for a proof the token cannot carry instead.
      */
     anyVaultOfTheAccount?: boolean;
-    /**
-     * This route writes nothing a backup copies as content — only who is signed in and when a
-     * device was last seen — so the backup window lets it through (D-142). Three routes have it:
-     * a token refresh, a vault login and a console sign-in.
-     */
-    writesOnlySessions?: boolean;
   }
 }
 

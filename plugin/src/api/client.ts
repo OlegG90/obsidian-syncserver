@@ -646,7 +646,12 @@ export class SyncClient {
     try {
       return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body, { auth: false });
     } catch (e) {
-      if (e instanceof ApiError && isCode(e.code, 'not_approved')) return undefined;
+      // Both mean "not yet": nobody has approved it, or the server is mid-backup and turns every
+      // claim away until the window shuts (D-142). Neither is a reason to give the pairing up — a
+      // refusal thrown from here ends it, and the person holding the code starts again.
+      if (e instanceof ApiError && (isCode(e.code, 'not_approved') || isCode(e.code, 'backup_in_progress'))) {
+        return undefined;
+      }
       throw e;
     }
   }

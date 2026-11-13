@@ -48,6 +48,16 @@ export interface AppDeps {
   stop?(): void;
 }
 
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /**
+     * This route writes sessions and nothing a backup copies as content, so the backup window lets
+     * it through (D-142). docs/08 names the routes that carry it.
+     */
+    writesOnlySessions?: boolean;
+  }
+}
+
 export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = {}): Promise<FastifyInstance> => {
   // The events hub used to be the only seam and was passed positionally; both shapes are
   // accepted so every existing caller keeps working.
@@ -158,7 +168,9 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   app.addHook('onRequest', async (req, reply) => {
     if (!backupInProgress()) return;
     if (req.method === 'GET' || req.method === 'HEAD') return;
-    if (req.routeOptions.config.writesOnlySessions) return;
+    // `?.`: a request that matched no route is answered by the not-found handler, whose options
+    // are Fastify's to shape rather than this file's.
+    if (req.routeOptions.config?.writesOnlySessions) return;
     return reply.code(503).send({
       error: 'backup_in_progress',
       message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',

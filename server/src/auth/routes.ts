@@ -374,14 +374,18 @@ export const registerAuthRoutes = (
     };
   });
 
-  app.post<{ Body: { refresh: string } }>('/auth/refresh', { config: { writesOnlySessions: true } }, async (req, reply) => {
-    const device = await findDeviceByRefresh(db, req.body.refresh);
-    if (!device) return reply.code(401).send({ error: 'invalid_refresh' });
+  app.post<{ Body: { refresh: string } }>(
+    '/auth/refresh',
+    { config: { writesOnlySessions: true } },
+    async (req, reply) => {
+      const device = await findDeviceByRefresh(db, req.body.refresh);
+      if (!device) return reply.code(401).send({ error: 'invalid_refresh' });
 
-    return {
-      access: app.jwt.sign({ sub: device.userId, device: device.id }, { expiresIn: cfg.accessTokenTtlSeconds }),
-    };
-  });
+      return {
+        access: app.jwt.sign({ sub: device.userId, device: device.id }, { expiresIn: cfg.accessTokenTtlSeconds }),
+      };
+    },
+  );
 
   app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
     if (refusedDeviceName(reply, req.body?.name)) return reply;
