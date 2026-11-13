@@ -224,8 +224,24 @@ describe("change notifications — the socket is held to the API's policy (#464)
     ws.close();
   });
 
+  it('refuses a device of an account that is no longer active, though the device is not revoked', async () => {
+    // The second line `liveDevice` reads (#373): disabling revokes the devices as well, so this
+    // is the state in which that first line was somehow missed. Only the handshake can be
+    // asked here — a disabled account's vault takes no writes at all
+    // (`owned_rows_require_active_user`), so it has no revision to wake anybody with.
+    const account = await makeAccount(`switched-off-${process.pid}-${Date.now()}`);
+    const device = await makeDevice(account);
+    await db.query(`UPDATE users SET state = 'disabled' WHERE id = $1`, [account]);
+
+    const { messages, closed } = await openSocket(device.token);
+    assert.ok(messages[0]!.includes('refused'), `refused explicitly: ${messages.join(', ')}`);
+    assert.deepEqual(await closed, [4003, 'device_revoked']);
+  });
+
   it('closes the socket when its token expires', async () => {
-    const { messages, closed } = await openSocket((await makeDevice(ownerId, null, { expiresIn: 1 })).token);
+    // Two seconds, not one: `exp` is in whole seconds, so a one-second token signed late in a
+    // second is already spent by the time the handshake reads it.
+    const { messages, closed } = await openSocket((await makeDevice(ownerId, null, { expiresIn: 2 })).token);
     assert.ok(messages[0]!.includes('ok'), 'the token was good when it arrived');
     assert.deepEqual(await closed, [4004, 'token_expired']);
   });

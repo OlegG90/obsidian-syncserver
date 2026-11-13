@@ -3,7 +3,7 @@
  *
  * Auth is the first frame, not the URL: a token in the query string settles into access
  * logs, and a browser `WebSocket` cannot set a header. This module owns that handshake —
- * waiting for the first frame, answering `ok` or `refused`, closing on refusal — and both of
+ * waiting for the first frame, answering `ok` or `refused` with its reason, closing on refusal — and both of
  * its clocks, so the route is a thin adapter and no outcome leaves a timer behind.
  *
  * The verification is injected: the route binds it to the JWT and to the same device check
@@ -48,7 +48,7 @@ export interface SocketAuth {
   dispose(): void;
 }
 
-/** `setTimeout` wraps past this, and fires at once — the opposite of a long-lived token. */
+/** `setTimeout` wraps past this and fires at once, so a longer wait is taken in steps of it. */
 const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): SocketAuth => {
@@ -62,7 +62,9 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
     if (settled) return;
     settled = true;
     clearTimeout(timeout);
-    hooks.send({ error: 'refused' });
+    // The reason rides in the frame as well as in the close: a browser client reads frames
+    // far more readily than close reasons, and "refused" alone made it guess which.
+    hooks.send({ error: 'refused', reason });
     hooks.close(code, reason);
   };
 
@@ -77,9 +79,14 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
     try {
       out = await hooks.verify(token);
     } catch {
-      // The policy could not be asked — the database, in practice. Not the token's fault, and
-      // said so: the client's reconnect is the right answer to this one, a refresh is not.
-      settle(1011, 'verification_unavailable');
+      // The policy could not be asked — the database, in practice. Closed WITHOUT a `refused`
+      // frame, because nothing was refused: that frame is what tells a client its token is no
+      // good, and every connected device spending a refresh on a database outage is a second
+      // outage. A bare close is answered by reconnecting, which is the right answer to this.
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      hooks.close(1011, 'verification_unavailable');
       return;
     }
     // The socket closed, or the timeout fired, while the answer was on its way.
@@ -92,12 +99,19 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
     clearTimeout(timeout);
     hooks.onAuthenticated(out.caller);
     hooks.send({ status: 'ok' });
-    if (out.expiresAt !== undefined) {
-      const left = Math.min(Math.max(out.expiresAt - Date.now(), 0), LONGEST_TIMER_MS);
-      expiry = setTimeout(() => hooks.close(4004, 'token_expired'), left);
-      // The socket is what keeps a connection alive, never this clock.
-      expiry.unref?.();
+    if (out.expiresAt !== undefined) endAt(out.expiresAt);
+  };
+
+  /** Close the socket when the token runs out — re-armed, for a lifetime longer than one timer holds. */
+  const endAt = (expiresAt: number): void => {
+    const left = expiresAt - Date.now();
+    if (left <= 0) {
+      hooks.close(4004, 'token_expired');
+      return;
     }
+    expiry = setTimeout(() => endAt(expiresAt), Math.min(left, LONGEST_TIMER_MS));
+    // The socket is what keeps a connection alive, never this clock.
+    expiry.unref?.();
   };
 
   return {
@@ -117,7 +131,10 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
         return;
       }
       verifying = true;
-      void authenticate(token);
+      // What can still throw in there is a write to a socket that closed a moment ago, and its
+      // `close` event is already on the way to `dispose()`. Nothing is owed to it but not
+      // becoming an unhandled rejection.
+      void authenticate(token).catch(() => undefined);
     },
     dispose() {
       settled = true;

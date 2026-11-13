@@ -45,8 +45,8 @@ export const openEventsHub = (db: Db): EventsHub => {
       // Nobody is listening, so there is nobody to ask about.
       if (connections.size === 0) return;
       // The vault that changed; one module answers who may hear of it and where its journal
-      // stands (account.ts) — the fan-out does not re-derive the guard's rule, which is the
-      // drift this exists to avoid.
+      // stands (account.ts), beside the guard's own predicates — a rule spelled again in this
+      // file is the drift that module exists to avoid.
       const woken = await wokenBy(db, payload);
       if (!woken) return; // a vault that no longer exists wakes nobody
       const devices = new Set(woken.deviceIds);

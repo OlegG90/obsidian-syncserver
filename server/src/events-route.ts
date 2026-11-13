@@ -16,7 +16,10 @@ import type { EventsHub } from './events.js';
 import { liveDevice, verifyCaller } from './auth/guard.js';
 import { beginSocketAuth } from './ws-auth.js';
 
-export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void => {
+/** What an access token says: who, which device, and until when (seconds). */
+type Claims = { sub?: string; device?: string; exp?: number };
+
+export const registerEventsRoutes =(app: FastifyInstance, hub: EventsHub): void => {
   app.get('/events', { websocket: true }, (socket, req) => {
     let unsub: (() => void) | undefined;
     const auth = beginSocketAuth({
@@ -24,9 +27,9 @@ export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void
       close: (code, reason) => socket.close(code, reason),
       verify: async (token) => {
         // The JWT verify is synchronous: it returns the claims or throws.
-        let claims: { sub?: string; device?: string; exp?: number };
+        let claims: Claims;
         try {
-          claims = req.server.jwt.verify<{ sub?: string; device?: string; exp?: number }>(token);
+          claims = req.server.jwt.verify<Claims>(token);
         } catch {
           return 'invalid_token';
         }

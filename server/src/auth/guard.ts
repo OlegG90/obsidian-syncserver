@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { DEVICE_IS_LIVE } from '../account.js';
 import type { Db } from '../db.js';
 import { isUuid } from '../uuid.js';
 
@@ -89,7 +90,7 @@ export const requireAuth = async (req: FastifyRequest, reply: FastifyReply): Pro
 export const liveDevice = (db: Db, caller: Caller): Promise<{ vaultId: string | null } | undefined> =>
   db.one<{ vaultId: string | null }>(
     `SELECT d.vault_id::text AS "vaultId" FROM devices d JOIN users u ON u.id = d.user_id
-      WHERE d.id = $1 AND d.user_id = $2 AND d.revoked_at IS NULL AND u.state = 'active'`,
+      WHERE d.id = $1 AND d.user_id = $2 AND ${DEVICE_IS_LIVE}`,
     [caller.deviceId, caller.userId],
   );
 

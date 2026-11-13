@@ -60,7 +60,7 @@ describe('WS /events first-message handshake', () => {
     const auth = beginSocketAuth(hooks, 5);
     auth.onMessage(frame());
     await sleep(20);
-    assert.deepEqual(sent, [{ error: 'refused' }]);
+    assert.deepEqual(sent, [{ error: 'refused', reason: 'no_token' }]);
     assert.deepEqual(closed, [[4002, 'no_token']], 'exactly one close — the timer never fires later');
   });
 
@@ -76,12 +76,12 @@ describe('WS /events first-message handshake', () => {
     const { hooks, sent, closed, authed } = rig({ verify: async () => 'device_revoked' });
     beginSocketAuth(hooks, 5).onMessage(frame('t'));
     await sleep(20);
-    assert.deepEqual(sent, [{ error: 'refused' }]);
+    assert.deepEqual(sent, [{ error: 'refused', reason: 'device_revoked' }], 'the frame names it too');
     assert.deepEqual(closed, [[4003, 'device_revoked']]);
     assert.deepEqual(authed, []);
   });
 
-  it('refuses when the policy cannot be asked, and does not blame the token', async () => {
+  it('closes without a refusal when the policy cannot be asked: the token was not judged', async () => {
     const { hooks, sent, closed, authed } = rig({
       verify: async () => {
         throw new Error('the database is away');
@@ -89,7 +89,8 @@ describe('WS /events first-message handshake', () => {
     });
     beginSocketAuth(hooks, 50).onMessage(frame('t'));
     await sleep(10);
-    assert.deepEqual(sent, [{ error: 'refused' }]);
+    // No `refused` frame: that is what makes a client spend a refresh, and nothing was refused.
+    assert.deepEqual(sent, []);
     assert.deepEqual(closed, [[1011, 'verification_unavailable']]);
     assert.deepEqual(authed, []);
   });
@@ -98,7 +99,7 @@ describe('WS /events first-message handshake', () => {
     const { hooks, sent, closed } = rig();
     beginSocketAuth(hooks, 5);
     await sleep(20);
-    assert.deepEqual(sent, [{ error: 'refused' }]);
+    assert.deepEqual(sent, [{ error: 'refused', reason: 'auth_timeout' }]);
     assert.deepEqual(closed, [[4001, 'auth_timeout']]);
   });
 

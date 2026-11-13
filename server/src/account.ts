@@ -27,11 +27,22 @@ export const ownsVault = async (q: Queryable, userId: string, vaultId: string): 
 };
 
 /**
+ * A device that may still act for its account, as SQL over `devices d` and `users u`: not
+ * revoked, and the account still active (D-90, #373).
+ *
+ * A fragment rather than a function because its two users ask different questions around it —
+ * the guard about one device, the fan-out about every device of a vault — and what must not
+ * exist twice is this line.
+ */
+export const DEVICE_IS_LIVE = `d.revoked_at IS NULL AND u.state = 'active'`;
+
+/**
  * Which devices a new revision of this vault wakes, and where its journal stands.
  *
  * The devices `requireAuth` would let read the vault right now, asked in one statement: the
- * owner's, not revoked, the account still active (D-90), and syncing this vault or none yet
- * (D-140). Asked per notification rather than remembered from the handshake, because every
+ * owner's, still live, and syncing this vault or none yet — which is `withinItsVault`'s rule
+ * for a path that names a vault (D-140), said in SQL because here it selects rows rather than
+ * judging one request. Asked per notification rather than remembered from the handshake, because every
  * part of it can change under an open socket — a device is revoked, or opens its first vault
  * — and a hint routed by what was true at connect time is a hint sent to a device the API
  * has already stopped answering.
@@ -46,7 +57,7 @@ export const wokenBy = async (
        FROM vaults v
        JOIN users u ON u.id = v.user_id
        LEFT JOIN devices d
-              ON d.user_id = v.user_id AND d.revoked_at IS NULL AND u.state = 'active'
+              ON d.user_id = v.user_id AND ${DEVICE_IS_LIVE}
              AND (d.vault_id = v.id OR d.vault_id IS NULL)
       WHERE v.id = $1
       GROUP BY v.id`,

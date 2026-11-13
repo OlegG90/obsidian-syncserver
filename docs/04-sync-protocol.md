@@ -723,7 +723,11 @@ browser `WebSocket` cannot set a header. The client connects and sends the acces
 message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The verification is
 the API's own: a token must name an account **and** a device, or it is refused — a connection that
 cannot be attributed to a device cannot be throttled or signed out (D-90) — and that device must still be
-allowed: not revoked, its account active, asked of the database as every HTTP request asks it. The
+allowed: not revoked, its account active, asked of the database as every HTTP request asks it. A refusal
+says which it was — `{error: "refused", reason}` and a close carrying the same reason: `4001 auth_timeout`,
+`4002 no_token`, `4003 invalid_token`, `4003 device_revoked`. When the server could not ask at all it
+closes `1011 verification_unavailable` **without** a `refused` frame, because that frame is what tells a
+client its token is spent, and a database outage must not cost every connected device a refresh. The
 connection lives while the access token does: the server closes it (`4004 token_expired`) at the moment
 the token runs out, and the client refreshes and reconnects, which is the ordinary token lifecycle
 ([06](06-key-model.md)).
