@@ -317,6 +317,21 @@ export type CursorStaleBody = { reason: CursorRejection };
 export type CursorFaultBody = { error: CursorFault };
 
 /**
+ * Why `WS /events` refused a handshake: the `reason` of its `{error: "refused"}` frame, and of
+ * the close that follows it (docs/04). Declared here because the server sends it and the
+ * plugin decides on it, and a reason one side renamed would otherwise reach the other as the
+ * fallback branch, silently.
+ */
+export type EventsRefusal = 'auth_timeout' | 'no_token' | 'invalid_token' | 'device_revoked';
+
+/**
+ * The close `WS /events` makes when the access token it was opened with runs out (docs/04).
+ * A type rather than a value, since this package carries none: each side writes the number
+ * against it, so the two cannot disagree and still compile.
+ */
+export type EventsTokenExpired = 4004;
+
+/**
  * The delta cursor payload. Opaque to the client — it is signed, and the client only
  * stores and returns it — but its shape is part of the contract because the server on the
  * other side of a version upgrade has to keep reading it.

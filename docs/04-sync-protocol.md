@@ -741,9 +741,10 @@ device never learns that another vault of its account moved.
 **The client gives each reason one answer.** `invalid_token` is a stale token: refresh, then reconnect.
 `4004 token_expired` is the same, met before it is refused: refresh first, so the next socket is not
 opened with a token the server is bound to turn away. `device_revoked` stops the listener — no refresh can
-help, and the next sync meets the same `401` and is what reports it. `auth_timeout`, `no_token` and
-`1011` say nothing about the token, so the same one tries again on backoff. A refresh that fails stops
-the listener too: the session then holds nothing a reconnect could use.
+help — and wakes one sync on the way out, which meets the same `401` and is what tells the user.
+`auth_timeout`, `no_token` and `1011` say nothing about the token, so the same one tries again on backoff.
+A refresh that fails is followed by a reconnect all the same: offline fails a refresh too, and a channel
+that gave up on a moment's outage would stay silent until the vault was next unlocked.
 
 **The client treats a notification as a hint, not an order.** It wakes and runs `syncNow` — and skips if a
 sync is already running, because that sync will see the change anyway. Reconnect uses backoff. iOS has no

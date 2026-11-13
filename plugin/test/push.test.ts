@@ -143,9 +143,7 @@ describe('PushListener', () => {
     await listener.stop();
   });
 
-  it('stops for a revoked device: no refresh, no reconnect', async () => {
-    // The loop this replaced: every refusal read as a stale token, and a revoked device's
-    // refresh can only fail, so it went round on backoff for as long as the app was open.
+  it('stops for a revoked device, with no refresh and no reconnect, and wakes the sync that reports it', async () => {
     const { listener, sockets, state } = makeListener({ delays: [1] });
     listener.start();
     const first = sockets[0]!;
@@ -156,6 +154,7 @@ describe('PushListener', () => {
     await sleep(20);
     assert.equal(state.refreshCalls, 0, 'a refresh cannot help a revoked device');
     assert.equal(sockets.length, 1, 'nothing reconnects');
+    assert.deepEqual(state.notified, ['vault-1'], 'one sync is woken, and its 401 tells the user');
   });
 
   it('refreshes on invalid_token, the reason a stale token is given', async () => {
@@ -171,18 +170,20 @@ describe('PushListener', () => {
     await listener.stop();
   });
 
-  it('reconnects with the same token when the handshake timed out', async () => {
-    const { listener, sockets, state } = makeListener({ delays: [1] });
-    listener.start();
-    sockets[0]!.open();
-    sockets[0]!.receive(JSON.stringify({ error: 'refused', reason: 'auth_timeout' }));
+  for (const reason of ['auth_timeout', 'no_token']) {
+    it(`reconnects with the same token on ${reason}, since the token was never judged`, async () => {
+      const { listener, sockets, state } = makeListener({ delays: [1] });
+      listener.start();
+      sockets[0]!.open();
+      sockets[0]!.receive(JSON.stringify({ error: 'refused', reason }));
 
-    await sleep(20);
-    assert.equal(state.refreshCalls, 0, 'the token was never judged');
-    sockets[1]!.open();
-    assert.deepEqual(sockets[1]!.sent, [JSON.stringify({ token: 'access-1' })]);
-    await listener.stop();
-  });
+      await sleep(20);
+      assert.equal(state.refreshCalls, 0);
+      sockets[1]!.open();
+      assert.deepEqual(sockets[1]!.sent, [JSON.stringify({ token: 'access-1' })]);
+      await listener.stop();
+    });
+  }
 
   it('refreshes before reconnecting when the server closes for an expired token', async () => {
     const { listener, sockets, state } = makeListener({ delays: [1] });
@@ -212,7 +213,7 @@ describe('PushListener', () => {
     await listener.stop();
   });
 
-  it('stops when the refresh fails, instead of reconnecting into the same refusal', async () => {
+  it('still reconnects when the refresh fails, because offline is not revoked', async () => {
     const { listener, sockets, state } = makeListener({ delays: [1], refreshResult: false });
     listener.start();
     sockets[0]!.open();
@@ -221,6 +222,7 @@ describe('PushListener', () => {
 
     await sleep(20);
     assert.equal(state.refreshCalls, 1);
-    assert.equal(sockets.length, 1, 'no token can be had, so there is nothing to reconnect with');
+    assert.equal(sockets.length, 2, 'the channel keeps trying; a revoked device is told so by its own reason');
+    await listener.stop();
   });
 });

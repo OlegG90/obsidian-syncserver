@@ -19,10 +19,11 @@
  * timeout, or `dispose()` from the socket closing — its timer is gone and no further frame
  * can change the answer.
  */
+import type { EventsRefusal, EventsTokenExpired } from '@syncserver/shared';
 import type { Caller } from './auth/guard.js';
 
 /** Why a token was turned away. It travels as the close reason, so a log can tell the two apart. */
-export type SocketRefusal = 'invalid_token' | 'device_revoked';
+export type SocketRefusal = Extract<EventsRefusal, 'invalid_token' | 'device_revoked'>;
 
 export interface SocketGrant {
   caller: Caller;
@@ -48,6 +49,8 @@ export interface SocketAuth {
   dispose(): void;
 }
 
+const TOKEN_EXPIRED: EventsTokenExpired = 4004;
+
 /** `setTimeout` wraps past this and fires at once, so a longer wait is taken in steps of it. */
 const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
@@ -58,7 +61,7 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
 
   /** Refuse, saying why — in the frame as well as the close, since a browser client reads frames
    * far more readily than close reasons, and "refused" alone made it guess which. */
-  const refuse = (code: number, reason: string): void => {
+  const refuse = (code: number, reason: EventsRefusal): void => {
     if (!finish()) return;
     hooks.send({ error: 'refused', reason });
     hooks.close(code, reason);
@@ -81,7 +84,7 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
   const endAt = (expiresAt: number): void => {
     const left = expiresAt - Date.now();
     if (left <= 0) {
-      hooks.close(4004, 'token_expired');
+      hooks.close(TOKEN_EXPIRED, 'token_expired');
       return;
     }
     timer = setTimeout(() => endAt(expiresAt), Math.min(left, LONGEST_TIMER_MS));

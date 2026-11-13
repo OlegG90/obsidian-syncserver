@@ -11,16 +11,12 @@
  * Obsidian it is the browser `WebSocket`, in the tests it is a fake. The token comes from a
  * `tokenSource` so the module never holds the session or the key material — it asks.
  *
- * **The server says why it refused or closed (docs/04), and each reason has one answer here.**
- * Treating every refusal as a stale token — which this did — sent a revoked device round a
- * refresh that could not succeed, on backoff, for as long as the app stayed open, and met an
- * expired token by reconnecting with it first and refreshing only once it was refused.
- *
- * **The listener stops when no token can be had.** A revoked device, and a refresh that fails,
- * both mean the session holds nothing a reconnect could use. Stopping says nothing to the
- * user, and does not need to: the next sync meets the same `401` and is the surface that
- * reports it, as it already does for every other request (`session.ts`).
+ * Each reason the server refuses or closes for has one answer; docs/04 states them. The one
+ * worth a word here: a revoked device stops, and wakes a sync on its way out — that sync meets
+ * the same `401`, and it, not this module, is how the plugin tells the user (`session.ts`).
  */
+
+import type { EventsRefusal, EventsTokenExpired } from '@syncserver/shared';
 
 export interface PushSocket {
   send(data: string): void;
@@ -54,8 +50,8 @@ export interface PushListenerOptions {
 /** Short, capped backoff: the channel is a hint, so a slow reconnect is acceptable. */
 const DEFAULT_DELAYS = [1_000, 2_000, 4_000, 8_000];
 
-/** The close the server makes when the token the socket was opened with runs out (docs/04). */
-const TOKEN_EXPIRED = 4004;
+const TOKEN_EXPIRED: EventsTokenExpired = 4004;
+
 
 export class PushListener {
   private readonly factory: PushSocketFactory;
@@ -105,7 +101,7 @@ export class PushListener {
 
     socket.onmessage = (ev) => {
       const text = String(ev.data);
-      let msg: { status?: string; error?: string; reason?: string; vault_id?: string };
+      let msg: { status?: string; error?: string; reason?: EventsRefusal; vault_id?: string };
       try {
         msg = JSON.parse(text) as typeof msg;
       } catch {
@@ -152,10 +148,13 @@ export class PushListener {
   }
 
   /** What a refusal's reason asks for. */
-  private afterRefusal(reason: string | undefined): void {
+  private afterRefusal(reason: EventsRefusal | undefined): void {
     switch (reason) {
       case 'device_revoked':
-        // Nothing this device holds will be accepted again, a refreshed token included.
+        // Nothing this device holds will be accepted again, a refreshed token included. The
+        // sync woken here is what reports it; stopping alone would leave the user to find out
+        // whenever a sync next happened to run.
+        this.options.onNotify(this.options.vaultId);
         void this.stop();
         return;
       case 'no_token':
@@ -169,13 +168,16 @@ export class PushListener {
     }
   }
 
+  /**
+   * Whatever the refresh answers, a reconnect follows: a refresh fails offline as well as for a
+   * spent token, and a channel that gave up on a moment's outage would stay silent until the
+   * vault was next unlocked.
+   */
   private refreshThenReconnect(attempt: number): void {
-    void this.options.refresh().then((ok) => {
-      if (ok) this.schedule(attempt);
-      // The refresh token is spent or revoked, and the client has already let go of it, so
-      // every later refresh fails the same way. Reconnecting would only repeat the refusal.
-      else void this.stop();
-    });
+    void this.options
+      .refresh()
+      .catch(() => false)
+      .then(() => this.schedule(attempt));
   }
 
   private schedule(attempt: number): void {
