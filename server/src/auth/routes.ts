@@ -42,6 +42,9 @@ const TOO_SHORT = {
   detail: 'at least 12 characters — this one is not slowed down by a client-side KDF',
 };
 
+/** The routes the backup window lets through (D-142): one name, so they can be found as a group. */
+const WRITES_ONLY_SESSIONS = { config: { writesOnlySessions: true } } as const;
+
 export const registerAuthRoutes = (
   app: FastifyInstance,
   db: Db,
@@ -219,7 +222,7 @@ export const registerAuthRoutes = (
    */
   app.post<{ Body: { login: string; password: string; device_name?: string } }>(
     '/auth/console',
-    { config: { writesOnlySessions: true } },
+    WRITES_ONLY_SESSIONS,
     async (req, reply) => {
       const login = req.body?.login;
       const password = req.body?.password;
@@ -252,7 +255,7 @@ export const registerAuthRoutes = (
 
   app.post<{ Body: { login: string; auth_secret: string; device_id?: string } }>(
     '/auth/login',
-    { config: { writesOnlySessions: true } },
+    WRITES_ONLY_SESSIONS,
     async (req, reply) => {
       const account = await findActiveAccount(db, req.body.login);
       // Same answer whether the login is unknown or the secret is wrong — the pair is the
@@ -376,7 +379,7 @@ export const registerAuthRoutes = (
 
   app.post<{ Body: { refresh: string } }>(
     '/auth/refresh',
-    { config: { writesOnlySessions: true } },
+    WRITES_ONLY_SESSIONS,
     async (req, reply) => {
       const device = await findDeviceByRefresh(db, req.body.refresh);
       if (!device) return reply.code(401).send({ error: 'invalid_refresh' });

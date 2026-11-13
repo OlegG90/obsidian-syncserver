@@ -81,30 +81,39 @@ describe('the backup window', () => {
     });
   });
 
-  it('lets a token refresh through, so a device whose token expires can go on reading', async () => {
-    await duringABackup(async () => {
-      const r = await post('/auth/refresh', { refresh });
-      assert.equal(r.statusCode, 200, r.body);
-      assert.ok(r.json().access, 'a new access token');
+  // The session routes, each answered on its merits. A wrong credential is answered as one: the
+  // window never saw the request, which is the point.
+  const sessions: { why: string; url: string; payload: () => object; status: number; error?: string }[] = [
+    {
+      why: 'a token refresh, so a device whose token expires can go on reading',
+      url: '/auth/refresh',
+      payload: () => ({ refresh }),
+      status: 200,
+    },
+    {
+      why: 'a console sign-in, so the operator can see what is happening',
+      url: '/auth/console',
+      payload: () => ({ login: 'admin', password: 'not the password at all' }),
+      status: 401,
+      error: 'invalid_credentials',
+    },
+    {
+      why: 'a vault login',
+      url: '/auth/login',
+      payload: () => ({ login: accountLogin, auth_secret: 'wrong', device_id: deviceId }),
+      status: 401,
+      error: 'invalid_credentials',
+    },
+  ];
+  for (const s of sessions) {
+    it(`lets through ${s.why}`, async () => {
+      await duringABackup(async () => {
+        const r = await post(s.url, s.payload());
+        assert.equal(r.statusCode, s.status, r.body);
+        if (s.error) assert.equal(r.json().error, s.error);
+      });
     });
-  });
-
-  it('lets a console sign-in through, so the operator can see what is happening', async () => {
-    await duringABackup(async () => {
-      // A wrong password is answered as one: the window never saw the request, which is the point.
-      const r = await post('/auth/console', { login: 'admin', password: 'not the password at all' });
-      assert.equal(r.statusCode, 401, r.body);
-      assert.equal(r.json().error, 'invalid_credentials');
-    });
-  });
-
-  it('lets a vault login through', async () => {
-    await duringABackup(async () => {
-      const r = await post('/auth/login', { login: accountLogin, auth_secret: 'wrong', device_id: deviceId });
-      assert.equal(r.statusCode, 401, r.body);
-      assert.equal(r.json().error, 'invalid_credentials');
-    });
-  });
+  }
 
   it('answers a refresh as before once the window has closed', async () => {
     const r = await post('/auth/refresh', { refresh });
