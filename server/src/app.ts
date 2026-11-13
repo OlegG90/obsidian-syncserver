@@ -100,9 +100,8 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
 
   // **A hook added to the app guards every route it has** — declared before it or after it, and
   // the routes of a plugin registered with its own scope too. Where one is added decides only the
-  // order hooks of one kind run in (issue #467). This file once said otherwise, and placed routes by
-  // it; the halt and the window below guard the routes above them, which is what
-  // `operator-restore.test.ts` and `operator-backup-window.test.ts` each pin.
+  // order hooks of one kind run in (issue #467). So the halt and the window below guard the routes
+  // above them, which `operator-restore.test.ts` and `operator-backup-window.test.ts` each pin.
   //
   // The order that matters: the bootstrap guard is the first `onRequest`, because while there is no
   // administrator the only thing this server does is let one be made (D-107) — not "the database is
