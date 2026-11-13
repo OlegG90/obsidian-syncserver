@@ -353,7 +353,7 @@ GET    /vaults/{vault_id}/trash?under=&limit=    → {entries, total}  a page, a
 POST   /vaults/{vault_id}/restore {node_id, rev}  → a new put with an old hash → a new version
 DELETE /vaults/{vault_id}/trash                 → {purged, thawed}   discard it all, for good
 DELETE /vaults/{vault_id}/trash/{node_id}       → {purged, thawed}   discard one subtree
-WS     /events                          → {vault_id, head_rev}   across the account's synced vaults
+WS     /events                          → {vault_id, head_rev}   for the vault this device syncs
 
 administration — every route acts on somebody else's account, and every one leaves an audit row
 GET    /admin/accounts                          → state, role, quota, usage, last seen
@@ -701,7 +701,7 @@ no such burden — the fact lives in the delta, and the client's next sync finds
 notification arrived or not.
 
 ```
-WS     /events                        → {vault_id, head_rev}   across the account's synced vaults
+WS     /events                        → {vault_id, head_rev}   for the vault this device syncs
 ```
 
 **The notification is born with the journal row, and only on commit.** A revision is the append-only
@@ -722,9 +722,17 @@ clients' backoff reconnects them.
 browser `WebSocket` cannot set a header. The client connects and sends the access token as its first
 message; the server verifies it, answers `ok` or `refused`, and closes on refusal. The verification is
 the API's own: a token must name an account **and** a device, or it is refused — a connection that
-cannot be attributed to a device cannot be throttled or signed out (D-90). The connection lives
-while the access token does; when it expires the client refreshes and reconnects, which is the ordinary
-token lifecycle ([06](06-key-model.md)).
+cannot be attributed to a device cannot be throttled or signed out (D-90) — and that device must still be
+allowed: not revoked, its account active, asked of the database as every HTTP request asks it. The
+connection lives while the access token does: the server closes it (`4004 token_expired`) at the moment
+the token runs out, and the client refreshes and reconnects, which is the ordinary token lifecycle
+([06](06-key-model.md)).
+
+**Who hears of a revision is asked when it happens, not remembered from the handshake.** A notification
+goes to the connected devices that could read the vault at that moment: the owner's, still allowed, and
+syncing that vault — or none yet, like a device that has just paired (D-140). So a device revoked while
+its socket is open hears nothing further, although the socket itself stays until its token ends, and a
+device never learns that another vault of its account moved.
 
 **The client treats a notification as a hint, not an order.** It wakes and runs `syncNow` — and skips if a
 sync is already running, because that sync will see the change anyway. Reconnect uses backoff. iOS has no

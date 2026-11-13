@@ -2,17 +2,18 @@
  * `WS /events` — the new-revision notification channel (docs/04).
  *
  * Auth is the first message, not the URL, and the handshake itself lives in `ws-auth.ts`;
- * this route binds it to the shared caller predicate and to the hub. A client either gets
- * `ok` (and a stream of `{vault_id, head_rev}` for its account's vaults) or `refused` and
- * a close.
+ * this route binds it to the policy every HTTP route is held to and to the hub. A client
+ * either gets `ok` (and a stream of `{vault_id, head_rev}` for the vault its device syncs) or
+ * `refused` and a close.
  *
- * The socket lives as long as the access token does; the client refreshes and reconnects,
- * which is the ordinary token lifecycle. The hub is shared across all connections and owns
- * the single `LISTEN` on the channel (docs/04).
+ * The socket lives as long as the access token does — `ws-auth.ts` closes it when the token
+ * runs out — and the client refreshes and reconnects, which is the ordinary token lifecycle.
+ * The hub is shared across all connections and owns the single `LISTEN` on the channel
+ * (docs/04).
  */
 import type { FastifyInstance } from 'fastify';
 import type { EventsHub } from './events.js';
-import { verifyCaller } from './auth/guard.js';
+import { liveDevice, verifyCaller } from './auth/guard.js';
 import { beginSocketAuth } from './ws-auth.js';
 
 export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void => {
@@ -21,20 +22,29 @@ export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void
     const auth = beginSocketAuth({
       send: (msg) => socket.send(JSON.stringify(msg)),
       close: (code, reason) => socket.close(code, reason),
-      verify: (token) => {
+      verify: async (token) => {
         // The JWT verify is synchronous: it returns the claims or throws.
-        let claims: { sub?: string; device?: string };
+        let claims: { sub?: string; device?: string; exp?: number };
         try {
-          claims = req.server.jwt.verify<{ sub?: string; device?: string }>(token);
+          claims = req.server.jwt.verify<{ sub?: string; device?: string; exp?: number }>(token);
         } catch {
-          return undefined;
+          return 'invalid_token';
         }
-        // The same policy as every HTTP route: a token names an account AND a device (D-90).
-        return verifyCaller(claims);
+        // The same policy as every HTTP route: a token names an account AND a device (D-90)…
+        const caller = verifyCaller(claims);
+        if (!caller) return 'invalid_token';
+        // …and a valid signature is not enough (#373): the device must still be allowed, which
+        // only the database knows. Without this a revoked phone was refused by the API and
+        // welcomed here, with the token it still held.
+        if (!(await liveDevice(req.server.db, caller))) return 'device_revoked';
+        return {
+          caller,
+          ...(claims.exp === undefined ? {} : { expiresAt: claims.exp * 1000 }),
+        };
       },
       onAuthenticated: (caller) => {
         unsub = hub.subscribe({
-          accountId: caller.userId,
+          deviceId: caller.deviceId,
           send: (msg) => {
             if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
           },

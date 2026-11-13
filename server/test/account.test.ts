@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { ownsVault, ownerOf, ownerAndFrozen, isFrozen } from '../src/account.js';
+import { ownsVault, wokenBy, ownerAndFrozen, isFrozen } from '../src/account.js';
 
 let db: Db;
 const createdUsers: string[] = [];
@@ -87,18 +87,41 @@ describe('ownsVault', () => {
   });
 });
 
-describe('ownerOf', () => {
-  it('names the owner and the journal head for a fan-out', async () => {
-    const a = await makeAccount(`owner-a-${process.pid}`);
+describe('wokenBy — who a new revision wakes', () => {
+  const device = async (userId: string, vaultId: string | null, revoked = false): Promise<string> => {
+    const row = await db.one<{ id: string }>(
+      `INSERT INTO devices (user_id, name, platform, vault_id, revoked_at)
+       VALUES ($1, 'test', 'linux', $2, CASE WHEN $3 THEN now() END) RETURNING id::text AS id`,
+      [userId, vaultId, revoked],
+    );
+    return row!.id;
+  };
 
-    const owned = await ownerOf(db, a.vaultId);
-    assert.ok(owned);
-    assert.equal(owned!.userId, a.userId);
-    assert.equal(typeof owned!.headRev, 'number');
+  it('names the journal head and the devices that may read the vault, and no others', async () => {
+    const a = await makeAccount(`woken-a-${process.pid}`);
+    const b = await makeAccount(`woken-b-${process.pid}`);
+    const syncing = await device(a.userId, a.vaultId);
+    const unbound = await device(a.userId, null);
+    await device(a.userId, a.vaultId, true);
+    await device(b.userId, b.vaultId);
+
+    const woken = await wokenBy(db, a.vaultId);
+    assert.ok(woken);
+    assert.equal(typeof woken!.headRev, 'number');
+    assert.deepEqual(
+      [...woken!.deviceIds].sort(),
+      [syncing, unbound].sort(),
+      'the owner\'s live devices syncing this vault or none yet — not the revoked one, not a stranger\'s',
+    );
+  });
+
+  it('still names the head of a vault no device may hear of', async () => {
+    const a = await makeAccount(`woken-none-${process.pid}`);
+    assert.deepEqual((await wokenBy(db, a.vaultId))!.deviceIds, []);
   });
 
   it('returns undefined for a vault that does not exist', async () => {
-    assert.equal(await ownerOf(db, randomUUID()), undefined);
+    assert.equal(await wokenBy(db, randomUUID()), undefined);
   });
 });
 

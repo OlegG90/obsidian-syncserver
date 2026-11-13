@@ -5,7 +5,7 @@
  * docs/04 names the reason this is one module: "Separate checks per endpoint are precisely
  * where one eventually falls behind the rest." The ownership predicate was copy-pasted
  * across delta, history and nodes, and the change-notification hub added a fourth shape
- * that also read `head_rev`. One module, one formulation of the rule — and the write paths
+ * that also reads `head_rev` and the devices to wake. One module, one formulation of the rule — and the write paths
  * that run inside `db.tx` use the same functions the routes use, through the `Queryable`
  * seam, instead of restating the fact as a second query shape.
  *
@@ -26,17 +26,34 @@ export const ownsVault = async (q: Queryable, userId: string, vaultId: string): 
   return row?.ok ?? false;
 };
 
-/** Who owns a vault and where its journal stands, for a fan-out that needs both. */
-export const ownerOf = async (
+/**
+ * Which devices a new revision of this vault wakes, and where its journal stands.
+ *
+ * The devices `requireAuth` would let read the vault right now, asked in one statement: the
+ * owner's, not revoked, the account still active (D-90), and syncing this vault or none yet
+ * (D-140). Asked per notification rather than remembered from the handshake, because every
+ * part of it can change under an open socket — a device is revoked, or opens its first vault
+ * — and a hint routed by what was true at connect time is a hint sent to a device the API
+ * has already stopped answering.
+ */
+export const wokenBy = async (
   q: Queryable,
   vaultId: string,
-): Promise<{ userId: string; headRev: number } | undefined> => {
-  const row = await q.one<{ userId: string; head: string }>(
-    `SELECT user_id AS "userId", head_rev::text AS head FROM vaults WHERE id = $1`,
+): Promise<{ headRev: number; deviceIds: string[] } | undefined> => {
+  const row = await q.one<{ head: string; devices: string[] }>(
+    `SELECT v.head_rev::text AS head,
+            COALESCE(array_agg(d.id::text) FILTER (WHERE d.id IS NOT NULL), '{}') AS devices
+       FROM vaults v
+       JOIN users u ON u.id = v.user_id
+       LEFT JOIN devices d
+              ON d.user_id = v.user_id AND d.revoked_at IS NULL AND u.state = 'active'
+             AND (d.vault_id = v.id OR d.vault_id IS NULL)
+      WHERE v.id = $1
+      GROUP BY v.id`,
     [vaultId],
   );
   if (!row) return undefined;
-  return { userId: row.userId, headRev: Number(row.head) };
+  return { headRev: Number(row.head), deviceIds: row.devices };
 };
 
 /** What a write to a vault is allowed to: the owner, and whether that account is frozen. */

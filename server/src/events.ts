@@ -1,22 +1,22 @@
 /**
  * The new-revision fan-out (docs/04, Change notifications).
  *
- * One process owns this (docs/13): a single `LISTEN` on the channel the journal trigger
- * notifies, and a set of open WebSocket connections, each tied to an account. When a vault
- * gains a revision, every connection of an account that owns that vault is handed
- * `{vault_id, head_rev}` — a hint to sync, nothing about what changed.
+ * One process owns this (docs/04): a single `LISTEN` on the channel the journal trigger
+ * notifies, and a set of open WebSocket connections, each tied to the device it
+ * authenticated as. When a vault gains a revision, every connected device that may read that
+ * vault is handed `{vault_id, head_rev}` — a hint to sync, nothing about what changed.
  *
- * The connection set is deliberately dumb: a socket plus the account it authenticated as.
- * Routing to the right accounts is a query per notification, which is the honest cost at
- * family scale; the alternative (caching vault ownership and invalidating it) is machinery
- * for a server with more writers than this one has.
+ * The connection set is deliberately dumb: a socket plus its device. Which devices a vault
+ * wakes is a query per notification (`wokenBy`), which is the honest cost at family scale —
+ * and the only arrangement in which a device revoked a moment ago stops hearing at once,
+ * since nothing here remembers an answer that revocation would have to reach and undo.
  */
 import type { Db } from './db.js';
-import { ownerOf } from './account.js';
+import { wokenBy } from './account.js';
 
 /** What the WS route registers for one open, authenticated connection. */
 export interface RevisionSubscriber {
-  accountId: string;
+  deviceId: string;
   send: (msg: { vault_id: string; head_rev: number }) => void;
 }
 
@@ -42,13 +42,16 @@ export const openEventsHub = (db: Db): EventsHub => {
 
   listener = db.listen(CHANNEL, (payload) => {
     void (async () => {
-      // The vault that changed; route to the account that owns it, with where its journal
-      // stands. One module answers both (account.ts) — the fan-out does not re-derive
-      // ownership, which is the drift this exists to avoid.
-      const owned = await ownerOf(db, payload);
-      if (!owned) return; // a vault that no longer exists wakes nobody
+      // Nobody is listening, so there is nobody to ask about.
+      if (connections.size === 0) return;
+      // The vault that changed; one module answers who may hear of it and where its journal
+      // stands (account.ts) — the fan-out does not re-derive the guard's rule, which is the
+      // drift this exists to avoid.
+      const woken = await wokenBy(db, payload);
+      if (!woken) return; // a vault that no longer exists wakes nobody
+      const devices = new Set(woken.deviceIds);
       for (const sub of connections) {
-        if (sub.accountId === owned.userId) sub.send({ vault_id: payload, head_rev: owned.headRev });
+        if (devices.has(sub.deviceId)) sub.send({ vault_id: payload, head_rev: woken.headRev });
       }
     })().catch(() => {
       // A failed fan-out is a missed hint, not data loss: the next sync finds the change
