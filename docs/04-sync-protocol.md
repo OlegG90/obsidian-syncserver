@@ -743,8 +743,13 @@ device never learns that another vault of its account moved.
 opened with a token the server is bound to turn away. `device_revoked` stops the listener — no refresh can
 help — and wakes one sync on the way out, which meets the same `401` and is what tells the user.
 `auth_timeout`, `no_token` and `1011` say nothing about the token, so the same one tries again on backoff.
-A refresh that fails is followed by a reconnect all the same: offline fails a refresh too, and a channel
-that gave up on a moment's outage would stay silent until the vault was next unlocked.
+
+**A refresh says why it failed, and only one failure is the end of the session.** `POST /auth/refresh`
+answers `401` for a refresh token that is spent or whose device was revoked; the client lets that token go
+and the listener stops the same way it does for `device_revoked`, waking the sync that reports it. Anything
+else — no network, a timeout, a `503` — says nothing about the token: the client keeps it, and the listener
+reconnects on backoff, since a channel that gave up on a moment's outage would stay silent until the vault
+was next unlocked.
 
 **The client treats a notification as a hint, not an order.** It wakes and runs `syncNow` — and skips if a
 sync is already running, because that sync will see the change anyway. Reconnect uses backoff. iOS has no

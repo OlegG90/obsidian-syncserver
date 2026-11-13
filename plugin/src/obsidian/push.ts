@@ -12,12 +12,13 @@
  * `tokenSource` so the module never holds the session or the key material — it asks.
  *
  * Each reason the server refuses or closes for has one answer; docs/04 states them. The one
- * worth a word here: a revoked device stops and calls `onRevoked` on its way out — the plugin
- * runs a sync there, which meets the same `401`, and that sync, not this module, is how the
- * user is told (`session.ts`).
+ * worth a word here: a device the server will not let in again — revoked, or its refresh token
+ * spent — stops and calls `onSignedOut` on its way out. The plugin runs a sync there, which meets
+ * the same `401`, and that sync, not this module, is how the user is told (`session.ts`).
  */
 
 import type { EventsRefusal, EventsTokenExpired } from '@syncserver/shared';
+import type { RefreshOutcome } from '../api/client.js';
 
 export interface PushSocket {
   send(data: string): void;
@@ -40,15 +41,16 @@ export interface PushListenerOptions {
   /** The current access token, or `undefined` when the session is locked. */
   tokenSource: () => string | undefined;
   /** Refresh the token (the connection lives as long as the access token does). */
-  refresh: () => Promise<boolean>;
+  refresh: () => Promise<RefreshOutcome>;
   /** Called when a notification names our vault. */
   onNotify: (vaultId: string) => void;
   /**
-   * Called once when the server refuses this device as revoked, as the listener stops. A hook of
-   * its own rather than a borrowed `onNotify`, which is documented as a hint and may one day be
-   * throttled — and a revocation is the one thing this channel says that must reach somebody.
+   * Called once, as the listener stops, when the server will not let this device in again:
+   * refused as revoked, or its refresh token spent. A hook of its own rather than a borrowed
+   * `onNotify`, which is documented as a hint and may one day be throttled — and this is the one
+   * thing the channel learns that must reach somebody.
    */
-  onRevoked: () => void;
+  onSignedOut: () => void;
   socketFactory?: PushSocketFactory;
   /** Backoff between attempts, milliseconds; a test shrinks it. */
   delays?: number[];
@@ -157,10 +159,8 @@ export class PushListener {
   private afterRefusal(reason: EventsRefusal | undefined, sent: string): void {
     switch (reason) {
       case 'device_revoked':
-        // Nothing this device holds will be accepted again, a refreshed token included. Stopping
-        // alone would leave the user to find out whenever a sync next happened to run.
-        this.options.onRevoked();
-        void this.stop();
+        // Nothing this device holds will be accepted again, a refreshed token included.
+        this.signedOut();
         return;
       case 'no_token':
       case 'auth_timeout':
@@ -180,16 +180,23 @@ export class PushListener {
    * socket's end arrives the session may hold a new token already — and a second refresh would
    * be a round trip spent on nothing.
    *
-   * Whatever the refresh answers, a reconnect follows: a refresh fails offline as well as for a
-   * spent token, and a channel that gave up on a moment's outage would stay silent until the
-   * vault was next unlocked.
+   * A refresh the server could not answer is followed by a reconnect all the same: it said
+   * nothing about the token, and a channel that gave up on a moment's outage would stay silent
+   * until the vault was next unlocked. A refresh token it refused is the end of the session.
    */
   private refreshThenReconnect(attempt: number, sent: string): void {
     if (this.options.tokenSource() !== sent) return this.schedule(attempt);
     void this.options
       .refresh()
-      .catch(() => false)
-      .then(() => this.schedule(attempt));
+      .catch((): RefreshOutcome => 'unavailable')
+      .then((outcome) => (outcome === 'spent' ? this.signedOut() : this.schedule(attempt)));
+  }
+
+  /** The server will not let this device in again. Stopping alone would leave the user to find
+   * out whenever a sync next happened to run, so the plugin is told on the way out. */
+  private signedOut(): void {
+    this.options.onSignedOut();
+    void this.stop();
   }
 
   private schedule(attempt: number): void {

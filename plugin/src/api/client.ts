@@ -288,6 +288,17 @@ const inFlight = async <T, R>(items: readonly T[], work: (item: T) => Promise<R>
   return out;
 };
 
+/**
+ * How a token refresh went: a new access token; a server that could not be asked — offline, timed
+ * out, or answering something other than a verdict on the token; or a refresh token it no longer
+ * accepts, spent or its device revoked.
+ *
+ * Three answers rather than a yes/no because the two failures call for opposite things. A spent
+ * token is gone for good and nothing should ask with it again; a server that could not be asked
+ * has said nothing about the token, which will work the moment it answers.
+ */
+export type RefreshOutcome = 'ok' | 'unavailable' | 'spent';
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -299,7 +310,7 @@ export class SyncClient {
    */
   private refresh: string | undefined;
   /** One `/auth/refresh` in flight at a time, so several requests hitting 401 together do not send several. */
-  private refreshing: Promise<boolean> | undefined;
+  private refreshing: Promise<RefreshOutcome> | undefined;
 
   constructor(
     private readonly baseUrl: string,
@@ -357,7 +368,7 @@ export class SyncClient {
     // for a less specific one. `auth === false` requests (kdf, redeem, login, refresh
     // itself) are never retried, which is what stops this from recursing into itself.
     if (res.status === 401 && req.auth !== false && !retried && this.refresh) {
-      if (errorIs(res.text(), 'unauthenticated') && (await this.refreshToken())) {
+      if (errorIs(res.text(), 'unauthenticated') && (await this.refreshToken()) === 'ok') {
         return this.send(req, true);
       }
     }
@@ -366,21 +377,29 @@ export class SyncClient {
   }
 
   /**
-   * Refresh the access token now; `false` when the refresh token is spent or revoked.
+   * Refresh the access token now, and say how it went.
+   *
+   * **The refresh token is let go only when the server refuses it** (`401`). It used to be let go
+   * on any failure, and an offline moment is a failure: a phone that lost its signal while its
+   * access token expired threw away a refresh token nothing was wrong with, and could not refresh
+   * again for the rest of the session — the network back, the server answering, and every request
+   * a `401` until the vault was locked and opened again.
    *
    * Single-flight: every request that meets an expired token at once waits on the same refresh.
    */
-  async refreshToken(): Promise<boolean> {
-    this.refreshing ??= (async () => {
+  async refreshToken(): Promise<RefreshOutcome> {
+    if (this.refresh === undefined) return 'spent';
+    this.refreshing ??= (async (): Promise<RefreshOutcome> => {
       try {
         const out = await this.json<{ access: string }>('POST', '/auth/refresh', { refresh: this.refresh! }, { auth: false });
         this.access = out.access;
-        return true;
-      } catch {
-        // The refresh token itself is spent, invalid, or its device was revoked. Cleared so
-        // the next 401 does not retry a refresh that can only fail the same way again.
+        return 'ok';
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 401) return 'unavailable';
+        // Spent, invalid, or its device revoked — the one answer that is about the token. Let go,
+        // so the next 401 does not retry a refresh that can only fail the same way again.
         this.refresh = undefined;
-        return false;
+        return 'spent';
       } finally {
         this.refreshing = undefined;
       }

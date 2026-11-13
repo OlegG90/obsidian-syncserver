@@ -15,6 +15,56 @@ const ok = (body: unknown, status = 200): HttpResponse => {
 };
 const fail = (status: number, error: string): HttpResponse => ok({ error }, status);
 
+describe('SyncClient says why a refresh failed, and keeps a token nothing was wrong with', () => {
+  /** A client whose `/auth/refresh` answers whatever the test says, counting how often it was asked. */
+  const refreshingAgainst = (answer: () => HttpResponse) => {
+    const sent: unknown[] = [];
+    const transport: Transport = async (req) => {
+      if (!req.url.endsWith('/auth/refresh')) throw new Error(`unexpected request: ${req.url}`);
+      sent.push(JSON.parse(String(req.body)));
+      return answer();
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setRefreshToken('the-refresh-token');
+    return { client, sent };
+  };
+
+  it('answers unavailable offline, and the same refresh token works once the network is back', async () => {
+    let online = false;
+    const { client, sent } = refreshingAgainst(() => {
+      if (!online) throw new Error('getaddrinfo ENOTFOUND x');
+      return ok({ access: 'new-access' });
+    });
+
+    assert.equal(await client.refreshToken(), 'unavailable');
+    online = true;
+    assert.equal(await client.refreshToken(), 'ok', 'the token was kept through the outage');
+    assert.deepEqual(sent, [{ refresh: 'the-refresh-token' }, { refresh: 'the-refresh-token' }]);
+    assert.equal(client.getAccessToken(), 'new-access');
+  });
+
+  it('answers unavailable when the server answers but not about the token', async () => {
+    // A 503 during a backup or a database outage is a server that could not be asked.
+    let calls = 0;
+    const { client } = refreshingAgainst(() => (++calls === 1 ? fail(503, 'backup_in_progress') : ok({ access: 'later' })));
+
+    assert.equal(await client.refreshToken(), 'unavailable');
+    assert.equal(await client.refreshToken(), 'ok');
+  });
+
+  it('answers spent on a 401, and lets that token go', async () => {
+    let calls = 0;
+    const { client } = refreshingAgainst(() => {
+      calls++;
+      return fail(401, 'invalid_refresh');
+    });
+
+    assert.equal(await client.refreshToken(), 'spent');
+    assert.equal(await client.refreshToken(), 'spent', 'and keeps saying so');
+    assert.equal(calls, 1, 'without asking the server again');
+  });
+});
+
 describe('SyncClient refreshes an expired access token', () => {
   it('retries the original request once the refresh succeeds', async () => {
     const calls: string[] = [];
@@ -98,6 +148,8 @@ describe('SyncClient refreshes an expired access token', () => {
 
     await assert.rejects(() => client.usage());
     assert.equal(refreshCalls, 1, 'tried once, then gave up rather than looping');
+    assert.equal(await client.refreshToken(), 'spent', 'and says so, without asking again');
+    assert.equal(refreshCalls, 1);
 
     // And the second call after that does not even try — the refresh token was cleared.
     await assert.rejects(() => client.usage());

@@ -718,9 +718,9 @@ export default class SyncServerPlugin extends Plugin {
       url,
       vaultId: conn.vaultId,
       tokenSource: () => this.sess?.accessToken,
-      refresh: () => this.sess?.refreshAccessToken() ?? Promise.resolve(false),
-      // A revocation reaches the user through the sync that meets its `401` (docs/04).
-      onRevoked: () => void this.sync?.runIfIdle(),
+      refresh: () => this.sess?.refreshAccessToken() ?? Promise.resolve('unavailable'),
+      // A device signed out reaches the user through the sync that meets its `401` (docs/04).
+      onSignedOut: () => void this.sync?.runIfIdle(),
       onNotify: () => {
         // A hint: the coordinator's `runIfIdle` skips when locked (a background hint must
         // not prompt for the passphrase) and when a sync is already running (it will see

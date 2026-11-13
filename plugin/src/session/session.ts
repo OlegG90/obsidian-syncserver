@@ -54,7 +54,7 @@ import { decryptName, encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
 import { newHumanCode, normaliseHumanCode } from '../crypto/human-code.js';
-import { SyncClient } from '../api/client.js';
+import { SyncClient, type RefreshOutcome } from '../api/client.js';
 import { openTreeCache, type TreeCache } from '../engine/tree-cache.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
@@ -307,9 +307,14 @@ export class Session {
     return this.handle?.client.getAccessToken();
   }
 
-  /** Refresh the access token now, so a stale notification channel can reconnect. */
-  refreshAccessToken(): Promise<boolean> {
-    if (!this.handle) return Promise.resolve(false);
+  /**
+   * Refresh the access token now, so a stale notification channel can reconnect.
+   *
+   * Locked, there is no client to ask, which says nothing about the token: `unavailable`, and the
+   * channel waits for a session the way it already does when `accessToken` is undefined.
+   */
+  refreshAccessToken(): Promise<RefreshOutcome> {
+    if (!this.handle) return Promise.resolve('unavailable');
     return this.handle.client.refreshToken();
   }
 
