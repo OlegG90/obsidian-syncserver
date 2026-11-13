@@ -10,13 +10,24 @@
  * The socket is injectable (`socketFactory`) for the same reason the transport is: inside
  * Obsidian it is the browser `WebSocket`, in the tests it is a fake. The token comes from a
  * `tokenSource` so the module never holds the session or the key material — it asks.
+ *
+ * **The server says why it refused or closed (docs/04), and each reason has one answer here.**
+ * Treating every refusal as a stale token — which this did — sent a revoked device round a
+ * refresh that could not succeed, on backoff, for as long as the app stayed open, and met an
+ * expired token by reconnecting with it first and refreshing only once it was refused.
+ *
+ * **The listener stops when no token can be had.** A revoked device, and a refresh that fails,
+ * both mean the session holds nothing a reconnect could use. Stopping says nothing to the
+ * user, and does not need to: the next sync meets the same `401` and is the surface that
+ * reports it, as it already does for every other request (`session.ts`).
  */
 
 export interface PushSocket {
   send(data: string): void;
   onopen: (() => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
-  onclose: (() => void) | null;
+  /** `code` is the WebSocket close code: the server's reason for a close it made (docs/04). */
+  onclose: ((ev: { code: number }) => void) | null;
   onerror: (() => void) | null;
   close(): void;
   readonly readyState: number;
@@ -42,6 +53,9 @@ export interface PushListenerOptions {
 
 /** Short, capped backoff: the channel is a hint, so a slow reconnect is acceptable. */
 const DEFAULT_DELAYS = [1_000, 2_000, 4_000, 8_000];
+
+/** The close the server makes when the token the socket was opened with runs out (docs/04). */
+const TOKEN_EXPIRED = 4004;
 
 export class PushListener {
   private readonly factory: PushSocketFactory;
@@ -85,12 +99,15 @@ export class PushListener {
     const socket = this.factory(this.options.url);
     this.socket = socket;
     let authed = false;
+    // A refusal frame decides what follows; the close behind it only confirms it, and must not
+    // schedule a second reconnect beside the one the refusal chose.
+    let decided = false;
 
     socket.onmessage = (ev) => {
       const text = String(ev.data);
-      let msg: { status?: string; error?: string; vault_id?: string };
+      let msg: { status?: string; error?: string; reason?: string; vault_id?: string };
       try {
-        msg = JSON.parse(text) as { status?: string; error?: string; vault_id?: string };
+        msg = JSON.parse(text) as typeof msg;
       } catch {
         return; // not JSON — ignore
       }
@@ -102,9 +119,9 @@ export class PushListener {
           return;
         }
         if (msg.error === 'refused') {
-          // Stale token: refresh once and reconnect, instead of retrying the same refusal.
+          decided = true;
           socket.close();
-          void this.options.refresh().then(() => this.schedule(this.attempt + 1));
+          this.afterRefusal(msg.reason);
           return;
         }
         return; // anything else before auth is ignored
@@ -113,8 +130,14 @@ export class PushListener {
       if (msg.vault_id === this.options.vaultId) this.options.onNotify(msg.vault_id);
     };
 
-    socket.onclose = () => {
+    socket.onclose = (ev) => {
       if (this.socket === socket) this.socket = undefined;
+      if (decided) return;
+      // The ordinary end of a socket's life, not a failure: a new token first, then a socket
+      // that can use it — rather than a reconnect the server is bound to refuse.
+      if (ev.code === TOKEN_EXPIRED) return this.refreshThenReconnect(0);
+      // Anything else — a server going away, `1011` when it could not ask its database — is
+      // no comment on the token, so the same token tries again.
       this.schedule(this.attempt);
     };
     socket.onerror = () => {
@@ -126,6 +149,33 @@ export class PushListener {
       // settles into access logs.
       socket.send(JSON.stringify({ token }));
     };
+  }
+
+  /** What a refusal's reason asks for. */
+  private afterRefusal(reason: string | undefined): void {
+    switch (reason) {
+      case 'device_revoked':
+        // Nothing this device holds will be accepted again, a refreshed token included.
+        void this.stop();
+        return;
+      case 'no_token':
+      case 'auth_timeout':
+        // The handshake went wrong, not the token: a fresh one would be refused the same way.
+        this.schedule(this.attempt);
+        return;
+      default:
+        // `invalid_token`, or a server too old to say: the token is stale.
+        this.refreshThenReconnect(this.attempt + 1);
+    }
+  }
+
+  private refreshThenReconnect(attempt: number): void {
+    void this.options.refresh().then((ok) => {
+      if (ok) this.schedule(attempt);
+      // The refresh token is spent or revoked, and the client has already let go of it, so
+      // every later refresh fails the same way. Reconnecting would only repeat the refusal.
+      else void this.stop();
+    });
   }
 
   private schedule(attempt: number): void {
@@ -144,14 +194,14 @@ class BrowserSocket implements PushSocket {
   private readonly ws: WebSocket;
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
 
   constructor(url: string) {
     this.ws = new WebSocket(url);
     this.ws.onopen = () => this.onopen?.();
     this.ws.onmessage = (ev) => this.onmessage?.(ev);
-    this.ws.onclose = () => this.onclose?.();
+    this.ws.onclose = (ev) => this.onclose?.({ code: ev.code });
     this.ws.onerror = () => this.onerror?.();
   }
 
