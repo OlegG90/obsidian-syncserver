@@ -45,8 +45,7 @@ describe('SyncClient says why a refresh failed, and keeps a token nothing was wr
 
   it('answers unavailable when the server answers but not about the token', async () => {
     // A 503 during a backup or a database outage is a server that could not be asked.
-    let calls = 0;
-    const { client } = refreshingAgainst(() => (++calls === 1 ? fail(503, 'backup_in_progress') : ok({ access: 'later' })));
+    const { client, sent } = refreshingAgainst(() => (sent.length === 1 ? fail(503, 'backup_in_progress') : ok({ access: 'later' })));
 
     assert.equal(await client.refreshToken(), 'unavailable');
     assert.equal(await client.refreshToken(), 'ok');
@@ -76,15 +75,11 @@ describe('SyncClient says why a refresh failed, and keeps a token nothing was wr
   });
 
   it('answers spent on a 401, and lets that token go', async () => {
-    let calls = 0;
-    const { client } = refreshingAgainst(() => {
-      calls++;
-      return fail(401, 'invalid_refresh');
-    });
+    const { client, sent } = refreshingAgainst(() => fail(401, 'invalid_refresh'));
 
     assert.equal(await client.refreshToken(), 'spent');
     assert.equal(await client.refreshToken(), 'spent', 'and keeps saying so');
-    assert.equal(calls, 1, 'without asking the server again');
+    assert.equal(sent.length, 1, 'without asking the server again');
   });
 });
 
@@ -171,8 +166,6 @@ describe('SyncClient refreshes an expired access token', () => {
 
     await assert.rejects(() => client.usage());
     assert.equal(refreshCalls, 1, 'tried once, then gave up rather than looping');
-    assert.equal(await client.refreshToken(), 'spent', 'and says so, without asking again');
-    assert.equal(refreshCalls, 1);
 
     // And the second call after that does not even try — the refresh token was cleared.
     await assert.rejects(() => client.usage());

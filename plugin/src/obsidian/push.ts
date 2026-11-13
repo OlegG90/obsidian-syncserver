@@ -188,6 +188,8 @@ export class PushListener {
     if (this.options.tokenSource() !== sent) return this.schedule(attempt);
     void this.options
       .refresh()
+      // The plugin's own refresh answers rather than rejects; this guards a callback that is
+      // injected, so that one which throws leaves a reconnect behind rather than nothing.
       .catch((): RefreshOutcome => 'unavailable')
       .then((outcome) => (outcome === 'spent' ? this.signedOut() : this.schedule(attempt)));
   }
