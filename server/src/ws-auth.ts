@@ -52,27 +52,42 @@ export interface SocketAuth {
 const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): SocketAuth => {
-  let settled = false;
-  // The first frame is being checked. The check asks the database, so further frames can
-  // arrive while it runs, and none of them may start a second one.
-  let verifying = false;
-  let expiry: ReturnType<typeof setTimeout> | undefined;
+  // Waiting for the first frame; checking it — which asks the database, so further frames can
+  // arrive meanwhile and none of them may start a second check; or done, whichever way.
+  let phase: 'waiting' | 'verifying' | 'done' = 'waiting';
 
-  const settle = (code: number, reason: string): void => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timeout);
-    // The reason rides in the frame as well as in the close: a browser client reads frames
-    // far more readily than close reasons, and "refused" alone made it guess which.
+  /** Refuse, saying why — in the frame as well as the close, since a browser client reads frames
+   * far more readily than close reasons, and "refused" alone made it guess which. */
+  const refuse = (code: number, reason: string): void => {
+    if (!finish()) return;
     hooks.send({ error: 'refused', reason });
     hooks.close(code, reason);
   };
 
-  const timeout = setTimeout(() => {
-    // A client that never authenticates is closed off so a half-open socket cannot hang
-    // the pool. It also bounds a verification that never answers.
-    settle(4001, 'auth_timeout');
-  }, timeoutMs);
+  // The one clock running: the handshake's deadline, then, once it is answered, the token's.
+  // The deadline closes off a client that never authenticates, so a half-open socket cannot
+  // hang the pool, and it bounds a verification that never answers.
+  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => refuse(4001, 'auth_timeout'), timeoutMs);
+
+  /** Settle the handshake. False when it already was: the one place "exactly once" is kept. */
+  const finish = (): boolean => {
+    if (phase === 'done') return false;
+    phase = 'done';
+    clearTimeout(timer);
+    return true;
+  };
+
+  /** Close the socket when the token runs out — re-armed, for a lifetime longer than one timer holds. */
+  const endAt = (expiresAt: number): void => {
+    const left = expiresAt - Date.now();
+    if (left <= 0) {
+      hooks.close(4004, 'token_expired');
+      return;
+    }
+    timer = setTimeout(() => endAt(expiresAt), Math.min(left, LONGEST_TIMER_MS));
+    // The socket is what keeps a connection alive, never this clock.
+    timer.unref?.();
+  };
 
   const authenticate = async (token: string): Promise<void> => {
     let out: SocketGrant | SocketRefusal;
@@ -83,63 +98,47 @@ export const beginSocketAuth = (hooks: SocketAuthHooks, timeoutMs = 10_000): Soc
       // frame, because nothing was refused: that frame is what tells a client its token is no
       // good, and every connected device spending a refresh on a database outage is a second
       // outage. A bare close is answered by reconnecting, which is the right answer to this.
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      hooks.close(1011, 'verification_unavailable');
+      if (finish()) hooks.close(1011, 'verification_unavailable');
       return;
     }
-    // The socket closed, or the timeout fired, while the answer was on its way.
-    if (settled) return;
     if (typeof out === 'string') {
-      settle(4003, out);
+      refuse(4003, out);
       return;
     }
-    settled = true;
-    clearTimeout(timeout);
+    // False when the socket closed, or the deadline passed, while the answer was on its way.
+    if (!finish()) return;
     hooks.onAuthenticated(out.caller);
     hooks.send({ status: 'ok' });
     if (out.expiresAt !== undefined) endAt(out.expiresAt);
   };
 
-  /** Close the socket when the token runs out — re-armed, for a lifetime longer than one timer holds. */
-  const endAt = (expiresAt: number): void => {
-    const left = expiresAt - Date.now();
-    if (left <= 0) {
-      hooks.close(4004, 'token_expired');
-      return;
-    }
-    expiry = setTimeout(() => endAt(expiresAt), Math.min(left, LONGEST_TIMER_MS));
-    // The socket is what keeps a connection alive, never this clock.
-    expiry.unref?.();
-  };
-
   return {
     onMessage(raw) {
-      if (settled || verifying) return;
+      if (phase !== 'waiting') return;
       let token: string | undefined;
       try {
         // The transport hands over a Buffer, a string, or a binary blob; the token frame
         // is text, and anything else fails the JSON parse and is refused.
         token = (JSON.parse(String(raw)) as { token?: string }).token;
       } catch {
-        settle(4002, 'no_token');
+        refuse(4002, 'no_token');
         return;
       }
       if (!token) {
-        settle(4002, 'no_token');
+        refuse(4002, 'no_token');
         return;
       }
-      verifying = true;
+      phase = 'verifying';
       // What can still throw in there is a write to a socket that closed a moment ago, and its
       // `close` event is already on the way to `dispose()`. Nothing is owed to it but not
       // becoming an unhandled rejection.
       void authenticate(token).catch(() => undefined);
     },
     dispose() {
-      settled = true;
-      clearTimeout(timeout);
-      clearTimeout(expiry);
+      // Directly rather than through `finish`: after a success the handshake is already done
+      // and the clock running is the token's, which has to stop as well.
+      phase = 'done';
+      clearTimeout(timer);
     },
   };
 };

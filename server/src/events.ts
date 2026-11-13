@@ -13,6 +13,7 @@
  */
 import type { Db } from './db.js';
 import { wokenBy } from './account.js';
+import { reachesVault } from './auth/guard.js';
 
 /** What the WS route registers for one open, authenticated connection. */
 export interface RevisionSubscriber {
@@ -44,12 +45,12 @@ export const openEventsHub = (db: Db): EventsHub => {
     void (async () => {
       // Nobody is listening, so there is nobody to ask about.
       if (connections.size === 0) return;
-      // The vault that changed; one module answers who may hear of it and where its journal
-      // stands (account.ts), beside the guard's own predicates — a rule spelled again in this
-      // file is the drift that module exists to avoid.
+      // The vault that changed: which devices are still live and where its journal stands
+      // (account.ts), and which of them may read it — the guard's own `reachesVault`. A rule
+      // spelled again in this file is the drift both modules exist to avoid.
       const woken = await wokenBy(db, payload);
       if (!woken) return; // a vault that no longer exists wakes nobody
-      const devices = new Set(woken.deviceIds);
+      const devices = new Set(woken.devices.filter((d) => reachesVault(d.vaultId, payload)).map((d) => d.id));
       for (const sub of connections) {
         if (devices.has(sub.deviceId)) sub.send({ vault_id: payload, head_rev: woken.headRev });
       }

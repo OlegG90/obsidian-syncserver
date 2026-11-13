@@ -97,7 +97,7 @@ describe('wokenBy — who a new revision wakes', () => {
     return row!.id;
   };
 
-  it('names the journal head and the devices that may read the vault, and no others', async () => {
+  it('names the journal head and the owner\'s live devices, each with the vault it syncs', async () => {
     const a = await makeAccount(`woken-a-${process.pid}`);
     const b = await makeAccount(`woken-b-${process.pid}`);
     const syncing = await device(a.userId, a.vaultId);
@@ -108,16 +108,21 @@ describe('wokenBy — who a new revision wakes', () => {
     const woken = await wokenBy(db, a.vaultId);
     assert.ok(woken);
     assert.equal(typeof woken!.headRev, 'number');
+    // Which of them may read this vault is the guard's `reachesVault`, asked by the fan-out;
+    // what this answers is who is still allowed to act at all.
     assert.deepEqual(
-      [...woken!.deviceIds].sort(),
-      [syncing, unbound].sort(),
-      'the owner\'s live devices syncing this vault or none yet — not the revoked one, not a stranger\'s',
+      [...woken!.devices].sort((x, y) => x.id.localeCompare(y.id)),
+      [
+        { id: syncing, vaultId: a.vaultId },
+        { id: unbound, vaultId: null },
+      ].sort((x, y) => x.id.localeCompare(y.id)),
+      'the owner\'s live devices — not the revoked one, not a stranger\'s',
     );
   });
 
-  it('still names the head of a vault no device may hear of', async () => {
+  it('still names the head of a vault whose owner has no live device', async () => {
     const a = await makeAccount(`woken-none-${process.pid}`);
-    assert.deepEqual((await wokenBy(db, a.vaultId))!.deviceIds, []);
+    assert.deepEqual((await wokenBy(db, a.vaultId))!.devices, []);
   });
 
   it('returns undefined for a vault that does not exist', async () => {

@@ -13,6 +13,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { openEventsHub } from '../src/events.js';
+import { aVaultAccount } from './support/accounts.js';
 
 const cfg = loadConfig();
 
@@ -25,17 +26,7 @@ let ownerToken: string;
 let strangerToken: string;
 let vaultId: string;
 
-const makeAccount = async (login: string): Promise<string> => {
-  const userId = randomUUID();
-  await db.query(
-    `INSERT INTO users (id, login, state, auth_secret_hash, account_salt, kdf_params,
-                        pubkey, enc_privkey, kek_verifier_hash, recovery_key, recovery_code_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
-             '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
-    [userId, login],
-  );
-  return userId;
-};
+const makeAccount = async (login: string): Promise<string> => (await aVaultAccount(db, login)).id;
 
 /** One device of an account — syncing `vault`, or none yet — and a token that names it. */
 const makeDevice = async (
@@ -250,9 +241,8 @@ describe("change notifications — the socket is held to the API's policy (#464)
     // D-140: what a device's token reaches is the vault it syncs. Which other vaults the
     // account holds, and that one of them moved, is not this device's business.
     const other = await makeVault(ownerId);
-    const desk = await openSocket((await makeDevice(ownerId, vaultId)).token);
-    const elsewhere = await openSocket((await makeDevice(ownerId, other)).token);
-    const unbound = await openSocket((await makeDevice(ownerId)).token);
+    const connect = async (vault: string | null): Promise<Opened> => openSocket((await makeDevice(ownerId, vault)).token);
+    const [desk, elsewhere, unbound] = await Promise.all([connect(vaultId), connect(other), connect(null)]);
 
     await revise(other);
     assert.ok(elsewhere.messages.some((m) => m.includes(other)), 'the device syncing it heard');

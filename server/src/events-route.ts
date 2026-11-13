@@ -13,13 +13,10 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { EventsHub } from './events.js';
-import { liveDevice, verifyCaller } from './auth/guard.js';
+import { authenticate, type Claims } from './auth/guard.js';
 import { beginSocketAuth } from './ws-auth.js';
 
-/** What an access token says: who, which device, and until when (seconds). */
-type Claims = { sub?: string; device?: string; exp?: number };
-
-export const registerEventsRoutes =(app: FastifyInstance, hub: EventsHub): void => {
+export const registerEventsRoutes = (app: FastifyInstance, hub: EventsHub): void => {
   app.get('/events', { websocket: true }, (socket, req) => {
     let unsub: (() => void) | undefined;
     const auth = beginSocketAuth({
@@ -33,13 +30,12 @@ export const registerEventsRoutes =(app: FastifyInstance, hub: EventsHub): void 
         } catch {
           return 'invalid_token';
         }
-        // The same policy as every HTTP route: a token names an account AND a device (D-90)…
-        const caller = verifyCaller(claims);
-        if (!caller) return 'invalid_token';
-        // …and a valid signature is not enough (#373): the device must still be allowed, which
-        // only the database knows. Without this a revoked phone was refused by the API and
-        // welcomed here, with the token it still held.
-        if (!(await liveDevice(req.server.db, caller))) return 'device_revoked';
+        // The very steps `requireAuth` takes, not a copy of them (#464): a token names an account
+        // and a device (D-90), and the device must still be allowed, which only the database
+        // knows (#373). A copy here once welcomed a phone the API had already revoked.
+        const caller = await authenticate(req.server.db, claims);
+        if (caller === 'unauthenticated') return 'invalid_token';
+        if (caller === 'device_revoked') return caller;
         return {
           caller,
           ...(claims.exp === undefined ? {} : { expiresAt: claims.exp * 1000 }),

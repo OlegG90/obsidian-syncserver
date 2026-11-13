@@ -15,6 +15,7 @@
  * perform an operation is the caller's decision too: a delete must proceed through a
  * freeze, because it is the only way out of over-quota (SH-20).
  */
+import { DEVICE_IS_LIVE } from './auth/guard.js';
 import type { Queryable } from './db.js';
 
 /** Whether `userId` owns `vaultId`. The single formulation of the ownership test. */
@@ -27,44 +28,32 @@ export const ownsVault = async (q: Queryable, userId: string, vaultId: string): 
 };
 
 /**
- * A device that may still act for its account, as SQL over `devices d` and `users u`: not
- * revoked, and the account still active (D-90, #373).
+ * Where a vault's journal stands, and the owner's devices that may still act — each with the
+ * vault it syncs, so the fan-out can ask `reachesVault` of it, which is the guard's own rule
+ * (D-140) rather than a second spelling of it here.
  *
- * A fragment rather than a function because its two users ask different questions around it —
- * the guard about one device, the fan-out about every device of a vault — and what must not
- * exist twice is this line.
- */
-export const DEVICE_IS_LIVE = `d.revoked_at IS NULL AND u.state = 'active'`;
-
-/**
- * Which devices a new revision of this vault wakes, and where its journal stands.
- *
- * The devices `requireAuth` would let read the vault right now, asked in one statement: the
- * owner's, still live, and syncing this vault or none yet — which is `withinItsVault`'s rule
- * for a path that names a vault (D-140), said in SQL because here it selects rows rather than
- * judging one request. Asked per notification rather than remembered from the handshake, because every
- * part of it can change under an open socket — a device is revoked, or opens its first vault
- * — and a hint routed by what was true at connect time is a hint sent to a device the API
- * has already stopped answering.
+ * Asked per notification rather than remembered from the handshake, because every part of it
+ * can change under an open socket — a device is revoked, or opens its first vault — and a
+ * hint routed by what was true at connect time is a hint sent to a device the API has already
+ * stopped answering.
  */
 export const wokenBy = async (
   q: Queryable,
   vaultId: string,
-): Promise<{ headRev: number; deviceIds: string[] } | undefined> => {
-  const row = await q.one<{ head: string; devices: string[] }>(
+): Promise<{ headRev: number; devices: { id: string; vaultId: string | null }[] } | undefined> => {
+  const row = await q.one<{ head: string; devices: { id: string; vaultId: string | null }[] }>(
     `SELECT v.head_rev::text AS head,
-            COALESCE(array_agg(d.id::text) FILTER (WHERE d.id IS NOT NULL), '{}') AS devices
+            COALESCE(json_agg(json_build_object('id', d.id, 'vaultId', d.vault_id))
+                       FILTER (WHERE d.id IS NOT NULL), '[]') AS devices
        FROM vaults v
        JOIN users u ON u.id = v.user_id
-       LEFT JOIN devices d
-              ON d.user_id = v.user_id AND ${DEVICE_IS_LIVE}
-             AND (d.vault_id = v.id OR d.vault_id IS NULL)
+       LEFT JOIN devices d ON d.user_id = v.user_id AND ${DEVICE_IS_LIVE}
       WHERE v.id = $1
       GROUP BY v.id`,
     [vaultId],
   );
   if (!row) return undefined;
-  return { headRev: Number(row.head), deviceIds: row.devices };
+  return { headRev: Number(row.head), devices: row.devices };
 };
 
 /** What a write to a vault is allowed to: the owner, and whether that account is frozen. */
