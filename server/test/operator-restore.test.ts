@@ -102,6 +102,9 @@ describe('the halt after an unconfirmed restore', () => {
     // answer that could not have changed.
     await checkRestoreState(db, stateFile);
 
+    // `/admin/accounts` is declared BEFORE the halt's hook in `buildApp`, so this is also the proof
+    // that a hook added to the app guards the routes above it (issue #467). A Fastify that ever
+    // scoped hooks by declaration order would fail here, and say why.
     const blocked = await app.inject({ method: 'GET', url: '/admin/accounts', headers: admin() });
     assert.equal(blocked.statusCode, 503);
     assert.equal(blocked.json().error, 'restore_pending');

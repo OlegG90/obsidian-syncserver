@@ -73,8 +73,6 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   await app.register(fastifyJwt, { secret: cfg.serverSecret });
   await app.register(import('@fastify/websocket'));
 
-  // Registered before the routes so it runs before any of them: while there is no
-  // administrator, the only thing this server does is let one be made (D-107).
   // Answers whether this process can do its job, which means asking PostgreSQL — a
   // server that is listening but cannot reach the database is not healthy, and a port
   // check would call it so.
@@ -100,8 +98,16 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     } satisfies HealthResponse;
   });
 
-  // Before every route, because a hook applies to the routes declared after it: each refusal to an
-  // authenticated device is counted and logged (#355).
+  // **A hook added to the app guards every route it has** — declared before it or after it, and
+  // the routes of a plugin registered with its own scope too. Where one is added decides only the
+  // order hooks of one kind run in (issue #467). This file once said otherwise, and placed routes by
+  // it; the halt and the window below guard the routes above them, which is what
+  // `operator-restore.test.ts` and `operator-backup-window.test.ts` each pin.
+  //
+  // The order that matters: the bootstrap guard is the first `onRequest`, because while there is no
+  // administrator the only thing this server does is let one be made (D-107) — not "the database is
+  // being restored", not "being backed up". The problem recorder is an `onSend`, so its place among
+  // the `onRequest` hooks does not matter; it counts each refusal to an authenticated device (#355).
   registerProblemRecorder(app, db);
   registerBootstrapGuard(app, db);
   registerAuthRoutes(app, db, cfg, attempts ?? inProcessAttemptLimiter());
@@ -113,6 +119,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   registerHistoryRoutes(app, db);
   registerVaultRoutes(app, db);
   registerShareRoutes(app, db, cfg);
+  registerDeltaRoutes(app, db, cfg);
 
   // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
   // that owns the fact, so this and `index.ts` cannot ask separately and disagree (D-89).
@@ -176,7 +183,6 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
       message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',
     });
   });
-  registerDeltaRoutes(app, db, cfg);
 
   if (events) registerEventsRoutes(app, events);
 

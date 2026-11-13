@@ -104,7 +104,9 @@ export const recordProblem = async (db: Pick<Db, 'query'>, p: SeenProblem): Prom
  * refreshing the view. Never failing because a problem that cannot be recorded (the device row deleted a
  * moment ago) is still an answer the client is owed: the failure goes to the log instead.
  *
- * Registered before the routes, since a Fastify hook applies to the routes declared after it.
+ * An `onSend` on the app, so it sees every route's answer wherever it is registered. It counts only
+ * those with a device behind them: a refusal from an `onRequest` hook — the bootstrap guard, a halt, a
+ * backup window — comes before the guard that names one, and is not a problem of anybody's device.
  */
 export const registerProblemRecorder = (app: FastifyInstance, db: Db, log: (m: string) => void = console.log): void => {
   app.addHook('onSend', async (req, reply, payload) => {
