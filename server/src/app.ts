@@ -98,44 +98,13 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     } satisfies HealthResponse;
   });
 
-  // **A hook added to the app guards every route it has** — declared before it or after it, and
-  // the routes of a plugin registered with its own scope too. Where one is added decides only the
-  // order hooks of one kind run in (issue #467). So the halt and the window below guard the routes
-  // above them, which `operator-restore.test.ts` and `operator-backup-window.test.ts` each pin.
-  //
-  // The order that matters: the bootstrap guard is the first `onRequest`, because while there is no
-  // administrator the only thing this server does is let one be made (D-107) — not "the database is
-  // being restored", not "being backed up". The problem recorder is an `onSend`, so its place among
-  // the `onRequest` hooks does not matter; it counts each refusal to an authenticated device (#355).
+  // Every hook first, then every route. A hook added to the app guards all of its routes wherever it
+  // is added (issue #467), so this layout is for the reader: what turns a request away is all here,
+  // in the order it is asked. The bootstrap guard goes first (`bootstrap.ts`); then the halt after
+  // an unconfirmed restore; then the backup window. The problem recorder is an `onSend`
+  // (`sync-problems.ts`), so its place among them does not matter.
   registerProblemRecorder(app, db);
   registerBootstrapGuard(app, db);
-  registerAuthRoutes(app, db, cfg, attempts ?? inProcessAttemptLimiter());
-  registerPairingRoutes(app, db, cfg);
-  const blobStore = openStore(cfg.blobStorePath);
-  const blobService = new BlobService(db, blobStore, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute), cfg.limits);
-  registerBlobRoutes(app, db, blobStore, blobService);
-  registerNodeRoutes(app, db);
-  registerHistoryRoutes(app, db);
-  registerVaultRoutes(app, db);
-  registerShareRoutes(app, db, cfg);
-  registerDeltaRoutes(app, db, cfg);
-
-  // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
-  // that owns the fact, so this and `index.ts` cannot ask separately and disagree (D-89).
-  const versionLine = await serverVersionLine(db);
-  registerAdminRoutes(app, db, {
-    restoreStateFile: cfg.restoreStateFile,
-    ...(stop ? { stop } : {}),
-    destination: cfg.backup.destination,
-    // The legs are built per run, so each backup lands in its own subdirectory and two runs
-    // never write into each other. The server's PostgreSQL version is read once, here, and
-    // carried into every run's `assertReady` — which `runBackup` calls before the lock, the
-    // row and the window, so a dump whose major disagrees is refused with none of them taken
-    // (docs/10, D-73). The blobs come from the live store, which the configuration names once
-    // (issue #219) rather than twice.
-    makeLegs: legsFor(cfg, versionLine),
-  }, { accessTokenTtlSeconds: cfg.accessTokenTtlSeconds });
-  await registerConsoleRoutes(app);
 
   // The halt after an unconfirmed restore (docs/11). The database is behind the state
   // file, so a restore happened and nobody confirmed it — and the silent divergence the
@@ -182,6 +151,34 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
       message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',
     });
   });
+
+  registerAuthRoutes(app, db, cfg, attempts ?? inProcessAttemptLimiter());
+  registerPairingRoutes(app, db, cfg);
+  const blobStore = openStore(cfg.blobStorePath);
+  const blobService = new BlobService(db, blobStore, inProcessRateLimiter(cfg.limits.uploadBytesPerMinute), cfg.limits);
+  registerBlobRoutes(app, db, blobStore, blobService);
+  registerNodeRoutes(app, db);
+  registerHistoryRoutes(app, db);
+  registerVaultRoutes(app, db);
+  registerShareRoutes(app, db, cfg);
+  registerDeltaRoutes(app, db, cfg);
+
+  // The PostgreSQL major a backup's dump must match (docs/10). Read through the one reader
+  // that owns the fact, so this and `index.ts` cannot ask separately and disagree (D-89).
+  const versionLine = await serverVersionLine(db);
+  registerAdminRoutes(app, db, {
+    restoreStateFile: cfg.restoreStateFile,
+    ...(stop ? { stop } : {}),
+    destination: cfg.backup.destination,
+    // The legs are built per run, so each backup lands in its own subdirectory and two runs
+    // never write into each other. The server's PostgreSQL version is read once, here, and
+    // carried into every run's `assertReady` — which `runBackup` calls before the lock, the
+    // row and the window, so a dump whose major disagrees is refused with none of them taken
+    // (docs/10, D-73). The blobs come from the live store, which the configuration names once
+    // (issue #219) rather than twice.
+    makeLegs: legsFor(cfg, versionLine),
+  }, { accessTokenTtlSeconds: cfg.accessTokenTtlSeconds });
+  await registerConsoleRoutes(app);
 
   if (events) registerEventsRoutes(app, events);
 
