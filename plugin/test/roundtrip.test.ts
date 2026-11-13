@@ -1189,6 +1189,7 @@ describe('the engine, device A pushes and device B pulls', () => {
       tokenSource: () => client.getAccessToken(),
       refresh: () => client.refreshToken(),
       onNotify: (vaultId) => notified.push(vaultId),
+      onRevoked: () => undefined,
     });
     listener.start();
 

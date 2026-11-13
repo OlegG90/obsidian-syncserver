@@ -738,6 +738,14 @@ syncing that vault — or none yet, like a device that has just paired (D-140). 
 its socket is open hears nothing further, although the socket itself stays until its token ends, and a
 device never learns that another vault of its account moved.
 
+**The client gives each reason one answer.** `invalid_token` is a stale token: refresh, then reconnect.
+`4004 token_expired` is the same, met before it is refused: refresh first, so the next socket is not
+opened with a token the server is bound to turn away. `device_revoked` stops the listener — no refresh can
+help — and wakes one sync on the way out, which meets the same `401` and is what tells the user.
+`auth_timeout`, `no_token` and `1011` say nothing about the token, so the same one tries again on backoff.
+A refresh that fails is followed by a reconnect all the same: offline fails a refresh too, and a channel
+that gave up on a moment's outage would stay silent until the vault was next unlocked.
+
 **The client treats a notification as a hint, not an order.** It wakes and runs `syncNow` — and skips if a
 sync is already running, because that sync will see the change anyway. Reconnect uses backoff. iOS has no
 background execution ([02](02-architecture.md)), so on a phone the notification only shortens the wait
