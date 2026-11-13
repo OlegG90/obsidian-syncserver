@@ -5,7 +5,7 @@
  * docs/04 names the reason this is one module: "Separate checks per endpoint are precisely
  * where one eventually falls behind the rest." The ownership predicate was copy-pasted
  * across delta, history and nodes, and the change-notification hub added a fourth shape
- * that also read `head_rev`. One module, one formulation of the rule — and the write paths
+ * that also reads `head_rev` and the devices to wake. One module, one formulation of the rule — and the write paths
  * that run inside `db.tx` use the same functions the routes use, through the `Queryable`
  * seam, instead of restating the fact as a second query shape.
  *
@@ -15,6 +15,7 @@
  * perform an operation is the caller's decision too: a delete must proceed through a
  * freeze, because it is the only way out of over-quota (SH-20).
  */
+import { DEVICE_IS_LIVE } from './auth/guard.js';
 import type { Queryable } from './db.js';
 
 /** Whether `userId` owns `vaultId`. The single formulation of the ownership test. */
@@ -26,17 +27,33 @@ export const ownsVault = async (q: Queryable, userId: string, vaultId: string): 
   return row?.ok ?? false;
 };
 
-/** Who owns a vault and where its journal stands, for a fan-out that needs both. */
-export const ownerOf = async (
+/**
+ * Where a vault's journal stands, and the owner's devices that may still act — each with the
+ * vault it syncs, so the fan-out can ask `reachesVault` of it, which is the guard's own rule
+ * (D-140) rather than a second spelling of it here.
+ *
+ * Asked per notification rather than remembered from the handshake, because every part of it
+ * can change under an open socket — a device is revoked, or opens its first vault — and a
+ * hint routed by what was true at connect time is a hint sent to a device the API has already
+ * stopped answering.
+ */
+export const wokenBy = async (
   q: Queryable,
   vaultId: string,
-): Promise<{ userId: string; headRev: number } | undefined> => {
-  const row = await q.one<{ userId: string; head: string }>(
-    `SELECT user_id AS "userId", head_rev::text AS head FROM vaults WHERE id = $1`,
+): Promise<{ headRev: number; devices: { id: string; vaultId: string | null }[] } | undefined> => {
+  const row = await q.one<{ head: string; devices: { id: string; vaultId: string | null }[] }>(
+    `SELECT v.head_rev::text AS head,
+            COALESCE(json_agg(json_build_object('id', d.id, 'vaultId', d.vault_id))
+                       FILTER (WHERE d.id IS NOT NULL), '[]') AS devices
+       FROM vaults v
+       JOIN users u ON u.id = v.user_id
+       LEFT JOIN devices d ON d.user_id = v.user_id AND ${DEVICE_IS_LIVE}
+      WHERE v.id = $1
+      GROUP BY v.id`,
     [vaultId],
   );
   if (!row) return undefined;
-  return { userId: row.userId, headRev: Number(row.head) };
+  return { headRev: Number(row.head), devices: row.devices };
 };
 
 /** What a write to a vault is allowed to: the owner, and whether that account is frozen. */

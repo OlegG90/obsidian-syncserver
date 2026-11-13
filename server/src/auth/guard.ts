@@ -38,11 +38,44 @@ declare module 'fastify' {
  * is not attributed to a device cannot be throttled and a session that cannot be signed
  * out one device at a time is a session nobody signs out (D-90).
  */
-export const verifyCaller = (
-  claims: { sub?: string; device?: string } | undefined,
-): Caller | undefined => {
+export const verifyCaller = (claims: Claims | undefined): Caller | undefined => {
   if (!claims?.sub || !claims.device) return undefined;
   return { userId: claims.sub, deviceId: claims.device };
+};
+
+/** What an access token says: who, which device, and until when (seconds). */
+export type Claims = { sub?: string; device?: string; exp?: number };
+
+/**
+ * A device that may still act for its account, as SQL over `devices d` and `users u`: not
+ * revoked, and the account still active (D-90, #373).
+ *
+ * A fragment rather than a function because its two users ask different questions around it —
+ * this guard about one device, the change fan-out about every device of a vault — and what
+ * must not exist twice is this line.
+ */
+export const DEVICE_IS_LIVE = `d.revoked_at IS NULL AND u.state = 'active'`;
+
+/**
+ * Whether a device syncing `own` may reach `vaultId` (D-140): its own vault, or any vault while
+ * it has none yet. The guard asks it of a request, and the change fan-out of a notification.
+ */
+export const reachesVault = (own: string | null | undefined, vaultId: string): boolean => !own || own === vaultId;
+
+/**
+ * Who verified claims act as, if they may still act at all — every authenticated door's first
+ * steps, in one place so that no door takes fewer (#464). The HTTP guard turns a refusal into a
+ * `401` and the change socket into a close; what is refused is the same.
+ */
+export const authenticate = async (
+  db: Db,
+  claims: Claims | undefined,
+): Promise<Caller | 'unauthenticated' | 'device_revoked'> => {
+  const caller = verifyCaller(claims);
+  if (!caller) return 'unauthenticated';
+  const device = await liveDevice(db, caller);
+  if (!device) return 'device_revoked';
+  return { ...caller, vaultId: device.vaultId };
 };
 
 /**
@@ -62,19 +95,13 @@ export const verifyCaller = (
  * trusts the other is a guard with a gap in it.
  */
 export const requireAuth = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-  const claims = await req.jwtVerify<{ sub?: string; device?: string }>().catch(() => undefined);
-  const caller = verifyCaller(claims);
-  if (!caller) {
-    await reply.code(401).send({ error: 'unauthenticated' });
+  const caller = await authenticate(req.server.db, await req.jwtVerify<Claims>().catch(() => undefined));
+  if (typeof caller === 'string') {
+    await reply.code(401).send({ error: caller });
     return;
   }
-  const device = await liveDevice(req.server.db, caller);
-  if (!device) {
-    await reply.code(401).send({ error: 'device_revoked' });
-    return;
-  }
-  req.caller = { ...caller, vaultId: device.vaultId };
-  if (!(await withinItsVault(req, req.caller))) {
+  req.caller = caller;
+  if (!(await withinItsVault(req, caller))) {
     // The answer another account's vault gets (D-20): which vaults this account holds is not this
     // device's business either (D-140).
     await reply.code(404).send({ error: 'not_found' });
@@ -89,7 +116,7 @@ export const requireAuth = async (req: FastifyRequest, reply: FastifyReply): Pro
 export const liveDevice = (db: Db, caller: Caller): Promise<{ vaultId: string | null } | undefined> =>
   db.one<{ vaultId: string | null }>(
     `SELECT d.vault_id::text AS "vaultId" FROM devices d JOIN users u ON u.id = d.user_id
-      WHERE d.id = $1 AND d.user_id = $2 AND d.revoked_at IS NULL AND u.state = 'active'`,
+      WHERE d.id = $1 AND d.user_id = $2 AND ${DEVICE_IS_LIVE}`,
     [caller.deviceId, caller.userId],
   );
 
@@ -113,10 +140,10 @@ const withinItsVault = async (req: FastifyRequest, caller: Caller): Promise<bool
   if (!own || req.routeOptions.config.anyVaultOfTheAccount) return true;
 
   const params = req.params as { vaultId?: string; shareId?: string };
-  if (params.vaultId !== undefined && params.vaultId !== own) return false;
+  if (params.vaultId !== undefined && !reachesVault(own, params.vaultId)) return false;
 
   const named = (req.body as { vault_id?: unknown } | undefined)?.vault_id;
-  if (typeof named === 'string' && named !== own) return false;
+  if (typeof named === 'string' && !reachesVault(own, named)) return false;
 
   // A share is this vault's when this account's membership in it lives here — or is still an invitation,
   // which has no vault until it is accepted, and accepting it names this one in the body above.

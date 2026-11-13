@@ -17,7 +17,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Db } from '../db.js';
 import type { Actor } from './audit.js';
-import { verifyCaller } from '../auth/guard.js';
+import { verifyCaller, type Claims } from '../auth/guard.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -29,7 +29,7 @@ declare module 'fastify' {
 export const requireAdmin = (db: Db) => async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
   // The same token rule every other route is held to, not a copy of it: two policies for one
   // server is how the newest path drifts (`auth/guard.ts`).
-  const caller = verifyCaller(await req.jwtVerify<{ sub?: string; device?: string }>().catch(() => undefined));
+  const caller = verifyCaller(await req.jwtVerify<Claims>().catch(() => undefined));
   if (!caller) {
     await reply.code(401).send({ error: 'unauthenticated' });
     return;
