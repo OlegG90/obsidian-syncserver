@@ -67,6 +67,8 @@ export type RefusalCode =
   // Device pairing (docs/07).
   | 'already_settled'
   | 'not_approved'
+  // The backup window (D-114, D-142): this write, not now — ask again once it closes.
+  | 'backup_in_progress'
   // A vault that is not the caller's to remove yet.
   | 'named_by_a_share'
   | 'vault_exists'

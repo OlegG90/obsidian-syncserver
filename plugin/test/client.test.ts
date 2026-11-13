@@ -333,3 +333,24 @@ describe('the batched lookups fit inside a request line', () => {
     assert.deepEqual(urls, [], 'no request was made');
   });
 });
+
+describe('SyncClient keeps a pairing waiting through a backup', () => {
+  const claimingAgainst = (answer: HttpResponse) =>
+    new SyncClient('http://x', async (req) => {
+      if (!req.url.endsWith('/claim')) throw new Error(`unexpected request: ${req.url}`);
+      return answer;
+    });
+  const body = { pairing_secret: 'code', name: 'phone', platform: 'android' };
+
+  it('reads backup_in_progress on a claim as not yet, like not_approved', async () => {
+    assert.equal(await claimingAgainst(fail(503, 'backup_in_progress')).claimPairing('p', body), undefined);
+    assert.equal(await claimingAgainst(fail(409, 'not_approved')).claimPairing('p', body), undefined);
+  });
+
+  it('still gives a pairing up on a refusal that is final', async () => {
+    await assert.rejects(
+      () => claimingAgainst(fail(409, 'already_settled')).claimPairing('p', body),
+      (e: unknown) => e instanceof ApiError && e.code === 'already_settled',
+    );
+  });
+});

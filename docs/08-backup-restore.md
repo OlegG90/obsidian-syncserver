@@ -39,6 +39,23 @@ rule. A write that has already passed the check goes on to commit — the window
 it does not reach into the ones in flight — so the two legs describe two slightly different instants no
 matter what, and only one order is safe.
 
+**What the window refuses is content, not sessions** (D-142). Three routes write only device rows — who is
+signed in, and when a device was last seen — and pass: `POST /auth/refresh`, `POST /auth/login` and
+`POST /auth/console`. A refused refresh is a device that cannot **read** for the rest of the backup once its
+access token expires, and a refused sign-in keeps the operator out of the console that would say why writes
+are being turned away. What they write is what any request after the window writes: a row the copy does not
+hold. A restore therefore loses at most a newer `last_seen_at`, or a refresh token issued after the dump —
+and a device holding one of those signs in again.
+
+Everything else that writes is refused, and these by decision rather than by default:
+
+- **pairing** — beginning, approving and claiming write a device and the seed envelope sealed to it. A
+  device waiting for its claim reads `backup_in_progress` as *not yet*, exactly like `not_approved`, and
+  keeps asking: the pairing outlasts the window instead of being abandoned in it;
+- **verifying a copy** — it walks every blob address of a copy while another copy is being written, and
+  the answer would describe neither moment cleanly. The button says the server is being backed up; pressed
+  again afterwards, it answers.
+
 > **The database is dumped first and the blobs are copied second** (D-114). That makes the blob copy a
 > *superset* of what the dump references: surplus blobs are harmless and the collector removes them,
 > while dangling references are neither. Blobs-first is safe only under a lock held across the whole
