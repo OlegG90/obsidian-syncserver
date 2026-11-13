@@ -219,6 +219,7 @@ export const registerAuthRoutes = (
    */
   app.post<{ Body: { login: string; password: string; device_name?: string } }>(
     '/auth/console',
+    { config: { writesOnlySessions: true } },
     async (req, reply) => {
       const login = req.body?.login;
       const password = req.body?.password;
@@ -251,6 +252,7 @@ export const registerAuthRoutes = (
 
   app.post<{ Body: { login: string; auth_secret: string; device_id?: string } }>(
     '/auth/login',
+    { config: { writesOnlySessions: true } },
     async (req, reply) => {
       const account = await findActiveAccount(db, req.body.login);
       // Same answer whether the login is unknown or the secret is wrong — the pair is the
@@ -372,7 +374,7 @@ export const registerAuthRoutes = (
     };
   });
 
-  app.post<{ Body: { refresh: string } }>('/auth/refresh', async (req, reply) => {
+  app.post<{ Body: { refresh: string } }>('/auth/refresh', { config: { writesOnlySessions: true } }, async (req, reply) => {
     const device = await findDeviceByRefresh(db, req.body.refresh);
     if (!device) return reply.code(401).send({ error: 'invalid_refresh' });
 

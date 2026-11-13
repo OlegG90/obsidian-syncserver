@@ -39,6 +39,14 @@ rule. A write that has already passed the check goes on to commit — the window
 it does not reach into the ones in flight — so the two legs describe two slightly different instants no
 matter what, and only one order is safe.
 
+**What the window refuses is content, not sessions** (D-142). Three routes write only who is signed in and
+when a device was last seen — `POST /auth/refresh`, `POST /auth/login` and `POST /auth/console` — and they
+pass. A refused refresh is a device that cannot **read** for the rest of the backup once its access token
+expires, and a refused sign-in keeps the operator out of the console that would say why writes are being
+turned away. What they write is what any request after the window writes: a row the copy does not hold,
+which a restore answers by asking the device to sign in again. Every other `POST`, `PUT` and `DELETE` —
+pairing and invitations included, since both write key material — is refused.
+
 > **The database is dumped first and the blobs are copied second** (D-114). That makes the blob copy a
 > *superset* of what the dump references: surplus blobs are harmless and the collector removes them,
 > while dangling references are neither. Blobs-first is safe only under a lock held across the whole

@@ -151,9 +151,14 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   // window turns away is *new* requests, and this is the one place all of them pass. It is
   // deliberately not a freeze — a request already inside a handler goes on to commit, which
   // is exactly why a backup dumps the database before it copies the blobs.
+  //
+  // A route that writes only sessions says so and passes (D-142): turning a token refresh away
+  // stopped a device from READING for the length of a backup, and a sign-in away kept the
+  // operator out of the console that would have said why.
   app.addHook('onRequest', async (req, reply) => {
     if (!backupInProgress()) return;
     if (req.method === 'GET' || req.method === 'HEAD') return;
+    if (req.routeOptions.config.writesOnlySessions) return;
     return reply.code(503).send({
       error: 'backup_in_progress',
       message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',
