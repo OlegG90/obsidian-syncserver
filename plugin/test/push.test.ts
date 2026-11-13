@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PushListener, type PushSocket, type PushSocketFactory } from '../src/obsidian/push.js';
+import type { RefreshOutcome } from '../src/api/client.js';
 
 /** A socket you can script from the test: open it, feed messages, close it. */
 class FakeSocket implements PushSocket {
@@ -50,12 +51,12 @@ class FakeSocket implements PushSocket {
 interface ListenerState {
   token: string | undefined;
   refreshCalls: number;
-  refreshResult: boolean;
+  refreshResult: RefreshOutcome;
   notified: string[];
-  revoked: number;
+  signedOut: number;
 }
 
-const makeListener = (over: { token?: string | undefined; refreshResult?: boolean; delays?: number[] } = {}) => {
+const makeListener = (over: { token?: string | undefined; refreshResult?: RefreshOutcome; delays?: number[] } = {}) => {
   const sockets: FakeSocket[] = [];
   const factory: PushSocketFactory = () => {
     const s = new FakeSocket();
@@ -65,9 +66,9 @@ const makeListener = (over: { token?: string | undefined; refreshResult?: boolea
   const state: ListenerState = {
     token: 'token' in over ? over.token : 'access-1',
     refreshCalls: 0,
-    refreshResult: over.refreshResult ?? true,
+    refreshResult: over.refreshResult ?? 'ok',
     notified: [],
-    revoked: 0,
+    signedOut: 0,
   };
   const options: import('../src/obsidian/push.js').PushListenerOptions = {
     url: 'ws://x.test/events',
@@ -76,11 +77,11 @@ const makeListener = (over: { token?: string | undefined; refreshResult?: boolea
     refresh: async () => {
       state.refreshCalls++;
       // A refresh that works hands out a token the next connection can be told apart by.
-      if (state.refreshResult) state.token = `access-${state.refreshCalls + 1}`;
+      if (state.refreshResult === 'ok') state.token = `access-${state.refreshCalls + 1}`;
       return state.refreshResult;
     },
     onNotify: (vaultId) => state.notified.push(vaultId),
-    onRevoked: () => state.revoked++,
+    onSignedOut: () => state.signedOut++,
     socketFactory: factory,
   };
   if (over.delays) options.delays = over.delays;
@@ -96,7 +97,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  */
 const afterEnding = async (
   end: (socket: FakeSocket, state: ListenerState) => void,
-  over: { refreshResult?: boolean } = {},
+  over: { refreshResult?: RefreshOutcome } = {},
 ) => {
   const made = makeListener({ delays: [1], ...over });
   made.listener.start();
@@ -177,7 +178,7 @@ describe('PushListener', () => {
     });
     assert.equal(out.state.refreshCalls, 0, 'a refresh cannot help a revoked device');
     assert.equal(out.sockets.length, 1, 'nothing reconnects');
-    assert.equal(out.state.revoked, 1, 'onRevoked is how the user comes to hear of it');
+    assert.equal(out.state.signedOut, 1, 'onSignedOut is how the user comes to hear of it');
   });
 
   it('refreshes on invalid_token, and reconnects once for the refusal and its close together', async () => {
@@ -223,15 +224,30 @@ describe('PushListener', () => {
     assert.equal(out.nextToken, 'access-from-a-sync');
   });
 
-  it('still reconnects when the refresh fails, because offline is not revoked', async () => {
+  it('still reconnects when the server could not answer the refresh, because offline is not signed out', async () => {
     const out = await afterEnding(
       (s) => {
         s.receive(ok);
         s.serverClose(4004);
       },
-      { refreshResult: false },
+      { refreshResult: 'unavailable' },
     );
     assert.equal(out.state.refreshCalls, 1);
-    assert.equal(out.sockets.length, 2, 'the channel keeps trying; a revoked device is told so by its own reason');
+    assert.equal(out.sockets.length, 2, 'the channel keeps trying');
+    assert.equal(out.state.signedOut, 0);
+  });
+
+  it('stops, and says so once, when the server refuses the refresh token', async () => {
+    // Spent is final: a reconnect would only be refused, refreshed for, and refused again.
+    const out = await afterEnding(
+      (s) => {
+        s.receive(refused('invalid_token'));
+        s.serverClose(4003);
+      },
+      { refreshResult: 'spent' },
+    );
+    assert.equal(out.state.refreshCalls, 1);
+    assert.equal(out.sockets.length, 1, 'nothing reconnects with a session that has ended');
+    assert.equal(out.state.signedOut, 1);
   });
 });

@@ -26,9 +26,9 @@
  *
  * - **persist.** It returns the record; the plugin stores it. `data.json` is worthless
  *   without the passphrase, and a persisted refresh token would quietly change that (docs/06).
- * - **re-login on refresh failure.** `refreshToken` already distinguishes `device_revoked`;
- *   building a hook here would repeat it one layer up. A sync that cannot be re-logged-in
- *   surfaces its own 401.
+ * - **re-login on refresh failure.** `refreshToken` already tells a spent token from a server
+ *   that could not be asked; building a hook here would repeat it one layer up. A sync whose
+ *   token is spent surfaces its own 401.
  * - **check the passphrase.** `open()` on an already-open session ignores the phrase. That is
  *   honest behaviour — the module answers state — but it means the UI must never use
  *   `open()` to confirm identity ("prove the phrase before changing it"). That check needs a
@@ -54,7 +54,7 @@ import { decryptName, encryptName } from '../crypto/scope.js';
 import { newKeypair, openFrom, sealTo } from '../crypto/hpke.js';
 import { open as openSealed, seal } from '../crypto/sealed.js';
 import { newHumanCode, normaliseHumanCode } from '../crypto/human-code.js';
-import { SyncClient } from '../api/client.js';
+import { SyncClient, type RefreshOutcome } from '../api/client.js';
 import { openTreeCache, type TreeCache } from '../engine/tree-cache.js';
 import type { Transport } from '../api/transport.js';
 import { concat, fromBase64, toBase64, toHex, utf8 } from '../crypto/bytes.js';
@@ -307,9 +307,14 @@ export class Session {
     return this.handle?.client.getAccessToken();
   }
 
-  /** Refresh the access token now, so a stale notification channel can reconnect. */
-  refreshAccessToken(): Promise<boolean> {
-    if (!this.handle) return Promise.resolve(false);
+  /**
+   * Refresh the access token now, so a stale notification channel can reconnect.
+   *
+   * Locked, there is no client to ask, which says nothing about the token: `unavailable`, and the
+   * channel waits for a session the way it already does when `accessToken` is undefined.
+   */
+  refreshAccessToken(): Promise<RefreshOutcome> {
+    if (!this.handle) return Promise.resolve('unavailable');
     return this.handle.client.refreshToken();
   }
 

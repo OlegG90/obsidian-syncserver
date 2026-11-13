@@ -288,6 +288,17 @@ const inFlight = async <T, R>(items: readonly T[], work: (item: T) => Promise<R>
   return out;
 };
 
+/**
+ * How a token refresh went: a new access token; a server that could not be asked — offline, timed
+ * out, or answering something other than a verdict on the token; or a refresh token it no longer
+ * accepts, spent or its device revoked.
+ *
+ * Three answers rather than a yes/no because the two failures call for opposite things. A spent
+ * token is gone for good and nothing should ask with it again; a server that could not be asked
+ * has said nothing about the token, which will work the moment it answers.
+ */
+export type RefreshOutcome = 'ok' | 'unavailable' | 'spent';
+
 export class SyncClient {
   private access: string | undefined;
   /**
@@ -299,7 +310,7 @@ export class SyncClient {
    */
   private refresh: string | undefined;
   /** One `/auth/refresh` in flight at a time, so several requests hitting 401 together do not send several. */
-  private refreshing: Promise<boolean> | undefined;
+  private refreshing: Promise<'ok' | 'spent'> | undefined;
 
   constructor(
     private readonly baseUrl: string,
@@ -356,31 +367,44 @@ export class SyncClient {
     // device's token by the same condition — so retrying it would only trade one failure
     // for a less specific one. `auth === false` requests (kdf, redeem, login, refresh
     // itself) are never retried, which is what stops this from recursing into itself.
-    if (res.status === 401 && req.auth !== false && !retried && this.refresh) {
-      if (errorIs(res.text(), 'unauthenticated') && (await this.refreshToken())) {
-        return this.send(req, true);
-      }
+    if (res.status === 401 && req.auth !== false && !retried && this.refresh && errorIs(res.text(), 'unauthenticated')) {
+      // A refresh the server could not answer rejects with what stopped it, and that is the
+      // failure to report rather than the expired token it was curing: offline, or a server
+      // mid-backup, read as `401 unauthenticated` tells the user to sign in again when nothing
+      // about their session is wrong.
+      if ((await this.refreshed()) === 'ok') return this.send(req, true);
     }
 
     return res;
   }
 
+  /** Refresh the access token now, and say how it went. */
+  refreshToken(): Promise<RefreshOutcome> {
+    return this.refreshed().catch((): RefreshOutcome => 'unavailable');
+  }
+
   /**
-   * Refresh the access token now; `false` when the refresh token is spent or revoked.
+   * The refresh itself: `ok` or `spent`, or rejected with whatever kept the server from answering.
+   *
+   * **The refresh token is let go only when the server refuses it** (`401`). Offline is a failure
+   * too, and a token let go then is one the session cannot get back: the network returns, the
+   * server answers, and every request is a `401` until the vault is locked and opened again.
    *
    * Single-flight: every request that meets an expired token at once waits on the same refresh.
    */
-  async refreshToken(): Promise<boolean> {
-    this.refreshing ??= (async () => {
+  private refreshed(): Promise<'ok' | 'spent'> {
+    if (this.refresh === undefined) return Promise.resolve('spent');
+    this.refreshing ??= (async (): Promise<'ok' | 'spent'> => {
       try {
         const out = await this.json<{ access: string }>('POST', '/auth/refresh', { refresh: this.refresh! }, { auth: false });
         this.access = out.access;
-        return true;
-      } catch {
-        // The refresh token itself is spent, invalid, or its device was revoked. Cleared so
-        // the next 401 does not retry a refresh that can only fail the same way again.
+        return 'ok';
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 401) throw e;
+        // Spent, invalid, or its device revoked — the one answer that is about the token. Let go,
+        // so the next 401 does not retry a refresh that can only fail the same way again.
         this.refresh = undefined;
-        return false;
+        return 'spent';
       } finally {
         this.refreshing = undefined;
       }

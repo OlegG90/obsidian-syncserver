@@ -15,6 +15,74 @@ const ok = (body: unknown, status = 200): HttpResponse => {
 };
 const fail = (status: number, error: string): HttpResponse => ok({ error }, status);
 
+describe('SyncClient says why a refresh failed, and keeps a token nothing was wrong with', () => {
+  /** A client whose `/auth/refresh` answers whatever the test says, counting how often it was asked. */
+  const refreshingAgainst = (answer: () => HttpResponse) => {
+    const sent: unknown[] = [];
+    const transport: Transport = async (req) => {
+      if (!req.url.endsWith('/auth/refresh')) throw new Error(`unexpected request: ${req.url}`);
+      sent.push(JSON.parse(String(req.body)));
+      return answer();
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setRefreshToken('the-refresh-token');
+    return { client, sent };
+  };
+
+  it('answers unavailable offline, and the same refresh token works once the network is back', async () => {
+    let online = false;
+    const { client, sent } = refreshingAgainst(() => {
+      if (!online) throw new Error('getaddrinfo ENOTFOUND x');
+      return ok({ access: 'new-access' });
+    });
+
+    assert.equal(await client.refreshToken(), 'unavailable');
+    online = true;
+    assert.equal(await client.refreshToken(), 'ok', 'the token was kept through the outage');
+    assert.deepEqual(sent, [{ refresh: 'the-refresh-token' }, { refresh: 'the-refresh-token' }]);
+    assert.equal(client.getAccessToken(), 'new-access');
+  });
+
+  it('answers unavailable when the server answers but not about the token', async () => {
+    // A 503 during a backup or a database outage is a server that could not be asked.
+    const { client, sent } = refreshingAgainst(() => (sent.length === 1 ? fail(503, 'backup_in_progress') : ok({ access: 'later' })));
+
+    assert.equal(await client.refreshToken(), 'unavailable');
+    assert.equal(await client.refreshToken(), 'ok');
+  });
+
+  it('reports what stopped the refresh, not the 401 it was curing, and refreshes on the next request', async () => {
+    let online = false;
+    let refreshes = 0;
+    const transport: Transport = async (req) => {
+      if (req.url.endsWith('/auth/refresh')) {
+        refreshes++;
+        if (!online) throw new Error('getaddrinfo ENOTFOUND x');
+        return ok({ access: 'new-access' });
+      }
+      return req.headers?.['authorization'] === 'Bearer new-access'
+        ? ok({ used: 1, quota: 2, frozen: false })
+        : fail(401, 'unauthenticated');
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('expired');
+    client.setRefreshToken('the-refresh-token');
+
+    await assert.rejects(() => client.usage(), (e: unknown) => e instanceof UnreachableError, 'offline, said as offline');
+    online = true;
+    await client.usage();
+    assert.equal(refreshes, 2, 'the kept token was spent on the second request');
+  });
+
+  it('answers spent on a 401, and lets that token go', async () => {
+    const { client, sent } = refreshingAgainst(() => fail(401, 'invalid_refresh'));
+
+    assert.equal(await client.refreshToken(), 'spent');
+    assert.equal(await client.refreshToken(), 'spent', 'and keeps saying so');
+    assert.equal(sent.length, 1, 'without asking the server again');
+  });
+});
+
 describe('SyncClient refreshes an expired access token', () => {
   it('retries the original request once the refresh succeeds', async () => {
     const calls: string[] = [];
