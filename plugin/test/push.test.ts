@@ -238,8 +238,7 @@ describe('PushListener', () => {
   });
 
   it('stops, and says so once, when the server refuses the refresh token', async () => {
-    // The loop this ends: a spent refresh token answered `false` exactly like an offline one,
-    // so the channel refreshed and reconnected into the same refusal every eight seconds.
+    // Spent is final: a reconnect would only be refused, refreshed for, and refused again.
     const out = await afterEnding(
       (s) => {
         s.receive(refused('invalid_token'));

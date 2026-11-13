@@ -26,9 +26,9 @@
  *
  * - **persist.** It returns the record; the plugin stores it. `data.json` is worthless
  *   without the passphrase, and a persisted refresh token would quietly change that (docs/06).
- * - **re-login on refresh failure.** `refreshToken` already distinguishes `device_revoked`;
- *   building a hook here would repeat it one layer up. A sync that cannot be re-logged-in
- *   surfaces its own 401.
+ * - **re-login on refresh failure.** `refreshToken` already tells a spent token from a server
+ *   that could not be asked; building a hook here would repeat it one layer up. A sync whose
+ *   token is spent surfaces its own 401.
  * - **check the passphrase.** `open()` on an already-open session ignores the phrase. That is
  *   honest behaviour — the module answers state — but it means the UI must never use
  *   `open()` to confirm identity ("prove the phrase before changing it"). That check needs a

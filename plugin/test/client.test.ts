@@ -52,6 +52,29 @@ describe('SyncClient says why a refresh failed, and keeps a token nothing was wr
     assert.equal(await client.refreshToken(), 'ok');
   });
 
+  it('reports what stopped the refresh, not the 401 it was curing, and refreshes on the next request', async () => {
+    let online = false;
+    let refreshes = 0;
+    const transport: Transport = async (req) => {
+      if (req.url.endsWith('/auth/refresh')) {
+        refreshes++;
+        if (!online) throw new Error('getaddrinfo ENOTFOUND x');
+        return ok({ access: 'new-access' });
+      }
+      return req.headers?.['authorization'] === 'Bearer new-access'
+        ? ok({ used: 1, quota: 2, frozen: false })
+        : fail(401, 'unauthenticated');
+    };
+    const client = new SyncClient('http://x', transport);
+    client.setAccessToken('expired');
+    client.setRefreshToken('the-refresh-token');
+
+    await assert.rejects(() => client.usage(), (e: unknown) => e instanceof UnreachableError, 'offline, said as offline');
+    online = true;
+    await client.usage();
+    assert.equal(refreshes, 2, 'the kept token was spent on the second request');
+  });
+
   it('answers spent on a 401, and lets that token go', async () => {
     let calls = 0;
     const { client } = refreshingAgainst(() => {
