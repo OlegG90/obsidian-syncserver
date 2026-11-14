@@ -1,3 +1,4 @@
+import { body, int, obj, str } from '../http-schema.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
@@ -9,7 +10,7 @@ import { listTrash, listVersions, restoreNode } from './service.js';
 export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
   app.get<{ Params: { vaultId: string; nodeId: string } }>(
     '/vaults/:vaultId/versions/:nodeId',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
@@ -20,7 +21,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.get<{ Params: { vaultId: string }; Querystring: { under?: string; limit?: string } }>(
     '/vaults/:vaultId/trash',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
@@ -34,7 +35,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{ Params: { vaultId: string }; Body: { node_id: string; rev: number } }>(
     '/vaults/:vaultId/restore',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(obj({ node_id: str, rev: int })) },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
@@ -64,7 +65,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
   // count, so a client that expected more can look again and see why.
   app.delete<{ Params: { vaultId: string } }>(
     '/vaults/:vaultId/trash',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
@@ -77,7 +78,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.delete<{ Params: { vaultId: string; nodeId: string } }>(
     '/vaults/:vaultId/trash/:nodeId',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });

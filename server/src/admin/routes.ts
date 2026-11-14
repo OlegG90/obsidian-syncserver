@@ -7,6 +7,7 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
+import { any, body, int, optional, str } from '../http-schema.js';
 import { refusedDeviceName } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import { listProblems } from '../sync-problems.js';
@@ -92,7 +93,7 @@ export const registerAdminRoutes = (
   /** Only what this surface needs of the configuration: how fresh a device's `last_seen_at` is (#386). */
   limits: { accessTokenTtlSeconds: number },
 ): void => {
-  const admin = { preHandler: requireAdmin(db) };
+  const admin = { preValidation: requireAdmin(db) };
 
   app.get('/admin/accounts', admin, async () => ({ accounts: await listAccounts(db) }));
 
@@ -121,7 +122,7 @@ export const registerAdminRoutes = (
 
   app.post<{ Body: { login: string; quota_bytes: string; ttl_seconds?: number } }>(
     '/admin/invitations',
-    admin,
+    { ...admin, ...body(optional({ login: str, quota_bytes: any, ttl_seconds: int })) },
     async (req, reply) => {
       const { login, quota_bytes: quota } = req.body ?? {};
       if (!login || typeof login !== 'string') return refuseWith(reply, 400, 'login_required');
@@ -144,7 +145,7 @@ export const registerAdminRoutes = (
 
   app.post<{ Params: { userId: string }; Body: { ttl_seconds?: number } }>(
     '/admin/invitations/:userId/reissue',
-    admin,
+    { ...admin, ...body(optional({ ttl_seconds: int })) },
     async (req, reply) => {
       const out = await reissue(db, req.admin!, req.params.userId, req.body?.ttl_seconds ?? INVITE_TTL_SECONDS);
       if ('kind' in out) return refuse(reply, out);

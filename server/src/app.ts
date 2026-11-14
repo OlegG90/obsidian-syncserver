@@ -1,5 +1,5 @@
 import fastifyJwt from '@fastify/jwt';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import type { HealthResponse } from '@syncserver/shared';
 import { schemaVersion } from './schema.js';
 import { registerProblemRecorder } from './sync-problems.js';
@@ -63,7 +63,21 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
   // accepted so every existing caller keeps working.
   const { events, attempts, stop } =
     'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined, stop: undefined } : deps;
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: false,
+    // A body is checked against its route's schema (`http-schema.ts`, issue #468), and checked as sent:
+    // Ajv's defaults would turn `"3"` into `3` and quietly drop what a schema does not list, so a client
+    // sending the wrong type would be answered as if it had sent the right one.
+    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
+  });
+
+  // A body the schema refused is answered the way every other refusal here is — a code, and the
+  // sentence that says what was wrong (`body/size must be integer`) — rather than in Fastify's own
+  // shape, which no client reads. Everything else keeps Fastify's answer.
+  app.setErrorHandler((error: FastifyError, _req, reply) => {
+    if (error.validation) return reply.code(400).send({ error: 'invalid_request', detail: error.message });
+    return reply.send(error);
+  });
 
   // The database, where a guard can reach it. `requireAuth` has to ask whether the caller's device is
   // still allowed (#373), and it is bound to routes by name in fifty-odd places — so it takes the

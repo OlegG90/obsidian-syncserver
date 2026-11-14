@@ -1,3 +1,4 @@
+import { any, body, obj, optional, str } from '../http-schema.js';
 import { refusedDeviceName, renameDevice } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import type { FastifyInstance } from 'fastify';
@@ -85,7 +86,7 @@ export const registerAuthRoutes = (
    * is simply no longer the first run, and saying so is what stops somebody hunting for a
    * typo in their request.
    */
-  app.post<{ Body: { login?: string; password: string } }>('/auth/bootstrap', async (req, reply) => {
+  app.post<{ Body: { login?: string; password: string } }>('/auth/bootstrap', body(optional({ login: str, password: str })), async (req, reply) => {
     const password = req.body?.password;
     if (!longEnough(password)) return reply.code(400).send(TOO_SHORT);
 
@@ -127,7 +128,7 @@ export const registerAuthRoutes = (
       device_name?: string;
       device_platform?: string;
     };
-  }>('/auth/redeem', async (req, reply) => {
+  }>('/auth/redeem', body(obj({ invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: any, pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str, recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str, device_name: any, device_platform: str }, ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'])), async (req, reply) => {
     const b = req.body;
 
     // Checked here as well as in the schema, for the reason a 500 is not an answer.
@@ -222,7 +223,7 @@ export const registerAuthRoutes = (
    */
   app.post<{ Body: { login: string; password: string; device_name?: string } }>(
     '/auth/console',
-    WRITES_ONLY_SESSIONS,
+    { ...WRITES_ONLY_SESSIONS, ...body(optional({ login: str, password: str, device_name: any })) },
     async (req, reply) => {
       const login = req.body?.login;
       const password = req.body?.password;
@@ -255,7 +256,7 @@ export const registerAuthRoutes = (
 
   app.post<{ Body: { login: string; auth_secret: string; device_id?: string } }>(
     '/auth/login',
-    WRITES_ONLY_SESSIONS,
+    { ...WRITES_ONLY_SESSIONS, ...body(obj({ login: str, auth_secret: str, device_id: str }, ['login', 'auth_secret'])) },
     async (req, reply) => {
       const account = await findActiveAccount(db, req.body.login);
       // Same answer whether the login is unknown or the secret is wrong — the pair is the
@@ -329,7 +330,7 @@ export const registerAuthRoutes = (
       device_name?: string;
       device_platform?: string;
     };
-  }>('/auth/recover', async (req, reply) => {
+  }>('/auth/recover', body(optional({ login: str, kek_verifier: str, recovery_code: str, device_name: any, device_platform: str })), async (req, reply) => {
     const b = req.body ?? ({} as Record<string, string>);
     if (!b.login) return reply.code(400).send({ error: 'login_required' });
     // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
@@ -379,7 +380,7 @@ export const registerAuthRoutes = (
 
   app.post<{ Body: { refresh: string } }>(
     '/auth/refresh',
-    WRITES_ONLY_SESSIONS,
+    { ...WRITES_ONLY_SESSIONS, ...body(obj({ refresh: str }, ['refresh'])) },
     async (req, reply) => {
       const device = await findDeviceByRefresh(db, req.body.refresh);
       if (!device) return reply.code(401).send({ error: 'invalid_refresh' });
@@ -390,7 +391,7 @@ export const registerAuthRoutes = (
     },
   );
 
-  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
+  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preValidation: requireAuth, ...body(obj({ name: any, platform: str }, ['platform'])) }, async (req, reply) => {
     if (refusedDeviceName(reply, req.body?.name)) return reply;
 
     const row = await db.one<{ id: string }>(
@@ -412,7 +413,7 @@ export const registerAuthRoutes = (
    * Authenticated, and that is proof enough: reaching here at all took `auth_secret`, which
    * comes from the seed, which comes from the envelope this verifier guards.
    */
-  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', { preHandler: requireAuth }, async (req, reply) => {
+  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', { preValidation: requireAuth, ...body(optional({ kek_verifier: str })) }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
     await db.query(`UPDATE users SET kek_verifier_hash = $2 WHERE id = $1 AND state = 'active'`, [
@@ -439,7 +440,7 @@ export const registerAuthRoutes = (
    * so this browser and any other holding it sign in again with the new password. That is the
    * point when a password is changed because it leaked.
    */
-  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', { preHandler: requireAuth }, async (req, reply) => {
+  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', { preValidation: requireAuth, ...body(optional({ current: str, password: str })) }, async (req, reply) => {
 
     const b = req.body ?? {};
     if (typeof b.current !== 'string' || !b.current) {
@@ -483,7 +484,7 @@ export const registerAuthRoutes = (
    *
    * Through the attempt limiter for the same reason recovery is: it is a passphrase guess.
    */
-  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', { preHandler: requireAuth }, async (req, reply) => {
+  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', { preValidation: requireAuth, ...body(optional({ kek_verifier: str })) }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
     const allowed = attempts.check(req.caller!.userId);
@@ -523,7 +524,7 @@ export const registerAuthRoutes = (
    * this endpoint — other devices keep their own copy of the envelope and would go on opening
    * with the old phrase — and that half is still open.
    */
-  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', { preHandler: requireAuth }, async (req, reply) => {
+  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', { preValidation: requireAuth, ...body(optional({ wrapped_seed: str, kek_verifier: str })) }, async (req, reply) => {
 
     const b = req.body ?? {};
     // Both, always. They describe one KEK from two sides, and a half write leaves the account
@@ -554,13 +555,13 @@ export const registerAuthRoutes = (
    * server could show again would be a code the server could use, and this one is stored as a
    * hash precisely so that it cannot.
    */
-  app.get('/auth/recovery-code', { preHandler: requireAuth }, async (req, reply) => {
+  app.get('/auth/recovery-code', { preValidation: requireAuth }, async (req, reply) => {
     return { present: await hasRecoveryCode(db, req.caller!.userId) };
   });
 
   app.put<{ Body: { recovery_key?: string; recovery_code_hash?: string } }>(
     '/auth/recovery-code',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ recovery_key: str, recovery_code_hash: str })) },
     async (req, reply) => {
 
       const b = req.body ?? {};
@@ -606,7 +607,7 @@ export const registerAuthRoutes = (
    * client cannot answer for itself once a person is looking at several — and it is what stops somebody
    * revoking the device they are holding.
    */
-  app.get('/auth/devices', { preHandler: requireAuth }, async (req, reply) => {
+  app.get('/auth/devices', { preValidation: requireAuth }, async (req, reply) => {
 
     const rows = await activeDevices(db, req.caller!.userId);
 
@@ -633,7 +634,7 @@ export const registerAuthRoutes = (
    * Idempotent, and silent about devices that are not the caller's — a 404 for someone
    * else's id would confirm it exists.
    */
-  app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', { preHandler: requireAuth }, async (req, reply) => {
+  app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', { preValidation: requireAuth }, async (req, reply) => {
     // Silent like the rest of this route, and never a 500 for a malformed id.
     if (!isUuid(req.params.deviceId)) return reply.code(204).send();
 
@@ -655,7 +656,7 @@ export const registerAuthRoutes = (
    */
   app.put<{ Params: { deviceId: string }; Body: { name?: unknown } }>(
     '/auth/devices/:deviceId',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       if (refusedDeviceName(reply, req.body?.name)) return reply;
       if (!isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });

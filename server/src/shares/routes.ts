@@ -5,6 +5,7 @@
  * the wire that every other route here already speaks. The service holds the decisions;
  * this file validates the shape of what arrived and turns a refusal into a status.
  */
+import { arrayOf, body, material, obj, optional, str } from '../http-schema.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
@@ -96,7 +97,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
    */
   app.get<{ Params: { shareId: string; login: string } }>(
     '/shares/:shareId/recipients/:login/pubkey',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const out = await recipientPubkey(
         db,
@@ -112,7 +113,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{
     Body: { vault_id: string; node_id: string; subtree_key_id: string; wrapped_key_initiator: string };
-  }>('/shares', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/shares', { preValidation: requireAuth, ...body(optional({ vault_id: str, node_id: str, subtree_key_id: str, wrapped_key_initiator: str })) }, async (req, reply) => {
     const body = req.body ?? ({} as Record<string, string>);
     // Three client-chosen identifiers, so three that are checked rather than passed
     // through. The scope id in particular becomes a primary key.
@@ -133,7 +134,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/cancel',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const refusal = await cancelShare(db, req.caller!.userId, req.params.shareId);
       if (!refusal) return reply.code(204).send();
@@ -153,7 +154,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/prepare', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/shares/:shareId/prepare', { preValidation: requireAuth, ...body(optional({ items: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, ...material })) })) }, async (req, reply) => {
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length === 0) return reply.code(400).send({ error: 'items_required' });
     for (const i of items) {
@@ -173,7 +174,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/activate',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const out = await activateShare(db, req.caller!.userId, req.params.shareId);
       if ('kind' in out) return refuse(reply, out);
@@ -183,7 +184,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{ Params: { shareId: string }; Body: { user_id: string; wrapped_key: string } }>(
     '/shares/:shareId/invite',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ user_id: str, wrapped_key: str })) },
     async (req, reply) => {
       const body = req.body ?? ({} as Record<string, string>);
       if (!UUID.test(body.user_id ?? '')) return reply.code(400).send({ error: 'bad_user_id' });
@@ -201,7 +202,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
   app.post<{
     Params: { shareId: string };
     Body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string };
-  }>('/shares/:shareId/join', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/shares/:shareId/join', { preValidation: requireAuth, ...body(optional({ vault_id: str, parent_id: str, name_enc: str, name_hmac: str, name_key_id: str })) }, async (req, reply) => {
     const body = req.body ?? ({} as Record<string, string>);
     for (const field of ['vault_id', 'parent_id', 'name_key_id'] as const) {
       if (!UUID.test(body[field] ?? '')) return reply.code(400).send({ error: `bad_${field}` });
@@ -221,7 +222,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/decline',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const refusal = await declineInvitation(db, req.caller!.userId, req.params.shareId);
       if (!refusal) return reply.code(204).send();
@@ -231,7 +232,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.delete<{ Params: { shareId: string; userId: string } }>(
     '/shares/:shareId/members/:userId',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const out = await removeMember(db, req.caller!.userId, req.params.shareId, req.params.userId);
       if ('kind' in out) return refuse(reply, out);
@@ -246,7 +247,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.get<{ Params: { shareId: string } }>(
     '/shares/:shareId/replica',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const rows = await replicaOf(db, req.caller!.userId, req.params.shareId);
       if (!rows) return reply.code(404).send({ error: 'not_found' });
@@ -265,7 +266,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.get<{ Params: { shareId: string } }>(
     '/shares/:shareId/preparation',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const rows = await preparationOwed(db, req.caller!.userId, req.params.shareId);
       if (!rows) return reply.code(404).send({ error: 'not_found' });
@@ -284,7 +285,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{ Params: { shareId: string } }>(
     '/shares/:shareId/leave/begin',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const out = await leaveShare(db, req.caller!.userId, req.params.shareId);
       if ('kind' in out) return refuse(reply, out);
@@ -306,7 +307,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/finalize-leave', { preHandler: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT }, async (req, reply) => {
+  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(optional({ nodes: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, vault_envelopes: material.blob_envelopes!, vault_dedup_tags: material.dedup_tags! })) })) }, async (req, reply) => {
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {
@@ -324,7 +325,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     return refuse(reply, refusal);
   });
 
-  app.get('/shares', { preHandler: requireAuth }, async (req) => {
+  app.get('/shares', { preValidation: requireAuth }, async (req) => {
     const { joined, invitations } = await listShares(db, req.caller!.userId);
     // This device's vault's shares, once the server knows which vault that is (D-140). Invitations stay:
     // they belong to no vault until one accepts them.
@@ -347,7 +348,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.get<{ Params: { shareId: string } }>(
     '/shares/:shareId/members',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const rows = await listMembers(db, req.caller!.userId, req.params.shareId);
       // One answer for "no such share" and "not yours to see", because distinguishing them

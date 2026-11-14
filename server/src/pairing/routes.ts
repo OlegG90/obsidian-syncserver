@@ -8,6 +8,7 @@
  * Approval is the exception and is authenticated: only a device that already holds the seed
  * can seal it, so only such a device may approve.
  */
+import { any, body, optional, str } from '../http-schema.js';
 import { refusedDeviceName } from '../devices.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
@@ -32,7 +33,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    */
   app.post<{ Body: { device_pubkey?: string; pairing_token_hash?: string } }>(
     '/auth/pairings',
-    async (req, reply) => {
+    body(optional({ device_pubkey: str, pairing_token_hash: str })), async (req, reply) => {
       const pubkey = req.body?.device_pubkey;
       const hash = req.body?.pairing_token_hash;
       if (!pubkey) return reply.code(400).send({ error: 'device_pubkey_required' });
@@ -52,7 +53,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    */
   app.post<{ Body: { pairing_secret?: string } }>(
     '/auth/pairings/lookup',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ pairing_secret: str })) },
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
       if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
@@ -76,7 +77,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    */
   app.post<{ Body: { pairing_secret?: string; seed_envelope?: string } }>(
     '/auth/pairings/approve',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ pairing_secret: str, seed_envelope: str })) },
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
       const envelope = req.body?.seed_envelope;
@@ -104,7 +105,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    */
   app.post<{ Params: { id: string }; Body: { pairing_secret?: string; name?: string; platform?: string } }>(
     '/auth/pairings/:id/claim',
-    async (req, reply) => {
+    body(optional({ pairing_secret: str, name: any, platform: str })), async (req, reply) => {
       const secret = req.body?.pairing_secret;
       if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
       if (req.body?.name !== undefined && refusedDeviceName(reply, req.body.name)) return reply;

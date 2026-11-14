@@ -7,13 +7,19 @@ import { type BlobStore } from './store.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-export const registerBlobRoutes = (
-  app: FastifyInstance,
-  db: Db,
-  store: BlobStore,
-  service: BlobService,
-): void => {
-  // The body is the blob. Fastify would otherwise try to parse it.
+/**
+ * The blob routes, in a scope of their own (issue #468).
+ *
+ * The parser below takes any body that is not JSON as a stream, and registered on the app it did so for
+ * every route: a JSON route sent `text/plain` received a stream where it read fields. Scoped, it reaches
+ * these routes and no others, and the rest answer such a body `415` as Fastify does. Hooks and decorators
+ * added to the app still reach routes in a child scope, so nothing else about these routes changes.
+ */
+export const registerBlobRoutes = (app: FastifyInstance, db: Db, store: BlobStore, service: BlobService): void => {
+  void app.register(async (scoped) => blobRoutes(scoped, db, store, service));
+};
+
+const blobRoutes = (app: FastifyInstance, db: Db, store: BlobStore, service: BlobService): void => {
   // The body is the blob. Fastify would otherwise try to parse it.
   //
   // **Anything that is not JSON is taken as bytes**, rather than `application/octet-stream`
@@ -42,7 +48,7 @@ export const registerBlobRoutes = (
    */
   app.get<{ Params: { vaultId: string }; Querystring: { sha256?: string } }>(
     '/vaults/:vaultId/blob-keys',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const raw = (req.query.sha256 ?? '').split(',').filter(Boolean);
       if (raw.length === 0) return reply.code(400).send({ error: 'sha256_required' });
@@ -72,7 +78,7 @@ export const registerBlobRoutes = (
    * No reference means **404, not 403**: a 403 would confirm that a file with that address
    * exists, which is the same oracle the rule exists to close.
    */
-  app.head<{ Params: { sha256: string } }>('/blobs/:sha256', { preHandler: requireAuth }, async (req, reply) => {
+  app.head<{ Params: { sha256: string } }>('/blobs/:sha256', { preValidation: requireAuth }, async (req, reply) => {
     const hex = req.params.sha256;
     if (!HEX64.test(hex)) return reply.code(400).send();
     // The same statement `GET` asks, with the answer thrown away: one condition, one place (#241).
@@ -80,7 +86,7 @@ export const registerBlobRoutes = (
     return reply.code(held ? 200 : 404).send();
   });
 
-  app.get<{ Params: { sha256: string } }>('/blobs/:sha256', { preHandler: requireAuth }, async (req, reply) => {
+  app.get<{ Params: { sha256: string } }>('/blobs/:sha256', { preValidation: requireAuth }, async (req, reply) => {
     const hex = req.params.sha256;
     if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
 
@@ -122,7 +128,7 @@ export const registerBlobRoutes = (
    */
   app.post<{ Querystring: { sha256?: string; size?: string; enc_alg?: string; key_id?: string } }>(
     '/blobs',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const hex = req.query.sha256;
       const declaredSize = Number(req.query.size);
@@ -163,7 +169,7 @@ export const registerBlobRoutes = (
    */
   app.put<{ Params: { sha256: string; n: string }; Querystring: { total?: string; size?: string } }>(
     '/blobs/:sha256/parts/:n',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const hex = req.params.sha256;
       const index = Number(req.params.n);
@@ -200,7 +206,7 @@ export const registerBlobRoutes = (
    */
   app.get<{ Params: { sha256: string } }>(
     '/blobs/:sha256/parts',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const hex = req.params.sha256;
       if (!HEX64.test(hex)) return reply.code(400).send({ error: 'bad_address' });
@@ -220,7 +226,7 @@ export const registerBlobRoutes = (
    */
   app.post<{ Params: { sha256: string }; Querystring: { size?: string; enc_alg?: string; key_id?: string } }>(
     '/blobs/:sha256/complete',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const hex = req.params.sha256;
       const declaredSize = Number(req.query.size);

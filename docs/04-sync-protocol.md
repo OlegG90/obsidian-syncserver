@@ -226,6 +226,16 @@ Consequences:
 
 ## Endpoints
 
+**A body is checked for its shape before the route reads it.** Every route that reads a JSON body declares
+it: the fields it reads and their types, and the fields it cannot do without. A body of the wrong shape is
+answered `400 {error: "invalid_request", detail}`, the detail naming the field (`body/size must be
+integer`), and nothing is coerced — a number sent as a string is refused rather than read as the number. A
+field whose absence a route already names keeps that answer (`login_required`, `name_enc_required`, the
+`bad_*` ids); the schema leaves those to the route, because clients read them. A token is judged first: a
+malformed body without one is `401`. Path and query parameters are the route's own to check, since a
+malformed id is answered as one that names nothing (`404`, D-20). Only the blob routes take a body that is not
+JSON, as the bytes of the blob; any other route answers one `415`.
+
 ```
 GET    /vaults/{vault_id}                → {root_node_id, head_rev,
                                            scopes: [{scope: "vault"|"share", id?, key_id}]}
