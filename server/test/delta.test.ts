@@ -13,6 +13,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { encodeCursor } from '../src/delta/cursor.js';
 import { testStore } from './support/store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 const STORE = testStore('delta');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
@@ -69,10 +70,7 @@ const cursorAt = (rev: number, epoch: { restore: number; reset: number }) =>
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   userId = randomUUID();
   await db.query(
@@ -82,9 +80,8 @@ before(async () => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
     [userId, `delta-${process.pid}`],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [userId]);
-  access = app.jwt.sign({ sub: userId, device: device!.id });
+  const deviceId = await aDevice(db, userId);
+  access = deviceToken(app, userId, deviceId);
 
   const scope = await db.one<{ id: string }>(`INSERT INTO key_scopes (kind) VALUES ('vault') RETURNING id`);
   vaultKeyId = scope!.id;

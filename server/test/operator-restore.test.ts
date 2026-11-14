@@ -19,6 +19,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 import { checkRestoreState, confirmRestore, restoreStatus } from '../src/restore.js';
 
 let db: Db;
@@ -33,14 +34,9 @@ before(async () => {
   const cfg = { ...loadConfig(), restoreStateFile: stateFile };
   app = await buildApp(db, cfg);
 
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = $1 AND state = 'provisioned'`,
-    [adminId],
-  );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [adminId]);
-  adminToken = app.jwt.sign({ sub: adminId, device: device!.id });
+  await claimSeededAdmin(db);
+  const deviceId = await aDevice(db, adminId);
+  adminToken = deviceToken(app, adminId, deviceId);
 });
 
 after(async () => {

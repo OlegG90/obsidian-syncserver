@@ -9,7 +9,7 @@
  * Needs the development database: `npm run db:reset` first. Named to sort after `auth.test.ts`, whose
  * first-run tests this file would otherwise take away by claiming the seeded administrator.
  */
-import { aVaultAccount } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken, SEEDED_ADMIN_ID } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -143,21 +143,13 @@ describe('what the server keeps', () => {
   before(async () => {
     db = connect(cfg.databaseUrl);
     app = await buildApp(db, cfg);
-    await db.query(
-      `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-        WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-    );
-    const adminDevice = await db.one<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform) VALUES ('00000000-0000-0000-0000-000000000001', 'test', 'console') RETURNING id`,
-    );
-    adminToken = app.jwt.sign({ sub: '00000000-0000-0000-0000-000000000001', device: adminDevice!.id });
+      await claimSeededAdmin(db);
+    const adminDeviceId = await aDevice(db, SEEDED_ADMIN_ID, { platform: 'console' });
+    adminToken = deviceToken(app, SEEDED_ADMIN_ID, adminDeviceId);
 
     const { id, login } = await aVaultAccount(db, `problems-${process.pid}`);
-    const device = await db.one<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'a phone', 'mobile') RETURNING id`,
-      [id],
-    );
-    user = { id, login, deviceId: device!.id, token: app.jwt.sign({ sub: id, device: device!.id }) };
+    const deviceId = await aDevice(db, id, { name: 'a phone', platform: 'mobile' });
+    user = { id, login, deviceId, token: deviceToken(app, id, deviceId) };
   });
 
   after(async () => {

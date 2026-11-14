@@ -20,6 +20,7 @@ import { inProcessRateLimiter } from '../src/blobs/rate.js';
 import { BlobService, parseRange } from '../src/blobs/service.js';
 import type { BlobStore } from '../src/blobs/store.js';
 import { testStore } from './support/store.js';
+import { aDevice } from './support/accounts.js';
 
 const STORE = testStore('blob-service');
 const base = loadConfig();
@@ -53,11 +54,8 @@ const makeAccount = async (login: string, quotaBytes = 1048576): Promise<Acct> =
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', $3)`,
     [userId, login, quotaBytes],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`,
-    [userId],
-  );
-  return { userId, deviceId: device!.id };
+  const deviceId = await aDevice(db, userId);
+  return { userId, deviceId };
 };
 
 const stream = (b: Buffer) => Readable.from([b]);

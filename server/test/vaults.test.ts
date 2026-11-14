@@ -3,7 +3,7 @@
  *
  * Needs the development database: `npm run db:reset` first.
  */
-import { TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
+import { aDevice, claimSeededAdmin, deviceToken, TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -29,10 +29,7 @@ const b64 = (s: string) => Buffer.from(s).toString('base64');
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   userId = randomUUID();
   await db.query(
@@ -42,9 +39,8 @@ before(async () => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [userId, `vaults-${process.pid}`],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [userId]);
-  access = app.jwt.sign({ sub: userId, device: device!.id });
+  const deviceId = await aDevice(db, userId);
+  access = deviceToken(app, userId, deviceId);
 });
 
 after(async () => {
@@ -200,9 +196,8 @@ describe('removing a vault lets a frozen account back in (issue #236)', () => {
                '{"v":19,"m":65536,"t":3,"p":1}', '\x01', '\x02', 'kv', '\x03', 'rh', '\x04', 1048576)`,
       [id, `frozen-${randomUUID()}`],
     );
-    const device = await db.one<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [id]);
-    return { id, token: app.jwt.sign({ sub: id, device: device!.id }) };
+    const frozenDeviceId = await aDevice(db, id);
+    return { id, token: deviceToken(app, id, frozenDeviceId) };
   };
 
   /** A vault holding one file, so that removing it frees bytes the account is charged for. */

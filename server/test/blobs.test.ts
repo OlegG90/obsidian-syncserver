@@ -14,6 +14,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { storageKeyFor } from '../src/blobs/store.js';
 import { testStore } from './support/store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 const STORE = testStore('blobs');
 const base = loadConfig();
@@ -40,21 +41,15 @@ const makeAccount = async (login: string): Promise<string> => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [userId, login],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`,
-    [userId],
-  );
-  return app.jwt.sign({ sub: userId, device: device!.id });
+  const deviceId = await aDevice(db, userId);
+  return deviceToken(app, userId, deviceId);
 };
 
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
   // The bootstrap guard is not what these tests are about; give the server an administrator.
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
   access = await makeAccount(`blobs-a-${process.pid}`);
   otherAccess = await makeAccount(`blobs-b-${process.pid}`);
 });

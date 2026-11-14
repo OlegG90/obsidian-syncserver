@@ -18,6 +18,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { clearRestoreRequest, readRestoreRequest, requestFile, writeRestoreRequest } from '../src/restore-request.js';
+import { aDevice, claimSeededAdmin } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -53,18 +54,11 @@ before(async () => {
   };
   app = await buildApp(db, cfg, { stop: () => void (stopped += 1) });
 
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = $1 AND state = 'provisioned'`,
-    [ADMIN],
-  );
+  await claimSeededAdmin(db);
   // A real device row, because the guard now reads one (#373): a token naming a device the server does
   // not have is a token nobody can sign out, which is what the check exists to refuse.
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'console') RETURNING id`,
-    [ADMIN],
-  );
-  token = app.jwt.sign({ sub: ADMIN, device: device!.id, role: 'console' });
+  const deviceId = await aDevice(db, ADMIN, { platform: 'console' });
+  token = app.jwt.sign({ sub: ADMIN, device: deviceId, role: 'console' });
 });
 
 after(async () => {

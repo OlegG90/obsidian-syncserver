@@ -8,7 +8,7 @@
  * **Claims the seeded administrator**, so the first-run guard does not answer every request the same way —
  * which is why this file sorts after `auth.test.ts`, whose first-run tests would otherwise be gone (AGENTS.md).
  */
-import { aVaultAccount, TEST_AUTH_SECRET } from './support/accounts.js';
+import { aDevice as insertDevice, aVaultAccount, claimSeededAdmin, deviceToken, TEST_AUTH_SECRET } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -30,11 +30,8 @@ const anAccount = async (): Promise<string> => (await aVaultAccount(db)).id;
 
 /** A device of that account, and a token for it. */
 const aDevice = async (userId: string, name: string): Promise<{ id: string; auth: { authorization: string } }> => {
-  const row = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, $2, 'desktop') RETURNING id`,
-    [userId, name],
-  );
-  return { id: row!.id, auth: { authorization: `Bearer ${app.jwt.sign({ sub: userId, device: row!.id })}` } };
+  const id = await insertDevice(db, userId, { name, platform: 'desktop' });
+  return { id, auth: { authorization: `Bearer ${deviceToken(app, userId, id)}` } };
 };
 
 const aVault = async (auth: { authorization: string }): Promise<string> => {
@@ -51,10 +48,7 @@ before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
   // Claimed so the first-run guard does not answer every request the same way.
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 });
 
 after(async () => {

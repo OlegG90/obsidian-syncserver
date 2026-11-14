@@ -15,6 +15,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
+import { aDevice, deviceToken } from './support/accounts.js';
 
 const cfg = loadConfig();
 let db: Db;
@@ -45,11 +46,8 @@ const makeAccount = async (login: string): Promise<{ userId: string; access: str
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x0a0b', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [id, login],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'desktop', 'linux') RETURNING id`,
-    [id],
-  );
-  return { userId: id, access: app.jwt.sign({ sub: id, device: device!.id }) };
+  const deviceId = await aDevice(db, id, { name: 'desktop' });
+  return { userId: id, access: deviceToken(app, id, deviceId) };
 };
 
 /** Start a pairing the way a new device does: it makes the secret, the server sees a hash. */
