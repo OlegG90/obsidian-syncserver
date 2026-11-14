@@ -146,4 +146,53 @@ describe('the schedule, over HTTP (#357)', () => {
     const r = await app.inject({ method: 'PUT', url: '/admin/backups/schedule', payload: good });
     assert.equal(r.statusCode, 401);
   });
+
+  it('holds the schedule and its audit row in one transaction (issue #477)', async () => {
+    // The save and the record used to be two transactions: a failure between them left a schedule
+    // in force the log never recorded. The lock below holds the record's INSERT back after the
+    // save has run but before anything commits — a reader in that window must still see the old
+    // schedule, because either both land or neither does.
+    const auth = { authorization: `Bearer ${adminToken}` };
+    const list = () => app.inject({ method: 'GET', url: '/admin/backups', headers: auth });
+    type Settings = { enabled: boolean; time: string; days: number[]; zone: string; keep: number };
+    const settings = (s: Settings): Settings => ({
+      enabled: s.enabled, time: s.time, days: s.days, zone: s.zone, keep: s.keep,
+    });
+    const before = settings(((await list()).json() as { schedule: Settings }).schedule);
+    const wanted = { ...good, time: '03:30', days: [2], keep: 6 };
+
+    // SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE an INSERT takes and with nothing a
+    // SELECT takes — so the PUT runs up to its audit write and waits there, while reads go on.
+    // (A transaction, because LOCK TABLE only lives in one.)
+    const pending: Promise<{ statusCode: number }>[] = [];
+    await db.tx(async (locker) => {
+      await locker.query('LOCK TABLE audit_log IN SHARE ROW EXCLUSIVE MODE');
+      pending.push(app.inject({ method: 'PUT', url: '/admin/backups/schedule', headers: auth, payload: wanted }));
+      // Until the PUT's backend is waiting on the audit table it may not have saved yet — an
+      // early read would show the old schedule for no reason and prove nothing.
+      for (let i = 0; i < 100; i++) {
+        const waiting = await db.one<{ n: string }>(
+          `SELECT count(*)::text AS n FROM pg_locks WHERE relation = 'audit_log'::regclass AND NOT granted`,
+        );
+        if (waiting!.n !== '0') break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const waited = await db.one<{ n: string }>(
+        `SELECT count(*)::text AS n FROM pg_locks WHERE relation = 'audit_log'::regclass AND NOT granted`,
+      );
+      assert.notEqual(waited!.n, '0', 'the PUT reached its blocked audit write');
+      const mid = await list();
+      assert.deepEqual(settings((mid.json() as { schedule: Settings }).schedule), before,
+        'an uncommitted schedule stays invisible');
+    });
+    const done = await pending[0]!;
+    assert.equal(done.statusCode, 200);
+    const after = settings(((await list()).json() as { schedule: Settings }).schedule);
+    assert.deepEqual(after, settings(wanted), 'releasing the lock lets both land together');
+    const row = await db.one<{ details: { from?: unknown; to?: unknown } }>(
+      `SELECT details FROM audit_log WHERE action = 'backup.schedule' ORDER BY at DESC LIMIT 1`,
+    );
+    assert.deepEqual(row?.details.from, before, 'the record names what it replaced');
+    assert.deepEqual(row?.details.to, settings(wanted));
+  });
 });
