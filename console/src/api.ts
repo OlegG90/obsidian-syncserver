@@ -273,8 +273,16 @@ export const audit = (): Promise<{ entries: AuditRow[]; size: { rows: number; by
 /** What went wrong for which device, counted by the server as it answered (#355, D-134). Newest first. */
 export const syncProblems = (): Promise<{ problems: SyncProblemRow[] }> => call('GET', '/admin/sync-problems');
 
-/** Start a backup now. Refused with `backup_not_ready` when something is in the way of one. */
-export const runBackup = (): Promise<{ self_check?: string }> =>
+/**
+ * Start a backup now, and report its row while the run goes on behind the reply.
+ *
+ * The answer is 202 with the run's id, not the run's outcome: a dump, a copy and a
+ * self-check take minutes, and a request held open for all of it is one a proxy can cut
+ * off (issue #479). Follow the id through `backups()` until its status leaves `running`.
+ * Refused with `backup_not_ready` or `backup_in_progress` when something is in the way of one —
+ * those still answer synchronously, because nothing started.
+ */
+export const runBackup = (): Promise<{ id: string; status: string }> =>
   call('POST', '/admin/backups');
 
 /** The previous runs, newest first. */

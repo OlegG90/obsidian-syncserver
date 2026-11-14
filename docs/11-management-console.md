@@ -200,7 +200,12 @@ console adds on top.
 ### Backups: trigger and observe, do not download
 
 The console can start a backup and list previous runs with their status, size, blob
-count, error and verification. A run records the **refusal window** and both legs (D-114), and `CHECK`s reject a leg
+count, error and verification. `POST /admin/backups` answers `202` with the run's id once the
+row exists and the window is open, and the run goes on behind the reply — a dump, a copy and
+a self-check take minutes, and a request held open for all of it is one a proxy can cut off
+(issue #479). The console follows the run through the list until its status leaves `running`;
+the refusals that come before any work (`backup_not_ready`, `backup_in_progress`) still answer
+synchronously, because nothing started. A run records the **refusal window** and both legs (D-114), and `CHECK`s reject a leg
 taken outside it, or a blob leg the database leg did not precede — so a half-finished backup, or one whose two stores describe different instants, can
 never be mistaken for a usable one.
 

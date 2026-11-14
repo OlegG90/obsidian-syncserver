@@ -153,6 +153,15 @@ export const runBackup = async (
      * real one.
      */
     openCopy?: (runDestination: string) => CopyReader;
+    /**
+     * Called the moment the run's row exists and the window is open, before the legs.
+     *
+     * The route answers 202 from it (issue #479): a dump, a copy and a self-check take minutes
+     * on a real store, and a request held open for all of it is one a proxy or a browser can
+     * cut off — the console called the backup failed while it went on and succeeded. Absent,
+     * the caller waits for the whole run, which is what the schedule and the tests do.
+     */
+    onStarted?: (id: string) => void;
   } = {},
 ): Promise<BackupResult> => {
   // **Before the connection, the lock, the row and the window.** Everything below this line
@@ -172,7 +181,7 @@ export const runBackup = async (
   }
 
   const run = await db.session(async (lock) => {
-    const { triggeredBy, source = 'manual', lockWaitMs = LOCK_WAIT_MS } = opts;
+    const { triggeredBy, source = 'manual', lockWaitMs = LOCK_WAIT_MS, onStarted } = opts;
     // The BLOCKING form, which is docs/08's requirement rather than a preference: it waits
     // for a collector pass already running, so the window is clean from the moment the lock
     // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
@@ -201,6 +210,9 @@ export const runBackup = async (
     // settle line is exactly the run somebody needs to read about.
     const openedAt = Date.now();
     log(`backup ${id} started, writes refused until it finishes → ${destination}`);
+    // The row exists and the window is open; what follows (the legs, the settle, the check)
+    // goes on behind whoever is told. The route answers 202 from here (issue #479).
+    onStarted?.(id);
 
     try {
       // The database FIRST (D-114). Reversing these two is the one mistake in this file that

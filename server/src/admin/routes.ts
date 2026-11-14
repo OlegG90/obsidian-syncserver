@@ -249,26 +249,31 @@ export const registerAdminRoutes = (
     // The destination recorded on the row is THIS run's directory, so verify knows where
     // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
     const runDestination = runDirOf(backup.destination, runDir);
+    // **202, then the run.** The dump, the copy and the self-check take minutes on a real
+    // store, and a request held open for all of it is one a proxy or a browser can cut off:
+    // the console called the backup failed while it went on and succeeded, and the next press
+    // landed in `backup_in_progress` (issue #479). So the run reports its row the moment the
+    // row exists and the window is open, and finishes behind the reply; the console follows it
+    // through the list. The refusals still answer here, because nothing started.
+    let started = false;
     const out = await runBackup(db, backup.makeLegs(runDir), runDestination, {
       triggeredBy: req.admin!.id,
       // The self-check: reopen the copy just written and confirm it is whole, so a backup
       // nobody can restore from is flagged on the row instead of at restore time (docs/10).
       openCopy: (dest) => openStore(copyAt(dest).blobs),
+      onStarted: (id) => {
+        started = true;
+        void reply.code(202).send({ id, status: 'running' });
+      },
     });
+    // Started means answered: the run's outcome now lives on its row, where the list shows it.
+    if (started) return;
     // Refused is not failed and not busy: nothing ran, so there is no row and nothing to
     // retry until the deployment is fixed. 503, like `unconfigured` — the same family of
     // answer, "this installation cannot do this yet", with the sentence that says what to fix.
     if (out.status === 'refused') return refuseWith(reply, 503, 'backup_not_ready', out.error);
     if (out.status === 'skipped') return refuseWith(reply, 409, 'backup_in_progress', out.error);
-    if (out.status === 'failed') return refuseWith(reply, 500, 'backup_failed', out.error);
-    return {
-      id: out.id,
-      status: out.status,
-      bytes: out.bytes,
-      blob_count: out.blobCount,
-      destination: runDestination,
-      ...(out.error ? { self_check: out.error } : {}),
-    };
+    return refuseWith(reply, 500, 'backup_failed', out.error);
   });
 
   /**

@@ -237,6 +237,84 @@ describe('the window a backup takes', () => {
   });
 });
 
+describe('reporting the run while it is still running (issue #479)', () => {
+  it('calls onStarted with the row id while the legs are still going', async () => {
+    // The route answers 202 from this call, so what it proves is timing: the row exists and
+    // the window is open while the legs have not finished. A dump that resolves on its own
+    // would let the callback arrive after the run and prove nothing about when it fired.
+    let releaseDump!: () => void;
+    const dumping = new Promise<void>((r) => {
+      releaseDump = r;
+    });
+    let report!: (id: string) => void;
+    const reported = new Promise<string>((r) => {
+      report = r;
+    });
+    const run = runBackup(
+      db,
+      {
+        assertReady: async () => {},
+        dumpDatabase: async () => {
+          await dumping;
+          return { bytes: 1 };
+        },
+        copyBlobs: async () => ({ bytes: 1, count: 0 }),
+      },
+      '/backups',
+      { onStarted: (id) => report(id) },
+    );
+    const id = await reported;
+    const row = await db.one<{ status: string }>(`SELECT status::text AS status FROM backup_runs WHERE id = $1`, [
+      id,
+    ]);
+    assert.equal(row!.status, 'running', 'the row exists and says so while the legs run');
+    assert.equal(backupInProgress(), true, 'and the window is open');
+    releaseDump();
+    const out = await run;
+    assert.equal(out.status, 'ok');
+    assert.equal(out.id, id, 'the finished run is the one that was reported');
+  });
+
+  it('never calls onStarted when nothing starts', async () => {
+    // Refused and skipped answer synchronously with no row, so there is no id to report —
+    // a call here would hand the route an answer about a run that does not exist.
+    let called = 0;
+    const refused = await runBackup(
+      db,
+      {
+        assertReady: async () => {
+          throw new Error('pg_dump is missing');
+        },
+        dumpDatabase: async () => ({ bytes: 1 }),
+        copyBlobs: async () => ({ bytes: 1, count: 0 }),
+      },
+      '/backups',
+      { onStarted: () => { called += 1; } },
+    );
+    assert.equal(refused.status, 'refused');
+    const held = runBackup(
+      db,
+      {
+        assertReady: async () => {},
+        dumpDatabase: async () => {
+          await new Promise((r) => setTimeout(r, 300));
+          return { bytes: 1 };
+        },
+        copyBlobs: async () => ({ bytes: 1, count: 0 }),
+      },
+      '/backups',
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const skipped = await runBackup(db, recording([]), '/backups', {
+      lockWaitMs: 50,
+      onStarted: () => { called += 1; },
+    });
+    assert.equal(skipped.status, 'skipped');
+    assert.equal((await held).status, 'ok');
+    assert.equal(called, 0, 'no row, no window, no call');
+  });
+});
+
 describe('what has to be true before a window is worth opening', () => {
   it('refuses without taking the lock, inserting a row or opening the window', async () => {
     // D-73's failure, one layer in: the pg_dump major check lived at the top of `dumpDatabase`,

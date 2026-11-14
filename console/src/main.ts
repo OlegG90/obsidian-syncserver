@@ -1236,16 +1236,36 @@ const backupsScreen = (): void => {
     runButton,
   );
   submits(runButton, runCard, async () => {
-    const out = await runBackup();
-    // Anything but a finished run is refused before this line, so what is left to say is whether
-    // the copy it wrote passed its own check — "Backup taken." over a copy nobody can restore
-    // from is the one sentence this card must not print.
-    runCard.append(
-      out.self_check
-        ? say(`Backup taken, and it is not restorable: ${out.self_check}`, true)
-        : say('Backup taken.'),
-    );
-    await fill();
+    const started = await runBackup();
+    // The run goes on behind the 202 (issue #479): the dump, the copy and the self-check
+    // take minutes, so this watches the run's row through the list rather than waiting on the
+    // request that started it. A reload is still safe — the list shows the running row, and
+    // the next press while it runs is refused with `backup_in_progress` rather than doubling it.
+    const note = el('p', { className: 'muted', textContent: 'Backup started — watching it finish…' });
+    runCard.append(note);
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const { backups: runs } = await backups();
+      const run = runs.find((b) => b.id === started.id);
+      if (run !== undefined && run.status === 'running') continue;
+      note.remove();
+      if (run === undefined) {
+        runCard.append(say('Backup finished, but its row is gone — the list below says what remains.', true));
+      } else if (run.status === 'ok') {
+        // Anything but a finished run is refused before the button's own line, so what is left
+        // to say is whether the copy it wrote passed its own check — "Backup taken." over a
+        // copy nobody can restore from is the one sentence this card must not print.
+        runCard.append(
+          run.error
+            ? say(`Backup taken, and it is not restorable: ${run.error}`, true)
+            : say('Backup taken.'),
+        );
+      } else {
+        runCard.append(say(`Backup ${run.status}: ${run.error ?? 'no detail recorded'}`, true));
+      }
+      await fill();
+      return;
+    }
   });
 
   const fill = async (): Promise<void> => {
