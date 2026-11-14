@@ -480,3 +480,7 @@ export const seenLine = (lastSeenAt: string | null, withinSeconds: number, now =
 export const seenNote = (withinSeconds: number): string =>
   `A device is marked seen when it renews its session, about once every ${aboutSpan(withinSeconds)} ` +
   'while it is in use — so one that is syncing right now can read as seen a few minutes ago.';
+
+/** A timestamp as a person reads a table — or a dash when there is none. */
+export const when = (iso: string | null): string =>
+  iso === null ? '—' : new Date(iso).toLocaleString();
