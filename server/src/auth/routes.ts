@@ -46,6 +46,20 @@ const TOO_SHORT = {
 /** The routes the backup window lets through (D-142): one name, so they can be found as a group. */
 const WRITES_ONLY_SESSIONS = { config: { writesOnlySessions: true } } as const;
 
+/**
+ * A redeemed invitation: everything the device made, sent once. `kdf_params`, the device name and the
+ * recovery pair are the handler's to judge — each has a refusal that says what is wrong with it.
+ */
+const REDEEM = obj(
+  {
+    invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: unchecked,
+    pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str,
+    recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str,
+    device_name: unchecked, device_platform: str,
+  },
+  ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'],
+);
+
 export const registerAuthRoutes = (
   app: FastifyInstance,
   db: Db,
@@ -128,7 +142,7 @@ export const registerAuthRoutes = (
       device_name?: string;
       device_platform?: string;
     };
-  }>('/auth/redeem', body(obj({ invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: unchecked, pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str, recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str, device_name: unchecked, device_platform: str }, ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'])), async (req, reply) => {
+  }>('/auth/redeem', body(REDEEM), async (req, reply) => {
     const b = req.body;
 
     // Checked here as well as in the schema, for the reason a 500 is not an answer.

@@ -19,8 +19,6 @@ type Schema = Record<string, unknown>;
 
 export const str: Schema = { type: 'string' };
 export const int: Schema = { type: 'integer' };
-export const num: Schema = { type: 'number' };
-export const bool: Schema = { type: 'boolean' };
 /** Any value — for a field whose handler checks it itself and names the refusal. */
 export const unchecked: Schema = {};
 
@@ -39,8 +37,11 @@ export const obj = (properties: Record<string, Schema>, required: readonly strin
  */
 export const optional = (properties: Record<string, Schema>): Schema => ({ properties });
 
+/** The name a node is placed under: encrypted, its HMAC, and the key that sealed it. */
+export const placedName: Record<string, Schema> = { name_enc: str, name_hmac: str, name_key_id: str };
+
 /** The key material a node write carries (`shared`'s `Material`): both lists optional, each entry whole. */
-export const material: { blob_envelopes: Schema; dedup_tags: Schema } = {
+export const keyMaterial: { blob_envelopes: Schema; dedup_tags: Schema } = {
   blob_envelopes: arrayOf(obj({ sha256: str, scope_id: str, wrapped_key: str }, ['sha256', 'scope_id', 'wrapped_key'])),
   dedup_tags: arrayOf(obj({ sha256: str, scope_id: str, content_tag: str }, ['sha256', 'scope_id', 'content_tag'])),
 };

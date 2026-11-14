@@ -5,7 +5,7 @@
  * the wire that every other route here already speaks. The service holds the decisions;
  * this file validates the shape of what arrived and turns a refusal into a status.
  */
-import { arrayOf, body, material, obj, optional, str } from '../http-schema.js';
+import { arrayOf, body, keyMaterial, obj, optional, placedName, str } from '../http-schema.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
@@ -41,6 +41,17 @@ interface WireName {
 /** The key material that travels with it, in the wire's spelling. */
 type WireEnvelope = { sha256: string; scope_id: string; wrapped_key: string };
 type WireTag = { sha256: string; scope_id: string; content_tag: string };
+
+/**
+ * The two conversions' bodies: one renamed node per entry, with the key material of the scope it moves to.
+ * The ids and names in each are the handler's to check (`badName`), so only their types are declared here.
+ */
+const PREPARE = optional({ items: arrayOf(obj({ ...placedName, ...keyMaterial, node_id: str })) });
+const FINALIZE_LEAVE = optional({
+  nodes: arrayOf(
+    obj({ ...placedName, node_id: str, vault_envelopes: keyMaterial.blob_envelopes, vault_dedup_tags: keyMaterial.dedup_tags }),
+  ),
+});
 
 /**
  * Which of a converted node's fields is malformed, or nothing.
@@ -154,7 +165,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/prepare', { preValidation: requireAuth, ...body(optional({ items: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, ...material })) })) }, async (req, reply) => {
+  }>('/shares/:shareId/prepare', { preValidation: requireAuth, ...body(PREPARE) }, async (req, reply) => {
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length === 0) return reply.code(400).send({ error: 'items_required' });
     for (const i of items) {
@@ -202,7 +213,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
   app.post<{
     Params: { shareId: string };
     Body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string };
-  }>('/shares/:shareId/join', { preValidation: requireAuth, ...body(optional({ vault_id: str, parent_id: str, name_enc: str, name_hmac: str, name_key_id: str })) }, async (req, reply) => {
+  }>('/shares/:shareId/join', { preValidation: requireAuth, ...body(optional({ ...placedName, vault_id: str, parent_id: str })) }, async (req, reply) => {
     const body = req.body ?? ({} as Record<string, string>);
     for (const field of ['vault_id', 'parent_id', 'name_key_id'] as const) {
       if (!UUID.test(body[field] ?? '')) return reply.code(400).send({ error: `bad_${field}` });
@@ -307,7 +318,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(optional({ nodes: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, vault_envelopes: material.blob_envelopes, vault_dedup_tags: material.dedup_tags })) })) }, async (req, reply) => {
+  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(FINALIZE_LEAVE) }, async (req, reply) => {
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {

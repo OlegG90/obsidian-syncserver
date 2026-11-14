@@ -63,12 +63,21 @@ after(async () => {
   await db.close();
 });
 
-function send(method: 'POST' | 'PUT', url: string, payload?: object, auth: string | null = token) {
+function send(
+  method: 'POST' | 'PUT',
+  url: string,
+  payload?: object | string | Buffer,
+  auth: string | null = token,
+  contentType?: string,
+) {
   return app.inject({
     method,
     url,
     ...(payload === undefined ? {} : { payload }),
-    headers: auth === null ? {} : { authorization: `Bearer ${auth}` },
+    headers: {
+      ...(auth === null ? {} : { authorization: `Bearer ${auth}` }),
+      ...(contentType ? { 'content-type': contentType } : {}),
+    },
   });
 }
 
@@ -154,33 +163,18 @@ describe('what the boundary leaves as it was', () => {
   });
 
   it('takes a body that is not JSON on the blob routes only', async () => {
-    const r = await app.inject({
-      method: 'PUT',
-      url: `/vaults/${vaultId}`,
-      payload: 'not json',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
-    });
+    const r = await send('PUT', `/vaults/${vaultId}`, 'not json', token, 'application/octet-stream');
     assert.equal(r.statusCode, 415, 'a JSON route no longer receives a stream where it reads fields');
     assert.equal(r.json().error, 'unsupported_media_type', 'in the shape every other refusal has');
 
     // And the blob routes still do, in their own scope: refused for the address, not for the media type.
-    const blob = await app.inject({
-      method: 'POST',
-      url: '/blobs',
-      payload: Buffer.from('ciphertext'),
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
-    });
+    const blob = await send('POST', '/blobs', Buffer.from('ciphertext'), token, 'application/octet-stream');
     assert.notEqual(blob.statusCode, 415, blob.body);
     assert.notEqual(blob.statusCode, 500, blob.body);
   });
 
   it('answers JSON that does not parse in the shape every other refusal has', async () => {
-    const r = await app.inject({
-      method: 'PUT',
-      url: `/vaults/${vaultId}`,
-      payload: '{"name_enc":',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    });
+    const r = await send('PUT', `/vaults/${vaultId}`, '{"name_enc":', token, 'application/json');
     assert.equal(r.statusCode, 400);
     assert.equal(r.json().error, 'invalid_request');
   });
