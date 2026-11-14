@@ -9,7 +9,7 @@
  * its reason, `404` on a blob the caller does not hold — each is an instruction to the
  * engine, and an exception would only be caught to read the status back out.
  */
-import type { ApprovePairingBody, BeginPairingBody, ChangePassphraseBody, ClaimPairingBody, CreateNodeBody, CreateShareBody, CreateVaultBody, FinalizeLeaveBody, InviteBody, JoinShareBody, KekVerifierBody, LoginBody, LookupPairingBody, MoveNodeBody, PrepareShareBody, PutContentBody, RecoverBody, RecoveryCodeBody, RedeemBody, RefreshBody, RemoveVaultBody, RenameDeviceBody } from '@syncserver/shared';
+import type { ApprovePairingBody, BeginPairingBody, ChangePassphraseBody, ClaimPairingBody, CreateNodeBody, CreateShareBody, CreateVaultBody, FinalizeLeaveBody, InviteBody, JoinShareBody, KekVerifierBody, LoginBody, LookupPairingBody, PrepareShareBody, PutContentBody, RecoverBody, RecoveryCodeBody, RedeemBody, RefreshBody, RemoveVaultBody, RenameDeviceBody, RestoreVersionBody } from '@syncserver/shared';
 import type {
   Change,
   CursorFault,
@@ -139,27 +139,20 @@ const ENC_ALG = 'xchacha20-poly1305';
 const PART_BYTES = 8 * 1024 * 1024;
 
 
-/** A node renamed into another scope: its id, and its name sealed under that scope. */
-interface ConvertedName {
-  node_id: string;
-  name_enc: string;
-  name_hmac: string;
-  name_key_id: string;
-}
+/**
+ * A body's entry with its name whole: the server's schema leaves the four name fields to the route
+ * to check (`badName`), and this client always sends all four.
+ */
+type Named<T> = T & Required<Pick<T, Extract<'node_id' | 'name_enc' | 'name_hmac' | 'name_key_id', keyof T>>>;
 
 /** One node converted to the share key, with the material its bytes need under it. */
-export type PrepareItem = ConvertedName & Material;
+export type PrepareItem = Named<NonNullable<PrepareShareBody['items']>[number]>;
 
 /**
  * One node converted back to the vault key, when a participant leaves. The same material under
  * other names — deliberately, so a body meant for one endpoint fails at the other.
  */
-export interface FinalizeNode extends ConvertedName {
-  // `NonNullable`: an indexed optional field carries `undefined` with it, which the body schema does not
-  // take — an absent list is left out, not sent as nothing.
-  vault_envelopes?: NonNullable<Material['blob_envelopes']>;
-  vault_dedup_tags?: NonNullable<Material['dedup_tags']>;
-}
+export type FinalizeNode = Named<NonNullable<FinalizeLeaveBody['nodes']>[number]>;
 
 /**
  * One row of a share's membership: who holds a copy of the folder, and who has not answered
@@ -461,23 +454,7 @@ export class SyncClient {
     return this.json('GET', `/auth/kdf?login=${encodeURIComponent(login)}`, undefined, { auth: false });
   }
 
-  redeem(body: {
-    invitation_token: string;
-    /** Checked against the invitation, never stored from here — a mismatch is a `409`. */
-    login: string;
-    auth_secret: string;
-    account_salt: string;
-    kdf_params: KdfParams;
-    pubkey: string;
-    enc_privkey: string;
-    wrapped_seed: string;
-    /** Proof this account can later be recovered from the passphrase alone (D-112). */
-    kek_verifier: string;
-    initial_vault_id: string;
-    initial_vault_name_enc: string;
-    device_name?: string;
-    device_platform?: string;
-  }): Promise<{
+  redeem(body: RedeemBody & { kdf_params: KdfParams }): Promise<{
     access: string;
     refresh: string;
     device_id: string;
@@ -485,14 +462,10 @@ export class SyncClient {
     root_node_id: string;
     user_id: string;
   }> {
-    return this.json('POST', '/auth/redeem', body satisfies RedeemBody, { auth: false });
+    return this.json('POST', '/auth/redeem', body, { auth: false });
   }
 
-  login(body: {
-    login: string;
-    auth_secret: string;
-    device_id: string;
-  }): Promise<{
+  login(body: LoginBody): Promise<{
     access: string;
     refresh: string;
     user_id: string;
@@ -508,7 +481,7 @@ export class SyncClient {
      */
     seed_fingerprint?: string;
   }> {
-    return this.json('POST', '/auth/login', body satisfies LoginBody, { auth: false });
+    return this.json('POST', '/auth/login', body, { auth: false });
   }
 
   /**
@@ -549,13 +522,7 @@ export class SyncClient {
    * Anonymous by necessity: a device with no seed has no `auth_secret` and nothing to
    * authenticate with, which is the shape of the whole problem.
    */
-  recover(body: {
-    login: string;
-    kek_verifier?: string;
-    recovery_code?: string;
-    device_name?: string;
-    device_platform?: string;
-  }): Promise<{
+  recover(body: RecoverBody): Promise<{
     seed_envelope: string;
     opened_by: 'passphrase' | 'recovery_code';
     enc_privkey: string;
@@ -564,7 +531,7 @@ export class SyncClient {
     user_id: string;
     device_id: string;
   }> {
-    return this.json('POST', '/auth/recover', body satisfies RecoverBody, { auth: false });
+    return this.json('POST', '/auth/recover', body, { auth: false });
   }
 
   // ---- pairing a second device (docs/07) ---------------------------------------
@@ -574,16 +541,16 @@ export class SyncClient {
    * authenticate with. It registers where to send the seed and a hash of the code the
    * human is about to carry — never the code itself (D-110).
    */
-  beginPairing(body: { device_pubkey: string; pairing_token_hash: string }): Promise<{ pairing_id: string }> {
-    return this.json('POST', '/auth/pairings', body satisfies BeginPairingBody, { auth: false });
+  beginPairing(body: BeginPairingBody): Promise<{ pairing_id: string }> {
+    return this.json('POST', '/auth/pairings', body, { auth: false });
   }
 
   /**
    * Put the account behind a different passphrase: the new envelope and the verifier for the
    * same KEK, which move together or not at all (D-34).
    */
-  setPassphrase(body: { wrapped_seed: string; kek_verifier: string }): Promise<void> {
-    return this.json('PUT', '/auth/passphrase', body satisfies ChangePassphraseBody, { expect: [204] });
+  setPassphrase(body: ChangePassphraseBody): Promise<void> {
+    return this.json('PUT', '/auth/passphrase', body, { expect: [204] });
   }
 
   /**
@@ -613,18 +580,18 @@ export class SyncClient {
    * cannot know on its own, and the half a person needs to hear: the old code has stopped
    * working.
    */
-  setRecoveryCode(body: { recovery_key: string; recovery_code_hash: string }): Promise<{ replaced: boolean }> {
-    return this.json('PUT', '/auth/recovery-code', body satisfies RecoveryCodeBody);
+  setRecoveryCode(body: RecoveryCodeBody): Promise<{ replaced: boolean }> {
+    return this.json('PUT', '/auth/recovery-code', body);
   }
 
   /** What to seal to. Precedes approval, because sealing needs the waiting device's key. */
-  lookupPairing(body: { pairing_secret: string }): Promise<{ device_pubkey: string }> {
-    return this.json('POST', '/auth/pairings/lookup', body satisfies LookupPairingBody);
+  lookupPairing(body: LookupPairingBody): Promise<{ device_pubkey: string }> {
+    return this.json('POST', '/auth/pairings/lookup', body);
   }
 
   /** From an authorised device, addressed by the secret alone — there is no id to carry. */
-  approvePairing(body: { pairing_secret: string; seed_envelope: string }): Promise<{ device_pubkey: string }> {
-    return this.json('POST', '/auth/pairings/approve', body satisfies ApprovePairingBody);
+  approvePairing(body: ApprovePairingBody): Promise<{ device_pubkey: string }> {
+    return this.json('POST', '/auth/pairings/approve', body);
   }
 
   /**
@@ -634,7 +601,7 @@ export class SyncClient {
    */
   async claimPairing(
     pairingId: string,
-    body: { pairing_secret: string; name: string; platform: string },
+    body: ClaimPairingBody,
   ): Promise<
     | {
         seed_envelope: string;
@@ -647,7 +614,7 @@ export class SyncClient {
     | undefined
   > {
     try {
-      return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body satisfies ClaimPairingBody, { auth: false });
+      return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body, { auth: false });
     } catch (e) {
       // Both mean "not yet": nobody has approved it, or the server is mid-backup and turns every
       // claim away until the window shuts (D-142). Neither is a reason to give the pairing up — a
@@ -741,7 +708,7 @@ export class SyncClient {
       method: 'POST',
       path: `/vaults/${vaultId}/restore`,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ node_id: nodeId, rev }),
+      body: JSON.stringify({ node_id: nodeId, rev } satisfies RestoreVersionBody),
     });
     // A `409 name_taken` is an ordinary refusal: `carries('name_taken')` reads the blocker out of
     // it. This used to rewrite the body into a sentence, which kept the code and lost the field.
@@ -753,18 +720,9 @@ export class SyncClient {
 
   createNode(
     vaultId: string,
-    body: Material & {
-      parent_id: string;
-      type: NodeType;
-      sha256?: string;
-      size?: number;
-      mtime: string;
-      name_enc: string;
-      name_hmac: string;
-      name_key_id: string;
-    },
+    body: CreateNodeBody,
   ): Promise<{ node_id: string; rev: number }> {
-    return this.json('POST', `/vaults/${vaultId}/nodes`, body satisfies CreateNodeBody);
+    return this.json('POST', `/vaults/${vaultId}/nodes`, body);
   }
 
   /**
@@ -781,13 +739,13 @@ export class SyncClient {
   async putContent(
     vaultId: string,
     nodeId: string,
-    body: Material & { sha256: string; size: number; mtime: string; base_sha256: string | null },
+    body: PutContentBody,
   ): Promise<{ rev: number } | PutConflict> {
     const res = await this.send({
       method: 'PUT',
       path: `/vaults/${vaultId}/nodes/${nodeId}`,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body satisfies PutContentBody),
+      body: JSON.stringify(body),
     });
 
     if (res.status === 409) {
@@ -819,7 +777,7 @@ export class SyncClient {
     ifMatchRev: number,
     body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
   ): Promise<{ rev: number }> {
-    return this.json('POST', `/vaults/${vaultId}/nodes/${nodeId}/move`, body satisfies MoveNodeBody, {
+    return this.json('POST', `/vaults/${vaultId}/nodes/${nodeId}/move`, body, {
       headers: { 'if-match': String(ifMatchRev) },
     });
   }
@@ -1024,13 +982,8 @@ export class SyncClient {
    * never be referenced by the `name_key_id` this client is about to write on every
    * interior node.
    */
-  createShare(body: {
-    vault_id: string;
-    node_id: string;
-    subtree_key_id: string;
-    wrapped_key_initiator: string;
-  }): Promise<{ share_id: string; state: string }> {
-    return this.json('POST', '/shares', body satisfies CreateShareBody, { expect: [201] });
+  createShare(body: CreateShareBody): Promise<{ share_id: string; state: string }> {
+    return this.json('POST', '/shares', body, { expect: [201] });
   }
 
   /** One resumable batch of interior nodes converted to `KS`. */
@@ -1071,8 +1024,8 @@ export class SyncClient {
     return this.json('GET', `/shares/${shareId}/recipients/${encodeURIComponent(login)}/pubkey`);
   }
 
-  invite(shareId: string, body: { user_id: string; wrapped_key: string }): Promise<void> {
-    return this.json('POST', `/shares/${shareId}/invite`, body satisfies InviteBody, { expect: [204] });
+  invite(shareId: string, body: InviteBody): Promise<void> {
+    return this.json('POST', `/shares/${shareId}/invite`, body, { expect: [204] });
   }
 
   /** What this account is in, and what is waiting for it. */
@@ -1093,9 +1046,9 @@ export class SyncClient {
    */
   joinShare(
     shareId: string,
-    body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
+    body: JoinShareBody,
   ): Promise<{ root_node_id: string }> {
-    return this.json('POST', `/shares/${shareId}/join`, body satisfies JoinShareBody, { expect: [201] });
+    return this.json('POST', `/shares/${shareId}/join`, body, { expect: [201] });
   }
 
   declineShare(shareId: string): Promise<void> {

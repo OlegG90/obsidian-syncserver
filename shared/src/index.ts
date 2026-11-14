@@ -14,6 +14,8 @@
  */
 
 /** A node is a file or a folder, and never changes from one to the other (D-102). */
+import type { CreateNodeBody } from './bodies.js';
+
 export type NodeType = 'file' | 'folder';
 
 /** The Argon2id parameters a redeem carries, and the floor the server enforces (D-62). */
@@ -284,10 +286,7 @@ export interface RestoreResult {
 }
 
 /** Client-produced key material for a node: the sealed blob's envelopes and dedup tags (docs/06). */
-export interface Material {
-  blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-  dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
-}
+export type Material = Pick<CreateNodeBody, 'blob_envelopes' | 'dedup_tags'>;
 
 /**
  * Why a cursor was rejected with 410. The reason is mandatory, because it decides whether
@@ -594,8 +593,8 @@ export interface BackupSchedule {
 /**
  * The schedule as the console reads it: what is stored, and what the server makes of it.
  *
- * The two limits travel with it because the console has to say them and `shared` holds no
- * values (#405): the card's field and its sentences take them from here rather than from a
+ * The two limits travel with it because the console has to say them and they are the server's
+ * numbers (#405): the card's field and its sentences take them from here rather than from a
  * number typed into the console a second time.
  */
 export interface BackupScheduleView extends BackupSchedule {

@@ -33,8 +33,8 @@ for w in $(node -p "require('./package.json').workspaces.join(' ')"); do
   gone "$w/dist"
 done
 
-# `shared/` is the one workspace whose output is not called dist: it emits declarations into
-# types/, which is generated from shared/src all the same and restored by a rebuild.
+# `shared/` is the one workspace whose output is not called dist: it builds into types/ —
+# declarations and, since D-143, JavaScript — generated from shared/src and restored by a rebuild.
 gone shared/types
 
 # The root workspace is the solution, and `npm run pack` is what it builds.

@@ -117,13 +117,13 @@ export const registerAuthRoutes = (
   }>('/auth/redeem', body(RedeemBody), async (req, reply) => {
     const b = req.body;
 
-    // Checked here as well as in the schema, for the reason a 500 is not an answer.
+    // Checked here as well as by the database (`is_valid_kdf`), for the reason a 500 is not an answer.
     //
     // `is_valid_kdf` enforces the 64 MiB floor (D-62), and a client that registers below it
     // hits a CHECK constraint — which surfaces as "Internal Server Error" and tells the one
     // person who can fix it nothing at all. The floor is a rule about the caller's input, so
     // it gets the status that says so, and names the parameter.
-    // Unchecked by the schema, so that a weak or malformed set is refused here with the floor it missed.
+    // Left unchecked by the request schema, so that a weak or malformed set is refused here with the floor it missed.
     const kdf = b.kdf_params as Partial<KdfParams> | undefined;
     if (
       !kdf ||

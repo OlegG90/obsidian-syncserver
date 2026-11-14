@@ -2,7 +2,7 @@
 node_modules
 **/node_modules
 **/dist
-# Same for shared/, which emits declarations into types/ rather than dist/. The build stage
+# Same for shared/, which builds into types/ rather than dist/ (declarations, and JavaScript since D-143). The build stage
 # compiles them from source; a stale local copy has no business in the context.
 shared/types
 data

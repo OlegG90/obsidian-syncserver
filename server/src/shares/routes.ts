@@ -6,6 +6,7 @@
  * this file validates the shape of what arrived and turns a refusal into a status.
  */
 import { body, optional } from '../http-schema.js';
+import type { CreateNodeBody } from '@syncserver/shared';
 import { CreateShareBody, FinalizeLeaveBody, InviteBody, JoinShareBody, PrepareShareBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
@@ -31,17 +32,14 @@ import { preparationOwed, replicaOf } from './owed.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A node's name as any conversion sends it: re-encrypted under the scope it is moving to. */
-interface WireName {
-  node_id: string;
-  name_enc: string;
-  name_hmac: string;
-  name_key_id: string;
-}
+/**
+ * A node's name as a conversion sends it, once `badName` has passed it: the body's own fields, all present.
+ */
+type WireName = Required<Pick<NonNullable<PrepareShareBody['items']>[number], 'node_id' | 'name_enc' | 'name_hmac' | 'name_key_id'>>;
 
 /** The key material that travels with it, in the wire's spelling. */
-type WireEnvelope = { sha256: string; scope_id: string; wrapped_key: string };
-type WireTag = { sha256: string; scope_id: string; content_tag: string };
+type WireEnvelope = NonNullable<CreateNodeBody['blob_envelopes']>[number];
+type WireTag = NonNullable<CreateNodeBody['dedup_tags']>[number];
 
 
 /**
