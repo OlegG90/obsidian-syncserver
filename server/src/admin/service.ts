@@ -30,8 +30,8 @@ import { record, type Actor } from './audit.js';
 /**
  * Every account, with what it holds and when it was last seen.
  *
- * Usage is summed here rather than read from a counter: `user_blobs` is reconciled nightly
- * and quota counts the row, not the number on it (docs/03), so the sum over the rows *is*
+ * Usage is summed here rather than read from a counter: `user_blobs` is reconciled by the
+ * collector's pass and quota counts the row, not the number on it (docs/03), so the sum over the rows *is*
  * the figure — and it is the same one `GET /usage` reports to the user themselves, which is
  * the point. Two numbers for one account is how a support conversation goes wrong.
  */

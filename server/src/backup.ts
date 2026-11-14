@@ -186,7 +186,7 @@ export const runBackup = async (
     // for a collector pass already running, so the window is clean from the moment the lock
     // is granted rather than from the moment it was asked for. `pg_try_advisory_lock` stood
     // here and turned a pass that happened to be mid-flight into a backup that silently did
-    // not happen — and a nightly copy nobody took is a worse outcome than one that waited a
+    // not happen — and a scheduled copy nobody took is a worse outcome than one that waited a
     // few seconds for a collector.
     //
     // Bounded, because "blocking" and "for ever" are not the same promise: a collector pass
@@ -370,7 +370,7 @@ export const missingBlobs = async (
  * Whether every blob the database references is present at the copy's address.
  *
  * The **one integrity check** the roadmap names, and the three callers share it: the
- * console's verify button, the periodic verification, and the nightly run that checks
+ * console's verify button, the periodic verification, and the scheduled run that checks
  * the backup it just took. A backup is two stores captured as one window (D-114); this is
  * the question that proves they agree — for every `nodes.sha256` and `versions.sha256`,
  * the bytes exist in the blob copy under that address.

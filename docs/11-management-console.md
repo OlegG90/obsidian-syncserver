@@ -222,9 +222,8 @@ getting it from there is an OS question.
 
 **Backups require no configuration** (issue #219). A copy lands where compose mounts one, `pg_dump` is
 in the image at the database's own major, and the blobs are copied from the store the server already
-names — so the button works on any deployment this file describes. The button needs no switch: one existed while
-backups ran nightly and decided whether the *schedule* should run, and since D-121 a backup happens
-when somebody presses it.
+names — so the button works on any deployment this file describes, and needs no switch to turn it on. A
+backup happens when somebody presses it, or when the schedule below says so.
 
 **The schedule is the console's, and starts off** (#357, D-141). Console → Backups carries a card with a
 switch, a time, the weekdays, a time zone and how many scheduled copies to keep; it says when the next

@@ -14,7 +14,7 @@ const backupRow = (b: BackupRun): HTMLElement => {
   const card = el('div', { className: 'card' });
   card.append(
     el('strong', { textContent: `${b.status} — ${when(b.startedAt)}` }),
-    // Which of the two asked for it, on every row: a history in which a nightly copy and a
+    // Which of the two asked for it, on every row: a history in which a scheduled copy and a
     // copy somebody took before an upgrade look identical is one nobody can read afterwards.
     el('div', { className: 'muted', textContent: b.source === 'schedule' ? 'on a schedule' : 'by hand' }),
   );
