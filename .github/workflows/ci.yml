@@ -51,6 +51,8 @@ jobs:
       - run: node checks/check-citations.mjs
       # One workspace, one name, two things — how a second `OpenedVault` reached a release.
       - run: node checks/check-names.mjs
+      # A route states its body twice, and nothing tied the generic to the options (issue #483).
+      - run: node checks/check-route-bodies.mjs
       # What Obsidian records ONCE must be a constant. The phase went into the ribbon's title, then
       # into its icon, and both reached a release — a phone was offered "Sync: not connected" beside a
       # vault that had synced.
