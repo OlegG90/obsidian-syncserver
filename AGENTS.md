@@ -28,7 +28,7 @@ comments explain themselves; nothing else states a contract.
 | Path | What it is |
 |---|---|
 | `docs/` | architecture, protocol, key model, roadmap — read before changing behaviour |
-| `shared/` | types both sides agree on. Nothing runtime-heavy belongs here |
+| `shared/` | what both sides agree on: types, and the request-body schemas the server validates against (D-143). Nothing else that runs belongs here |
 | `server/` | Fastify + `pg`. No ORM |
 | `server/db/schema.sql` | the whole schema: tables, constraints, triggers. What a fresh installation gets |
 | `server/db/migrations/` | the same changes as steps for a database that already exists, applied by the server at start (D-132) |

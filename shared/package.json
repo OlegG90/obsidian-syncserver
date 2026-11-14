@@ -3,13 +3,19 @@
   "version": "0.8.13",
   "private": true,
   "type": "module",
-  "description": "The wire contract both sides implement: nothing that runs, only what they must agree on",
-  "//": "No runtime entry, deliberately: this package emits declarations only. Anything that tried to import it at run time would fail loudly here rather than load an empty module.",
+  "description": "The wire contract both sides implement: the types they agree on, and the request-body schemas the server checks them against",
+  "//": "One runtime entry, for the request-body schemas (D-143): the server imports them to validate against. The plugin and the console import only types from here, which their bundlers erase.",
   "exports": {
-    ".": { "types": "./types/index.d.ts" }
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./types/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.52"
   }
 }

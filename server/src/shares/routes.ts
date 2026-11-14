@@ -5,7 +5,8 @@
  * the wire that every other route here already speaks. The service holds the decisions;
  * this file validates the shape of what arrived and turns a refusal into a status.
  */
-import { arrayOf, body, keyMaterial, obj, optional, placedName, str } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { CreateShareBody, FinalizeLeaveBody, InviteBody, JoinShareBody, PrepareShareBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import type { Config } from '../config.js';
@@ -42,16 +43,6 @@ interface WireName {
 type WireEnvelope = { sha256: string; scope_id: string; wrapped_key: string };
 type WireTag = { sha256: string; scope_id: string; content_tag: string };
 
-/**
- * The two conversions' bodies: one renamed node per entry, with the key material of the scope it moves to.
- * The ids and names in each are the handler's to check (`badName`), so only their types are declared here.
- */
-const PREPARE = optional({ items: arrayOf(obj({ ...placedName, ...keyMaterial, node_id: str })) });
-const FINALIZE_LEAVE = optional({
-  nodes: arrayOf(
-    obj({ ...placedName, node_id: str, vault_envelopes: keyMaterial.blob_envelopes, vault_dedup_tags: keyMaterial.dedup_tags }),
-  ),
-});
 
 /**
  * Which of a converted node's fields is malformed, or nothing.
@@ -59,7 +50,7 @@ const FINALIZE_LEAVE = optional({
  * Both conversions check the same four, because a conversion is the same act in both
  * directions — only the scope it moves to differs.
  */
-const badName = (n: WireName | undefined): string | undefined => {
+const badName = (n: Partial<WireName> | undefined): string | undefined => {
   if (!UUID.test(n?.node_id ?? '')) return 'bad_node_id';
   if (!UUID.test(n?.name_key_id ?? '')) return 'bad_name_key_id';
   if (!n?.name_enc || !n.name_hmac) return 'name_required';
@@ -123,8 +114,8 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
   );
 
   app.post<{
-    Body: { vault_id: string; node_id: string; subtree_key_id: string; wrapped_key_initiator: string };
-  }>('/shares', { preValidation: requireAuth, ...body(optional({ vault_id: str, node_id: str, subtree_key_id: str, wrapped_key_initiator: str })) }, async (req, reply) => {
+    Body: CreateShareBody | undefined;
+  }>('/shares', { preValidation: requireAuth, ...body(optional(CreateShareBody)) }, async (req, reply) => {
     const body = req.body ?? ({} as Record<string, string>);
     // Three client-chosen identifiers, so three that are checked rather than passed
     // through. The scope id in particular becomes a primary key.
@@ -133,10 +124,11 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     }
     if (!body.wrapped_key_initiator) return reply.code(400).send({ error: 'wrapped_key_initiator_required' });
 
+    // `!`: each id passed the test above, which is a regex the compiler cannot follow.
     const out = await createShare(db, req.caller!.userId, {
-      vaultId: body.vault_id,
-      nodeId: body.node_id,
-      subtreeKeyId: body.subtree_key_id,
+      vaultId: body.vault_id!,
+      nodeId: body.node_id!,
+      subtreeKeyId: body.subtree_key_id!,
       wrappedKeyInitiator: Buffer.from(body.wrapped_key_initiator, 'base64'),
     });
     if ('kind' in out) return refuse(reply, out);
@@ -155,17 +147,8 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{
     Params: { shareId: string };
-    Body: {
-      items: {
-        node_id: string;
-        name_enc: string;
-        name_hmac: string;
-        name_key_id: string;
-        blob_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-        dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
-      }[];
-    };
-  }>('/shares/:shareId/prepare', { preValidation: requireAuth, ...body(PREPARE) }, async (req, reply) => {
+    Body: PrepareShareBody | undefined;
+  }>('/shares/:shareId/prepare', { preValidation: requireAuth, ...body(optional(PrepareShareBody)) }, async (req, reply) => {
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length === 0) return reply.code(400).send({ error: 'items_required' });
     for (const i of items) {
@@ -177,7 +160,8 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
       db,
       req.caller!.userId,
       req.params.shareId,
-      items.map((i) => converted(i, i.blob_envelopes, i.dedup_tags)),
+      // Every item passed `badName` above, which is what makes it a whole name.
+      items.map((i) => converted(i as WireName, i.blob_envelopes, i.dedup_tags)),
     );
     if (!refusal) return reply.code(204).send();
     return refuse(reply, refusal);
@@ -193,16 +177,16 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
     },
   );
 
-  app.post<{ Params: { shareId: string }; Body: { user_id: string; wrapped_key: string } }>(
+  app.post<{ Params: { shareId: string }; Body: InviteBody | undefined }>(
     '/shares/:shareId/invite',
-    { preValidation: requireAuth, ...body(optional({ user_id: str, wrapped_key: str })) },
+    { preValidation: requireAuth, ...body(optional(InviteBody)) },
     async (req, reply) => {
       const body = req.body ?? ({} as Record<string, string>);
       if (!UUID.test(body.user_id ?? '')) return reply.code(400).send({ error: 'bad_user_id' });
       if (!body.wrapped_key) return reply.code(400).send({ error: 'wrapped_key_required' });
 
       const refusal = await invite(db, req.caller!.userId, req.params.shareId, {
-        targetUserId: body.user_id,
+        targetUserId: body.user_id!, // tested above
         wrappedKey: Buffer.from(body.wrapped_key, 'base64'),
       });
       if (!refusal) return reply.code(204).send();
@@ -212,20 +196,21 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{
     Params: { shareId: string };
-    Body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string };
-  }>('/shares/:shareId/join', { preValidation: requireAuth, ...body(optional({ ...placedName, vault_id: str, parent_id: str })) }, async (req, reply) => {
+    Body: JoinShareBody | undefined;
+  }>('/shares/:shareId/join', { preValidation: requireAuth, ...body(optional(JoinShareBody)) }, async (req, reply) => {
     const body = req.body ?? ({} as Record<string, string>);
     for (const field of ['vault_id', 'parent_id', 'name_key_id'] as const) {
       if (!UUID.test(body[field] ?? '')) return reply.code(400).send({ error: `bad_${field}` });
     }
     if (!body.name_enc || !body.name_hmac) return reply.code(400).send({ error: 'name_required' });
 
+    // `!`: each id passed the test above, which is a regex the compiler cannot follow.
     const out = await joinShare(db, req.caller!.userId, req.params.shareId, {
-      vaultId: body.vault_id,
-      parentId: body.parent_id,
+      vaultId: body.vault_id!,
+      parentId: body.parent_id!,
       nameEnc: body.name_enc,
       nameHmac: body.name_hmac,
-      nameKeyId: body.name_key_id,
+      nameKeyId: body.name_key_id!,
     });
     if ('kind' in out) return refuse(reply, out);
     return reply.code(201).send({ root_node_id: out.rootNodeId });
@@ -308,17 +293,8 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.post<{
     Params: { shareId: string };
-    Body: {
-      nodes: {
-        node_id: string;
-        name_enc: string;
-        name_hmac: string;
-        name_key_id: string;
-        vault_envelopes?: { sha256: string; scope_id: string; wrapped_key: string }[];
-        vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
-      }[];
-    };
-  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(FINALIZE_LEAVE) }, async (req, reply) => {
+    Body: FinalizeLeaveBody | undefined;
+  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(optional(FinalizeLeaveBody)) }, async (req, reply) => {
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {
@@ -330,7 +306,8 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
       db,
       req.caller!.userId,
       req.params.shareId,
-      nodes.map((n) => converted(n, n.vault_envelopes, n.vault_dedup_tags)),
+      // Every node passed `badName` above, which is what makes it a whole name.
+      nodes.map((n) => converted(n as WireName, n.vault_envelopes, n.vault_dedup_tags)),
     );
     if (!refusal) return reply.code(204).send();
     return refuse(reply, refusal);

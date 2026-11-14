@@ -9,6 +9,7 @@
  * its reason, `404` on a blob the caller does not hold — each is an instruction to the
  * engine, and an exception would only be caught to read the status back out.
  */
+import type { ApprovePairingBody, BeginPairingBody, ChangePassphraseBody, ClaimPairingBody, CreateNodeBody, CreateShareBody, CreateVaultBody, FinalizeLeaveBody, InviteBody, JoinShareBody, KekVerifierBody, LoginBody, LookupPairingBody, MoveNodeBody, PrepareShareBody, PutContentBody, RecoverBody, RecoveryCodeBody, RedeemBody, RefreshBody, RemoveVaultBody, RenameDeviceBody } from '@syncserver/shared';
 import type {
   Change,
   CursorFault,
@@ -154,8 +155,10 @@ export type PrepareItem = ConvertedName & Material;
  * other names — deliberately, so a body meant for one endpoint fails at the other.
  */
 export interface FinalizeNode extends ConvertedName {
-  vault_envelopes?: Material['blob_envelopes'];
-  vault_dedup_tags?: Material['dedup_tags'];
+  // `NonNullable`: an indexed optional field carries `undefined` with it, which the body schema does not
+  // take — an absent list is left out, not sent as nothing.
+  vault_envelopes?: NonNullable<Material['blob_envelopes']>;
+  vault_dedup_tags?: NonNullable<Material['dedup_tags']>;
 }
 
 /**
@@ -396,7 +399,7 @@ export class SyncClient {
     if (this.refresh === undefined) return Promise.resolve('spent');
     this.refreshing ??= (async (): Promise<'ok' | 'spent'> => {
       try {
-        const out = await this.json<{ access: string }>('POST', '/auth/refresh', { refresh: this.refresh! }, { auth: false });
+        const out = await this.json<{ access: string }>('POST', '/auth/refresh', { refresh: this.refresh! } satisfies RefreshBody, { auth: false });
         this.access = out.access;
         return 'ok';
       } catch (e) {
@@ -482,7 +485,7 @@ export class SyncClient {
     root_node_id: string;
     user_id: string;
   }> {
-    return this.json('POST', '/auth/redeem', body, { auth: false });
+    return this.json('POST', '/auth/redeem', body satisfies RedeemBody, { auth: false });
   }
 
   login(body: {
@@ -505,7 +508,7 @@ export class SyncClient {
      */
     seed_fingerprint?: string;
   }> {
-    return this.json('POST', '/auth/login', body, { auth: false });
+    return this.json('POST', '/auth/login', body satisfies LoginBody, { auth: false });
   }
 
   /**
@@ -515,12 +518,12 @@ export class SyncClient {
    * passphrase, so knowing the passphrase is what buys it.
    */
   seedEnvelope(kekVerifier: string): Promise<{ wrapped_seed: string }> {
-    return this.json('POST', '/auth/seed-envelope', { kek_verifier: kekVerifier });
+    return this.json('POST', '/auth/seed-envelope', { kek_verifier: kekVerifier } satisfies KekVerifierBody);
   }
 
   /** File this account's recovery verifier — on a backfill, or after a passphrase change. */
   setKekVerifier(kekVerifier: string): Promise<void> {
-    return this.json('PUT', '/auth/kek-verifier', { kek_verifier: kekVerifier }, { expect: [204] });
+    return this.json('PUT', '/auth/kek-verifier', { kek_verifier: kekVerifier } satisfies KekVerifierBody, { expect: [204] });
   }
 
   /**
@@ -537,7 +540,7 @@ export class SyncClient {
    * the name.
    */
   renameDevice(deviceId: string, name: string): Promise<void> {
-    return this.json('PUT', `/auth/devices/${deviceId}`, { name }, { expect: [204] });
+    return this.json('PUT', `/auth/devices/${deviceId}`, { name } satisfies RenameDeviceBody, { expect: [204] });
   }
 
   /**
@@ -561,7 +564,7 @@ export class SyncClient {
     user_id: string;
     device_id: string;
   }> {
-    return this.json('POST', '/auth/recover', body, { auth: false });
+    return this.json('POST', '/auth/recover', body satisfies RecoverBody, { auth: false });
   }
 
   // ---- pairing a second device (docs/07) ---------------------------------------
@@ -572,7 +575,7 @@ export class SyncClient {
    * human is about to carry — never the code itself (D-110).
    */
   beginPairing(body: { device_pubkey: string; pairing_token_hash: string }): Promise<{ pairing_id: string }> {
-    return this.json('POST', '/auth/pairings', body, { auth: false });
+    return this.json('POST', '/auth/pairings', body satisfies BeginPairingBody, { auth: false });
   }
 
   /**
@@ -580,7 +583,7 @@ export class SyncClient {
    * same KEK, which move together or not at all (D-34).
    */
   setPassphrase(body: { wrapped_seed: string; kek_verifier: string }): Promise<void> {
-    return this.json('PUT', '/auth/passphrase', body, { expect: [204] });
+    return this.json('PUT', '/auth/passphrase', body satisfies ChangePassphraseBody, { expect: [204] });
   }
 
   /**
@@ -611,17 +614,17 @@ export class SyncClient {
    * working.
    */
   setRecoveryCode(body: { recovery_key: string; recovery_code_hash: string }): Promise<{ replaced: boolean }> {
-    return this.json('PUT', '/auth/recovery-code', body);
+    return this.json('PUT', '/auth/recovery-code', body satisfies RecoveryCodeBody);
   }
 
   /** What to seal to. Precedes approval, because sealing needs the waiting device's key. */
   lookupPairing(body: { pairing_secret: string }): Promise<{ device_pubkey: string }> {
-    return this.json('POST', '/auth/pairings/lookup', body);
+    return this.json('POST', '/auth/pairings/lookup', body satisfies LookupPairingBody);
   }
 
   /** From an authorised device, addressed by the secret alone — there is no id to carry. */
   approvePairing(body: { pairing_secret: string; seed_envelope: string }): Promise<{ device_pubkey: string }> {
-    return this.json('POST', '/auth/pairings/approve', body);
+    return this.json('POST', '/auth/pairings/approve', body satisfies ApprovePairingBody);
   }
 
   /**
@@ -644,7 +647,7 @@ export class SyncClient {
     | undefined
   > {
     try {
-      return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body, { auth: false });
+      return await this.json('POST', `/auth/pairings/${pairingId}/claim`, body satisfies ClaimPairingBody, { auth: false });
     } catch (e) {
       // Both mean "not yet": nobody has approved it, or the server is mid-backup and turns every
       // claim away until the window shuts (D-142). Neither is a reason to give the pairing up — a
@@ -667,7 +670,7 @@ export class SyncClient {
   }
 
   createVault(id: string, nameEnc: string): Promise<{ id: string; root_node_id: string }> {
-    return this.json('POST', '/vaults', { id, name_enc: nameEnc });
+    return this.json('POST', '/vaults', { id, name_enc: nameEnc } satisfies CreateVaultBody);
   }
 
   /** Where a client starts syncing: the root, the head, and the key scope per scope (docs/06). */
@@ -688,7 +691,7 @@ export class SyncClient {
   deleteVault(vaultId: string, authSecret: string): Promise<{ thawed: boolean; revoked: number }> {
     // The proof rides with the token (D-140): removing a vault is the one act a device may do to a vault
     // other than its own, so the server asks for what only an unlocked device holds.
-    return this.json('DELETE', `/vaults/${vaultId}`, { auth_secret: authSecret }, { expect: [200] });
+    return this.json('DELETE', `/vaults/${vaultId}`, { auth_secret: authSecret } satisfies RemoveVaultBody, { expect: [200] });
   }
 
   /**
@@ -761,7 +764,7 @@ export class SyncClient {
       name_key_id: string;
     },
   ): Promise<{ node_id: string; rev: number }> {
-    return this.json('POST', `/vaults/${vaultId}/nodes`, body);
+    return this.json('POST', `/vaults/${vaultId}/nodes`, body satisfies CreateNodeBody);
   }
 
   /**
@@ -784,7 +787,7 @@ export class SyncClient {
       method: 'PUT',
       path: `/vaults/${vaultId}/nodes/${nodeId}`,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body satisfies PutContentBody),
     });
 
     if (res.status === 409) {
@@ -816,7 +819,7 @@ export class SyncClient {
     ifMatchRev: number,
     body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
   ): Promise<{ rev: number }> {
-    return this.json('POST', `/vaults/${vaultId}/nodes/${nodeId}/move`, body, {
+    return this.json('POST', `/vaults/${vaultId}/nodes/${nodeId}/move`, body satisfies MoveNodeBody, {
       headers: { 'if-match': String(ifMatchRev) },
     });
   }
@@ -1027,12 +1030,12 @@ export class SyncClient {
     subtree_key_id: string;
     wrapped_key_initiator: string;
   }): Promise<{ share_id: string; state: string }> {
-    return this.json('POST', '/shares', body, { expect: [201] });
+    return this.json('POST', '/shares', body satisfies CreateShareBody, { expect: [201] });
   }
 
   /** One resumable batch of interior nodes converted to `KS`. */
   prepareShare(shareId: string, items: PrepareItem[]): Promise<void> {
-    return this.json('POST', `/shares/${shareId}/prepare`, { items }, { expect: [204] });
+    return this.json('POST', `/shares/${shareId}/prepare`, { items } satisfies PrepareShareBody, { expect: [204] });
   }
 
   /**
@@ -1069,7 +1072,7 @@ export class SyncClient {
   }
 
   invite(shareId: string, body: { user_id: string; wrapped_key: string }): Promise<void> {
-    return this.json('POST', `/shares/${shareId}/invite`, body, { expect: [204] });
+    return this.json('POST', `/shares/${shareId}/invite`, body satisfies InviteBody, { expect: [204] });
   }
 
   /** What this account is in, and what is waiting for it. */
@@ -1092,7 +1095,7 @@ export class SyncClient {
     shareId: string,
     body: { vault_id: string; parent_id: string; name_enc: string; name_hmac: string; name_key_id: string },
   ): Promise<{ root_node_id: string }> {
-    return this.json('POST', `/shares/${shareId}/join`, body, { expect: [201] });
+    return this.json('POST', `/shares/${shareId}/join`, body satisfies JoinShareBody, { expect: [201] });
   }
 
   declineShare(shareId: string): Promise<void> {
@@ -1123,7 +1126,7 @@ export class SyncClient {
 
   /** The metadata pass only this device can perform: the replica returns to `KV`. */
   finalizeLeave(shareId: string, nodes: FinalizeNode[]): Promise<void> {
-    return this.json('POST', `/shares/${shareId}/finalize-leave`, { nodes }, { expect: [204] });
+    return this.json('POST', `/shares/${shareId}/finalize-leave`, { nodes } satisfies FinalizeLeaveBody, { expect: [204] });
   }
 
 }

@@ -1,4 +1,5 @@
-import { body, int, optional, str } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { RestoreVersionBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
@@ -33,14 +34,15 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
     },
   );
 
-  app.post<{ Params: { vaultId: string }; Body: { node_id: string; rev: number } }>(
+  app.post<{ Params: { vaultId: string }; Body: RestoreVersionBody | undefined }>(
     '/vaults/:vaultId/restore',
-    { preValidation: requireAuth, ...body(optional({ node_id: str, rev: int })) },
+    { preValidation: requireAuth, ...body(optional(RestoreVersionBody)) },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });
       }
-      if (!req.body?.node_id || !Number.isInteger(req.body?.rev)) {
+      // An integer when it is there at all: the schema refused any other `rev`.
+      if (!req.body?.node_id || req.body.rev === undefined) {
         return reply.code(400).send({ error: 'node_id_and_rev_required' });
       }
 

@@ -630,3 +630,6 @@ export interface RestoreStatus {
   /** True when the database is behind the state file — a restore happened and nobody confirmed it. */
   pending: boolean;
 }
+
+// The request bodies: schemas the server validates against, and the types inferred from them (D-143).
+export * from './bodies.js';

@@ -7,7 +7,8 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
-import { body, int, optional, str, unchecked } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { InviteAccountBody, ReissueBody, RenameDeviceBody, SaveScheduleBody, SetEnabledBody, SetQuotaBody } from '@syncserver/shared';
 import { refusedDeviceName } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import { listProblems } from '../sync-problems.js';
@@ -120,20 +121,20 @@ export const registerAdminRoutes = (
   // What went wrong for which device, counted (#355). Newest first and bounded, like the audit log.
   app.get('/admin/sync-problems', admin, async () => ({ problems: await listProblems(db) }));
 
-  app.post<{ Body: { login: string; quota_bytes: string; ttl_seconds?: number } }>(
+  app.post<{ Body: InviteAccountBody | undefined }>(
     '/admin/invitations',
-    { ...admin, ...body(optional({ login: str, quota_bytes: unchecked, ttl_seconds: int })) },
+    { ...admin, ...body(optional(InviteAccountBody)) },
     async (req, reply) => {
       const { login, quota_bytes: quota } = req.body ?? {};
       if (!login || typeof login !== 'string') return refuseWith(reply, 400, 'login_required');
-      if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
+      if (!quota || !/^\d+$/.test(String(quota)) || BigInt(String(quota)) <= 0n) {
         return refuseWith(reply, 400, 'quota_bytes_required');
       }
 
       const out = await invite(db, req.admin!, {
         login,
         quotaBytes: String(quota),
-        ttlSeconds: req.body.ttl_seconds ?? INVITE_TTL_SECONDS,
+        ttlSeconds: req.body?.ttl_seconds ?? INVITE_TTL_SECONDS,
       });
       if ('kind' in out) return refuse(reply, out);
 
@@ -143,9 +144,9 @@ export const registerAdminRoutes = (
     },
   );
 
-  app.post<{ Params: { userId: string }; Body: { ttl_seconds?: number } }>(
+  app.post<{ Params: { userId: string }; Body: ReissueBody | undefined }>(
     '/admin/invitations/:userId/reissue',
-    { ...admin, ...body(optional({ ttl_seconds: int })) },
+    { ...admin, ...body(optional(ReissueBody)) },
     async (req, reply) => {
       const out = await reissue(db, req.admin!, req.params.userId, req.body?.ttl_seconds ?? INVITE_TTL_SECONDS);
       if ('kind' in out) return refuse(reply, out);
@@ -161,9 +162,9 @@ export const registerAdminRoutes = (
 
   // Disable and delete are different operations and must not share a control ([11]); this
   // is the reversible one, and the only one that exists yet.
-  app.post<{ Params: { userId: string }; Body: { enabled: boolean } }>(
+  app.post<{ Params: { userId: string }; Body: SetEnabledBody | undefined }>(
     '/admin/accounts/:userId/enabled',
-    { ...admin, ...body(optional({ enabled: unchecked })) },
+    { ...admin, ...body(optional(SetEnabledBody)) },
     async (req, reply) => {
       if (typeof req.body?.enabled !== 'boolean') return refuseWith(reply, 400, 'enabled_required');
       const out = await setEnabled(db, req.admin!, req.params.userId, req.body.enabled);
@@ -210,9 +211,9 @@ export const registerAdminRoutes = (
   );
 
   // Renaming one, for the operator telling somebody's devices apart for them (#356). Audited like a revoke.
-  app.put<{ Params: { userId: string; deviceId: string }; Body: { name?: unknown } }>(
+  app.put<{ Params: { userId: string; deviceId: string }; Body: RenameDeviceBody | undefined }>(
     '/admin/accounts/:userId/devices/:deviceId',
-    { ...admin, ...body(optional({ name: unchecked })) },
+    { ...admin, ...body(optional(RenameDeviceBody)) },
     async (req, reply) => {
       if (refusedDeviceName(reply, req.body?.name)) return reply;
       if (!isUuid(req.params.userId) || !isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });
@@ -222,12 +223,12 @@ export const registerAdminRoutes = (
     },
   );
 
-  app.put<{ Params: { userId: string }; Body: { quota_bytes: string } }>(
+  app.put<{ Params: { userId: string }; Body: SetQuotaBody | undefined }>(
     '/admin/accounts/:userId/quota',
-    { ...admin, ...body(optional({ quota_bytes: unchecked })) },
+    { ...admin, ...body(optional(SetQuotaBody)) },
     async (req, reply) => {
       const quota = req.body?.quota_bytes;
-      if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
+      if (!quota || !/^\d+$/.test(String(quota)) || BigInt(String(quota)) <= 0n) {
         return refuseWith(reply, 400, 'quota_bytes_required');
       }
       const out = await setQuota(db, req.admin!, req.params.userId, String(quota));
@@ -294,10 +295,10 @@ export const registerAdminRoutes = (
     * it was and what it became: a schedule is the rare setting whose *previous* value is the
     * thing somebody will want six months later, when the copies stopped appearing.
     */
-  app.put<{ Body: Partial<BackupSchedule> }>(
+  app.put<{ Body: SaveScheduleBody | undefined }>(
     '/admin/backups/schedule',
     // Each field is read through its own type check below, which names what was wrong.
-    { ...admin, ...body(optional({ enabled: unchecked, time: unchecked, days: unchecked, zone: unchecked, keep: unchecked })) },
+    { ...admin, ...body(optional(SaveScheduleBody)) },
     async (req, reply) => {
     const body = req.body ?? {};
     const wanted: BackupSchedule = {

@@ -10,6 +10,7 @@
  * **No key material passes through here, ever.** A console account has none (D-115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
+import type { BootstrapBody, ChangePasswordBody, ConsoleSignInBody, InviteAccountBody, ReissueBody, RenameDeviceBody, SaveScheduleBody, SetEnabledBody, SetQuotaBody } from '@syncserver/shared';
 import type {
   AccountRow, AuditRow, BackupRun, BackupSchedule, BackupScheduleView, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus,
   StorageTotals, SyncProblemRow,
@@ -158,12 +159,12 @@ export const health = (): Promise<HealthResponse> => call('GET', '/health');
  * away half a credential before anybody attacked it.
  */
 export const bootstrap = (login: string, password: string): Promise<{ login: string }> =>
-  call('POST', '/auth/bootstrap', { login, password });
+  call('POST', '/auth/bootstrap', { login, password } satisfies BootstrapBody);
 
 export const signIn = async (login: string, password: string): Promise<void> => {
   // Both halves. The server has answered with both since M4; keeping only the access token is
   // what made a console session fifteen minutes long instead of tab-long (D-102).
-  const out = await call<{ access: string; refresh: string }>('POST', '/auth/console', { login, password });
+  const out = await call<{ access: string; refresh: string }>('POST', '/auth/console', { login, password } satisfies ConsoleSignInBody);
   access = out.access;
   refresh = out.refresh;
   who = login;
@@ -172,7 +173,7 @@ export const signIn = async (login: string, password: string): Promise<void> => 
 export const accounts = (): Promise<{ accounts: AccountRow[] }> => call('GET', '/admin/accounts');
 
 export const invite = (login: string, quotaBytes: string): Promise<{ user_id: string; token: string }> =>
-  call('POST', '/admin/invitations', { login, quota_bytes: quotaBytes });
+  call('POST', '/admin/invitations', { login, quota_bytes: quotaBytes } satisfies InviteAccountBody);
 
 /**
  * Change what an account may store.
@@ -182,7 +183,7 @@ export const invite = (login: string, quotaBytes: string): Promise<{ user_id: st
  * stale by the time it is read. Lowering a limit below usage deletes nothing (SH-20).
  */
 export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_bytes: string; freezes: boolean }> =>
-  call('PUT', `/admin/accounts/${userId}/quota`, { quota_bytes: quotaBytes });
+  call('PUT', `/admin/accounts/${userId}/quota`, { quota_bytes: quotaBytes } satisfies SetQuotaBody);
 
 /**
  * Switch an account off, or back on.
@@ -192,7 +193,7 @@ export const setQuota = (userId: string, quotaBytes: string): Promise<{ used_byt
  * should not be spelled with the second one (D-55).
  */
 export const setEnabled = (userId: string, enabled: boolean): Promise<void> =>
-  call('POST', `/admin/accounts/${userId}/enabled`, { enabled });
+  call('POST', `/admin/accounts/${userId}/enabled`, { enabled } satisfies SetEnabledBody);
 
 /**
  * Change this console account's password (#137).
@@ -207,11 +208,11 @@ export const setEnabled = (userId: string, enabled: boolean): Promise<void> =>
  * because it leaked.
  */
 export const changePassword = (current: string, password: string): Promise<void> =>
-  call('PUT', '/auth/password', { current, password });
+  call('PUT', '/auth/password', { current, password } satisfies ChangePasswordBody);
 
 /** Mint a fresh token for an invitation nobody redeemed — the answer to a token that got lost. */
 export const reissue = (userId: string): Promise<{ token: string; expires_at: string }> =>
-  call('POST', `/admin/invitations/${userId}/reissue`, {});
+  call('POST', `/admin/invitations/${userId}/reissue`, {} satisfies ReissueBody);
 
 /** Withdraw an invitation. Only ever an unclaimed one; the server refuses anything else. */
 export const revokeInvitation = (userId: string): Promise<void> =>
@@ -232,7 +233,7 @@ export const revokeDevice = (userId: string, deviceId: string): Promise<void> =>
 
 /** Rename one device of an account (#356) — recorded in the audit log with both names, like a revoke. */
 export const renameDevice = (userId: string, deviceId: string, name: string): Promise<void> =>
-  call('PUT', `/admin/accounts/${userId}/devices/${deviceId}`, { name });
+  call('PUT', `/admin/accounts/${userId}/devices/${deviceId}`, { name } satisfies RenameDeviceBody);
 
 /**
  * Remove one backup's copy from disk, keeping the run in the history (#136).
@@ -287,7 +288,7 @@ export const backups = (): Promise<{ backups: BackupRun[]; schedule: BackupSched
  * moment in which the server is on with the previous time, and that moment takes backups.
  */
 export const saveSchedule = (schedule: BackupSchedule): Promise<BackupScheduleView> =>
-  call('PUT', '/admin/backups/schedule', schedule);
+  call('PUT', '/admin/backups/schedule', schedule satisfies SaveScheduleBody);
 
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>

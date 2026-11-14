@@ -8,7 +8,8 @@
  * Approval is the exception and is authenticated: only a device that already holds the seed
  * can seal it, so only such a device may approve.
  */
-import { body, optional, str, unchecked } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { ApprovePairingBody, BeginPairingBody, ClaimPairingBody, LookupPairingBody } from '@syncserver/shared';
 import { refusedDeviceName } from '../devices.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
@@ -31,9 +32,9 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    * The secret itself is **not** sent here (D-110). The server stores a hash, and a hash of
    * something it generated would prove nothing about who is asking later.
    */
-  app.post<{ Body: { device_pubkey?: string; pairing_token_hash?: string } }>(
+  app.post<{ Body: BeginPairingBody | undefined }>(
     '/auth/pairings',
-    body(optional({ device_pubkey: str, pairing_token_hash: str })), async (req, reply) => {
+    body(optional(BeginPairingBody)), async (req, reply) => {
       const pubkey = req.body?.device_pubkey;
       const hash = req.body?.pairing_token_hash;
       if (!pubkey) return reply.code(400).send({ error: 'device_pubkey_required' });
@@ -51,9 +52,9 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    * What to seal to. Sealing needs the waiting device's key, so this necessarily precedes
    * approval — see the service for the substitution limitation this admits.
    */
-  app.post<{ Body: { pairing_secret?: string } }>(
+  app.post<{ Body: LookupPairingBody | undefined }>(
     '/auth/pairings/lookup',
-    { preValidation: requireAuth, ...body(optional({ pairing_secret: str })) },
+    { preValidation: requireAuth, ...body(optional(LookupPairingBody)) },
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
       if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
@@ -75,9 +76,9 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    * body: a device approves into the account it belongs to, and letting a request name a
    * different one would be an invitation to bind somebody else's.
    */
-  app.post<{ Body: { pairing_secret?: string; seed_envelope?: string } }>(
+  app.post<{ Body: ApprovePairingBody | undefined }>(
     '/auth/pairings/approve',
-    { preValidation: requireAuth, ...body(optional({ pairing_secret: str, seed_envelope: str })) },
+    { preValidation: requireAuth, ...body(optional(ApprovePairingBody)) },
     async (req, reply) => {
       const secret = req.body?.pairing_secret;
       const envelope = req.body?.seed_envelope;
@@ -103,9 +104,9 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
    * `409 not_approved` is the polling answer — the pairing is real and nobody has approved
    * it yet, so the caller should keep asking rather than start over.
    */
-  app.post<{ Params: { id: string }; Body: { pairing_secret?: string; name?: string; platform?: string } }>(
+  app.post<{ Params: { id: string }; Body: ClaimPairingBody | undefined }>(
     '/auth/pairings/:id/claim',
-    body(optional({ pairing_secret: str, name: unchecked, platform: str })), async (req, reply) => {
+    body(optional(ClaimPairingBody)), async (req, reply) => {
       const secret = req.body?.pairing_secret;
       if (!secret) return reply.code(400).send({ error: 'pairing_secret_required' });
       if (req.body?.name !== undefined && refusedDeviceName(reply, req.body.name)) return reply;
@@ -113,7 +114,7 @@ export const registerPairingRoutes = (app: FastifyInstance, db: Db, cfg: Config)
       const out = await claimPairing(db, {
         pairingId: req.params.id,
         pairingSecret: secret,
-        name: req.body?.name ?? 'obsidian',
+        name: (req.body?.name as string | undefined) ?? 'obsidian',
         platform: req.body?.platform ?? 'unknown',
       });
       if ('kind' in out) return refuse(reply, out);
