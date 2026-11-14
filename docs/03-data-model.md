@@ -318,7 +318,8 @@ is not what thaws, the arithmetic is.
 
 ## Garbage collection
 
-`refcount` is reconciled by a **nightly mark and sweep**, not maintained live: under concurrent writes a
+`refcount` is reconciled by **mark and sweep** — the collector's pass, at start and then every
+`SWEEP_INTERVAL_SECONDS` — not maintained live: under concurrent writes a
 live counter drifts, and an error towards zero means data loss.
 
 ```

@@ -16,7 +16,7 @@ C4Context
 
     Rel(owner, obsidian, "Writes notes")
     Rel(member, obsidian, "Reads and writes within their rights")
-    Rel(obsidian, sync, "Synchronises through the plugin", "HTTPS; WebSocket from M2")
+    Rel(obsidian, sync, "Synchronises through the plugin", "HTTP; a WebSocket for change notifications")
     Rel(sync, net, "Reachable only from inside")
 ```
 
@@ -42,14 +42,14 @@ C4Container
     Container_Boundary(server, "SyncServer") {
         Container(api, "Server process", "TypeScript, Fastify, one Node process", "Sync API, change notifications, the console's files; the collector and the backup schedule run beside the routes")
         ContainerDb(pg, "Metadata", "PostgreSQL", "Vaults, nodes, delta journal, versions, shares, blob accounting, key envelopes, dedup index")
-        ContainerDb(blobs, "Blob store", "Filesystem or S3-compatible", "File content by sha256, immutable")
+        ContainerDb(blobs, "Blob store", "Filesystem", "File content by sha256, immutable")
         ContainerQueue(bus, "Event bus", "LISTEN/NOTIFY", "New-revision notifications")
     }
 
     Rel(owner, plugin, "Works in the vault")
     Rel(plugin, idb, "Reads and updates state")
-    Rel(plugin, api, "Delta, writes, blobs", "HTTPS")
-    Rel(api, plugin, "Change notifications (M2)", "WebSocket")
+    Rel(plugin, api, "Delta, writes, blobs", "HTTP")
+    Rel(api, plugin, "Change notifications", "WebSocket")
     Rel(api, pg, "Reads and writes", "SQL")
     Rel(api, blobs, "Uploads and serves content")
     Rel(api, bus, "Publishes new-revision events")
@@ -69,13 +69,16 @@ an interval, and each pass is a single function that keeps the order [03](03-dat
 thinning before marking, marking before sweeping. What keeps it apart from a backup is the advisory lock
 both take ([08](08-backup-restore.md)), not a process boundary.
 
-**And one process per database is an assumption the code makes.** Several decisions are held in memory
-because one process owns them: the backup window that refuses writes, the halt after an unconfirmed
-restore, the upload and sign-in rate limiters, the cached answer that an administrator exists, and the one
-`LISTEN` connection change notifications fan out from. A second server instance against the same database
-would not refuse writes while the first one's backup runs, would double every rate limit, and would not
-halt after a restore it did not start. Running two is not supported; making it supported means moving each
-of those into the database first.
+**And one process per database is an assumption the code makes.** Three things are held in memory
+because one process owns them, and a second server instance against the same database would see none of
+them: it would not refuse writes while the first one's backup window is open, it would allow every upload
+and sign-in limit a second time over, and it would not halt after a restore it did not start. Running two
+is not supported; making it supported means moving those three into the database first.
+
+The rest already holds across instances. The collector and a backup exclude each other through an advisory
+lock in the database, the backup schedule claims each moment with a conditional `UPDATE` (D-141), every
+process opens its own `LISTEN` and PostgreSQL delivers to all of them, and the cached answer that an
+administrator exists can only go from no to yes.
 
 Cryptography is almost invisible on these diagrams, and that is the point: the keys live on the clients,
 the server stores envelopes and never opens them.
@@ -88,7 +91,7 @@ C4Component
 
     Container(plugin, "Sync plugin", "TypeScript", "")
     ContainerDb(pg, "Metadata", "PostgreSQL", "")
-    ContainerDb(blobs, "Blob store", "FS or S3", "")
+    ContainerDb(blobs, "Blob store", "Filesystem", "")
 
     Container_Boundary(api, "Sync API") {
         Component(auth, "AuthService", "JWT, refresh", "Login, tokens, device registration, KDF parameters")
@@ -96,8 +99,8 @@ C4Component
         Component(delta, "DeltaService", "TypeScript", "Reads one journal — the caller's own; pins a snapshot, collapses changes")
         Component(blobsvc, "BlobService", "TypeScript", "Upload with quota and rate verdicts, authorisation by the caller's own live reference, Range serving")
         Component(history, "HistoryService", "TypeScript", "Version list, trash, restore as a new write with an old hash; transfers history on join and on thaw")
-        Component(shares, "ShareService — M3", "TypeScript", "Shares, invitations, membership, freezing; fans a write out to live non-frozen participants")
-        Component(events, "EventPublisher — M2", "TypeScript", "Fans out new-revision notifications over WebSocket")
+        Component(shares, "ShareService", "TypeScript", "Shares, invitations, membership, freezing; fans a write out to live non-frozen participants")
+        Component(events, "EventsHub", "TypeScript", "Fans out new-revision notifications over WebSocket")
     }
 
     Rel(plugin, auth, "Login and token refresh")
@@ -105,11 +108,11 @@ C4Component
     Rel(plugin, nodes, "Pushes local changes")
     Rel(plugin, blobsvc, "Checks presence, uploads content")
     Rel(plugin, history, "Versions, trash, restore")
-    Rel(plugin, shares, "Creates, joins, leaves shares (M3)")
-    Rel(nodes, shares, "A write inside a shared folder fans out to live non-frozen participants (M3)")
-    Rel(nodes, events, "Announces a new revision (M2)")
+    Rel(plugin, shares, "Creates, joins, leaves shares")
+    Rel(nodes, shares, "A write inside a shared folder fans out to live non-frozen participants")
+    Rel(nodes, events, "Announces a new revision")
     Rel(history, nodes, "Restore is an ordinary write")
-    Rel(shares, history, "Hands over the interval on join and on thaw (M3)")
+    Rel(shares, history, "Hands over the interval on join and on thaw")
     Rel(nodes, pg, "One server transaction: node, journal, version — per eligible participant")
     Rel(blobsvc, blobs, "Reads and writes content")
 ```
@@ -132,7 +135,7 @@ the accounting itself is schema counters — there is no separate service to pla
 C4Component
     title Sync plugin — components
 
-    Container(api, "Sync API", "HTTPS", "")
+    Container(api, "Sync API", "HTTP", "")
     System_Ext(obsidian, "Obsidian", "Vault API")
 
     Container_Boundary(plugin, "Sync plugin") {
@@ -141,8 +144,7 @@ C4Component
         Component(engine, "SyncEngine", "TypeScript", "One pass reconciles: pushes, pulls, adopts a non-empty local vault on first contact, writes conflict files on a failed content precondition, and pushes and applies deletes — gated by the epoch the cursor probe answers (restore never wipes, reset quarantines)")
         Component(state, "LocalState", "data.json", "Node tree and what is already on the server; the only place paths are resolved to node ids")
         Component(vault, "VaultAdapter", "Obsidian API", "list, read, write, delete — the seam between the engine and the Obsidian vault")
-        Component(shareui, "ShareManager — M3", "TypeScript", "Creates and joins shares; runs the additive key pass and the leave-time re-key")
-        Component(attach, "AttachmentRouter — M2", "Obsidian API", "Keeps attachments created inside a shared folder inside it — a convenience, not a rule")
+        Component(shareui, "Sharing", "TypeScript", "Creates and joins shares; runs the additive key pass and the leave-time re-key")
     }
 
     Rel(ui, sess, "Connects, unlocks, locks")
@@ -152,12 +154,11 @@ C4Component
     Rel(engine, state, "Reads and updates")
     Rel(engine, vault, "Lists, reads, writes")
     Rel(vault, obsidian, "Vault API")
-    Rel(engine, shareui, "Share events: joined, ended; freeze and thaw (M3)")
-    Rel(shareui, api, "Key envelopes and share-key names (M3)")
-    Rel(attach, shareui, "Asks whether the note is inside a shared folder (M2)")
+    Rel(engine, shareui, "Share events: joined, ended; freeze and thaw")
+    Rel(shareui, api, "Key envelopes and share-key names")
 ```
 
-**A shared folder is an ordinary folder to every component above `ShareManager`.** That component handles
+**A shared folder is an ordinary folder to every component above Sharing (`sharing.ts`).** That component handles
 joining and leaving plus the two key passes described in [06](06-key-model.md); nothing else on the client
 needs to know that a folder is shared. There is no read-only state to emulate (SH-10), nothing to mount, and
 no detachment protocol for the client to drive — a participant's copy is their own from the start.
@@ -180,8 +181,10 @@ C4Deployment
             ContainerDb(pg, "PostgreSQL", "Database", "Vaults, metadata, journal, versions, shares")
         }
         Deployment_Node(vol, "Data volumes", "Filesystem") {
+            ContainerDb(pgdata, "Database files", "PGDATA", "")
             ContainerDb(blobs, "Blob store", "Hash-prefixed directories", "")
             ContainerDb(backups, "Backups", "One directory per run", "")
+            ContainerDb(state, "State", "restore.epoch", "Outside both the database and the blobs, so it survives restoring either")
         }
     }
 
@@ -196,8 +199,10 @@ C4Deployment
     Rel(pd, api, "Sync, over the private network", "HTTP")
     Rel(pm, api, "Same; no background sync on iOS", "HTTP")
     Rel(api, pg, "SQL")
+    Rel(pg, pgdata, "Stores")
     Rel(api, blobs, "Content")
     Rel(api, backups, "Copies when asked or scheduled")
+    Rel(api, state, "The newest restore epoch it has run with")
 ```
 
 Two containers and the volumes they write. Nothing terminates TLS in front of the server: it publishes a
