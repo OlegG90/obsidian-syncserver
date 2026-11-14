@@ -39,7 +39,8 @@ import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
 import { removeBackupCopy } from '../backup-remove.js';
 import { backupRunDir, runDirOf } from '../backup-legs.js';
-import { readSchedule, saveSchedule, scheduleProblem, settingsOf, tidyDays, type BackupSchedule } from '../backup-schedule.js';
+import { readSchedule, scheduleProblem, settingsOf, tidyDays, writeSchedule, type BackupSchedule } from '../backup-schedule.js';
+import { oneFrom } from '../db.js';
 import { scheduleView } from '../backup-scheduler.js';
 import { openStore } from '../blobs/store.js';
 import { confirmRestore, restoreStatus } from '../restore.js';
@@ -316,18 +317,23 @@ export const registerAdminRoutes = (
     const problem = scheduleProblem(wanted);
     if (problem) return refuseWith(reply, 400, problem);
 
-    const before = await readSchedule(db);
-    await saveSchedule(db, wanted);
-    await db.tx((c) =>
-      record(c, {
+    // The setting and its record in one transaction (issue #477): a failure between them used
+    // to leave a schedule in force the log never recorded, and the log exists to answer "who
+    // changed this and when" — for a schedule, what it was before is the point. Reading the
+    // previous row inside the same transaction keeps `from` the value being replaced, not one
+    // a concurrent write has since moved past.
+    await db.tx(async (c) => {
+      const before = await readSchedule(oneFrom(c));
+      await writeSchedule(c, wanted);
+      await record(c, {
         actor: req.admin!,
         action: 'backup.schedule',
         details: {
           from: settingsOf(before),
           to: wanted,
         },
-      }),
-    );
+      });
+    });
     return scheduleView(db);
   });
 

@@ -12,7 +12,8 @@
  * asking them for a `TZ` on the day they install the server.
  */
 import type { BackupSchedule, ScheduleRefusalCode } from '@syncserver/shared';
-import type { Db } from './db.js';
+import type { Db, Queryable } from './db.js';
+import type { PoolClient } from 'pg';
 
 export type { BackupSchedule };
 
@@ -194,7 +195,7 @@ interface Row {
  */
 export type StoredSchedule = BackupSchedule & { lastScheduledFor: Date | null; updatedAt: Date };
 
-export const readSchedule = async (db: Db): Promise<StoredSchedule> => {
+export const readSchedule = async (db: Queryable): Promise<StoredSchedule> => {
   const row = (await db.one<Row>(
     `SELECT enabled, to_char(at_time, 'HH24:MI') AS time, days, zone, keep::int AS keep,
             last_scheduled_for AS "lastScheduledFor", updated_at AS "updatedAt"
@@ -204,16 +205,20 @@ export const readSchedule = async (db: Db): Promise<StoredSchedule> => {
 };
 
 /**
- * Store a schedule, and start counting from now.
+ * Store a schedule on this connection, and start counting from now.
  *
  * `last_scheduled_for` is set to the moment the new schedule most recently passed, so
  * switching one on at nine in the morning does not read this morning's 02:00 as missed and
  * open a refusal window while people are working. What an operator turns on begins with its
  * next run, never with a backlog.
+ *
+ * The core `saveSchedule` shares: the route pairs it with its audit row in one transaction
+ * (issue #477), while a lone write keeps the `Db` shape everywhere else. One statement of SQL
+ * either way — the split is about who else is in the transaction, not about the write.
  */
-export const saveSchedule = async (db: Db, s: BackupSchedule, now = new Date()): Promise<void> => {
+export const writeSchedule = async (c: PoolClient, s: BackupSchedule, now = new Date()): Promise<void> => {
   const days = tidyDays(s.days);
-  await db.query(
+  await c.query(
     `UPDATE backup_schedule
         SET enabled = $1, at_time = $2::time, days = $3::smallint[], zone = $4, keep = $5,
             last_scheduled_for = $6, updated_at = $7
@@ -224,6 +229,10 @@ export const saveSchedule = async (db: Db, s: BackupSchedule, now = new Date()):
     [s.enabled, s.time, days, s.zone, s.keep, lastDue({ ...s, days }, now) ?? null, now],
   );
 };
+
+/** The lone-write entry point: the same statement, in a transaction of its own. */
+export const saveSchedule = async (db: Db, s: BackupSchedule, now = new Date()): Promise<void> =>
+  db.tx(async (c) => writeSchedule(c, s, now));
 
 /**
  * Claim the moment this schedule owes, if it owes one — the whole of "does a backup start now".
