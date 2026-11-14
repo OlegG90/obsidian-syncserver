@@ -1,4 +1,4 @@
-import { body, int, obj, str } from '../http-schema.js';
+import { body, int, optional, str } from '../http-schema.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { ownsVault } from '../account.js';
@@ -35,7 +35,7 @@ export const registerHistoryRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{ Params: { vaultId: string }; Body: { node_id: string; rev: number } }>(
     '/vaults/:vaultId/restore',
-    { preValidation: requireAuth, ...body(obj({ node_id: str, rev: int })) },
+    { preValidation: requireAuth, ...body(optional({ node_id: str, rev: int })) },
     async (req, reply) => {
       if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
         return reply.code(404).send({ error: 'not_found' });

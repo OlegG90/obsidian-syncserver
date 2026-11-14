@@ -1,4 +1,4 @@
-import { any, body, obj, optional, str } from '../http-schema.js';
+import { body, obj, optional, str, unchecked } from '../http-schema.js';
 import { refusedDeviceName, renameDevice } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import type { FastifyInstance } from 'fastify';
@@ -128,7 +128,7 @@ export const registerAuthRoutes = (
       device_name?: string;
       device_platform?: string;
     };
-  }>('/auth/redeem', body(obj({ invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: any, pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str, recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str, device_name: any, device_platform: str }, ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'])), async (req, reply) => {
+  }>('/auth/redeem', body(obj({ invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: unchecked, pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str, recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str, device_name: unchecked, device_platform: str }, ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'])), async (req, reply) => {
     const b = req.body;
 
     // Checked here as well as in the schema, for the reason a 500 is not an answer.
@@ -223,7 +223,7 @@ export const registerAuthRoutes = (
    */
   app.post<{ Body: { login: string; password: string; device_name?: string } }>(
     '/auth/console',
-    { ...WRITES_ONLY_SESSIONS, ...body(optional({ login: str, password: str, device_name: any })) },
+    { ...WRITES_ONLY_SESSIONS, ...body(optional({ login: str, password: str, device_name: unchecked })) },
     async (req, reply) => {
       const login = req.body?.login;
       const password = req.body?.password;
@@ -330,7 +330,7 @@ export const registerAuthRoutes = (
       device_name?: string;
       device_platform?: string;
     };
-  }>('/auth/recover', body(optional({ login: str, kek_verifier: str, recovery_code: str, device_name: any, device_platform: str })), async (req, reply) => {
+  }>('/auth/recover', body(optional({ login: str, kek_verifier: str, recovery_code: str, device_name: unchecked, device_platform: str })), async (req, reply) => {
     const b = req.body ?? ({} as Record<string, string>);
     if (!b.login) return reply.code(400).send({ error: 'login_required' });
     // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
@@ -391,7 +391,7 @@ export const registerAuthRoutes = (
     },
   );
 
-  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preValidation: requireAuth, ...body(obj({ name: any, platform: str }, ['platform'])) }, async (req, reply) => {
+  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preValidation: requireAuth, ...body(obj({ name: unchecked, platform: str }, ['platform'])) }, async (req, reply) => {
     if (refusedDeviceName(reply, req.body?.name)) return reply;
 
     const row = await db.one<{ id: string }>(
@@ -656,7 +656,7 @@ export const registerAuthRoutes = (
    */
   app.put<{ Params: { deviceId: string }; Body: { name?: unknown } }>(
     '/auth/devices/:deviceId',
-    { preValidation: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ name: unchecked })) },
     async (req, reply) => {
       if (refusedDeviceName(reply, req.body?.name)) return reply;
       if (!isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });

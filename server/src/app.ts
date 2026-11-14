@@ -58,6 +58,14 @@ declare module 'fastify' {
   }
 }
 
+/** What Fastify can refuse while it reads a body, before any schema or route sees it. */
+const BODY_REFUSALS: Record<string, { status: number; error: string }> = {
+  FST_ERR_CTP_INVALID_JSON_BODY: { status: 400, error: 'invalid_request' },
+  FST_ERR_CTP_EMPTY_JSON_BODY: { status: 400, error: 'invalid_request' },
+  FST_ERR_CTP_INVALID_MEDIA_TYPE: { status: 415, error: 'unsupported_media_type' },
+  FST_ERR_CTP_BODY_TOO_LARGE: { status: 413, error: 'body_too_large' },
+};
+
 export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = {}): Promise<FastifyInstance> => {
   // The events hub used to be the only seam and was passed positionally; both shapes are
   // accepted so every existing caller keeps working.
@@ -71,11 +79,15 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
 
-  // A body the schema refused is answered the way every other refusal here is — a code, and the
+  // A body refused at the boundary is answered the way every other refusal here is — a code, and the
   // sentence that says what was wrong (`body/size must be integer`) — rather than in Fastify's own
-  // shape, which no client reads. Everything else keeps Fastify's answer.
+  // shape, whose `error` is a status phrase a client would read as a code. That covers the schema and
+  // the three refusals that come before it, while the body is still being read. Everything else keeps
+  // Fastify's answer.
   app.setErrorHandler((error: FastifyError, _req, reply) => {
     if (error.validation) return reply.code(400).send({ error: 'invalid_request', detail: error.message });
+    const reading = BODY_REFUSALS[error.code];
+    if (reading) return reply.code(reading.status).send({ error: reading.error, detail: error.message });
     return reply.send(error);
   });
 

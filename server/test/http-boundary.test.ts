@@ -130,6 +130,9 @@ describe('a body of the wrong shape is refused before a handler reads it', () =>
     const r = await send('POST', '/vaults', { name_enc: 'AA==' });
     assert.equal(r.statusCode, 400);
     assert.equal(r.json().error, 'bad_vault_id');
+    // And so does a request with no body at all, where the route asks whether there is one.
+    const empty = await send('POST', '/vaults');
+    assert.equal(empty.json().error, 'bad_vault_id');
   });
 });
 
@@ -158,5 +161,27 @@ describe('what the boundary leaves as it was', () => {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
     });
     assert.equal(r.statusCode, 415, 'a JSON route no longer receives a stream where it reads fields');
+    assert.equal(r.json().error, 'unsupported_media_type', 'in the shape every other refusal has');
+
+    // And the blob routes still do, in their own scope: refused for the address, not for the media type.
+    const blob = await app.inject({
+      method: 'POST',
+      url: '/blobs',
+      payload: Buffer.from('ciphertext'),
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+    });
+    assert.notEqual(blob.statusCode, 415, blob.body);
+    assert.notEqual(blob.statusCode, 500, blob.body);
+  });
+
+  it('answers JSON that does not parse in the shape every other refusal has', async () => {
+    const r = await app.inject({
+      method: 'PUT',
+      url: `/vaults/${vaultId}`,
+      payload: '{"name_enc":',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    });
+    assert.equal(r.statusCode, 400);
+    assert.equal(r.json().error, 'invalid_request');
   });
 });

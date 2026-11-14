@@ -307,7 +307,7 @@ export const registerShareRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
         vault_dedup_tags?: { sha256: string; scope_id: string; content_tag: string }[];
       }[];
     };
-  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(optional({ nodes: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, vault_envelopes: material.blob_envelopes!, vault_dedup_tags: material.dedup_tags! })) })) }, async (req, reply) => {
+  }>('/shares/:shareId/finalize-leave', { preValidation: requireAuth, bodyLimit: FINALIZE_BODY_LIMIT, ...body(optional({ nodes: arrayOf(obj({ node_id: str, name_enc: str, name_hmac: str, name_key_id: str, vault_envelopes: material.blob_envelopes, vault_dedup_tags: material.dedup_tags })) })) }, async (req, reply) => {
     const nodes = req.body?.nodes;
     if (!Array.isArray(nodes)) return reply.code(400).send({ error: 'nodes_required' });
     for (const n of nodes) {
