@@ -1,3 +1,4 @@
+import { body, optional, str, unchecked } from '../http-schema.js';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { tokenMatches } from '../crypto.js';
@@ -9,12 +10,12 @@ import { createVault, deleteVault, listVaults, readUsage, renameVault } from './
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
-  app.get('/vaults', { preHandler: requireAuth }, async (req) => {
+  app.get('/vaults', { preValidation: requireAuth }, async (req) => {
     const rows = await listVaults(db, req.caller!.userId);
     return rows.map((v) => ({ id: v.id, name_enc: v.nameEnc, nodes: v.nodes, bytes: v.bytes, shared: v.shared }));
   });
 
-  app.post<{ Body: { id: string; name_enc: string } }>('/vaults', { preHandler: requireAuth }, async (req, reply) => {
+  app.post<{ Body: { id: string; name_enc: string } }>('/vaults', { preValidation: requireAuth, ...body(optional({ id: str, name_enc: str })) }, async (req, reply) => {
     // The id comes from the client and must look like one: it is a primary key the caller
     // chose, so it is the one input here that is not simply passed through.
     if (!UUID.test(req.body?.id ?? '')) return reply.code(400).send({ error: 'bad_vault_id' });
@@ -27,7 +28,7 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.put<{ Params: { vaultId: string }; Body: { name_enc: string } }>(
     '/vaults/:vaultId',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth, ...body(optional({ name_enc: str })) },
     async (req, reply) => {
       if (!req.body?.name_enc) return reply.code(400).send({ error: 'name_enc_required' });
       const ok = await renameVault(db, req.caller!.userId, req.params.vaultId, req.body.name_enc);
@@ -42,7 +43,7 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
   // never inside an access token. A token lifted off the wire can list the vaults and delete none.
   app.delete<{ Params: { vaultId: string }; Body: { auth_secret?: unknown } }>(
     '/vaults/:vaultId',
-    { preHandler: requireAuth, config: { anyVaultOfTheAccount: true } },
+    { preValidation: requireAuth, config: { anyVaultOfTheAccount: true }, ...body(optional({ auth_secret: unchecked })) },
     async (req, reply) => {
       const proof = req.body?.auth_secret;
       const held = await db.one<{ hash: string | null }>(`SELECT auth_secret_hash AS hash FROM users WHERE id = $1`, [
@@ -67,7 +68,7 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{ Params: { vaultId: string } }>(
     '/vaults/:vaultId/reset',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const out = await resetVault(db, req.caller!.userId, req.params.vaultId);
       if (!out) return reply.code(404).send({ error: 'not_found' });
@@ -77,7 +78,7 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
     },
   );
 
-  app.get('/usage', { preHandler: requireAuth }, async (req, reply) => {
+  app.get('/usage', { preValidation: requireAuth }, async (req, reply) => {
     const usage = await readUsage(db, req.caller!.userId);
     if (!usage) return reply.code(404).send({ error: 'not_found' });
     return { used: usage.used, quota: usage.quota, frozen: usage.frozen };

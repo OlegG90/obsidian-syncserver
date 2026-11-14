@@ -7,6 +7,7 @@
  * vault: with E2EE always on there is no key to do it with, so the absence is cryptographic
  * rather than a permission somebody could grant later.
  */
+import { body, int, optional, str, unchecked } from '../http-schema.js';
 import { refusedDeviceName } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import { listProblems } from '../sync-problems.js';
@@ -92,7 +93,7 @@ export const registerAdminRoutes = (
   /** Only what this surface needs of the configuration: how fresh a device's `last_seen_at` is (#386). */
   limits: { accessTokenTtlSeconds: number },
 ): void => {
-  const admin = { preHandler: requireAdmin(db) };
+  const admin = { preValidation: requireAdmin(db) };
 
   app.get('/admin/accounts', admin, async () => ({ accounts: await listAccounts(db) }));
 
@@ -121,7 +122,7 @@ export const registerAdminRoutes = (
 
   app.post<{ Body: { login: string; quota_bytes: string; ttl_seconds?: number } }>(
     '/admin/invitations',
-    admin,
+    { ...admin, ...body(optional({ login: str, quota_bytes: unchecked, ttl_seconds: int })) },
     async (req, reply) => {
       const { login, quota_bytes: quota } = req.body ?? {};
       if (!login || typeof login !== 'string') return refuseWith(reply, 400, 'login_required');
@@ -144,7 +145,7 @@ export const registerAdminRoutes = (
 
   app.post<{ Params: { userId: string }; Body: { ttl_seconds?: number } }>(
     '/admin/invitations/:userId/reissue',
-    admin,
+    { ...admin, ...body(optional({ ttl_seconds: int })) },
     async (req, reply) => {
       const out = await reissue(db, req.admin!, req.params.userId, req.body?.ttl_seconds ?? INVITE_TTL_SECONDS);
       if ('kind' in out) return refuse(reply, out);
@@ -162,7 +163,7 @@ export const registerAdminRoutes = (
   // is the reversible one, and the only one that exists yet.
   app.post<{ Params: { userId: string }; Body: { enabled: boolean } }>(
     '/admin/accounts/:userId/enabled',
-    admin,
+    { ...admin, ...body(optional({ enabled: unchecked })) },
     async (req, reply) => {
       if (typeof req.body?.enabled !== 'boolean') return refuseWith(reply, 400, 'enabled_required');
       const out = await setEnabled(db, req.admin!, req.params.userId, req.body.enabled);
@@ -211,7 +212,7 @@ export const registerAdminRoutes = (
   // Renaming one, for the operator telling somebody's devices apart for them (#356). Audited like a revoke.
   app.put<{ Params: { userId: string; deviceId: string }; Body: { name?: unknown } }>(
     '/admin/accounts/:userId/devices/:deviceId',
-    admin,
+    { ...admin, ...body(optional({ name: unchecked })) },
     async (req, reply) => {
       if (refusedDeviceName(reply, req.body?.name)) return reply;
       if (!isUuid(req.params.userId) || !isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });
@@ -223,7 +224,7 @@ export const registerAdminRoutes = (
 
   app.put<{ Params: { userId: string }; Body: { quota_bytes: string } }>(
     '/admin/accounts/:userId/quota',
-    admin,
+    { ...admin, ...body(optional({ quota_bytes: unchecked })) },
     async (req, reply) => {
       const quota = req.body?.quota_bytes;
       if (!quota || !/^\d+$/.test(String(quota)) || BigInt(quota) <= 0n) {
@@ -293,7 +294,11 @@ export const registerAdminRoutes = (
     * it was and what it became: a schedule is the rare setting whose *previous* value is the
     * thing somebody will want six months later, when the copies stopped appearing.
     */
-  app.put<{ Body: Partial<BackupSchedule> }>('/admin/backups/schedule', admin, async (req, reply) => {
+  app.put<{ Body: Partial<BackupSchedule> }>(
+    '/admin/backups/schedule',
+    // Each field is read through its own type check below, which names what was wrong.
+    { ...admin, ...body(optional({ enabled: unchecked, time: unchecked, days: unchecked, zone: unchecked, keep: unchecked })) },
+    async (req, reply) => {
     const body = req.body ?? {};
     const wanted: BackupSchedule = {
       enabled: body.enabled === true,

@@ -13,7 +13,7 @@ const MAX_LIMIT = 500;
 
 export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): void => {
   /** Where a client starts syncing this vault. */
-  app.get<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preHandler: requireAuth }, async (req, reply) => {
+  app.get<{ Params: { vaultId: string } }>('/vaults/:vaultId', { preValidation: requireAuth }, async (req, reply) => {
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }
@@ -46,7 +46,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
 
   app.get<{ Params: { vaultId: string }; Querystring: { cursor?: string; limit?: string } }>(
     '/vaults/:vaultId/delta',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const { vaultId } = req.params;
       if (!(await ownsVault(db, req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
@@ -125,7 +125,7 @@ export const registerDeltaRoutes = (app: FastifyInstance, db: Db, cfg: Config): 
    */
   app.get<{ Params: { vaultId: string }; Querystring: { under?: string } }>(
     '/vaults/:vaultId/list',
-    { preHandler: requireAuth },
+    { preValidation: requireAuth },
     async (req, reply) => {
       const { vaultId } = req.params;
       if (!(await ownsVault(db, req.caller!.userId, vaultId))) return reply.code(404).send({ error: 'not_found' });
