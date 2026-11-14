@@ -30,16 +30,17 @@ C4Container
     title SyncServer — containers
 
     Person(owner, "Vault owner", "")
+    Person(operator, "Operator", "Administers the server")
 
     Container_Boundary(client, "User device") {
         Container(plugin, "Sync plugin", "TypeScript, Obsidian API", "Runs a sync on command, keeps local state, applies the remote tree")
         ContainerDb(idb, "Local state", "data.json", "Node tree: path to node_id, rev, hash. Path resolution lives only here")
     }
 
+    Container(console, "Management console", "Browser, TypeScript", "Accounts, quotas, backups, audit; served by the server itself, holds no key, browses no content")
+
     Container_Boundary(server, "SyncServer") {
-        Container(api, "Sync API", "TypeScript, Fastify", "Delta, node writes, blobs, shares, quota")
-        Container(worker, "Background worker", "TypeScript", "Version thinning, quota reconciliation, blob GC, quarantine")
-        Container(web, "Web UI", "TypeScript", "Account and share management, history metadata; no content browsing — the server cannot read content")
+        Container(api, "Server process", "TypeScript, Fastify, one Node process", "Sync API, change notifications, the console's files; the collector and the backup schedule run beside the routes")
         ContainerDb(pg, "Metadata", "PostgreSQL", "Vaults, nodes, delta journal, versions, shares, blob accounting, key envelopes, dedup index")
         ContainerDb(blobs, "Blob store", "Filesystem or S3-compatible", "File content by sha256, immutable")
         ContainerQueue(bus, "Event bus", "LISTEN/NOTIFY", "New-revision notifications")
@@ -53,9 +54,8 @@ C4Container
     Rel(api, blobs, "Uploads and serves content")
     Rel(api, bus, "Publishes new-revision events")
     Rel(bus, api, "Fans out to subscribed connections")
-    Rel(worker, pg, "Thins versions, marks dead blobs")
-    Rel(worker, blobs, "Deletes after quarantine")
-    Rel(web, api, "Same endpoints", "HTTPS")
+    Rel(operator, console, "Administers")
+    Rel(console, api, "/admin endpoints, same origin", "HTTP")
 ```
 
 Two things are worth reading from this level.
@@ -63,9 +63,19 @@ Two things are worth reading from this level.
 **Content and metadata are separate stores.** Everything that makes the system cheap — deduplication,
 free renames, history, blobs shared between vaults through a share — rests on that split.
 
-**The worker is separate from the API.** Version thinning and garbage collection must run as one nightly
-pass in a specific order (see [03](03-data-model.md)); tying them to user requests would make that order
-impossible to guarantee.
+**One process does all of it.** The routes, the change-notification listener, the collector and the backup
+schedule run in one Node process. The collector is not tied to requests: it runs once at start and then on
+an interval, and each pass is a single function that keeps the order [03](03-data-model.md) requires —
+thinning before marking, marking before sweeping. What keeps it apart from a backup is the advisory lock
+both take ([08](08-backup-restore.md)), not a process boundary.
+
+**And one process per database is an assumption the code makes.** Several decisions are held in memory
+because one process owns them: the backup window that refuses writes, the halt after an unconfirmed
+restore, the upload and sign-in rate limiters, the cached answer that an administrator exists, and the one
+`LISTEN` connection change notifications fan out from. A second server instance against the same database
+would not refuse writes while the first one's backup runs, would double every rate limit, and would not
+halt after a restore it did not start. Running two is not supported; making it supported means moving each
+of those into the database first.
 
 Cryptography is almost invisible on these diagrams, and that is the point: the keys live on the clients,
 the server stores envelopes and never opens them.
@@ -166,13 +176,12 @@ C4Deployment
 
     Deployment_Node(host, "Home server", "Docker") {
         Deployment_Node(compose, "Docker Compose", "") {
-            Container(caddy, "Caddy", "Reverse proxy", "TLS and routing")
-            Container(api, "Sync API", "TypeScript, Fastify", "")
-            Container(worker, "Background worker", "TypeScript", "")
+            Container(api, "Server process", "TypeScript, Fastify", "Routes, console, collector, backup schedule")
             ContainerDb(pg, "PostgreSQL", "Database", "Vaults, metadata, journal, versions, shares")
         }
-        Deployment_Node(vol, "Data volume", "Filesystem") {
+        Deployment_Node(vol, "Data volumes", "Filesystem") {
             ContainerDb(blobs, "Blob store", "Hash-prefixed directories", "")
+            ContainerDb(backups, "Backups", "One directory per run", "")
         }
     }
 
@@ -184,14 +193,15 @@ C4Deployment
         Container(pm, "Obsidian with the plugin", "Capacitor WebView", "")
     }
 
-    Rel(pd, caddy, "Sync", "HTTPS")
-    Rel(pm, caddy, "Same; no background sync on iOS", "HTTPS")
-    Rel(caddy, api, "Proxies")
+    Rel(pd, api, "Sync, over the private network", "HTTP")
+    Rel(pm, api, "Same; no background sync on iOS", "HTTP")
     Rel(api, pg, "SQL")
     Rel(api, blobs, "Content")
-    Rel(worker, pg, "SQL")
-    Rel(worker, blobs, "Deletes after quarantine")
+    Rel(api, backups, "Copies when asked or scheduled")
 ```
+
+Two containers and the volumes they write. Nothing terminates TLS in front of the server: it publishes a
+port on the host, and the private network — a VPN — is what reaches it ([13](13-deployment.md)).
 
 **The server is not published externally.** Access is from inside a private perimeter only, until
 authentication has had a review of its own. That is a deployment constraint rather than an architectural
@@ -201,7 +211,8 @@ one — but while it holds, it is the boundary of the system.
 
 Named so that their absence reads as a decision rather than an omission:
 
-- **the code level of C4** — there is no code yet, and describing classes in advance is fiction;
+- **the code level of C4** — the code is that level, and a diagram of its classes would be a second copy
+  to keep in step with it;
 - **a WebDAV gateway** — dropped, not deferred (it was M6). The vault is reached through the plugin, and a
   second protocol into the same data is a second place to get the key model wrong, for a way in nobody
   needs;
