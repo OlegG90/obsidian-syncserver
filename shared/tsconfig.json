@@ -7,11 +7,7 @@
     "outDir": "types",
     "rootDir": "src",
     "composite": true,
-    // Nothing here runs. Every import of this package across the three consuming workspaces
-    // is `import type`, and `verbatimModuleSyntax` erases those, so the emitted index.js was
-    // a docblock and `export {}` — 714 bytes that no bundle ever loaded and no `node` ever
-    // resolved. Declarations are the whole product.
-    "emitDeclarationOnly": true,
+    // JavaScript as well as declarations: the request-body schemas run, in the server (D-143).
     "tsBuildInfoFile": "types/.tsbuildinfo"
   },
   "include": [

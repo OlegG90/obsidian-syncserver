@@ -1,4 +1,5 @@
-import { body, int, keyMaterial, obj, placedName, str } from '../http-schema.js';
+import { body } from '../http-schema.js';
+import { CreateNodeBody, MoveNodeBody, PutContentBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import type { Material as WireMaterial } from '@syncserver/shared';
 import { requireAuth } from '../auth/guard.js';
@@ -11,17 +12,7 @@ import type { Material } from '../material.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-/** What a node write must carry. Every handler here reads its body without asking, so all of it is required. */
-const NAMED = ['parent_id', 'name_enc', 'name_hmac', 'name_key_id'];
-const CREATE = obj(
-  { ...keyMaterial, ...placedName, parent_id: str, type: { enum: ['file', 'folder'] }, sha256: str, size: int, mtime: str },
-  [...NAMED, 'type', 'mtime'],
-);
-const PUT_CONTENT = obj(
-  { ...keyMaterial, sha256: str, size: int, mtime: str, base_sha256: { type: ['string', 'null'] } },
-  ['sha256', 'size', 'mtime'],
-);
-const MOVE = obj({ ...placedName, parent_id: str }, NAMED);
+
 
 const isFailure = (v: object): v is Refusal => 'kind' in v;
 
@@ -65,17 +56,8 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{
     Params: { vaultId: string };
-    Body: WireMaterial & {
-      parent_id: string;
-      type: 'file' | 'folder';
-      sha256?: string;
-      size?: number;
-      mtime: string;
-      name_enc: string;
-      name_hmac: string;
-      name_key_id: string;
-    };
-  }>('/vaults/:vaultId/nodes', { preValidation: requireAuth, ...body(CREATE) }, async (req, reply) => {
+    Body: CreateNodeBody;
+  }>('/vaults/:vaultId/nodes', { preValidation: requireAuth, ...body(CreateNodeBody) }, async (req, reply) => {
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }
@@ -104,8 +86,8 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.put<{
     Params: { vaultId: string; nodeId: string };
-    Body: WireMaterial & { sha256: string; size: number; mtime: string; base_sha256: string | null };
-  }>('/vaults/:vaultId/nodes/:nodeId', { preValidation: requireAuth, ...body(PUT_CONTENT) }, async (req, reply) => {
+    Body: PutContentBody;
+  }>('/vaults/:vaultId/nodes/:nodeId', { preValidation: requireAuth, ...body(PutContentBody) }, async (req, reply) => {
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }
@@ -140,8 +122,8 @@ export const registerNodeRoutes = (app: FastifyInstance, db: Db): void => {
 
   app.post<{
     Params: { vaultId: string; nodeId: string };
-    Body: { parent_id: string; name_enc: string; name_hmac: string; name_key_id: string };
-  }>('/vaults/:vaultId/nodes/:nodeId/move', { preValidation: requireAuth, ...body(MOVE) }, async (req, reply) => {
+    Body: MoveNodeBody;
+  }>('/vaults/:vaultId/nodes/:nodeId/move', { preValidation: requireAuth, ...body(MoveNodeBody) }, async (req, reply) => {
     if (!(await ownsVault(db, req.caller!.userId, req.params.vaultId))) {
       return reply.code(404).send({ error: 'not_found' });
     }

@@ -1,4 +1,5 @@
-import { body, obj, optional, str, unchecked } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { BootstrapBody, ChangePassphraseBody, ChangePasswordBody, ConsoleSignInBody, KekVerifierBody, LoginBody, RecoverBody, RecoveryCodeBody, RedeemBody, RefreshBody, RegisterDeviceBody, RenameDeviceBody } from '@syncserver/shared';
 import { refusedDeviceName, renameDevice } from '../devices.js';
 import { isUuid } from '../uuid.js';
 import type { FastifyInstance } from 'fastify';
@@ -46,19 +47,6 @@ const TOO_SHORT = {
 /** The routes the backup window lets through (D-142): one name, so they can be found as a group. */
 const WRITES_ONLY_SESSIONS = { config: { writesOnlySessions: true } } as const;
 
-/**
- * A redeemed invitation: everything the device made, sent once. `kdf_params`, the device name and the
- * recovery pair are the handler's to judge — each has a refusal that says what is wrong with it.
- */
-const REDEEM = obj(
-  {
-    invitation_token: str, login: str, auth_secret: str, account_salt: str, kdf_params: unchecked,
-    pubkey: str, enc_privkey: str, wrapped_seed: str, kek_verifier: str, recovery_key: str,
-    recovery_code_hash: str, initial_vault_id: str, initial_vault_name_enc: str,
-    device_name: unchecked, device_platform: str,
-  },
-  ['invitation_token', 'auth_secret', 'account_salt', 'pubkey', 'enc_privkey', 'wrapped_seed', 'initial_vault_id', 'initial_vault_name_enc'],
-);
 
 export const registerAuthRoutes = (
   app: FastifyInstance,
@@ -100,7 +88,7 @@ export const registerAuthRoutes = (
    * is simply no longer the first run, and saying so is what stops somebody hunting for a
    * typo in their request.
    */
-  app.post<{ Body: { login?: string; password: string } }>('/auth/bootstrap', body(optional({ login: str, password: str })), async (req, reply) => {
+  app.post<{ Body: BootstrapBody | undefined }>('/auth/bootstrap', body(optional(BootstrapBody)), async (req, reply) => {
     const password = req.body?.password;
     if (!longEnough(password)) return reply.code(400).send(TOO_SHORT);
 
@@ -125,42 +113,28 @@ export const registerAuthRoutes = (
   });
 
   app.post<{
-    Body: {
-      invitation_token: string;
-      login: string;
-      auth_secret: string;
-      account_salt: string;
-      kdf_params: KdfParams;
-      pubkey: string;
-      enc_privkey: string;
-      wrapped_seed: string;
-      kek_verifier: string;
-      recovery_key?: string;
-      recovery_code_hash?: string;
-      initial_vault_id: string;
-      initial_vault_name_enc: string;
-      device_name?: string;
-      device_platform?: string;
-    };
-  }>('/auth/redeem', body(REDEEM), async (req, reply) => {
+    Body: RedeemBody;
+  }>('/auth/redeem', body(RedeemBody), async (req, reply) => {
     const b = req.body;
 
-    // Checked here as well as in the schema, for the reason a 500 is not an answer.
+    // Checked here as well as by the database (`is_valid_kdf`), for the reason a 500 is not an answer.
     //
     // `is_valid_kdf` enforces the 64 MiB floor (D-62), and a client that registers below it
     // hits a CHECK constraint — which surfaces as "Internal Server Error" and tells the one
     // person who can fix it nothing at all. The floor is a rule about the caller's input, so
     // it gets the status that says so, and names the parameter.
-    const kdf = b.kdf_params;
+    // Left unchecked by the request schema, so that a weak or malformed set is refused here with the floor it missed.
+    const kdf = b.kdf_params as Partial<KdfParams> | undefined;
     if (
       !kdf ||
       kdf.v !== 19 ||
       !Number.isInteger(kdf.m) ||
       !Number.isInteger(kdf.t) ||
       !Number.isInteger(kdf.p) ||
-      kdf.m < 65536 ||
-      kdf.t < 3 ||
-      kdf.p < 1
+      // `?? 0` only for the compiler: `Number.isInteger` above already refused a missing one.
+      (kdf.m ?? 0) < 65536 ||
+      (kdf.t ?? 0) < 3 ||
+      (kdf.p ?? 0) < 1
     ) {
       // The numbers are `is_valid_kdf`'s, repeated rather than inferred: two places state
       // this floor, and if they ever disagree the CHECK wins and this becomes a 500 again.
@@ -185,7 +159,8 @@ export const registerAuthRoutes = (
       login: b.login ?? '',
       authSecret: b.auth_secret,
       accountSalt: b64(b.account_salt),
-      kdfParams: b.kdf_params,
+      // Every field was checked against the floor above.
+      kdfParams: kdf as KdfParams,
       pubkey: b64(b.pubkey),
       encPrivkey: b64(b.enc_privkey),
       wrappedSeed: b64(b.wrapped_seed),
@@ -196,7 +171,8 @@ export const registerAuthRoutes = (
       recoveryCodeHash: b.recovery_code_hash,
       initialVaultId: b.initial_vault_id,
       initialVaultNameEnc: b64(b.initial_vault_name_enc),
-      deviceName: b.device_name ?? 'first device',
+      // A string once `refusedDeviceName` let it through above.
+      deviceName: (b.device_name as string | undefined) ?? 'first device',
       devicePlatform: b.device_platform ?? 'unknown',
     });
 
@@ -235,9 +211,9 @@ export const registerAuthRoutes = (
    * endpoint on this server where guessing pays, because the secret behind it is one a person
    * chose rather than 128 bits of CSPRNG.
    */
-  app.post<{ Body: { login: string; password: string; device_name?: string } }>(
+  app.post<{ Body: ConsoleSignInBody | undefined }>(
     '/auth/console',
-    { ...WRITES_ONLY_SESSIONS, ...body(optional({ login: str, password: str, device_name: unchecked })) },
+    { ...WRITES_ONLY_SESSIONS, ...body(optional(ConsoleSignInBody)) },
     async (req, reply) => {
       const login = req.body?.login;
       const password = req.body?.password;
@@ -252,8 +228,9 @@ export const registerAuthRoutes = (
           .send({ error: 'too_many_attempts', retry_after_seconds: allowed.retryAfterSeconds });
       }
 
-      if (req.body.device_name !== undefined && refusedDeviceName(reply, req.body.device_name)) return reply;
-      const out = await consoleSignIn(db, login, password, req.body.device_name ?? 'console');
+      const deviceName = req.body?.device_name;
+      if (deviceName !== undefined && refusedDeviceName(reply, deviceName)) return reply;
+      const out = await consoleSignIn(db, login, password, (deviceName as string | undefined) ?? 'console');
       if (!out) {
         attempts.fail(login);
         return reply.code(401).send({ error: 'invalid_credentials' });
@@ -268,9 +245,9 @@ export const registerAuthRoutes = (
     },
   );
 
-  app.post<{ Body: { login: string; auth_secret: string; device_id?: string } }>(
+  app.post<{ Body: LoginBody }>(
     '/auth/login',
-    { ...WRITES_ONLY_SESSIONS, ...body(obj({ login: str, auth_secret: str, device_id: str }, ['login', 'auth_secret'])) },
+    { ...WRITES_ONLY_SESSIONS, ...body(LoginBody) },
     async (req, reply) => {
       const account = await findActiveAccount(db, req.body.login);
       // Same answer whether the login is unknown or the secret is wrong — the pair is the
@@ -337,14 +314,8 @@ export const registerAuthRoutes = (
    * attempt limit is counted before any of them is evaluated.
    */
   app.post<{
-    Body: {
-      login: string;
-      kek_verifier?: string;
-      recovery_code?: string;
-      device_name?: string;
-      device_platform?: string;
-    };
-  }>('/auth/recover', body(optional({ login: str, kek_verifier: str, recovery_code: str, device_name: unchecked, device_platform: str })), async (req, reply) => {
+    Body: RecoverBody | undefined;
+  }>('/auth/recover', body(optional(RecoverBody)), async (req, reply) => {
     const b = req.body ?? ({} as Record<string, string>);
     if (!b.login) return reply.code(400).send({ error: 'login_required' });
     // Exactly one proof. Both would let a caller test two guesses per lockout slot; neither
@@ -371,7 +342,7 @@ export const registerAuthRoutes = (
       login: b.login,
       kekVerifier: b.kek_verifier,
       recoveryCode: b.recovery_code,
-      name: b.device_name ?? 'recovered device',
+      name: (b.device_name as string | undefined) ?? 'recovered device',
       platform: b.device_platform ?? 'unknown',
     });
 
@@ -392,9 +363,9 @@ export const registerAuthRoutes = (
     };
   });
 
-  app.post<{ Body: { refresh: string } }>(
+  app.post<{ Body: RefreshBody }>(
     '/auth/refresh',
-    { ...WRITES_ONLY_SESSIONS, ...body(obj({ refresh: str }, ['refresh'])) },
+    { ...WRITES_ONLY_SESSIONS, ...body(RefreshBody) },
     async (req, reply) => {
       const device = await findDeviceByRefresh(db, req.body.refresh);
       if (!device) return reply.code(401).send({ error: 'invalid_refresh' });
@@ -405,7 +376,7 @@ export const registerAuthRoutes = (
     },
   );
 
-  app.post<{ Body: { name: string; platform: string } }>('/auth/devices', { preValidation: requireAuth, ...body(obj({ name: unchecked, platform: str }, ['platform'])) }, async (req, reply) => {
+  app.post<{ Body: RegisterDeviceBody }>('/auth/devices', { preValidation: requireAuth, ...body(RegisterDeviceBody) }, async (req, reply) => {
     if (refusedDeviceName(reply, req.body?.name)) return reply;
 
     const row = await db.one<{ id: string }>(
@@ -427,7 +398,7 @@ export const registerAuthRoutes = (
    * Authenticated, and that is proof enough: reaching here at all took `auth_secret`, which
    * comes from the seed, which comes from the envelope this verifier guards.
    */
-  app.put<{ Body: { kek_verifier: string } }>('/auth/kek-verifier', { preValidation: requireAuth, ...body(optional({ kek_verifier: str })) }, async (req, reply) => {
+  app.put<{ Body: KekVerifierBody | undefined }>('/auth/kek-verifier', { preValidation: requireAuth, ...body(optional(KekVerifierBody)) }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
     await db.query(`UPDATE users SET kek_verifier_hash = $2 WHERE id = $1 AND state = 'active'`, [
@@ -454,7 +425,7 @@ export const registerAuthRoutes = (
    * so this browser and any other holding it sign in again with the new password. That is the
    * point when a password is changed because it leaked.
    */
-  app.put<{ Body: { current?: string; password?: string } }>('/auth/password', { preValidation: requireAuth, ...body(optional({ current: str, password: str })) }, async (req, reply) => {
+  app.put<{ Body: ChangePasswordBody | undefined }>('/auth/password', { preValidation: requireAuth, ...body(optional(ChangePasswordBody)) }, async (req, reply) => {
 
     const b = req.body ?? {};
     if (typeof b.current !== 'string' || !b.current) {
@@ -498,7 +469,7 @@ export const registerAuthRoutes = (
    *
    * Through the attempt limiter for the same reason recovery is: it is a passphrase guess.
    */
-  app.post<{ Body: { kek_verifier?: string } }>('/auth/seed-envelope', { preValidation: requireAuth, ...body(optional({ kek_verifier: str })) }, async (req, reply) => {
+  app.post<{ Body: KekVerifierBody | undefined }>('/auth/seed-envelope', { preValidation: requireAuth, ...body(optional(KekVerifierBody)) }, async (req, reply) => {
     if (!req.body?.kek_verifier) return reply.code(400).send({ error: 'kek_verifier_required' });
 
     const allowed = attempts.check(req.caller!.userId);
@@ -538,7 +509,7 @@ export const registerAuthRoutes = (
    * this endpoint — other devices keep their own copy of the envelope and would go on opening
    * with the old phrase — and that half is still open.
    */
-  app.put<{ Body: { wrapped_seed?: string; kek_verifier?: string } }>('/auth/passphrase', { preValidation: requireAuth, ...body(optional({ wrapped_seed: str, kek_verifier: str })) }, async (req, reply) => {
+  app.put<{ Body: ChangePassphraseBody | undefined }>('/auth/passphrase', { preValidation: requireAuth, ...body(optional(ChangePassphraseBody)) }, async (req, reply) => {
 
     const b = req.body ?? {};
     // Both, always. They describe one KEK from two sides, and a half write leaves the account
@@ -573,9 +544,9 @@ export const registerAuthRoutes = (
     return { present: await hasRecoveryCode(db, req.caller!.userId) };
   });
 
-  app.put<{ Body: { recovery_key?: string; recovery_code_hash?: string } }>(
+  app.put<{ Body: RecoveryCodeBody | undefined }>(
     '/auth/recovery-code',
-    { preValidation: requireAuth, ...body(optional({ recovery_key: str, recovery_code_hash: str })) },
+    { preValidation: requireAuth, ...body(optional(RecoveryCodeBody)) },
     async (req, reply) => {
 
       const b = req.body ?? {};
@@ -668,9 +639,9 @@ export const registerAuthRoutes = (
    * is revoked, or is the console's — one answer, because telling those apart would confirm that
    * another account's device exists (D-20). Unlike revoking this is not silent: nothing was renamed.
    */
-  app.put<{ Params: { deviceId: string }; Body: { name?: unknown } }>(
+  app.put<{ Params: { deviceId: string }; Body: RenameDeviceBody | undefined }>(
     '/auth/devices/:deviceId',
-    { preValidation: requireAuth, ...body(optional({ name: unchecked })) },
+    { preValidation: requireAuth, ...body(optional(RenameDeviceBody)) },
     async (req, reply) => {
       if (refusedDeviceName(reply, req.body?.name)) return reply;
       if (!isUuid(req.params.deviceId)) return reply.code(404).send({ error: 'not_found' });

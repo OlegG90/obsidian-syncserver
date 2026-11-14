@@ -1,4 +1,5 @@
-import { body, optional, str, unchecked } from '../http-schema.js';
+import { body, optional } from '../http-schema.js';
+import { CreateVaultBody, RemoveVaultBody, RenameVaultBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
 import { tokenMatches } from '../crypto.js';
@@ -15,20 +16,21 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
     return rows.map((v) => ({ id: v.id, name_enc: v.nameEnc, nodes: v.nodes, bytes: v.bytes, shared: v.shared }));
   });
 
-  app.post<{ Body: { id: string; name_enc: string } }>('/vaults', { preValidation: requireAuth, ...body(optional({ id: str, name_enc: str })) }, async (req, reply) => {
+  app.post<{ Body: CreateVaultBody | undefined }>('/vaults', { preValidation: requireAuth, ...body(optional(CreateVaultBody)) }, async (req, reply) => {
     // The id comes from the client and must look like one: it is a primary key the caller
     // chose, so it is the one input here that is not simply passed through.
     if (!UUID.test(req.body?.id ?? '')) return reply.code(400).send({ error: 'bad_vault_id' });
     if (!req.body?.name_enc) return reply.code(400).send({ error: 'name_enc_required' });
 
-    const out = await createVault(db, req.caller!.userId, { id: req.body.id, nameEnc: req.body.name_enc });
+    // `id!`: the test above is the check, and a regex is not one the compiler can see.
+    const out = await createVault(db, req.caller!.userId, { id: req.body.id!, nameEnc: req.body.name_enc });
     if ('kind' in out) return refuse(reply, out);
     return reply.code(201).send({ id: out.id, root_node_id: out.rootNodeId });
   });
 
-  app.put<{ Params: { vaultId: string }; Body: { name_enc: string } }>(
+  app.put<{ Params: { vaultId: string }; Body: RenameVaultBody | undefined }>(
     '/vaults/:vaultId',
-    { preValidation: requireAuth, ...body(optional({ name_enc: str })) },
+    { preValidation: requireAuth, ...body(optional(RenameVaultBody)) },
     async (req, reply) => {
       if (!req.body?.name_enc) return reply.code(400).send({ error: 'name_enc_required' });
       const ok = await renameVault(db, req.caller!.userId, req.params.vaultId, req.body.name_enc);
@@ -41,9 +43,9 @@ export const registerVaultRoutes = (app: FastifyInstance, db: Db): void => {
   // account's — and it is the most destructive one there is. So the token opens it, and the account's
   // `auth_secret` has to come with it: derived from the seed, held only by an unlocked device, and
   // never inside an access token. A token lifted off the wire can list the vaults and delete none.
-  app.delete<{ Params: { vaultId: string }; Body: { auth_secret?: unknown } }>(
+  app.delete<{ Params: { vaultId: string }; Body: RemoveVaultBody | undefined }>(
     '/vaults/:vaultId',
-    { preValidation: requireAuth, config: { anyVaultOfTheAccount: true }, ...body(optional({ auth_secret: unchecked })) },
+    { preValidation: requireAuth, config: { anyVaultOfTheAccount: true }, ...body(optional(RemoveVaultBody)) },
     async (req, reply) => {
       const proof = req.body?.auth_secret;
       const held = await db.one<{ hash: string | null }>(`SELECT auth_secret_hash AS hash FROM users WHERE id = $1`, [

@@ -4,7 +4,7 @@ dist/
 build/
 *.tsbuildinfo
 
-# `shared/` emits declarations rather than a build, into `types/` rather than `dist/`, so the
+# `shared/` builds into `types/` rather than `dist/` — declarations and, since D-143, JavaScript — so the
 # rule above does not reach it. Generated all the same: tsc writes it from `shared/src`, and a
 # rebuild restores it.
 shared/types/

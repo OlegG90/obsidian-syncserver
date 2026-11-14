@@ -18,9 +18,19 @@ import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const SHARED = 'shared/src/index.ts';
-const exported = new Set(
-  [...readFileSync(SHARED, 'utf8').matchAll(/^export (?:interface|type|const|class) ([A-Za-z_]\w*)/gm)].map((m) => m[1]),
-);
+/**
+ * Every name `shared` exports, following its `export * from './x.js'` lines: the request bodies live in a
+ * module of their own (D-143), and a check that read only the index would not see one of them.
+ */
+const exportsOf = (file) => {
+  const text = readFileSync(file, 'utf8');
+  const own = [...text.matchAll(/^export (?:interface|type|const|class) ([A-Za-z_]\w*)/gm)].map((m) => m[1]);
+  const reexported = [...text.matchAll(/^export \* from '\.\/([\w-]+)\.js';/gm)].flatMap((m) =>
+    exportsOf(file.replace(/[^/]+$/, `${m[1]}.ts`)),
+  );
+  return [...own, ...reexported];
+};
+const exported = new Set(exportsOf(SHARED));
 if (exported.size === 0) {
   console.error(`${SHARED}: no exports found — the format changed and this check is blind`);
   process.exit(1);

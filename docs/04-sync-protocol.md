@@ -227,7 +227,8 @@ Consequences:
 ## Endpoints
 
 **A body is checked for its shape before the route reads it.** Every route that reads a JSON body declares
-it: the fields it reads and their types, and the fields it cannot do without. A body of the wrong shape is
+it, once, in `shared` (D-143): the fields it reads and their types, and the fields it cannot do without. The
+server validates against that schema and the clients type what they send from it. A body of the wrong shape is
 answered `400 {error: "invalid_request", detail}`, the detail naming the field (`body/size must be
 integer`), and nothing is coerced — a number sent as a string is refused rather than read as the number. A
 field whose absence a route already names keeps that answer (`login_required`, `name_enc_required`, the
