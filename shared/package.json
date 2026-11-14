@@ -13,10 +13,13 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsx scripts/emit-schemas.ts && tsc",
+    "emit:schemas": "tsx scripts/emit-schemas.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.52"
+  "dependencies": {},
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.52",
+    "tsx": "^4.23.9"
   }
 }
