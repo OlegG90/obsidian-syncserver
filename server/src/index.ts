@@ -14,6 +14,7 @@ import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema, SchemaRefusal } from './schema.js';
 import { assertWritable } from './writable.js';
+import { claimInstance } from './instance.js';
 import { dirname } from 'node:path';
 
 const cfg = loadConfig();
@@ -28,6 +29,45 @@ await assertWritable([
   { what: 'the backup destination', dir: cfg.backup.destination, setting: 'BACKUP_DESTINATION' },
   { what: 'the blob store', dir: cfg.blobStorePath, setting: 'BLOB_STORE_PATH' },
 ]);
+
+// **One server per database, claimed before anything else touches it** (docs/02, D-144). The
+// window, the limiters and the halt live in this process's memory, so a second instance would
+// split the database silently; a second boot therefore refuses to start with a sentence naming
+// the holder. The claim is a session lock held on one pooled connection until shutdown — a dead
+// process releases it by disconnecting, and the pool closing ends it — which is why the signal
+// handlers let go of it before they close the pool (`pool.end` waits for checked-out clients).
+let releaseInstance!: () => void;
+const instanceHeld = new Promise<void>((resolve) => {
+  releaseInstance = resolve;
+});
+// Awaited only until the claim is decided, not for the life of it: resolving lets the boot go
+// on while the session underneath stays open and keeps the lock. Awaiting the session itself
+// would stall the boot here, before a single route exists and before the signal handlers below.
+const refusal = await new Promise<string | undefined>((resolve, reject) => {
+  void db.session(async (c) => {
+    const claim = await claimInstance(c);
+    if (!claim.ok) {
+      resolve(claim.holder);
+      return;
+    }
+    resolve(undefined);
+    await instanceHeld;
+  }).then(
+    () => resolve(undefined),
+    (e: unknown) => reject(e),
+  );
+});
+if (refusal !== undefined) {
+  // Like the schema refusal below: a sentence, then out. A second server that served would
+  // still bind and look alive; one that exits is one the orchestrator restarts loudly instead
+  // of a database split quietly.
+  console.error(
+    `refusing to start: ${refusal}. Running two instances against one database is not supported ` +
+      '(docs/02) — stop the one that should not be here and start again.',
+  );
+  await db.close();
+  process.exit(1);
+}
 
 // **Before the schema, before anything is served, and that is the whole point.** A restore asked for
 // from the console is carried out here, on the way back up: `pg_restore --clean` drops and recreates
@@ -170,6 +210,9 @@ console.log(`syncserver listening on ${host}:${port}`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    // The instance claim first: `pool.end` waits for checked-out clients, so closing the
+    // pool while the claim's session is still held would hang the shutdown it is leaving.
+    releaseInstance();
     stopCollector();
     stopSchedule();
     void events.close().then(() => app.close()).then(() => db.close()).then(() => process.exit(0));

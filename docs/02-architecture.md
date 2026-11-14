@@ -68,11 +68,12 @@ an interval, and each pass is one function that keeps the order [03](03-data-mod
 it apart from a backup is an advisory lock in the database ([08](08-backup-restore.md)), not a process
 boundary.
 
-**And one process per database is an assumption the code makes.** Three things are held in memory
+**And one process per database is an assumption the code makes — and the boot enforces** (D-144). Three things are held in memory
 because one process owns them, and a second server instance against the same database would see none of
 them: it would not refuse writes while the first one's backup window is open, it would allow every upload
 and sign-in limit a second time over, and it would not halt after a restore it did not start. Running two
-is not supported; making it supported means moving those three into the database first.
+is not supported, and a second boot refuses to start with a sentence naming the holder; making it
+supported means moving those three into the database first.
 
 The rest already holds across instances: that advisory lock, the schedule's claim on each moment (D-141),
 a `LISTEN` that every process opens for itself, and the cached answer that an administrator exists, which
