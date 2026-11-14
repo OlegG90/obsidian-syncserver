@@ -630,5 +630,7 @@ export interface RestoreStatus {
   pending: boolean;
 }
 
-// The request bodies: schemas the server validates against, and the types inferred from them (D-143).
-export * from './bodies.js';
+// The request bodies: plain-JSON schemas the server validates against, and the types inferred
+// from the TypeBox that declares them (D-143). Both come from the generated file, where each
+// value sits beside its inferred type — two stars with the same names do not merge.
+export * from './schemas-gen.js';

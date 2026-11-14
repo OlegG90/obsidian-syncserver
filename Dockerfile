@@ -103,9 +103,10 @@ COPY --from=build /app/server/dist        server/dist
 # `server/src/console.ts` reads this at boot, relative to server/dist.
 COPY --from=build /app/console/dist       console/dist
 # `shared/` travels as what it builds to: the request-body schemas the server validates against
-# are JavaScript now (D-143), reached through the workspace symlink in node_modules, whose target
-# is this directory. Its `package.json` is what the resolver reads to find them. The CI job that
-# BUILDS this image also RUNS it, which is what proves the server finds them.
+# are plain JSON Schema, generated from the TypeBox that declares them (D-143, issue #482) —
+# no TypeBox rides into this image. Reached through the workspace symlink in node_modules, whose
+# target is this directory. Its `package.json` is what the resolver reads to find them. The CI job
+# that BUILDS this image also RUNS it, which is what proves the server finds them.
 COPY shared/package.json shared/
 COPY --from=build /app/shared/types       shared/types
 COPY server/package.json server/
