@@ -4,7 +4,7 @@
  *
  * Needs the development database: `npm run db:reset` first.
  */
-import { TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
+import { aDevice, claimSeededAdmin, deviceToken, TEST_AUTH_SECRET, TEST_AUTH_SECRET_HASH } from './support/accounts.js';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -83,10 +83,7 @@ const alive = async (vaultId: string, nodeId: string) =>
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   userId = randomUUID();
   await db.query(
@@ -96,9 +93,8 @@ before(async () => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
     [userId, `reset-${process.pid}`],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [userId]);
-  access = app.jwt.sign({ sub: userId, device: device!.id });
+  const deviceId = await aDevice(db, userId);
+  access = deviceToken(app, userId, deviceId);
 });
 
 after(async () => {

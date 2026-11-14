@@ -13,7 +13,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { openEventsHub } from '../src/events.js';
-import { aVaultAccount } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin } from './support/accounts.js';
 
 const cfg = loadConfig();
 
@@ -34,11 +34,8 @@ const makeDevice = async (
   vault: string | null = null,
   sign: { expiresIn?: number } = {},
 ): Promise<{ id: string; token: string }> => {
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform, vault_id) VALUES ($1, 'test', 'linux', $2) RETURNING id`,
-    [userId, vault],
-  );
-  return { id: device!.id, token: app.jwt.sign({ sub: userId, device: device!.id }, sign) };
+  const deviceId = await aDevice(db, userId, { vaultId: vault });
+  return { id: deviceId, token: app.jwt.sign({ sub: userId, device: deviceId }, sign) };
 };
 
 const makeVault = async (userId: string): Promise<string> => {
@@ -77,10 +74,7 @@ before(async () => {
   db = connect(cfg.databaseUrl);
   hub = openEventsHub(db);
   app = await buildApp(db, cfg, hub);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();
   assert.ok(addr && typeof addr !== 'string');

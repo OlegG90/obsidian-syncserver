@@ -27,6 +27,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { testStore } from './support/store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 const STORE = testStore('admin');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
@@ -64,9 +65,8 @@ const makeAccount = async (login: string, role: 'user' | 'admin'): Promise<{ id:
       [id, login],
     );
   }
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [id]);
-  return { id, token: app.jwt.sign({ sub: id, device: device!.id }) };
+  const deviceId = await aDevice(db, id);
+  return { id, token: deviceToken(app, id, deviceId) };
 };
 
 const asAdmin = () => ({ authorization: `Bearer ${adminToken}` });
@@ -86,10 +86,7 @@ before(async () => {
 
   // Claim the seeded administrator so this file stands on its own: until one exists the API
   // answers 503 to everything but its redemption (D-107).
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   // The operator is the SEEDED administrator rather than a second one this file invents.
   // "First run" means no active administrator exists (D-107), and once one does the schema
@@ -97,9 +94,8 @@ before(async () => {
   // account is a procedure (D-55). A suite that left an extra administrator behind would
   // therefore make first-run unreachable for whoever runs next, permanently.
   adminId = '00000000-0000-0000-0000-000000000001';
-  const seededDevice = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [adminId]);
-  adminToken = app.jwt.sign({ sub: adminId, device: seededDevice!.id });
+  const seededDeviceId = await aDevice(db, adminId);
+  adminToken = deviceToken(app, adminId, seededDeviceId);
   const user = await makeAccount(`subject-${process.pid}`, 'user');
   userId = user.id;
   userToken = user.token;

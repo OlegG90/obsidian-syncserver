@@ -20,7 +20,7 @@ import { issueRefreshToken } from '../src/auth/service.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { holdForBackup } from '../src/interlock.js';
-import { aVaultAccount } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -32,22 +32,14 @@ const adminId = '00000000-0000-0000-0000-000000000001';
 
 before(async () => {
   db = connect(loadConfig().databaseUrl);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = $1 AND state = 'provisioned'`,
-    [adminId],
-  );
+  await claimSeededAdmin(db);
   app = await buildApp(db, loadConfig());
 
   const account = await aVaultAccount(db);
   accountLogin = account.login;
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'phone', 'android') RETURNING id::text AS id`,
-    [account.id],
-  );
-  deviceId = device!.id;
+  deviceId = await aDevice(db, account.id, { name: 'phone', platform: 'android' });
   refresh = await issueRefreshToken(db, deviceId);
-  access = app.jwt.sign({ sub: account.id, device: deviceId });
+  access = deviceToken(app, account.id, deviceId);
 });
 
 after(async () => {

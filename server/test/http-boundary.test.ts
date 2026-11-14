@@ -17,7 +17,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { aVaultAccount } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -30,26 +30,15 @@ const adminId = '00000000-0000-0000-0000-000000000001';
 
 before(async () => {
   db = connect(loadConfig().databaseUrl);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = $1 AND state = 'provisioned'`,
-    [adminId],
-  );
+  await claimSeededAdmin(db);
   app = await buildApp(db, loadConfig());
 
   const account = await aVaultAccount(db);
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'laptop', 'linux') RETURNING id::text AS id`,
-    [account.id],
-  );
-  deviceId = device!.id;
-  token = app.jwt.sign({ sub: account.id, device: deviceId });
+  deviceId = await aDevice(db, account.id, { name: 'laptop' });
+  token = deviceToken(app, account.id, deviceId);
 
-  const adminDevice = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'console', 'console') RETURNING id::text AS id`,
-    [adminId],
-  );
-  adminToken = app.jwt.sign({ sub: adminId, device: adminDevice!.id });
+  const adminDeviceId = await aDevice(db, adminId, { name: 'console', platform: 'console' });
+  adminToken = deviceToken(app, adminId, adminDeviceId);
 
   // The vault through the API, so the world is the one a client builds.
   vaultId = randomUUID();

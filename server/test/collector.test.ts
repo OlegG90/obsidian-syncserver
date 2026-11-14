@@ -18,6 +18,7 @@ import { openStore } from '../src/blobs/store.js';
 import { runCollector } from '../src/collector.js';
 import { INTERLOCK_ID as COLLECTOR_LOCK_ID } from '../src/interlock.js';
 import { testStore } from './support/store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 const STORE = testStore('collector');
 // Small TTLs so the test can backdate rows instead of waiting.
@@ -58,10 +59,7 @@ const uploadBlob = async (body: Buffer): Promise<string> => {
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   const userId = randomUUID();
   await db.query(
@@ -71,11 +69,8 @@ before(async () => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [userId, `collector-${process.pid}`],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`,
-    [userId],
-  );
-  token = app.jwt.sign({ sub: userId, device: device!.id });
+  const deviceId = await aDevice(db, userId);
+  token = deviceToken(app, userId, deviceId);
 
   const vaultIdRaw = randomUUID();
   const v = await app.inject({

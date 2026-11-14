@@ -6,7 +6,57 @@
  * constraint in a test about something else entirely.
  */
 import { randomUUID } from 'node:crypto';
+import type { FastifyInstance } from 'fastify';
 import type { Db } from '../../src/db.js';
+
+/**
+ * The seeded administrator's id: the row `schema.sql` plants with no password (D-107).
+ *
+ * One constant rather than twenty literals, because the one thing every operator suite
+ * agrees on is which row that is — and a suite that named a different one would test a
+ * server whose first run had already happened somewhere else.
+ */
+export const SEEDED_ADMIN_ID = '00000000-0000-0000-0000-000000000001';
+
+/**
+ * Claim the seeded administrator: active, with a password hash no password satisfies.
+ *
+ * The hash is a placeholder, not a credential — nothing signs in as the administrator with
+ * a password in these suites; every call carries a token minted for a device instead. What
+ * the claim is for is the first-run guard: an unclaimed server answers everything but its
+ * own creation with `bootstrap_pending`, which is a different test's subject (auth.test.ts
+ * sets its own passwords because setting them is what it proves).
+ */
+export const claimSeededAdmin = async (db: Db): Promise<void> => {
+  await db.query(
+    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
+      WHERE id = '${SEEDED_ADMIN_ID}' AND state = 'provisioned'`,
+  );
+};
+
+/**
+ * A device row for an account, and nothing else.
+ *
+ * The columns here are not choices a test makes: a device is a name, a platform and an
+ * optional vault, and a suite that needs more — a revocation, a refresh token — writes its
+ * own row, because that row is what the suite is about.
+ */
+export const aDevice = async (
+  db: Db,
+  userId: string,
+  opts: { name?: string; platform?: string; vaultId?: string | null } = {},
+): Promise<string> => {
+  const { name = 'test', platform = 'linux', vaultId = null } = opts;
+  const device = await db.one<{ id: string }>(
+    `INSERT INTO devices (user_id, name, platform, vault_id) VALUES ($1, $2, $3, $4) RETURNING id::text AS id`,
+    [userId, name, platform, vaultId],
+  );
+  return device!.id;
+};
+
+/** A token for a device to call with — the only credential these suites spend. */
+export const deviceToken = (app: FastifyInstance, userId: string, deviceId: string): string =>
+  app.jwt.sign({ sub: userId, device: deviceId });
 
 /**
  * The `auth_secret` every vault account here is made with, and its hash is what the fixtures store.

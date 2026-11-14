@@ -16,6 +16,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { inProcessRateLimiter } from '../src/blobs/rate.js';
 import { testStore } from './support/store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
 
 const STORE = testStore('rate');
 /** Small enough that two ordinary uploads cross it. */
@@ -46,10 +47,7 @@ const upload = (body: Buffer) =>
 before(async () => {
   db = connect(cfg.databaseUrl);
   app = await buildApp(db, cfg);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
 
   userId = randomUUID();
   await db.query(
@@ -59,10 +57,8 @@ before(async () => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
     [userId, `rate-${process.pid}`],
   );
-  const device = await db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`, [userId]);
-  deviceId = device!.id;
-  access = app.jwt.sign({ sub: userId, device: deviceId });
+  deviceId = await aDevice(db, userId);
+  access = deviceToken(app, userId, deviceId);
 });
 
 after(async () => {
@@ -135,10 +131,9 @@ describe('POST /blobs under the limit', () => {
        VALUES ($1, $2, 'active', 'h', decode('00112233445566778899aabbccddeeff','hex'),
                '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 104857600)`,
       [other, `revoked-${process.pid}`]);
-    const dev = await db.one<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'gone', 'linux') RETURNING id`, [other]);
+    const devId = await aDevice(db, other, { name: 'gone' });
 
-    const token = app.jwt.sign({ sub: other, device: dev!.id });
+    const token = deviceToken(app, other, devId);
     const body = randomBytes(64);
     const query = { sha256: sha(body), size: String(body.length), key_id: randomUUID() };
 
@@ -149,7 +144,7 @@ describe('POST /blobs under the limit', () => {
     });
     assert.equal(before_.statusCode, 201, before_.body);
 
-    await db.query(`UPDATE devices SET revoked_at = now() WHERE id = $1`, [dev!.id]);
+    await db.query(`UPDATE devices SET revoked_at = now() WHERE id = $1`, [devId]);
 
     const body2 = randomBytes(64);
     const after_ = await app.inject({

@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
+import { claimSeededAdmin } from './support/accounts.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 
@@ -39,10 +40,7 @@ let app: FastifyInstance;
 before(async () => {
   db = connect(loadConfig().databaseUrl);
   // Claimed, so the first-run guard does not answer every path the same way.
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
   app = await buildApp(db, loadConfig());
 });
 

@@ -15,6 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { catchUpShare } from '../src/shares/catchup.js';
 import { settleFreeze } from '../src/shares/thaw.js';
+import { claimSeededAdmin } from './support/accounts.js';
 
 const cfg = loadConfig();
 let db: Db;
@@ -57,10 +58,7 @@ const account = async (label: string) => {
 
 before(async () => {
   db = connect(cfg.databaseUrl);
-  await db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(db);
   app = await buildApp(db, cfg);
 });
 

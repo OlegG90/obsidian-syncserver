@@ -37,6 +37,7 @@ import {
   w,
   type ReplicaRow,
 } from './support/shares.js';
+import { aDevice, deviceToken } from './support/accounts.js';
 
 before(() => openWorld('shares-surface'));
 after(closeWorld);
@@ -373,11 +374,8 @@ describe('a device reaches only the shares of its own vault', () => {
       method: 'POST', url: '/vaults', headers: auth(), payload: { id: secondVault, name_enc: b64('second') },
     });
     assert.equal(made.statusCode, 201, made.body);
-    const device = await w.db.one<{ id: string }>(
-      `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'second vault', 'desktop') RETURNING id`,
-      [w.userId],
-    );
-    const other = { authorization: `Bearer ${w.app.jwt.sign({ sub: w.userId, device: device!.id })}` };
+    const deviceId = await aDevice(w.db, w.userId, { name: 'second vault', platform: 'desktop' });
+    const other = { authorization: `Bearer ${deviceToken(w.app, w.userId, deviceId)}` };
     const opened = await w.app.inject({ method: 'GET', url: `/vaults/${secondVault}`, headers: other });
     assert.equal(opened.statusCode, 200, 'that vault is now this device’s');
 
