@@ -10,7 +10,7 @@
  * **No key material passes through here, ever.** A console account has none (D-115) — that is
  * what makes a browser an acceptable place for it, and it is why this file imports no crypto.
  */
-import type { BootstrapBody, ChangePasswordBody, ConsoleSignInBody, InviteAccountBody, ReissueBody, RenameDeviceBody, SaveScheduleBody, SetEnabledBody, SetQuotaBody } from '@syncserver/shared';
+import type { BootstrapBody, ChangePasswordBody, ConsoleSignInBody, InviteAccountBody, ReissueBody, RenameDeviceBody, SetEnabledBody, SetQuotaBody } from '@syncserver/shared';
 import type {
   AccountRow, AuditRow, BackupRun, BackupSchedule, BackupScheduleView, DeletionProgress, DeviceRow, HealthResponse, RestoreStatus,
   StorageTotals, SyncProblemRow,
@@ -288,7 +288,7 @@ export const backups = (): Promise<{ backups: BackupRun[]; schedule: BackupSched
  * moment in which the server is on with the previous time, and that moment takes backups.
  */
 export const saveSchedule = (schedule: BackupSchedule): Promise<BackupScheduleView> =>
-  call('PUT', '/admin/backups/schedule', schedule satisfies SaveScheduleBody);
+  call('PUT', '/admin/backups/schedule', schedule);
 
 /** Ask whether a run's blob copy holds every blob the database references. */
 export const verify = (id: string): Promise<{ checked: number; missing: string[]; whole: boolean }> =>

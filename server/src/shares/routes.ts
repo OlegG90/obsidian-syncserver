@@ -6,7 +6,7 @@
  * this file validates the shape of what arrived and turns a refusal into a status.
  */
 import { body, optional } from '../http-schema.js';
-import type { CreateNodeBody } from '@syncserver/shared';
+import type { WireDedupTag, WireEnvelope } from '@syncserver/shared';
 import { CreateShareBody, FinalizeLeaveBody, InviteBody, JoinShareBody, PrepareShareBody } from '@syncserver/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/guard.js';
@@ -37,9 +37,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 type WireName = Required<Pick<NonNullable<PrepareShareBody['items']>[number], 'node_id' | 'name_enc' | 'name_hmac' | 'name_key_id'>>;
 
-/** The key material that travels with it, in the wire's spelling. */
-type WireEnvelope = NonNullable<CreateNodeBody['blob_envelopes']>[number];
-type WireTag = NonNullable<CreateNodeBody['dedup_tags']>[number];
 
 
 /**
@@ -65,7 +62,7 @@ const badName = (n: Partial<WireName> | undefined): string | undefined => {
  * makes a body meant for one endpoint fail at the other rather than half-apply — but it is
  * the only difference, and translating it twice invited the two to drift.
  */
-const converted = (n: WireName, envelopes: WireEnvelope[] = [], tags: WireTag[] = []) => ({
+const converted = (n: WireName, envelopes: WireEnvelope[] = [], tags: WireDedupTag[] = []) => ({
   nodeId: n.node_id,
   nameEnc: n.name_enc,
   nameHmac: n.name_hmac,

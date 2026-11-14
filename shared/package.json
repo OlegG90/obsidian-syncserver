@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "description": "The wire contract both sides implement: the types they agree on, and the request-body schemas the server checks them against",
-  "//": "One runtime entry, for the request-body schemas (D-143): the server imports them to validate against. The plugin and the console import only types from here, which their bundlers erase.",
+  "//": "One runtime entry, for the request-body schemas (D-143): the server imports them to validate against. `source` is the TypeScript itself, for tsx \u2014 the server's tests and dev run read it directly, so an edit here reaches them without a build. The plugin and the console import only types from here, which their bundlers erase.",
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./types/index.d.ts",
       "default": "./types/index.js"
     }

@@ -19,11 +19,16 @@ const Unchecked = () => Type.Optional(Type.Unknown());
 /** The name a node is placed under: encrypted, its HMAC, and the key that sealed it. */
 const placedName = { name_enc: Type.String(), name_hmac: Type.String(), name_key_id: Type.String() };
 
-const Envelope = Type.Object({ sha256: Type.String(), scope_id: Type.String(), wrapped_key: Type.String() });
-const DedupTag = Type.Object({ sha256: Type.String(), scope_id: Type.String(), content_tag: Type.String() });
+/** One content key wrapped to a scope, as a node write carries it. */
+export const WireEnvelope = Type.Object({ sha256: Type.String(), scope_id: Type.String(), wrapped_key: Type.String() });
+export type WireEnvelope = Static<typeof WireEnvelope>;
+
+/** One dedup tag in a scope, as a node write carries it. */
+export const WireDedupTag = Type.Object({ sha256: Type.String(), scope_id: Type.String(), content_tag: Type.String() });
+export type WireDedupTag = Static<typeof WireDedupTag>;
 
 /** The key material a node write carries: both lists optional, each entry whole. */
-const keyMaterial = { blob_envelopes: Type.Optional(Type.Array(Envelope)), dedup_tags: Type.Optional(Type.Array(DedupTag)) };
+const keyMaterial = { blob_envelopes: Type.Optional(Type.Array(WireEnvelope)), dedup_tags: Type.Optional(Type.Array(WireDedupTag)) };
 
 // ---- nodes: every handler reads its body without asking, so what it cannot do without is required ----
 
@@ -76,7 +81,9 @@ export const CreateShareBody = Type.Object({
 });
 export type CreateShareBody = Static<typeof CreateShareBody>;
 
-const convertedName = { node_id: Type.Optional(Type.String()), name_enc: Type.Optional(Type.String()), name_hmac: Type.Optional(Type.String()), name_key_id: Type.Optional(Type.String()) };
+/** The same name where the route checks it and names what is missing (`badName`, `name_required`). */
+const placedNameToCheck = Type.Partial(Type.Object(placedName)).properties;
+const convertedName = { node_id: Type.Optional(Type.String()), ...placedNameToCheck };
 
 export const PrepareShareBody = Type.Object({ items: Type.Optional(Type.Array(Type.Object({ ...convertedName, ...keyMaterial }))) });
 export type PrepareShareBody = Static<typeof PrepareShareBody>;
@@ -85,11 +92,9 @@ export const InviteBody = Type.Object({ user_id: Type.Optional(Type.String()), w
 export type InviteBody = Static<typeof InviteBody>;
 
 export const JoinShareBody = Type.Object({
+  ...placedNameToCheck,
   vault_id: Type.Optional(Type.String()),
   parent_id: Type.Optional(Type.String()),
-  name_enc: Type.Optional(Type.String()),
-  name_hmac: Type.Optional(Type.String()),
-  name_key_id: Type.Optional(Type.String()),
 });
 export type JoinShareBody = Static<typeof JoinShareBody>;
 
@@ -98,8 +103,8 @@ export const FinalizeLeaveBody = Type.Object({
     Type.Array(
       Type.Object({
         ...convertedName,
-        vault_envelopes: Type.Optional(Type.Array(Envelope)),
-        vault_dedup_tags: Type.Optional(Type.Array(DedupTag)),
+        vault_envelopes: Type.Optional(Type.Array(WireEnvelope)),
+        vault_dedup_tags: Type.Optional(Type.Array(WireDedupTag)),
       }),
     ),
   ),
