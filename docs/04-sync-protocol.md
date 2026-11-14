@@ -711,8 +711,8 @@ PostgreSQL delivers a `NOTIFY` only when the transaction that issued it commits 
 back emits nothing, and the delivery rule is structural, not a convention about where a service calls
 `emit`. There is one channel for all vaults; the payload carries the `vault_id`.
 
-**One process owns the listener.** The deployment runs the API and the collector in one process
-([02](02-architecture.md)), so there is exactly one connection `LISTEN`ing on the channel. The `Db` seam
+**A process owns its listener.** The server is one process ([02](02-architecture.md)), and it holds one
+connection `LISTEN`ing on the channel. The `Db` seam
 gains a `listen` primitive that opens a dedicated connection, subscribes, and hands each notification to a
 callback — the same shape as `session` (a connection held for a purpose), but persistent rather than for
 one callback. Reconnect is the listener's own business; a server restart simply drops the socket and the

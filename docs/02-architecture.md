@@ -63,11 +63,10 @@ Two things are worth reading from this level.
 **Content and metadata are separate stores.** Everything that makes the system cheap — deduplication,
 free renames, history, blobs shared between vaults through a share — rests on that split.
 
-**One process does all of it.** The routes, the change-notification listener, the collector and the backup
-schedule run in one Node process. The collector is not tied to requests: it runs once at start and then on
-an interval, and each pass is a single function that keeps the order [03](03-data-model.md) requires —
-thinning before marking, marking before sweeping. What keeps it apart from a backup is the advisory lock
-both take ([08](08-backup-restore.md)), not a process boundary.
+**One process does all of it.** The collector is not tied to requests: it runs once at start and then on
+an interval, and each pass is one function that keeps the order [03](03-data-model.md) requires. What keeps
+it apart from a backup is an advisory lock in the database ([08](08-backup-restore.md)), not a process
+boundary.
 
 **And one process per database is an assumption the code makes.** Three things are held in memory
 because one process owns them, and a second server instance against the same database would see none of
@@ -75,10 +74,9 @@ them: it would not refuse writes while the first one's backup window is open, it
 and sign-in limit a second time over, and it would not halt after a restore it did not start. Running two
 is not supported; making it supported means moving those three into the database first.
 
-The rest already holds across instances. The collector and a backup exclude each other through an advisory
-lock in the database, the backup schedule claims each moment with a conditional `UPDATE` (D-141), every
-process opens its own `LISTEN` and PostgreSQL delivers to all of them, and the cached answer that an
-administrator exists can only go from no to yes.
+The rest already holds across instances: that advisory lock, the schedule's claim on each moment (D-141),
+a `LISTEN` that every process opens for itself, and the cached answer that an administrator exists, which
+can only go from no to yes.
 
 Cryptography is almost invisible on these diagrams, and that is the point: the keys live on the clients,
 the server stores envelopes and never opens them.
@@ -164,8 +162,8 @@ needs to know that a folder is shared. There is no read-only state to emulate (S
 no detachment protocol for the client to drive — a participant's copy is their own from the start.
 
 There is no watcher: sync is a command the user runs, and the engine's one pass is the whole reconciliation.
-Adoption and conflict resolution are not components of their own — they are branches of that pass, and the
-diagram above names no module the code does not have. `Session` is the one the M0.5 code grew into: it owns
+Adoption and conflict resolution are not components of their own — they are branches of that pass. The
+diagram's components are roles, each played by a module or a few; it names none the code does not play. `Session` is the one the M0.5 code grew into: it owns
 the lifecycle `main.ts` used to hold in pieces, and it is what makes the passphrase-to-keys wiring testable
 without launching an editor.
 
@@ -177,8 +175,8 @@ C4Deployment
 
     Deployment_Node(host, "Home server", "Docker") {
         Deployment_Node(compose, "Docker Compose", "") {
-            Container(api, "Server process", "TypeScript, Fastify", "Routes, console, collector, backup schedule")
-            ContainerDb(pg, "PostgreSQL", "Database", "Vaults, metadata, journal, versions, shares")
+            Container(server, "Server process", "TypeScript, Fastify", "Routes, console, collector, backup schedule")
+            ContainerDb(db, "PostgreSQL", "Database", "Vaults, metadata, journal, versions, shares")
         }
         Deployment_Node(vol, "Data volumes", "Filesystem") {
             ContainerDb(pgdata, "Database files", "PGDATA", "")
@@ -196,19 +194,20 @@ C4Deployment
         Container(pm, "Obsidian with the plugin", "Capacitor WebView", "")
     }
 
-    Rel(pd, api, "Sync, over the private network", "HTTP")
-    Rel(pm, api, "Same; no background sync on iOS", "HTTP")
-    Rel(api, pg, "SQL")
-    Rel(pg, pgdata, "Stores")
-    Rel(api, blobs, "Content")
-    Rel(api, backups, "Copies when asked or scheduled")
-    Rel(api, state, "The newest restore epoch it has run with")
+    Rel(pd, server, "Sync, over the private network", "HTTP")
+    Rel(pm, server, "Same; no background sync on iOS", "HTTP")
+    Rel(server, db, "SQL")
+    Rel(db, pgdata, "Stores")
+    Rel(server, blobs, "Content")
+    Rel(server, backups, "Copies when asked or scheduled")
+    Rel(server, state, "The newest restore epoch it has run with")
 ```
 
-Two containers and the volumes they write. Nothing terminates TLS in front of the server: it publishes a
-port on the host, and the private network — a VPN — is what reaches it ([13](13-deployment.md)).
+The containers inside Docker Compose are named as the compose file names its services, and
+`checks/check-compose.mjs` holds the two to the same list.
 
-**The server is not published externally.** Access is from inside a private perimeter only, until
+**The server is not published externally.** Access is from inside a private perimeter only — nothing
+terminates TLS in front of it, and a VPN is what reaches it ([13](13-deployment.md)) — until
 authentication has had a review of its own. That is a deployment constraint rather than an architectural
 one — but while it holds, it is the boundary of the system.
 
