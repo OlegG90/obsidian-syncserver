@@ -1,5 +1,6 @@
 /**
- * Every route the management console calls, answered by a route this server has.
+ * Every route the management console calls, answered by a route this server has —
+ * and the two paths the page itself is served from, answering with security headers.
  *
  * The console is a separate bundle talking to `/admin/*` by path, so nothing ties the two
  * together at compile time. The Reissue button POSTed to `/admin/invitations/:id` while the
@@ -48,6 +49,32 @@ before(async () => {
 after(async () => {
   await app.close();
   await db.close();
+});
+
+describe('the console answers with security headers', () => {
+  it('serves / and /app.js behind the same four headers', async () => {
+    // The page holds both console tokens in memory (D-102), so script running in it holds
+    // them too. The literals below are the contract from docs/11 — a change here changes
+    // that section in the same commit, rather than teaching the test to repeat the code.
+    const csp =
+      "default-src 'none'; " +
+      "script-src 'self'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self'; " +
+      "font-src 'self'; " +
+      "connect-src 'self'; " +
+      "base-uri 'none'; " +
+      "form-action 'none'; " +
+      "frame-ancestors 'none'";
+    for (const url of ['/', '/app.js']) {
+      const r = await app.inject({ method: 'GET', url });
+      assert.ok(r.statusCode === 200 || (url === '/app.js' && r.statusCode === 404), `${url} answers ${r.statusCode}`);
+      assert.equal(r.headers['content-security-policy'], csp, `${url} carries the page's loading rules`);
+      assert.equal(r.headers['x-frame-options'], 'DENY', `${url} refuses framing on old browsers too`);
+      assert.equal(r.headers['x-content-type-options'], 'nosniff', `${url} refuses sniffing`);
+      assert.equal(r.headers['referrer-policy'], 'no-referrer', `${url} sends no referrer`);
+    }
+  });
 });
 
 describe('the console and the server agree on paths', () => {

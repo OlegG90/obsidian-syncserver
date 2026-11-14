@@ -35,6 +35,20 @@ The refresh token is worth more than the access token, because it lasts longer; 
 under the same access, and what it buys is bounded by the one console device row an administrator can
 revoke. A revoked device, or a spent token, drops the person on the sign-in screen with the reason.
 
+### What the page may load
+
+Both console tokens live in that page's memory, so anything running script in it holds them.
+The page is two responses — `/` carrying the markup and `/app.js` carrying the bundle — and both
+carry the same four headers: a content policy naming what may load, `X-Frame-Options: DENY` for
+browsers that do not read the policy's `frame-ancestors`, `nosniff`, and `no-referrer`.
+
+The policy allows script from this origin only — there is no inline script to grandfather in — and
+style inline or same-origin, which is the current `<style>` block plus room to move it into a file
+without changing the contract. Fetches, images and fonts are same-origin only; there is no base to
+hijack, no form target to submit to since the page calls the API rather than posting, and no framing
+at all. The headers ride on the not-built answers too, so the sentence saying how to build the console
+and the `console_not_built` refusal are as strict as the page itself.
+
 **"An administrator cannot browse another user's vault" is now a fact about the row rather than a promise
 about behaviour.** With E2EE always on (AC-08) the server holds only ciphertext, and a console account
 holds no key to open it with — so this is not a permission somebody could grant later, it is an absence.
