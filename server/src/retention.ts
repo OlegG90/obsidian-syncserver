@@ -1,5 +1,5 @@
 /**
- * The nightly half of garbage collection: what history is kept, and what stops being held.
+ * The policy half of garbage collection: what history is kept, and what stops being held.
  *
  * The TTL sweeps in `collector.ts` are about things that were never finished — an abandoned
  * upload part, a claim on bytes no node ever bound. These four statements are about things

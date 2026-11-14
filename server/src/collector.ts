@@ -1,7 +1,7 @@
 /**
  * The TTL sweeps docs/04 promises (abandoned parts, unbound blobs, the delta journal).
  *
- * This is deliberately the *sweeps*, not the full nightly mark-and-sweep of
+ * This is deliberately the *sweeps*, not the full mark-and-sweep of
  * docs/03 (`refcount` reconciliation, node-row removal, quarantine) — M0 has no
  * resumable parts and no deleted-node GC to run against, and inventing the machinery
  * before the thing it collects exists would be code with no path to exercise it.

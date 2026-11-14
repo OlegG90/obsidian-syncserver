@@ -8,7 +8,7 @@
 | **M2** | WebSocket push, resumable upload, mobile, `.obsidian/` exclusions | ☑ |
 | **M3** | **folder sharing** by replication: create/invite/decline/withdraw/join/revoke/leave, the membership list, synchronous fan-out to at most 8 participants, history transfer on join, over-quota freeze | ☑ |
 | **M3.5** | **getting back in, and getting out**: recovery with the passphrase, an editable server address, disconnect, and the thaw M3 left open — scope below | ☑ |
-| **M4** | **space, and the history already on disk**: the nightly mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
+| **M4** | **space, and the history already on disk**: the mark and sweep, emptying the trash, the administrative API with its audit trail, and the history/trash UI — scope below | ☑ |
 | **M5** | **the operator's milestone**: the management console, backup operations, and an image that is pulled rather than built on the server — see [11](11-management-console.md), [08](08-backup-restore.md), and the scope below | ☑ |
 | **M7** | the **recovery code**: the second proof to an endpoint that already takes two, answering the one loss nothing else does — a forgotten passphrase. Scope below | ☑ |
 | **M8** | **the bad day**: the operations that only matter once something has gone wrong — restoring, revoking a device that is gone, seeing and removing a vault, starting a reset — every one of them today either prose or unreachable. Scope below | ☐ |
@@ -185,7 +185,7 @@ mean the space problem waits for a front end.
       the only way out is a deadlock, and the schema agrees: the trigger refusing a frozen account's writes
       fires on `INSERT` and `UPDATE`, never on `DELETE`.
 
-### The nightly mark and sweep
+### The mark and sweep
 
 [03](03-data-model.md) specifies seven steps; `collector.ts` implements the TTL sweeps and says so in its
 own header. The rest is this milestone, and its traps are already written down — they become tests, not

@@ -162,13 +162,14 @@ then the effective quarantine is zero and every restore should expect the report
 
 ## Removing a copy
 
-Copies are taken when somebody asks for one, so they pile up at the rate somebody asks — a rate a person
-can keep up with. **Removing one from the console**, per row and behind a confirmation naming it, is the
-whole of it.
+**A copy somebody took by hand is removed by hand**: from the console, per row and behind a confirmation
+naming it. Those copies pile up at the rate somebody asks for them — a rate a person can keep up with — and
+a server that deleted them on a rule nobody re-reads would be a server that deletes backups.
 
-There is no retention setting. One existed while backups were nightly, and a number of copies to keep is
-an answer to a machine producing them; with a person producing them the same person can remove them, and
-a server that deletes backups on a rule nobody re-reads is a server that deletes backups.
+**Scheduled copies have a number to keep** (D-141), because the schedule is a machine producing them. Once
+there are more than that, the oldest scheduled copies are removed through the same removal the row's button
+uses, with every refusal below. The number belongs to the schedule and reaches only what the schedule took;
+a copy taken by hand is never swept.
 
 **The run stays in the history and its `destination` becomes null.** Dropping the row would leave the files
 behind with nothing referencing them, which is exactly the state an operator watching free space disappear
