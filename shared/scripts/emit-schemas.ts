@@ -8,8 +8,7 @@
  * runtime image then needs no TypeBox, and `checks/check-schemas-current.mjs` fails when
  * the committed file is older than the source it was generated from.
  *
- * Run directly to regenerate (`npm run emit:schemas --workspace @syncserver/shared`), or
- * with `--check` to compare instead of writing.
+ * Run directly to regenerate (`npm run emit:schemas --workspace @syncserver/shared`).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
