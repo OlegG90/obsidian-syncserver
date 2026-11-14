@@ -393,6 +393,8 @@ just `docker compose pull` again.
 
 ## What this deployment is not
 
+- **not more than one server.** One server container per database; why, and what changing it would
+  take, is in [02](02-architecture.md);
 - **not exposed publicly.** It publishes on the host and nothing terminates TLS in front of it.
   Public exposure stays out of scope until authentication has had a review of its own
   ([02](02-architecture.md)). Reaching it from elsewhere is a VPN's job, not this compose file's;

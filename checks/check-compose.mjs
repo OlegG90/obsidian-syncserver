@@ -23,6 +23,17 @@ check(services.includes('db') && services.includes('server'), 'expected services
 
 const { db, server } = doc.services ?? {};
 
+// docs/02 draws this deployment, and drew a worker, a proxy and a web container for a long time after
+// the compose file had none (issue #466). The containers inside its Docker Compose node are named as the
+// services are, so the two lists can be held to each other.
+const architecture = readFileSync('docs/02-architecture.md', 'utf8');
+const composeNode = /Deployment_Node\(compose,[^{]*\{([^}]*)\}/.exec(architecture)?.[1] ?? '';
+const drawn = [...composeNode.matchAll(/Container(?:Db)?\((\w+),/g)].map((m) => m[1]).sort();
+check(
+  drawn.join(',') === [...services].sort().join(','),
+  `docs/02's deployment diagram draws ${drawn.join(', ') || 'nothing'} inside Docker Compose; the compose file has ${services.join(', ')}`,
+);
+
 // Not "started": the server reads the seeded rows at boot, so against a database still
 // initialising it comes up and answers wrongly.
 check(
@@ -137,6 +148,6 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(
-  `${file}: two services, ordered on health, both mounts, no secrets written down, pulled not built; ` +
+  `${file}: two services, as docs/02 draws them, ordered on health, both mounts, no secrets written down, pulled not built; ` +
     `pg_dump ${clientMajor} matches postgres ${dbMajor}`,
 );
