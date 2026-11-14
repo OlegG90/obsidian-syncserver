@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   accountBadge, accountState, accountUsage, auditAction, confirmLabel, operatorRefusal, freezeWarning, human, isOver, quotaProblem,
-  holdsStorage, keptLine, mib, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker, windowHeld,
+  holdsStorage, keptLine, mib, scheduleAlarm, scheduleLine, seenLine, seenNote, serverLine, usageFraction, usageMarker, when, windowHeld,
   type AccountLine,
 } from '../src/format.js';
 import type { BackupRun, ConsoleAuthRefusalCode } from '@syncserver/shared';
@@ -376,6 +376,18 @@ describe('the backup schedule, as the card says it (#357)', () => {
     assert.match(scheduleAlarm({ lastFailed: true, overdue: true })!, /did not happen/);
     assert.match(scheduleAlarm({ lastFailed: true, overdue: false })!, /failed/);
     assert.equal(scheduleAlarm({ lastFailed: false, overdue: false }), undefined);
+  });
+});
+
+describe('a timestamp as a person reads it', () => {
+  it('draws a dash when there is none', () => {
+    // A missing instant is ordinary here — a run that has not finished, a device never seen —
+    // and a blank reads as a value that failed to load rather than as nothing to show.
+    assert.equal(when(null), '—');
+  });
+
+  it('reads the instant the server sent', () => {
+    assert.equal(when('2026-03-10T02:00:00.000Z'), new Date('2026-03-10T02:00:00.000Z').toLocaleString());
   });
 });
 
