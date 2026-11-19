@@ -20,6 +20,6 @@
   "dependencies": {},
   "devDependencies": {
     "@sinclair/typebox": "^0.34.52",
-    "tsx": "^4.23.9"
+    "tsx": "^4.23.15"
   }
 }

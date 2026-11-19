@@ -12,17 +12,17 @@
     "test": "tsx --conditions=source --test --test-concurrency=1 test/*.test.ts"
   },
   "dependencies": {
-    "@fastify/jwt": "^10.2.1",
-    "@noble/hashes": "^2.3.0",
-    "@fastify/websocket": "^11.3.0",
+    "@fastify/jwt": "^10.2.7",
+    "@noble/hashes": "^2.4.0",
+    "@fastify/websocket": "^11.3.7",
     "@syncserver/shared": "*",
-    "fastify": "^5.11.2",
-    "pg": "^8.22.0",
-    "ws": "^8.21.3"
+    "fastify": "^5.12.8",
+    "pg": "^8.23.1",
+    "ws": "^8.22.2"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.4",
-    "@types/ws": "^8.18.1",
-    "tsx": "^4.23.9"
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15"
   }
 }
