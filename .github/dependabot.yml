@@ -22,6 +22,9 @@ updates:
       # CI). A newer major describes APIs the server cannot call.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
+      # The alias exists to stay on 5 (`checks/check-thenables.mjs` says why).
+      - dependency-name: typescript5
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /
