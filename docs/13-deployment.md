@@ -338,14 +338,11 @@ server, a credential added to a machine in exchange for hiding source that is al
 it is running, and to go back; `latest` names a moving target that a specific installation
 cannot be rolled back to.
 
-**The base images move by hand, never by an update bot.** Every one is pinned to a major and an
-Alpine release — `node:26-alpine3.23` in the Dockerfile, `postgres:18-alpine` in the compose
-file — so the only update a bot could propose is the next major, and each is a migration rather
-than a bump. A new PostgreSQL major will not start on the existing cluster without `pg_upgrade`,
-and it moves together with the `postgresqlNN-client` the runtime image carries for `pg_dump`. A
-new Alpine release has to still carry that package. Dependabot therefore watches npm and the
-workflow actions only (`.github/dependabot.yml`), and nothing prompts these reads: they happen
-when a Node or PostgreSQL major is chosen on purpose.
+**The base images move by hand, never by an update bot.** Each is pinned to a major, so the only
+update a bot could propose is the next one, and that is a migration rather than a bump: a new
+PostgreSQL major will not start on the existing cluster without `pg_upgrade`, and the `pg_dump` in
+the runtime image is pinned to agree with it (the Dockerfile says why). Dependabot therefore
+watches npm and the workflow actions only (`.github/dependabot.yml`).
 
 ### The plugin, which is installed with BRAT
 
