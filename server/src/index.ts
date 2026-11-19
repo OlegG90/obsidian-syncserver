@@ -43,26 +43,24 @@ const instanceHeld = new Promise<void>((resolve) => {
 // Awaited only until the claim is decided, not for the life of it: resolving lets the boot go
 // on while the session underneath stays open and keeps the lock. Awaiting the session itself
 // would stall the boot here, before a single route exists and before the signal handlers below.
-const refusal = await new Promise<string | undefined>((resolve, reject) => {
+const claimed = await new Promise<{ refusal: string } | { pid: number }>((resolve, reject) => {
   void db.session(async (c) => {
     const claim = await claimInstance(c);
     if (!claim.ok) {
-      resolve(claim.holder);
+      resolve({ refusal: claim.holder });
       return;
     }
-    resolve(undefined);
+    const me = await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    resolve({ pid: me.rows[0]!.pid });
     await instanceHeld;
-  }).then(
-    () => resolve(undefined),
-    (e: unknown) => reject(e),
-  );
+  }).catch(reject);
 });
-if (refusal !== undefined) {
+if ('refusal' in claimed) {
   // Like the schema refusal below: a sentence, then out. A second server that served would
   // still bind and look alive; one that exits is one the orchestrator restarts loudly instead
   // of a database split quietly.
   console.error(
-    `refusing to start: ${refusal}. Running two instances against one database is not supported ` +
+    `refusing to start: ${claimed.refusal}. Running two instances against one database is not supported ` +
       '(docs/02) — stop the one that should not be here and start again.',
   );
   await db.close();
@@ -72,8 +70,10 @@ if (refusal !== undefined) {
 // **Before the schema, before anything is served, and that is the whole point.** A restore asked for
 // from the console is carried out here, on the way back up: `pg_restore --clean` drops and recreates
 // what it restores, and the only moment nothing else holds a connection to this database is the moment
-// before this server opens one for serving. The request is cleared BEFORE the attempt — a marker that
-// survived a failure would turn one bad restore into a restart loop.
+// before this server opens one for serving. The instance claim above is the one connection already
+// open, and it stays open on purpose: a second boot must not read this request and lose it, so the
+// claim comes first and the restore is told it is ours. The request is cleared BEFORE the attempt — a
+// marker that survived a failure would turn one bad restore into a restart loop.
 const asked = await readRestoreRequest(cfg.restoreStateFile);
 if (asked) {
   console.log(`restore: carrying out the request made by ${asked.by} at ${asked.at}, from ${asked.destination}`);
@@ -82,6 +82,7 @@ if (asked) {
     blobStorePath: cfg.blobStorePath,
     restoreCommand: cfg.restoreCommand,
     store: openStore(cfg.blobStorePath),
+    ours: [claimed.pid],
   }).catch((e: unknown) => {
     // Reported and not rethrown: a server that refused to start because a restore failed would leave
     // an operator with neither the old data reachable nor a way in to see why.
