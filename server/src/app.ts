@@ -17,7 +17,7 @@ import { registerPairingRoutes } from './pairing/routes.js';
 import { registerShareRoutes } from './shares/routes.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import { registerConsoleRoutes, CONSOLE_PATHS } from './console.js';
-import { backupInProgress } from './backup.js';
+import { backupInProgress, type Legs } from './backup.js';
 import { legsFor, serverVersionLine } from './backup-legs.js';
 import { checkRestoreState, restoreHalted } from './restore.js';
 import { registerEventsRoutes } from './events-route.js';
@@ -46,6 +46,11 @@ export interface AppDeps {
    * seam would end the run rather than assert anything.
    */
   stop?(): void;
+  /**
+   * The legs a console-started backup runs. A test that drives `POST /admin/backups` over HTTP
+   * would otherwise dump the development database and copy a real store to answer one `202`.
+   */
+  backupLegs?(runDir: string): Legs;
 }
 
 declare module 'fastify' {
@@ -55,6 +60,12 @@ declare module 'fastify' {
      * it through (D-142). docs/08 names the routes that carry it.
      */
     writesOnlySessions?: boolean;
+    /**
+     * This route has its own answer for "a backup is running", so the window leaves the request
+     * to it. Starting a backup is the one: the window's 503 says "try the write again shortly",
+     * which is the wrong advice for a second backup, and the code would arrive under two statuses.
+     */
+    answersTheWindowItself?: boolean;
   }
 }
 
@@ -69,8 +80,8 @@ const BODY_REFUSALS: Record<string, { status: number; error: string }> = {
 export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = {}): Promise<FastifyInstance> => {
   // The events hub used to be the only seam and was passed positionally; both shapes are
   // accepted so every existing caller keeps working.
-  const { events, attempts, stop } =
-    'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined, stop: undefined } : deps;
+  const { events, attempts, stop, backupLegs } =
+    'subscribe' in deps ? { events: deps as EventsHub, attempts: undefined, stop: undefined, backupLegs: undefined } : deps;
   const app = Fastify({
     logger: false,
     // A body is checked against its route's schema (`http-schema.ts`, issue #468), and checked as sent:
@@ -171,7 +182,8 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     if (req.method === 'GET' || req.method === 'HEAD') return;
     // `?.`: a request that matched no route is answered by the not-found handler, whose options
     // are Fastify's to shape rather than this file's.
-    if (req.routeOptions.config?.writesOnlySessions) return;
+    const route = req.routeOptions.config;
+    if (route?.writesOnlySessions || route?.answersTheWindowItself) return;
     return reply.code(503).send({
       error: 'backup_in_progress',
       message: 'This server is being backed up. Reads are unaffected; try the write again shortly.',
@@ -202,7 +214,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     // row and the window, so a dump whose major disagrees is refused with none of them taken
     // (docs/10, D-73). The blobs come from the live store, which the configuration names once
     // (issue #219) rather than twice.
-    makeLegs: legsFor(cfg, versionLine),
+    makeLegs: backupLegs ?? legsFor(cfg, versionLine),
   }, { accessTokenTtlSeconds: cfg.accessTokenTtlSeconds });
   await registerConsoleRoutes(app);
 

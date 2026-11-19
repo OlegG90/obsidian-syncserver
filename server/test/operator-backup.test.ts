@@ -11,16 +11,21 @@
  * compiler holds that now, and a test asserting an absent string would pass whether or not the branch
  * came back under a different one.
  *
- * **Nothing here takes a backup.** Every server is configured now, so a `POST /admin/backups` would
- * dump the development database and open a refusal window in a file the runner may be running beside
- * others — a real copy is `backup.test.ts`'s job, with legs it controls.
+ * **Nothing here takes a real backup.** Every server is configured now, so a `POST /admin/backups` on
+ * the default legs would dump the development database and write a copy under `var/backups`. The
+ * trigger is driven through the `backupLegs` seam instead, into a temporary destination: what is under
+ * test is what the route answers and when, and a real copy is `backup.test.ts`'s job.
  *
  * Needs the development database: `npm run db:reset` first.
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
+import type { Legs } from '../src/backup.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
@@ -73,6 +78,79 @@ describe('the backup surface', () => {
     // that can be wrong here (D-122).
     assert.equal(r.statusCode, 404);
     assert.equal(r.json().error, 'not_found');
+  });
+});
+
+describe('starting a backup, over HTTP (issue #479)', () => {
+  // Legs of the test's own, so the route runs for real while nothing is dumped and nothing is
+  // written under `var/backups`, where copies are data rather than residue.
+  let root: string;
+  let started: FastifyInstance;
+  let dumpMayFinish: () => void = () => undefined;
+  let ready: () => Promise<void> = async () => undefined;
+  const legs = (): Legs => ({
+    assertReady: () => ready(),
+    dumpDatabase: () => new Promise((resolve) => (dumpMayFinish = () => resolve({ bytes: 1 }))),
+    copyBlobs: async () => ({ bytes: 0, count: 0 }),
+  });
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), 'syncserver-backup-route-'));
+    const cfg = loadConfig();
+    started = await buildApp(db, { ...cfg, backup: { ...cfg.backup, destination: root } }, { backupLegs: legs });
+  });
+
+  after(async () => {
+    await started.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const press = () =>
+    started.inject({ method: 'POST', url: '/admin/backups', headers: { authorization: `Bearer ${adminToken}` } });
+
+  it('answers 202 with the run while the run is still going, and the list follows it', async () => {
+    const r = await press();
+    // The dump has not finished — it cannot, until this test says so — and the answer is here.
+    assert.equal(r.statusCode, 202, r.body);
+    const { id, status } = r.json() as { id: string; status: string };
+    assert.equal(status, 'running');
+
+    const runOf = async () => {
+      const list = await started.inject({
+        method: 'GET', url: '/admin/backups', headers: { authorization: `Bearer ${adminToken}` },
+      });
+      return (list.json() as { backups: { id: string; status: string }[] }).backups.find((b) => String(b.id) === id);
+    };
+    try {
+      assert.equal((await runOf())?.status, 'running', 'the list shows the run the reply named');
+
+      // A second press while it runs is told so at once, by the route rather than by the window.
+      const again = await press();
+      assert.equal(again.statusCode, 409, again.body);
+      assert.equal(again.json().error, 'backup_in_progress');
+    } finally {
+      // Whatever failed above, the run must end, or it holds the window and the app open for ever.
+      dumpMayFinish();
+    }
+    let settled: string | undefined;
+    for (let i = 0; i < 100 && (settled = (await runOf())?.status) === 'running'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.notEqual(settled, 'running', 'the run finished behind the reply');
+  });
+
+  it('refuses a deployment that cannot take one, synchronously and with the reason', async () => {
+    ready = async () => {
+      throw new Error('pg_dump 16 cannot dump a PostgreSQL 18 server');
+    };
+    try {
+      const r = await press();
+      assert.equal(r.statusCode, 503, r.body);
+      assert.equal(r.json().error, 'backup_not_ready');
+      assert.match(r.body, /pg_dump 16 cannot dump/);
+    } finally {
+      ready = async () => undefined;
+    }
   });
 });
 
@@ -190,5 +268,26 @@ describe('the schedule, over HTTP (#357)', () => {
     );
     assert.deepEqual(row?.details.from, before, 'the record names what it replaced');
     assert.deepEqual(row?.details.to, settings(wanted));
+  });
+
+  it('leaves the schedule as it was when its audit row is refused (issue #477)', async () => {
+    // The failure the issue named, made to happen: the audit INSERT is refused after the save has
+    // run. One transaction means the save goes with it. `NOT VALID` because the rows already
+    // there are not the question — it still holds every new one to `CHECK (false)`.
+    const auth = { authorization: `Bearer ${adminToken}` };
+    const schedule = async () =>
+      ((await app.inject({ method: 'GET', url: '/admin/backups', headers: auth })).json() as {
+        schedule: { time: string; keep: number };
+      }).schedule;
+    const before = await schedule();
+    await db.query(`ALTER TABLE audit_log ADD CONSTRAINT test_refuses_every_row CHECK (false) NOT VALID`);
+    try {
+      const r = await put({ ...good, time: '04:45', keep: 3 });
+      assert.notEqual(r.statusCode, 200, 'the save did not report success');
+    } finally {
+      await db.query(`ALTER TABLE audit_log DROP CONSTRAINT test_refuses_every_row`);
+    }
+    const after = await schedule();
+    assert.deepEqual([after.time, after.keep], [before.time, before.keep], 'and the schedule is unchanged');
   });
 });

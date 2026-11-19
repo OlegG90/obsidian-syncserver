@@ -56,6 +56,10 @@ Everything else that writes is refused, and these by decision rather than by def
   the answer would describe neither moment cleanly. The button says the server is being backed up; pressed
   again afterwards, it answers.
 
+**Starting a backup** passes the window only to be refused by its own route: `409 backup_in_progress`,
+at once ([11](11-management-console.md)). The window's `503` says to try the write again shortly, which is
+the wrong advice for a second backup, and one code under two statuses is a code a client cannot read.
+
 > **The database is dumped first and the blobs are copied second** (D-114). That makes the blob copy a
 > *superset* of what the dump references: surplus blobs are harmless and the collector removes them,
 > while dangling references are neither. Blobs-first is safe only under a lock held across the whole
