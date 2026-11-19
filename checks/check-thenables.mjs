@@ -15,9 +15,14 @@
  * check reads the program: in a callback given to `then`, `catch` or `finally`, and in any `async`
  * function, nothing returned may be a value whose `then` Obsidian declares. A block body that does
  * not return the chain is the fix, and `void` in front of the call is another.
+ *
+ * **It reads the program through TypeScript 5, not the 7 that `tsc` is.** 7 is the native compiler
+ * and does not carry the JavaScript API this walks — `createProgram`, the checker, the AST guards —
+ * so the root installs 5.9 a second time under the alias `typescript5` for this file alone. The
+ * alias goes when 7 ships a stable API that can answer "where is this `then` declared".
  */
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript5';
 
 const root = path.resolve(import.meta.dirname, '..');
 const configPath = path.join(root, 'plugin', 'tsconfig.json');

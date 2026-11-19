@@ -34,7 +34,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.2",
+    "typescript5": "npm:typescript@^5.9.3",
     "yaml": "^2.9.1"
   },
   "allowScripts": {
