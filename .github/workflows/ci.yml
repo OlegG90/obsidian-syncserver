@@ -16,6 +16,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a pull request makes the run still going on it worthless: it tests a commit
+# nobody will merge, and the live suite alone holds a runner for up to twenty minutes. Dependabot
+# makes this routine rather than rare — merging one of its PRs leaves the others conflicting in
+# the lockfile, and it rebases them in quick succession.
+#
+# **Everything else runs in a group of its own.** Each merge is a state main was in, and its run
+# is the record of it. Sharing one group without cancelling would not keep them: a group holds one
+# run and ONE pending, so three quick merges silently drop the middle run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   # Not a secret: this is a throwaway database inside the job. Set explicitly so the server
   # does not fall back to the development socket, which does not exist on a runner.
