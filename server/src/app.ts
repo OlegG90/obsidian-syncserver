@@ -200,7 +200,7 @@ export const buildApp = async (db: Db, cfg: Config, deps: EventsHub | AppDeps = 
     // never write into each other. The server's PostgreSQL version is read once, here, and
     // carried into every run's `assertReady` — which `runBackup` calls before the lock, the
     // row and the window, so a dump whose major disagrees is refused with none of them taken
-    // (docs/10, D-73). The blobs come from the live store, which the configuration names once
+    // (docs/10, issue #73). The blobs come from the live store, which the configuration names once
     // (issue #219) rather than twice.
     makeLegs: legsFor(cfg, versionLine),
   }, { accessTokenTtlSeconds: cfg.accessTokenTtlSeconds });

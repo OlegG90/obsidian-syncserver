@@ -117,7 +117,7 @@ export const backupLegs = (
    *
    * It used to be the first line of `dumpDatabase`, which reads as "before the work" and is
    * not: by then `runBackup` had taken the collector's lock, inserted a `backup_runs` row and
-   * set the server refusing writes. So a mismatched binary — the case D-73 exists for —
+   * set the server refusing writes. So a mismatched binary — the case issue #73 exists for —
    * announced itself with the window already open, which is the failure it was meant to
    * replace rather than relocate.
    */
