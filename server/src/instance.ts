@@ -75,3 +75,26 @@ export const claimInstance = async (client: PoolClient): Promise<InstanceClaim> 
       'another server instance held this database a moment ago and is already gone — start again',
   };
 };
+
+/**
+ * Say, once, that the claim's connection is gone — and with it the claim.
+ *
+ * A session lock lives exactly as long as its connection, so a PostgreSQL restart or a cut
+ * network ends the claim while this process goes on serving, and a second instance could then
+ * start beside it. The driver reports that as an `error` event on the checked-out client, which
+ * with no listener is an uncaught exception: the process did stop, but with a driver stack
+ * trace an operator has to read the cause out of. The caller decides what losing the claim
+ * means; the boot stops, and the restart that follows claims again.
+ *
+ * `error` and not `end`: `end` is also what an orderly shutdown emits when the pool closes.
+ */
+export const onClaimLost = (client: PoolClient, lost: (reason: string) => void): void => {
+  // `on` with a flag rather than `once`: a second `error` after the first would otherwise be
+  // uncaught again, which is the stack trace this exists to replace.
+  let said = false;
+  client.on('error', (e: Error) => {
+    if (said) return;
+    said = true;
+    lost(`the connection holding this server's claim on the database ended (${e.message})`);
+  });
+};
