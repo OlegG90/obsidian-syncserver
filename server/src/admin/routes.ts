@@ -33,7 +33,7 @@ import {
   storage,
   renameAccountDevice,
 } from './service.js';
-import { listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
+import { backupInProgress, listBackups, runBackup, verifyBackup, type Legs } from '../backup.js';
 import { insideDestination } from '../backup-remove.js';
 import { record } from './audit.js';
 import { writeRestoreRequest } from '../restore-request.js';
@@ -245,7 +245,13 @@ export const registerAdminRoutes = (
   // The backup surface. Trigger is a POST because it starts work; list and verify are GETs
   // because they only look — a poll that moved the state would make watching a backup
   // indistinguishable from driving one.
-  app.post('/admin/backups', admin, async (req, reply) => {
+  app.post('/admin/backups', { ...admin, config: { answersTheWindowItself: true } }, async (req, reply) => {
+    // Asked here rather than left to the collector lock: `runBackup` would wait that lock out
+    // before calling itself skipped, so a second press would hang for the wait and then be told
+    // what was already true when it arrived.
+    if (backupInProgress()) {
+      return refuseWith(reply, 409, 'backup_in_progress', 'A backup is already being written; it shows in the list.');
+    }
     const runDir = backupRunDir(new Date().toISOString().replace(/[:.]/g, '-'));
     // The destination recorded on the row is THIS run's directory, so verify knows where
     // the copy lives. `backupLegs` puts it under `destination/<runDir>/`.
@@ -266,9 +272,16 @@ export const registerAdminRoutes = (
         started = true;
         void reply.code(202).send({ id, status: 'running' });
       },
+    }).catch((e: unknown) => {
+      // Before the 202 the error is the request's, and Fastify answers it. After, nobody is
+      // listening: Fastify would try to answer a reply already sent, and with its logger off
+      // that is the last anyone hears of it.
+      if (!started) throw e;
+      console.error(`backup started from the console failed behind its reply: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
     });
     // Started means answered: the run's outcome now lives on its row, where the list shows it.
-    if (started) return;
+    if (started || !out) return;
     // Refused is not failed and not busy: nothing ran, so there is no row and nothing to
     // retry until the deployment is fixed. 503, like `unconfigured` — the same family of
     // answer, "this installation cannot do this yet", with the sentence that says what to fix.
@@ -319,10 +332,12 @@ export const registerAdminRoutes = (
 
     // The setting and its record in one transaction (issue #477): a failure between them used
     // to leave a schedule in force the log never recorded, and the log exists to answer "who
-    // changed this and when" — for a schedule, what it was before is the point. Reading the
-    // previous row inside the same transaction keeps `from` the value being replaced, not one
-    // a concurrent write has since moved past.
+    // changed this and when" — for a schedule, what it was before is the point. The row is
+    // locked before it is read: in the same transaction alone, two saves at once under READ
+    // COMMITTED both read the same `before`, and the second record names a `from` that the
+    // first had already replaced.
     await db.tx(async (c) => {
+      await c.query('SELECT 1 FROM backup_schedule WHERE only_row FOR UPDATE');
       const before = await readSchedule(oneFrom(c));
       await writeSchedule(c, wanted);
       await record(c, {

@@ -204,8 +204,11 @@ count, error and verification. `POST /admin/backups` answers `202` with the run'
 row exists and the window is open, and the run goes on behind the reply — a dump, a copy and
 a self-check take minutes, and a request held open for all of it is one a proxy can cut off
 (issue #479). The console follows the run through the list until its status leaves `running`;
-the refusals that come before any work (`backup_not_ready`, `backup_in_progress`) still answer
-synchronously, because nothing started. A run records the **refusal window** and both legs (D-114), and `CHECK`s reject a leg
+the refusals that come before any work still answer synchronously, because nothing started:
+`503 backup_not_ready` when the deployment cannot take one, with the sentence that says what to
+fix, and `409 backup_in_progress` when one is already running. The second is the trigger's own
+answer, given at once — the refusal window lets this route through rather than answer for it
+([08](08-backup-restore.md)). A run records the **refusal window** and both legs (D-114), and `CHECK`s reject a leg
 taken outside it, or a blob leg the database leg did not precede — so a half-finished backup, or one whose two stores describe different instants, can
 never be mistaken for a usable one.
 
