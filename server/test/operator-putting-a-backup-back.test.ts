@@ -23,6 +23,7 @@ import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { restoreArgv } from '../src/restore-argv.js';
 import { copyAt, whatIsMissing } from '../src/backup-copy.js';
+import { claimInstance } from '../src/instance.js';
 import { currentDatabase, otherConnections, restoreFrom } from '../src/restore-run.js';
 
 let db: Db;
@@ -118,6 +119,27 @@ describe('refusing to run under a live server', () => {
     assert.equal('kind' in out ? out.kind : undefined, 'server_running');
     await assert.rejects(readFile(join(live, 'aa', 'aa')), 'nothing was copied');
     await second.close();
+  });
+
+  it("does not take the booting server's own instance claim for a server running under it", async () => {
+    // The boot claims the database (D-144) before it carries out a restore the console asked for, and
+    // keeps the claim across it. Counted as somebody else, that claim refused every such restore as one
+    // "under a live server" — and the request was already cleared, so the restore was simply lost.
+    // A pool of its own, closed at the end: left idle in `db`'s pool, the claim's connection would be
+    // "somebody else" to every restore after this one.
+    const claimant = connect(loadConfig().databaseUrl);
+    await claimant.session(async (claim) => {
+      assert.deepEqual(await claimInstance(claim), { ok: true });
+      const { rows } = await claim.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      const out = await restoreFrom(db, await aBackup('under-its-own-claim'), {
+        blobStorePath: join(root, 'live-under-its-own-claim'),
+        restoreCommand: ['true'],
+        store: { size: async () => 1 },
+        log: () => undefined,
+        ours: [rows[0]!.pid],
+      });
+      assert.ok(!('kind' in out), `it ran: ${JSON.stringify(out)}`);
+    }).finally(() => claimant.close());
   });
 });
 

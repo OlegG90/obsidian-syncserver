@@ -40,11 +40,16 @@ export type RestoreRefusal =
  * race to be careful about — it is a server holding open transactions against tables being dropped, and
  * the outcome is neither the old data nor the new. So the check is "am I alone", which is a question with
  * an exact answer, rather than "is the server stopped", which is a guess about another process.
+ *
+ * `ours` names the backends this process itself holds open for a reason that does not touch a table: the
+ * boot's instance claim (D-144) is taken before the restore and kept across it, and counting it made the
+ * booting server refuse every restore as one run "under a live server" — its own.
  */
-export const otherConnections = async (db: Db): Promise<number> => {
+export const otherConnections = async (db: Db, ours: readonly number[] = []): Promise<number> => {
   const row = await db.one<{ n: string }>(
     `SELECT count(*)::text AS n FROM pg_stat_activity
-      WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+      WHERE datname = current_database() AND pid <> pg_backend_pid() AND pid <> ALL($1::int[])`,
+    [ours],
   );
   return Number(row?.n ?? 0);
 };
@@ -78,6 +83,8 @@ export const restoreFrom = async (
     /** The live store, to ask what the restored database now references and cannot find. */
     store: { size(storageKey: string): Promise<number | undefined> };
     log?: (message: string) => void;
+    /** Backends of this very process that the "am I alone" check must not count (see `otherConnections`). */
+    ours?: readonly number[];
   },
 ): Promise<RestoreOutcome | RestoreRefusal> => {
   const log = deps.log ?? console.log;
@@ -92,7 +99,7 @@ export const restoreFrom = async (
   const wrong = await whatIsMissing(copy);
   if (wrong) return { kind: 'not_a_backup', detail: wrong };
 
-  const others = await otherConnections(db);
+  const others = await otherConnections(db, deps.ours);
   if (others > 0) return { kind: 'server_running', connections: others };
 
   // Copied INTO the live store rather than over it: a blob the store has and the copy does not is

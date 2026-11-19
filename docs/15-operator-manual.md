@@ -402,7 +402,10 @@ shows — `/backups/…`, the path inside the container, not where it is on the 
 
 **It refuses while anything else is connected to the database**, naming how many. `pg_restore` drops and
 recreates what it restores, and doing that under a running server is not a race to be careful about: it is
-open transactions against tables being dropped, and the result is neither the old data nor the new.
+open transactions against tables being dropped, and the result is neither the old data nor the new. A
+restore the button asked for does not count the server carrying it out: that server's claim on the
+database (D-144) is taken first and held across the restore, so a second instance cannot start in the
+middle of it, and the claim touches no table.
 
 **Blobs first, then the database** — the opposite order to a backup, and for the same reason a backup runs
 the other way. A database restored ahead of its blobs references content that is not there yet; blobs
