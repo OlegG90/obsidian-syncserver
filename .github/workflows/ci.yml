@@ -46,6 +46,8 @@ jobs:
           node-version: 26
           cache: npm
       - run: npm ci
+      # Before the typecheck, which would pass on the wrong TypeScript just as well.
+      - run: node checks/check-tsc.mjs
       - run: npm run typecheck
       # The console's own tests. They live in this job rather than the server one because
       # they need no database — the only judgement in that workspace is what a line under a
