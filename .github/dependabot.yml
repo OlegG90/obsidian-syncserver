@@ -1,12 +1,7 @@
 # Version updates. Security updates are a repository setting, not this file, and they arrive
 # whenever an advisory does — neither the schedule nor the cooldown below delays them.
 #
-# **Docker is deliberately absent.** Every base image is pinned to a major and an Alpine release
-# (`node:26-alpine3.23`, `postgres:18-alpine`), and Dependabot only offers tags with the same
-# suffix — so all it could ever propose is the next major. For postgres that is a cluster the
-# existing PGDATA cannot start (docs/13: `pg_upgrade`), and the `postgresql18-client` the runtime
-# image carries is pinned to agree with it (docs/10, `check-compose.mjs`). Moving any of these is
-# a migration somebody plans, not a pull request somebody merges.
+# Docker is absent on purpose: the base images move by hand (docs/13, "The image").
 version: 2
 updates:
   # One lockfile at the root covers all four workspaces.
