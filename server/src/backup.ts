@@ -39,7 +39,7 @@ export interface Legs {
    * **Runs before the lock, before the row, before the window** — which is the whole point
    * of its existing separately from the legs it guards. The `pg_dump` major check lived inside
    * `dumpDatabase`, so a mismatched binary was discovered with writes already being refused
-   * and a `backup_runs` row already inserted: the exact failure D-73 was opened to prevent,
+   * and a `backup_runs` row already inserted: the exact failure issue #73 was opened to prevent,
    * reproduced one layer further in. A precondition that can only be checked by starting the
    * work is not a precondition.
    *

@@ -324,7 +324,7 @@ export class Session {
    * **One question with three answers, not two questions.** Issue #117 gave this a yes/no for the
    * single-vault case; the moment an account can hold two, that same moment is also when
    * somebody might want a third. Asking "is it this one?" and then, separately, "or which of
-   * these?" would be two callbacks with overlapping duty — the shape D-86 was opened about.
+   * these?" would be two callbacks with overlapping duty — the shape issue #86 was opened about.
    * So the caller is handed the vaults and answers with what it wants done.
    *
    * The single-vault case is still ONE press: a list of one, plus the way to make another.
