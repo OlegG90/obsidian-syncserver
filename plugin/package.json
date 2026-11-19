@@ -11,15 +11,15 @@
     "dev": "node esbuild.mjs --watch"
   },
   "dependencies": {
-    "@noble/ciphers": "^2.3.0",
-    "@noble/curves": "^2.3.0",
-    "@noble/hashes": "^2.3.0",
+    "@noble/ciphers": "^2.4.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "@syncserver/shared": "*"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "esbuild": "^0.28.2",
     "obsidian": "^1.14.4",
-    "tsx": "^4.23.12"
+    "tsx": "^4.23.15"
   }
 }
