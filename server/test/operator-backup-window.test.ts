@@ -20,7 +20,7 @@ import { issueRefreshToken } from '../src/auth/service.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { holdForBackup } from '../src/interlock.js';
-import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken, SEEDED_ADMIN_ID } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -28,7 +28,7 @@ let accountLogin: string;
 let deviceId: string;
 let refresh: string;
 let access: string;
-const adminId = '00000000-0000-0000-0000-000000000001';
+const adminId = SEEDED_ADMIN_ID;
 
 before(async () => {
   db = connect(loadConfig().databaseUrl);

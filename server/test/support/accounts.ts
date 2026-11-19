@@ -1,9 +1,12 @@
 /**
- * A vault account for a test to act as: active, carrying the key material the schema requires, and no vault.
+ * Who a test acts as: the seeded administrator claimed, a vault account, a device, and the token it
+ * calls with (issue #485).
  *
- * One fixture rather than a copy per suite, because the column list is not a choice a test makes: it is the
- * shape `keys_match_state` insists a vault account has (D-115), and a copy that drifts from it fails as a
- * constraint in a test about something else entirely.
+ * One fixture rather than a copy per suite, because none of these shapes is a choice a test makes. The
+ * vault account is what `keys_match_state` insists one has (D-115); the administrator is the row
+ * `schema.sql` plants (D-107). A copy that drifts from either fails as a constraint in a test about
+ * something else entirely. A suite whose subject IS one of these rows — `auth.test.ts` and the seeded
+ * administrator, a revoked device, a token signed with options of its own — writes that row itself.
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
@@ -77,9 +80,9 @@ export const aVaultAccount = async (
   await db.query(
     `INSERT INTO users (id, login, state, role, auth_secret_hash, account_salt, kdf_params, pubkey,
                         enc_privkey, kek_verifier_hash, wrapped_seed, quota_bytes)
-     VALUES ($1, $2, 'active', 'user', '3e8db92a13a09e5a54a22c439aaf033842dffbad80af58297b9cefb451f9d3a3', decode('00112233445566778899aabbccddeeff','hex'),
+     VALUES ($1, $2, 'active', 'user', $3, decode('00112233445566778899aabbccddeeff','hex'),
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x04', 104857600)`,
-    [id, login],
+    [id, login, TEST_AUTH_SECRET_HASH],
   );
   return { id, login };
 };

@@ -17,7 +17,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken } from './support/accounts.js';
+import { aDevice, aVaultAccount, claimSeededAdmin, deviceToken, SEEDED_ADMIN_ID } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -26,7 +26,7 @@ let deviceId: string;
 let adminToken: string;
 let vaultId: string;
 let rootId: string;
-const adminId = '00000000-0000-0000-0000-000000000001';
+const adminId = SEEDED_ADMIN_ID;
 
 before(async () => {
   db = connect(loadConfig().databaseUrl);
