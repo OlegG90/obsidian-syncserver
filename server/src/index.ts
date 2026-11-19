@@ -14,7 +14,7 @@ import { restoreFrom } from './restore-run.js';
 import { restoreStatus, writeEpochFile } from './restore.js';
 import { ensureSchema, SchemaRefusal } from './schema.js';
 import { assertWritable } from './writable.js';
-import { claimInstance } from './instance.js';
+import { claimInstance, onClaimLost } from './instance.js';
 import { dirname } from 'node:path';
 
 const cfg = loadConfig();
@@ -50,6 +50,12 @@ const claimed = await new Promise<{ refusal: string } | { pid: number }>((resolv
       resolve({ refusal: claim.holder });
       return;
     }
+    onClaimLost(c, (reason) => {
+      // Out, like a second boot is turned away: a server that kept serving without the claim
+      // is the split D-144 exists to prevent, and the restart that follows claims again.
+      console.error(`stopping: ${reason}. A second instance could start beside this one without it.`);
+      process.exit(1);
+    });
     const me = await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
     resolve({ pid: me.rows[0]!.pid });
     await instanceHeld;
