@@ -19,7 +19,7 @@ on:
 # A new push to a pull request makes the run still going on it worthless: it tests a commit
 # nobody will merge, and the live suite alone holds a runner for up to twenty minutes. Dependabot
 # makes this routine rather than rare — merging one of its PRs leaves the others conflicting in
-# the lockfile, and it rebases them all at once.
+# the lockfile, and it rebases them in quick succession.
 #
 # **Everything else runs in a group of its own.** Each merge is a state main was in, and its run
 # is the record of it. Sharing one group without cancelling would not keep them: a group holds one
