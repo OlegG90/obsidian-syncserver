@@ -19,6 +19,7 @@ import { rm } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
 import { testStore } from './store.js';
+import { aDevice, claimSeededAdmin, deviceToken } from './accounts.js';
 import { loadConfig } from '../../src/config.js';
 import { connect, type Db } from '../../src/db.js';
 
@@ -53,10 +54,7 @@ export const openWorld = async (label: string): Promise<void> => {
   // Claim the seeded administrator, so each file stands on its own. Until one exists the API
   // answers 503 to everything but its redemption (D-107) — and this suite used to pass only
   // because another file had happened to run first and claim it.
-  await w.db.query(
-    `UPDATE users SET state = 'active', password_hash = '$argon2id$test'
-      WHERE id = '00000000-0000-0000-0000-000000000001' AND state = 'provisioned'`,
-  );
+  await claimSeededAdmin(w.db);
 
   const initiator = await makeAccount(`${label}-initiator`);
   w.userId = initiator.id;
@@ -110,11 +108,7 @@ export const makeAccount = async (label: string) => {
              '{"v":19,"m":65536,"t":3,"p":1}', '\\x01', '\\x02', 'kv', '\\x03', 'rh', '\\x04', 1048576)`,
     [id, `${label}-${process.pid}`],
   );
-  const device = await w.db.one<{ id: string }>(
-    `INSERT INTO devices (user_id, name, platform) VALUES ($1, 'test', 'linux') RETURNING id`,
-    [id],
-  );
-  return { id, access: w.app.jwt.sign({ sub: id, device: device!.id }) };
+  return { id, access: deviceToken(w.app, id, await aDevice(w.db, id)) };
 };
 
 export const createNode = async (type: 'folder', name: string, parent = w.rootId, keyId?: string) => {

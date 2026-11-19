@@ -18,7 +18,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { clearRestoreRequest, readRestoreRequest, requestFile, writeRestoreRequest } from '../src/restore-request.js';
-import { aDevice, claimSeededAdmin } from './support/accounts.js';
+import { aDevice, claimSeededAdmin, SEEDED_ADMIN_ID } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
@@ -35,7 +35,7 @@ let stopped = 0;
  */
 const invented: string[] = [];
 
-const ADMIN = '00000000-0000-0000-0000-000000000001';
+const ADMIN = SEEDED_ADMIN_ID;
 
 before(async () => {
   root = await mkdtemp(join(tmpdir(), 'syncserver-ask-'));

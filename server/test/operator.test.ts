@@ -27,7 +27,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
 import { testStore } from './support/store.js';
-import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
+import { aDevice, claimSeededAdmin, deviceToken, SEEDED_ADMIN_ID } from './support/accounts.js';
 
 const STORE = testStore('admin');
 const cfg = { ...loadConfig(), blobStorePath: STORE };
@@ -93,7 +93,7 @@ before(async () => {
   // refuses every route back — demoting the last is refused (D-88) and deleting an active
   // account is a procedure (D-55). A suite that left an extra administrator behind would
   // therefore make first-run unreachable for whoever runs next, permanently.
-  adminId = '00000000-0000-0000-0000-000000000001';
+  adminId = SEEDED_ADMIN_ID;
   const seededDeviceId = await aDevice(db, adminId);
   adminToken = deviceToken(app, adminId, seededDeviceId);
   const user = await makeAccount(`subject-${process.pid}`, 'user');

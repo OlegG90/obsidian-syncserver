@@ -23,13 +23,13 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { connect, type Db } from '../src/db.js';
-import { aDevice, claimSeededAdmin, deviceToken } from './support/accounts.js';
+import { aDevice, claimSeededAdmin, deviceToken, SEEDED_ADMIN_ID } from './support/accounts.js';
 
 let db: Db;
 let app: FastifyInstance;
 let adminToken: string;
 /** The seeded administrator, claimed exactly as operator.test.ts does. */
-const adminId = '00000000-0000-0000-0000-000000000001';
+const adminId = SEEDED_ADMIN_ID;
 
 before(async () => {
   db = connect(loadConfig().databaseUrl);
